@@ -27,7 +27,8 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNum
 import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
-import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
+import hydrozoa.multisig.ledger.eutxol2.EutxoL2Screener
+import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
@@ -1149,11 +1150,12 @@ object MultiPeerHeadHarness:
                             given CardanoNetwork.Section = nodeConfig
                             Persistence.fromBackend(backendStore, persistenceTracer)
                         }
-                        l2Ledger <- Resource.eval(EutxoL2Ledger(nodeConfig))
+                        l2Ledger <- Resource.eval(InMemoryL2Store.ledger(nodeConfig))
                         mrm <- HeadMultisigRegimeManager.resource(
                           nodeConfig,
                           cardanoBackend,
                           l2Ledger,
+                          EutxoL2Screener(nodeConfig),
                           persistence,
                           mrmTracer,
                           peerFactory,
@@ -1191,7 +1193,7 @@ object MultiPeerHeadHarness:
                         given CardanoNetwork.Section = coilConfig
                         Persistence.fromBackend(backendStore, persistenceTracer)
                     }
-                    l2Ledger <- Resource.eval(EutxoL2Ledger(coilConfig))
+                    l2Ledger <- Resource.eval(InMemoryL2Store.ledger(coilConfig))
                     mrm <- CoilMultisigRegimeManager.resource(
                       coilConfig,
                       cardanoBackend,

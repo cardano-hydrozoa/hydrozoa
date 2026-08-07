@@ -35,7 +35,7 @@ object NodeOperationMultisigConfig {
         override def rateLimits: RateLimits = nodeOperationMultisigConfig.rateLimits
     }
 
-    lazy val default = NodeOperationMultisigConfig(
+    lazy val default: NodeOperationMultisigConfig = NodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = 10.seconds,
       peerLiaisonMaxRequestsPerBatch = PositiveInt.unsafeApply(42),
       peerLiaisonResendInterval = 5.seconds,

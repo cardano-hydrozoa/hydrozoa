@@ -5,7 +5,7 @@ import cats.implicits.*
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.liaison.Server.Served
 
-/** The serve half of one liaison link (§5.5 of `design/coil-network.md`) [doc-ref]: answer the
+/** The serve half of one liaison link (§5.5 of `docs/spec/coil-network.md`) [doc-ref]: answer the
   * remote's `*.Get` pulls (the concrete request is `Mesh.Get` on the head mesh, `Population.Get` on
   * a hub→coil link, `OwnHardAck.Get` on a coil→hub link) from our outbox lanes. When a pull finds
   * nothing new, the request is stashed and re-answered the moment fresh content is appended

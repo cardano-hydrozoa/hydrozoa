@@ -17,10 +17,10 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
-import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
-import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger}
-import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
+import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
+import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
+import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
@@ -112,7 +112,7 @@ object Serve {
             // `remoteLedgerUri`. Only the EUTXO ledger is also an EutxoL2LedgerReader, so only it
             // yields a reader for the server's L2-query endpoints (a remote node hands it None).
             l2 <- mkL2Ledger(nodeConfig, dataDir)
-            (l2Ledger, l2QueryReader) = l2
+            (l2Ledger, l2Screener, l2QueryReader) = l2
 
             // Per-peer persistence store. Default path; later milestones will surface this
             // through NodeConfig (P1 skeleton; see design §7). Open the RocksDB-backed
@@ -146,6 +146,7 @@ object Serve {
                       nodeConfig,
                       backend,
                       l2Ledger,
+                      l2Screener,
                       l2QueryReader,
                       persistence,
                       headTracer,
@@ -202,7 +203,7 @@ object Serve {
     private def mkL2Ledger(
         nodeConfig: NodeConfig,
         dataDir: Path,
-    ): Resource[IO, (L2Ledger[IO], Option[EutxoL2LedgerReader[IO]])] =
+    ): Resource[IO, (L2Ledger[IO], L2Screener[IO], Option[EutxoL2LedgerReader[IO]])] =
         nodeConfig.headConfig.l2Ledger match {
             case L2LedgerKind.CardanoEutxo =>
                 for {
@@ -211,7 +212,7 @@ object Serve {
                       dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/l2-rocksdb")
                     )
                     ledger <- Resource.eval(EutxoL2Ledger(nodeConfig, store))
-                } yield (ledger, Some(ledger))
+                } yield (ledger, EutxoL2Screener(nodeConfig), Some(ledger))
             case L2LedgerKind.AnyRemote =>
                 val tracer = Slf4jTracer.sink.contramap(RemoteL2LedgerEventFormat.humanFormat)
                 val wsUri = nodeConfig.remoteLedgerUri.getOrElse(
@@ -221,14 +222,12 @@ object Serve {
                 )
                 for {
                     _ <- Resource.eval(log.info(s"L2 ledger: remote at $wsUri"))
-                    ledger <- Resource.eval(
-                      RemoteL2Ledger.create(
-                        wsUri = wsUri,
-                        config = nodeConfig,
-                        tracer = tracer,
-                      )
+                    ledger <- RemoteL2Ledger.create(
+                      wsUri = wsUri,
+                      config = nodeConfig,
+                      tracer = tracer,
                     )
-                } yield (ledger, Option.empty[EutxoL2LedgerReader[IO]])
+                } yield (ledger, RemoteL2Screener, Option.empty[EutxoL2LedgerReader[IO]])
         }
 
     /** Build the head-node transports (mesh + optional hub-coil), bind one shared `NodeWsServer`,
@@ -238,6 +237,7 @@ object Serve {
         nodeConfig: NodeConfig,
         backend: CardanoBackend[IO],
         l2Ledger: L2Ledger[IO],
+        l2Screener: L2Screener[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         persistence: Persistence[IO],
         mrmTracer: ContraTracer[IO, HeadRegimeManagerEvent],
@@ -329,6 +329,7 @@ object Serve {
               nodeConfig,
               backend,
               l2Ledger,
+              l2Screener,
               persistence,
               mrmTracer,
               peerFactory,

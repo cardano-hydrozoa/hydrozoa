@@ -1,28 +1,12 @@
 # Persistence & Crash Recovery
 
-**Status:** Draft · **Whitepaper milestone:** M5 — Feature Complete MVP (2026 May)
-· **Branch baseline:** post `feature/slow-consensus` + `migrate-kzg` + `rate-limiter`
-+ `feature/coil` (PR #454) merge — coil peers are now in scope here
+**Status:** As-built reference — durable storage and crash recovery for head and coil peers.
 
 > [!NOTE]
-> The whitepaper does not yet have a dedicated persistence article. The only
-> reference is the roadmap: M5 plans to *"add coil consensus, TDX privacy
-> features, persistence for consensus data, and crash recovery procedures"*
-> ([/gummiworm-whitepaper/introduction/roadmap](https://)). This spec proposes
-> the design and flags decision points for review; promotable content should be
+> The whitepaper does not yet have a dedicated persistence article. This document is
+> the as-built reference for persistence and crash recovery; promotable content can be
 > folded back into the whitepaper (likely a new article under
 > `single-head-gummiworm-protocol/peer-network`).
-
-> [!NOTE]
-> **What is M5?** M5 is the fifth milestone on the Gummiworm roadmap —
-> *"Feature Complete MVP"* (2026 May). It rounds out a suitable initial
-> minimum-viable, production-grade product for a single Gummiworm head by adding
-> four things: **coil consensus**, **TDX privacy features**, **persistence for
-> consensus data**, and **crash-recovery procedures**. This spec covers the last
-> two. Roadmap context: M4 *Specification* (2026 Apr) precedes it; M6 *Hardening*
-> (2026 Jun — testing, then the duration-bounded Sugar Rush launch on a curated
-> coil set) follows. M5 is the point at which a single head is feature-complete
-> enough to be hardened for production.
 
 ---
 
@@ -33,7 +17,7 @@ controlled restart **without losing custody safety and without violating
 consensus invariants**. After a restart the peer rejoins the running head,
 catches up, and resumes producing/verifying blocks and effects as if it had only
 been briefly unresponsive (within the head's inactivity/silence timing budget —
-see [timing-rules](https://) `#fallback`).
+see timing-rules `#fallback`).
 
 **Head and coil peers share one recovery architecture.** A coil peer keeps the
 **same journal structure and the same store** as a head peer (`coil-network.md` §2),
@@ -44,7 +28,7 @@ the `BlockResult` CF, [§6](#6-per-actor-recovery-contracts) `JointLedger`), and
 journal. Hub head peers carry one extra
 recovery contract — the `CoilAckSequencer` re-sequencing consensus actor ([§6](#6-per-actor-recovery-contracts)).
 
-### In scope (M5)
+### In scope
 
 - **Both peer types — head and coil.** Durable storage and crash recovery for head
   peers *and* coil peers, over the one shared store. Coil-specific deltas are called
@@ -94,7 +78,7 @@ recovery contract — the `CoilAckSequencer` re-sequencing consensus actor ([§6
   membership). Coil-peer *recovery* is in scope (threaded throughout); the
   marketplace mechanics that would let coil membership change under a peer are a
   separate future-work spec (`coil-network.md` §6.1).
-- TDX sealed storage / encryption-at-rest (the M5 TDX workstream; this spec
+- TDX sealed storage / encryption-at-rest (this spec
   assumes a pluggable "sealed blob" primitive).
 - Backup/restore tooling, multi-host replication.
 - Rule-based-regime persistence beyond what is needed to *enter* it cleanly
@@ -379,7 +363,7 @@ last key, no separate marker record to keep consistent.
   `(ownPeerId, n)` bound to a different request than the one already broadcast at
   `n`. ⇒ own `RequestNumber` high-water + the request bytes for every assigned `n`
   must be durable **before the user is told the id** (not merely before broadcast).
-  (Defends the *lying-peer proof*, [anti-censorship](https://) `#the-lying-peer-proof`.)
+  (Defends the *lying-peer proof*, anti-censorship `#the-lying-peer-proof`.)
 - **CR2 — No conflicting signatures.** Never two soft acks for different headers
   at one block number, nor conflicting hard acks at one stack/partition index.
   ⇒ the equivocation marker lives at the **peer boundary** — "what signature
@@ -411,7 +395,7 @@ last key, no separate marker record to keep consistent.
 **Recovery is initialization against a non-empty store.** There is one boot path;
 a cold start is the degenerate case where the store is empty. The same path runs
 on every boot, so it cannot silently rot, and "test recovery" reduces to "restart
-and observe re-convergence" ([§9](#9-failure-scenarios-to-specify--test)).
+and observe re-convergence" ([§9](#9-failure-scenarios-recovery-handles)).
 
 **Recovery is therefore re-entrant — a second crash mid-recovery is not special.**
 Because recovery *is* the normal boot path, it makes only the same monotonic,
@@ -424,7 +408,7 @@ next boot re-runs the identical path from wherever the anchor reached and makes
 the same progress.
 Each uninterrupted attempt strictly advances (or completes), so recovery converges
 to the committed state after finitely many interruptions — exactly the
-observational-equivalence property of [§9](#9-failure-scenarios-to-specify--test), with the crash placed *inside* the
+observational-equivalence property of [§9](#9-failure-scenarios-recovery-handles), with the crash placed *inside* the
 recovery window.
 
 The boot **starts every actor together** — consensus and boundary alike — and
@@ -449,12 +433,13 @@ exactly as a live duplicate would be. A replay re-emission of something already
 sent is therefore filtered; a genuinely new (`> cursor`) output is precisely what
 forward progress *should* emit. So there is nothing for a separate "boundary-last"
 phase to protect — the cursor filter is load-bearing either way, and deferring
-boundary start **buys nothing**. We start from the simpler all-together shape and
-observe; if a replay re-emission is ever found to leak past the cursor filter, we
-can reintroduce a deferral surgically ([§10](#10-open-questions) Q1) — but only if measurement shows it
-is needed. The all-together start needs **no** topology change: consensus actors
-reference the boundaries through the `Connections` barrier (`pendingConnections`),
-so the boundaries are already in place when consensus starts.
+boundary start **buys nothing**. All actors start together; the cursor / equivocation
+filter suppresses every replay re-emission `≤ cursor`, so a deferred boundary start
+buys nothing (were a re-emission ever found to leak past the filter, a deferral could
+be reintroduced surgically — but the filter is what makes that unnecessary). The
+all-together start needs **no** topology change: consensus actors reference the
+boundaries through the `Connections` barrier (`pendingConnections`), so the
+boundaries are already in place when consensus starts.
 
 **Why replay, not just state-restore, for the interior.** Restoring an actor's
 state alone misses the *signals it would have emitted on receiving its inputs*.
@@ -599,8 +584,7 @@ These carry **only the non-derivable** passive state on each side:
       these on-chain commitments (a settlement's `nextKzg`, or a SEC), and
       evacuation needs the map *behind that commitment* — so the only maps it can
       ever need are the ones we keep. The maps at intermediate minors commit to
-      nothing on-chain, so they are dead weight (this corrects the earlier
-      "store every block" sketch — those extra maps were useless). Pruning is
+      nothing on-chain, so they are dead weight. Pruning is
       still bounded: anything strictly older than the last-hard-confirmed major
       can be dropped, since those minors can never be disputed against once the
       next major supersedes them. The set of committed blocks mirrors
@@ -788,16 +772,18 @@ gets base state but no tail — `JointLedger`, for one, reads no journal (`Block
 drives it), so the `ReplayActor` never feeds it ([§6](#6-per-actor-recovery-contracts)). This holds for either
 mechanism below.
 
-Two candidate mechanisms for *how* to feed that journal tail; we target **(1)** and
-keep **(2)** as a test oracle.
+There are two mechanisms for *how* to feed that journal tail. Recovery feeds it by
+mechanism **(1)** (pre-populate mailboxes); mechanism **(2)** (one-by-one +
+quiescence) is retained as a test oracle.
 
 1. **Pre-populate mailboxes ("crash as a state").** Create the consensus actors
    suspended, seed each with its passive base state, and drop the total-ordered
    **journal-entry tail** into the mailboxes of the actors that read those journals (e.g.
    `BlockWeaver` the request journals; the ack-aggregators the ack journals). Then open
    the start barrier and let them run concurrently to the crash state. Fast,
-   reuses the existing `Deferred[Connections]` barrier (though a **separate
-   suspend barrier** may be needed to hold actors during seeding — [§8](#8-boot-sequence), [§10](#10-open-questions) Q1),
+   reuses the existing `Deferred[Connections]` barrier — replay sends queue behind each
+   actor's `PreStart` (which blocks on that barrier) and drain in order once it opens, so
+   no separate suspend barrier is needed ([§8](#8-boot-sequence)) —
    and unifies replay with normal operation (cold boot = the empty-seed case).
    Boundary actors start *together* with the consensus actors ([§5](#5-recovery-architecture)); during replay
    the interior's external re-emissions reach the running boundaries but are
@@ -915,7 +901,7 @@ differing only in which lanes each serves.
 - In steady state the queue is a write-through cache, so a cold cache *is* recovery —
   same procedure. The whitepaper already prunes these outboxes by **remote
   `GetMsgBatch` cursors**, not local confirmation, *"so that messages can be
-  retransmitted if needed during recovery scenarios"* ([peer-network](https://)
+  retransmitted if needed during recovery scenarios"* (peer-network
   `#outbox-queues-and-confirmation`); persistence extends that retransmissibility
   across a process restart, not just a transient disconnect. Reading from the
   store on demand (rather than eagerly seeding the whole own production) also
@@ -937,13 +923,12 @@ differing only in which lanes each serves.
 | `PeerLiaisonHubToCoil` (hub → coil) | the **full** population: `Block` (contiguous), `Stack`, `Request ×N`, `SoftAck ×N`, head `HardAck ×N`, `HubHardAck ×H` | the coil peer's own `HardAck` → the hub's `HardAck(PeerId.Coil)` receive CF |
 | `PeerLiaisonCoilToHub` (coil → hub) | this coil peer's own `HardAck` (one lane) | the **full** population (mirror of `HubToCoil` outbound) |
 
-> **Code reality (2026-06).** All three shapes recover the same way: each outbound
+> **Code reality.** All three shapes recover the same way: each outbound
 > lane is built with a `LaneOutgoingBacking` over its journal, `preStart` restores the
 > lane high-waters (`seedHighWater`), and `LaneOutbound.reply` hot-loads below the
 > in-memory floor (`LaneOutgoingBacking.backfill`); inbound receive cursors restore off a
 > `LaneIncomingCursors` read. No lane eagerly seeds its whole own
-> production. The earlier `recover` → `OutboxSeed` → `LaneOutbound.seed` (eager,
-> `HeadToHead`-only) is gone (GUM-153).
+> production.
 
 #### 6.1.3 `CardanoLiaison`
 
@@ -971,6 +956,15 @@ These recover by **base-state seed + replay** — load the base snapshot at the 
 mark (`fastBlockMark` / `hardAcked`), then the `ReplayActor` re-runs the input tail from that
 mark onward, regenerating the inter-actor signals deterministically.
 
+The recovery machinery is a **single `PeerId`-parameterized seam** — one
+`ReplayActor.replay(own: PeerId, …)` and one `ReplayCursors` (carrying
+`ownCoilHardAck: Option[JournalKey.HardAck]`), with `own` threading straight into
+`JournalKey.HardAck(own, n)` across `Markers`, `StackComposer.recover`,
+`LaneOutgoingBacking.hardAck`, and `ReplayActor.route` (one `HardAck` case) — and the
+`BlockResult` fast anchor (`fastBlockMark = max(BlockResult)`) shared by both peer types.
+No peer-type `own match` appears in the recovery path; head and coil differ only in the
+enumerated deltas below.
+
 #### 6.2.1 `BlockWeaver`
 
 - **State:**
@@ -984,7 +978,7 @@ mark onward, regenerating the inter-actor signals deterministically.
   `BlockCreationStart/EndTime` already sit in the persisted brief headers), and a
   block left mid-`Producing` at the crash was never saved or acked, so `BlockWeaver`
   just **cuts a fresh block** under the current clock — a never-committed cut may
-  legitimately differ, and only committed state must match ([§9](#9-failure-scenarios-to-specify--test)). The transient
+  legitimately differ, and only committed state must match ([§9](#9-failure-scenarios-recovery-handles)). The transient
   `pollResults` is seeded **by the `ReplayActor`**, which reads L1 directly from
   `CardanoBackend` and sends the first `PollResults` rather than waiting on
   `CardanoLiaison`'s poll cadence ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)) — so deposit decisions can proceed
@@ -1002,7 +996,7 @@ mark onward, regenerating the inter-actor signals deterministically.
 
 #### 6.2.2 `JointLedger`
 
-Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
+Owns only the fast-side state; the treasury lives in `StackComposer`.
 
 - **State:** one of two shapes —
   - `Done(previousBlockHeader, deposits)` — between blocks;
@@ -1321,7 +1315,7 @@ just its sequence scalar and the per-coil-peer stamp floor that bounds that repl
 
 ## 7. Storage design — RocksDB
 
-We will use **RocksDB** — an embedded ordered key-value store. A short primer
+Hydrozoa uses **RocksDB** — an embedded ordered key-value store. A short primer
 first, then how we use it.
 
 **Primer — RocksDB in 101 terms** *(skip if familiar).*
@@ -1546,10 +1540,10 @@ A few benefits worth calling out separately:
   barrier (CR4/CR6/CR8) is one batch. The SC per-hard-ack-close bundle
   `{UnsignedStack, StackSpine, own HardAck(own), Treasury, EvacuationMap}` is
   the slow-side mirror.
-- **The R10 floor is a clean subset.** P2 (the first-priority milestone) writes
-  `HardConfirmation` + `Treasury` + `EvacuationMap` and reads them on rule-based
-  handover — no entanglement with the fast-side CFs. If we ever want to back up
-  *just* the evacuation floor, it's three CFs, not a key-range carve-out.
+- **The R10 floor is a clean subset.** It is three CFs —
+  `HardConfirmation` + `Treasury` + `EvacuationMap` — read on rule-based
+  handover, with no entanglement with the fast-side CFs. Backing up
+  *just* the evacuation floor is three CFs, not a key-range carve-out.
 - **Self-documenting layout.** "Where do block briefs live?" → the `BlockSpine` CF.
   "Where do `BlockResult`s live?" → `Cf.BlockResult`. The CF inventory is the
   persistence map of the system, enumerable in one place (`Cf.scala`).
@@ -1558,9 +1552,9 @@ A few benefits worth calling out separately:
   confirmation CF). Fewer CFs to keep consistent, fewer keys per confirmation
   WriteBatch, derivation is a single `SeekToLast`.
 
-We don't set most of those tuning knobs on day 1 — RocksDB defaults are fine for
-P1. The win is having the **option** to tune each CF independently when profiling
-reveals a hotspot later, instead of being stuck with one-size keyspace knobs.
+Most of those tuning knobs are left at RocksDB defaults. The value of
+CF-per-concern is the **option** to tune each CF independently when profiling
+reveals a hotspot, instead of being stuck with one-size keyspace knobs.
 
 Notes / decisions:
 
@@ -1576,12 +1570,12 @@ Notes / decisions:
   like `CardanoBackend` — `HeadMultisigRegimeManager` already reserves a
   `Dependencies.Persistence` enum case and termination handler, so the seam exists.
 - **Layout:** one store per head instance, keyed by head ID, path from `NodeConfig`.
-- **Versioning** mechanism from day one; recovery refuses to load an incompatible version. The
-  number is **held at 1** (`StoreVersion.current`, in `Cf.Meta`) and **not** bumped while the
-  format still churns in development — a format change just rebuilds the store; we start tracking
-  backward-incompatible bumps once the layout stabilizes. (The current layout unifies the head and
-  coil own-hard-ack CFs into one `PeerId`-keyed `HardAck` journal — one CF per peer, a coil
-  author's named `HardAck:<peerWireInt>` — but that rode in without a version bump.)
+- **Versioning:** the store version is **held at 1** (`StoreVersion.current`, in `Cf.Meta`),
+  and recovery refuses to load an incompatible version. While the layout is unstable a format
+  change rebuilds the store rather than bumping the version; backward-incompatible bumps get
+  tracked once the layout stabilizes. (The layout unifies the head and coil own-hard-ack CFs
+  into one `PeerId`-keyed `HardAck` journal — one CF per peer, a coil author's named
+  `HardAck:<peerWireInt>`.)
 
 ### 7.1 Key layout — journal IDs
 
@@ -1654,12 +1648,24 @@ go on the wire — there is no separate `ArrivalStamps` CF. Non-journal CFs (`Bl
 `UnsignedStack`, `DepositMap`, `Treasury`, `EvacuationMap`, `Meta`) carry no stamp
 prefix.
 
-### 7.2 fsync policy — a per-CF gradient
+### 7.2 fsync policy
 
-Durability is **not** one global policy: `WriteOptions::sync` is chosen per `Write`
-call, by which CF (and what protocol promise) the write backs.
+As-built, durability is a **single policy**: one shared `WriteOptions` backs every
+`put` / `delete` / `write`, with `sync` left at RocksDB's default (`false`). No write
+is fsync'd per call, so process-crash durability rests on the **OS page cache** —
+kernel-owned, so it survives a JVM crash while the host stays powered, and RocksDB
+replays the WAL on restart — while power-loss / kernel-panic durability is forfeited
+uniformly across CFs. `WriteOptions` is not scoped per CF; the CF split makes a per-CF
+`sync` gradient *possible*, but that gradient is not yet wired.
 
-- **Always `sync=true` (R10-critical):** `HardAck`, `HardConfirmation`, `Treasury`,
+For request-ID the uniform `sync=false` trades against **CR1**: a power loss after
+telling the user an id but before the page flushes could re-assign. As-built that
+trade-off is accepted — a Hydrozoa **process** crash recovers fine (the page cache is
+kernel-owned), and **power loss is outside the durability promise**.
+
+The intended per-CF gradient the layout enables — not yet wired:
+
+- **`sync=true` (R10-critical):** `HardAck`, `HardConfirmation`, `Treasury`,
   `EvacuationMap`. Losing one to a power loss would let us forget a hard-ack or
   hard-confirmation, or roll back the slow-side snapshot anchor — violating the
   protocol's external-effect safety premise. Group-commit happens naturally (the
@@ -1667,20 +1673,15 @@ call, by which CF (and what protocol promise) the write backs.
 - **`sync=true`, group-committed (soft-side protocol promises):** `SoftAck`,
   `BlockResult`, `SoftConfirmation`, `DepositMap`. Soft acks are protocol promises too,
   but losing one to a power loss is **recoverable via re-replication** (no
-  external-effect violation), so we accept the fsync cost but rely on group commit
+  external-effect violation), so the fsync cost is accepted but leans on group commit
   (concurrent soft-acks coalesce into one fsync) to amortize.
-- **`sync=false` (page-cache durable):** `Request` and the request-ID assignment.
-  Without fsync the WAL write still lands in the **OS page cache**, which survives a
-  process crash (the kernel owns the bytes), so a Hydrozoa crash with the host still
-  powered recovers fine — RocksDB replays the WAL on restart. The forfeit is power-loss
-  / kernel-panic durability for exactly those records. ⚠ For request-ID this trades
-  against **CR1** (a power loss after telling the user an id but before the page flushes
-  could re-assign) — accept only if power-loss is outside the durability promise;
-  **decide explicitly**.
+- **`sync=false` (page-cache durable):** `Request` and the request-ID assignment — the
+  current uniform behavior, and the one tier where page-cache durability is the intended
+  end state.
 
-(RocksJava is embedded / in-process, not a separate process — the `sync=false` path's
-process-crash durability comes from the OS page cache being kernel-owned and outliving
-the JVM, not from a separate writer staying up.)
+(RocksJava is embedded / in-process, not a separate process — the page cache being
+kernel-owned and outliving the JVM is what gives a `sync=false` write its process-crash
+durability, not a separate writer staying up.)
 
 ---
 
@@ -1689,7 +1690,7 @@ the JVM, not from a separate writer staying up.)
 Executed in/around the regime manager's `preStartLocal`, before
 `pendingConnections.complete` — `HeadMultisigRegimeManager` on a head peer,
 `CoilMultisigRegimeManager` on a coil peer (both run the single `PeerId`-parameterized
-replay seam; [§6](#6-per-actor-recovery-contracts), [§10](#10-open-questions)). **All actors start together**; the two recovery mechanisms
+replay seam; [§6](#6-per-actor-recovery-contracts)). **All actors start together**; the two recovery mechanisms
 (replay / restore) run concurrently ([§5](#5-recovery-architecture)).
 
 1. Open the store; verify version; **bump the arrival-stamp `generation`** — read
@@ -1723,8 +1724,10 @@ replay seam; [§6](#6-per-actor-recovery-contracts), [§10](#10-open-questions))
    `pending` ([§6](#6-per-actor-recovery-contracts) `StackComposer`). The `ReplayActor` also reads L1 **directly from
    `CardanoBackend`** (`utxosAt(treasuryAddress)`) and seeds the first
    `PollResults` into `BlockWeaver`, so deposit decisions proceed immediately rather
-   than waiting on `CardanoLiaison`'s poll cadence ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)). A **suspend barrier** may
-   be needed to hold the consensus actors until seeding completes ([§10](#10-open-questions) Q1).
+   than waiting on `CardanoLiaison`'s poll cadence ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)). No separate suspend
+   barrier is needed: the existing `Connections` barrier (`pendingConnections`) holds the
+   consensus actors — each blocks on it inside its `PreStart` handler, so these replay
+   sends queue behind `PreStart` and drain in order once the barrier opens.
 5. **Open the start barrier:** every actor — consensus *and* boundary — runs.
    Consensus actors rebuild state + cascades from the seeded tail; their external
    re-emissions (acks, briefs, effects) reach the already-running boundaries.
@@ -1766,7 +1769,7 @@ three liaisons' outbox recover ([§6](#6-per-actor-recovery-contracts)).
 
 ---
 
-## 9. Failure scenarios to specify & test
+## 9. Failure scenarios recovery handles
 
 - Crash after assigning a request ID but before the user was told (CR1).
 - Crash after signing a soft/hard ack but before it crossed the peer boundary
@@ -1817,72 +1820,35 @@ three liaisons' outbox recover ([§6](#6-per-actor-recovery-contracts)).
   in-flight slow-side cell completes as replayed/live `HubHardAck` entries arrive —
   assert hard-confirmation still reaches `AllOf(head) ∧ coilQuorum`.
 
-**Testing strategy.** Extend the model-based integration suites (stage1 / stage4)
-with a **crash-restart action** that kills and reconstructs a peer from its store
-mid-run, asserting the consensus invariants still hold — for **head, coil, and hub**
-peers. Single-actor restart tests the per-actor contract; **whole-node reboot**
-tests cross-actor re-convergence; **crash-window fault injection** tests the CR4/CR8
-barriers. Run the one-by-one replay ([§5.6](#56-the-replay-mechanism) mechanism 2) as the deterministic oracle
-the concurrent run is checked against. Property: *for any crash point, recovered
-committed state is observationally equivalent to the no-crash run.*
+**Testing strategy.** The automated coverage of these scenarios is not yet built: the
+model-based integration suites (stage1 / stage4) do not yet carry a **crash-restart
+action** that kills and reconstructs a peer from its store mid-run, and the
+**observational-equivalence property** (*for any crash point, recovered committed state
+is observationally equivalent to the no-crash run*) is not yet asserted. The design of
+that coverage: a crash-restart action for **head, coil, and hub** peers asserting the
+consensus invariants still hold — single-actor restart exercising the per-actor
+contract, **whole-node reboot** exercising cross-actor re-convergence, **crash-window
+fault injection** exercising the CR4/CR8 barriers — with the one-by-one replay
+([§5.6](#56-the-replay-mechanism) mechanism 2) as the deterministic oracle the concurrent
+run is checked against.
 
 ---
 
-## 10. Open questions
+## 10. Not yet implemented
 
-_Resolved questions have been folded into the sections they belong to ([§3](#3-consensus-data-the-journals), [§5](#5-recovery-architecture), [§6](#6-per-actor-recovery-contracts),
-[§7](#7-storage-design--rocksdb)); only genuinely-open items remain here._
+The R10 floor ([§5.7](#57-the-recovery-priority-ladder-graceful-degradation)) — `HardConfirmation` +
+`Treasury` + `EvacuationMap` — is the minimum durable set that lets a crashed peer fall
+back, vote, and evacuate, and its write side is fully persisted. Outstanding beyond it:
 
-1. **Additional barrier?** Does the `ReplayActor` need an **extra suspend barrier** to
-   hold the consensus actors while it seeds their mailboxes, or does the existing
-   `Connections` barrier (`pendingConnections`) already suffice? Each actor blocks on
-   that barrier inside its `PreStart` handler, so replay sends queue *behind* `PreStart`
-   and drain in order once it opens — which appears sufficient (then we add nothing).
-   Confirm empirically on the real substrate before adding a second barrier.
-2. **Coil marker / cursor derivation seam — resolved (P13), confirm:** the coil path
-   took a **`PeerId`-parameterized unification** — one `ReplayActor.replay(own: PeerId, …)`
-   and one `ReplayCursors` (with an `ownCoilHardAck: Option[JournalKey.HardAck]`
-   field), the fast side anchoring on the `fastBlockMark = max(BlockResult)` on
-   both peer types. The slow-side own-ack journal is now the one `PeerId`-keyed `HardAck`
-   journal, so `own: PeerId` flows straight into `JournalKey.HardAck(own, n)` in `Markers`,
-   `StackComposer.recover`, `LaneOutgoingBacking.hardAck`, and `ReplayActor.route` (one
-   `case k: JournalKey.HardAck`) — no peer-type `own match` in the recovery machinery
-   ([§5](#5-recovery-architecture), [§6](#6-per-actor-recovery-contracts) `JointLedger` / `StackComposer`). Remaining: confirm under load that
-   `HardAck(PeerId.Coil)` `max + 1` + the in-flight-stack unpack behave as the head
-   `HardAck(PeerId.Head)` scan does.
-
----
-
-**Priority.** Sequence by **custody value, not by data flow.** After the storage
-skeleton (P1), the first deliverable is **persisting what the rule-based regime
-reads** — the hard-confirmed effects / SECs / fallbacks (the **R10 evacuation
-floor**) plus the read path that loads them once on handover ([§5.7](#57-the-recovery-priority-ladder-graceful-degradation) top rung).
-With that durable, a crashed peer can always fall back, vote, and evacuate even if
-nothing else is restored. Everything after it is liveness / performance and may be
-built **in any order**.
-
-Status legend: ✅ done · 🚧 done, uncommitted · 📋 scoped, not started · ⬜ pending.
-Steps below renumbered (the old letter scheme `Pa–Pg` is now `P3–P9`); `P1`/`P2` are
-unchanged. `P10–P14` are the coil workstream ([§2](#2-two-kinds-of-actor), [§6](#6-per-actor-recovery-contracts) — the head plan threaded onto coil
-peers).
-
-| Step | Deliverable | Status |
-|---|---|---|
-| P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `JournalId`/`JournalKey` layout ([§7.1](#71-key-layout--journal-ids)); versioning; wired through `HeadMultisigRegimeManager.Dependencies.Persistence`. | ✅ |
-| P2 | **First priority — the rule-based regime's read-set = the R10 floor.** `SlowConsensusActor` writes `HardConfirmation` records **in full** (multisigned effects / SECs / fallbacks) as it produces them (CR4); `StackComposer`'s `Treasury` + `EvacuationMap` snapshots ride alongside ([§6](#6-per-actor-recovery-contracts) `StackComposer`); the rule-based regime's **read path** loads `HardConfirmation` + `Treasury` + `EvacuationMap` once on handover and runs off live L1 ([§5.7](#57-the-recovery-priority-ladder-graceful-degradation)). Custody-safe in isolation — needs no replay, no fast-side state. | ✅ write side · **read path → Peter** |
-| P3 | Boundary persistence: `RequestSequencer` write-before-tell-user (CR1/CR4); `PeerLiaison*` inbound write-before-advance + cursors (CR8), with the 12-byte `ArrivalStamp` prefix on each journal value ([§5.4](#54-total-order-of-the-replayed-streams)). | ✅ |
-| P4 | Equivocation guard at the peer boundary (CR2) + counter recovery (CR3); unit tests. | ✅ |
-| P5 | Fast-side per-block persistence (`JointLedger`): per-soft-ack `WriteBatch` over `Block` + `SoftAck` + `BlockResult` + `DepositMap` + `RequestHighWater` ([§6](#6-per-actor-recovery-contracts) `JointLedger`); plus `FastConsensusActor`'s confirmation write to `SoftConfirmation` + soft-ack pruning. The `BlockResult` CF is what lets `StackComposer` rebuild `pending` from disk on restart ([§5.2](#52-state-recovery-the-base-snapshots)); `RequestHighWater` feeds the Request journal recovery cursors ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-journal-cursors)). | ✅ — soft-ack pruning **deferred** (keep-all) |
-| P6 | `ReplayActor` + total-order merge ([§5.4](#54-total-order-of-the-replayed-streams)) + indices algorithm ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-journal-cursors)); pre-populate-mailboxes mechanism + suspend barrier ([§5.6](#56-the-replay-mechanism)); seeds the first `PollResults` straight from `CardanoBackend` so deposit decisions don't wait on `CardanoLiaison`'s poll cadence ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)). | ✅ — suspend barrier reuses the `Connections` barrier (Q1) |
-| P7 | L1 reconciliation + live re-sample in `CardanoLiaison` ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed), [§8](#8-boot-sequence) step 7 — post-barrier). | ✅ |
-| P8 | Boot sequence end-to-end ([§8](#8-boot-sequence)); fail-safe paths (CR6/CR7). | ✅ — CR7 catch-up-budget abort **deferred** |
-| P9 | Crash-restart integration action + one-by-one oracle + observational-equivalence property ([§9](#9-failure-scenarios-to-specify--test)). | 📋 scoped, not started — deferred |
-| — | Slow-side schema (over `StackComposer` types) — unblocked: the slow-consensus types and Bootstrap have landed ([§6](#6-per-actor-recovery-contracts) `StackComposer`). | ✅ |
-| P10 | **Coil recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + per-coil-peer stamped marks (`CoilStampMark`); the `ReplayActor` re-feeds the unstamped `HardAck(PeerId.Coil)` receive gap to it ([§6.2.5](#625-coilacksequencer)); `PeerLiaison*` lazy outbox recovery + hub→coil receive-cursor restore ([§6.1.2](#612-peerliaison-three-shapes)). | ✅ |
-| P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; coil JL recovers off the `fastBlockMark = max(BlockResult)` ([§6](#6-per-actor-recovery-contracts) `JointLedger`). | ✅ |
-| P12 | **Coil slow-side anchor:** `StackComposer.recover(own: PeerId)` off the unified `HardAck(own)` journal + the `UnsignedStack` brief (`lastBlockNum` from `UnsignedStack` for both peer types); `Markers.recoverHardAcked(backend, own)` / `recoverHardConfirmed` ([§6](#6-per-actor-recovery-contracts) `StackComposer`). | ✅ |
-| P13 | **Coil boot replay (Q2):** unified `ReplayActor.replay(own: PeerId)` / `ReplayCursors` with `ownCoilHardAck: Option[JournalKey.HardAck]` (one `route` case `JournalKey.HardAck`→SCA over the `PeerId`-keyed journal, `HubHardAck`→SCA via `.ack`, fast anchor the `fastBlockMark`); `CoilMultisigRegimeManager` replay seam. | ✅ |
-| P14 | **Head-peer `HubHardAck` replay** (follow-up to P13): `HubHardAck` added to the head `ReplayCursors` + `replay` (`hubs = config.hubHeadPeerNumbers`) so a head peer in a coil head re-feeds the coil quorum on recovery. | ✅ |
+- **Soft-ack pruning is keep-all.** `FastConsensusActor` does not prune the soft-acks a
+  `SoftConfirmation` subsumes; the `SoftAck` CFs retain every ack.
+- **The CR7 catch-up-budget abort is not implemented.** Boot does not yet fail safe when
+  catch-up cannot complete within the timing budget ([§8](#8-boot-sequence)).
+- **The rule-based regime read path is outstanding.** The R10 floor CFs are written, but
+  loading them once on the rule-based handover ([§5.7](#57-the-recovery-priority-ladder-graceful-degradation))
+  is not yet wired (`rulebased/persistence/Persistence.scala` is a stub).
+- **The crash-restart integration action and the observational-equivalence property test
+  are not yet built** ([§9](#9-failure-scenarios-recovery-handles)).
 
 ---
 

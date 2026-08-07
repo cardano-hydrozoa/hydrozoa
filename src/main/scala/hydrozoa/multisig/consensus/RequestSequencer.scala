@@ -19,7 +19,7 @@ import hydrozoa.multisig.consensus.RequestSequencer.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.DepositL1Screening
-import hydrozoa.multisig.ledger.l2.L2Ledger
+import hydrozoa.multisig.ledger.l2.L2Screener
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, WriteBatch}
 
 /** The first actor responsible for processing events from end-users, as received by the
@@ -32,7 +32,7 @@ import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persist
 trait RequestSequencer(
     config: Config,
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | RequestSequencer.Connections,
-    l2Ledger: L2Ledger[IO],
+    l2Screener: L2Screener[IO],
     tracer: ContraTracer[IO, EventSequencerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
@@ -83,7 +83,7 @@ trait RequestSequencer(
             req.request.handleSync(
               req,
               (userRequest: UserRequest) => {
-                  // Screening (docs/l2-isomorphism.md): decide whether this request is worth a
+                  // Screening (docs/spec/l2-isomorphism.md): decide whether this request is worth a
                   // RequestId. On a No, reject before assigning one — no id, no CR1 persist, no
                   // consensus fan-out. A transaction goes straight to the ledger (it
                   // self-authenticates through its own witnesses); a deposit first runs Hydrozoa's
@@ -91,7 +91,7 @@ trait RequestSequencer(
                   // value checks.
                   val screened: IO[Either[String, Unit]] = userRequest.body match {
                       case UserRequestBody.TransactionRequestBody(l2Payload) =>
-                          l2Ledger.sendScreenTx(l2Payload).value.map(_.left.map(_.message))
+                          l2Screener.screenTx(l2Payload).value.map(_.left.map(_.message))
                       case UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
                           realTimeQuantizedInstant(config.slotConfig).flatMap { now =>
                               DepositL1Screening.screen(l1Payload, l2Payload, now)(
@@ -99,8 +99,8 @@ trait RequestSequencer(
                               ) match {
                                   case Left(e) => IO.pure(Left(e.toString))
                                   case Right(screenDeposit) =>
-                                      l2Ledger
-                                          .sendScreenDeposit(screenDeposit)
+                                      l2Screener
+                                          .screenDeposit(screenDeposit)
                                           .value
                                           .map(_.left.map(_.message))
                               }
@@ -189,11 +189,11 @@ object RequestSequencer {
     def apply(
         config: Config,
         pendingConnections: HeadMultisigRegimeManager.PendingConnections,
-        l2Ledger: L2Ledger[IO],
+        l2Screener: L2Screener[IO],
         tracer: ContraTracer[IO, EventSequencerEvent],
         persistence: Persistence[IO]
     ): IO[RequestSequencer] =
-        IO(new RequestSequencer(config, pendingConnections, l2Ledger, tracer, persistence) {})
+        IO(new RequestSequencer(config, pendingConnections, l2Screener, tracer, persistence) {})
 
     // `& CardanoNetwork.Section`: the Request-lane codec (UserRequestWithId) is Section-dependent;
     // the full configs passed in satisfy it.

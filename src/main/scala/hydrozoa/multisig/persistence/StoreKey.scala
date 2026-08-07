@@ -48,7 +48,7 @@ import scalus.cardano.ledger.TransactionHash
   * `type Value = Array[Byte]`; the universal `StoreCodec.passthrough` from the companion supplies
   * the codec, so those cases are zero-line.
   *
-  * See `design/persistence-and-crash-recovery.md` §7 / §7.1.
+  * See `docs/spec/persistence-and-crash-recovery.md` §7 / §7.1.
   */
 trait StoreKey:
     /** The typed payload stored at this key. */

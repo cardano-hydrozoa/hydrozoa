@@ -14,7 +14,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.l2.L2LedgerCommand
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.persistence.ConsensusStoreReader
 import io.circe.{Json, Printer}
 import org.http4s.circe.*
@@ -72,10 +72,10 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     ledger <- EutxoL2Ledger(nodeConfig, store)
                     // Seed a small transaction log: three rejected-deposit decisions, blocks 1..3.
                     _ <- List(1, 2, 3).traverse_ { n =>
-                        ledger
-                            .sendApplyDepositDecisions(rejectDecision(n, RequestId(0, n.toLong)))
-                            .value
-                            .flatMap(IO.fromEither)
+                        ledger.applyDepositDecisions(
+                          L2CommandNumber(n.toLong),
+                          rejectDecision(n, RequestId(0, n.toLong))
+                        )
                     }
                     requestSequencerStub <- system.actorOf(
                       new Actor[IO, RequestSequencer.Request] {

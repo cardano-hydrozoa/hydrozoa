@@ -17,8 +17,7 @@ import hydrozoa.multisig.persistence.{ArrivalStamp, JournalValue}
   *       …
   * }}}
   *
-  * See `design/persistence-and-crash-recovery.md` §5.4, and
-  * `design/recovery-implementation-plan.md` R1.
+  * See `docs/spec/persistence-and-crash-recovery.md` §5.4.
   */
 final case class RawJournalEntry(
     key: hydrozoa.multisig.persistence.JournalKey,
