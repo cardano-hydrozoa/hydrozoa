@@ -271,7 +271,7 @@ object MultiPeerHeadHarness:
         tracer: ContraTracer[IO, Event],
         wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO],
         cardanoBackendMode: CardanoBackend.Mode = CardanoBackend.Mode.Mock,
-        extraSnapshotAddresses: List[ShelleyAddress] = Nil,
+        extraSnapshotAddresses: Set[ShelleyAddress] = Set.empty,
     ): Resource[IO, Harness[Option[RequestSequencer.Handle]]] =
         val preinitPeerUtxosL1 =
             yaciTestSauceGenesis(testPeers.cardanoNetwork.network)(testPeers).map {
@@ -442,7 +442,7 @@ object MultiPeerHeadHarness:
         // Extra addresses to union into the Yaci `l1Snapshot` beyond the auto-derived peer/script
         // set — for UTxOs a test needs to observe that live elsewhere (e.g. the RBR MBT's evacuation
         // payout address). Ignored by the mock backend, which already sees the whole ledger.
-        extraSnapshotAddresses: List[ShelleyAddress] = Nil,
+        extraSnapshotAddresses: Set[ShelleyAddress] = Set.empty,
     )
 
     /** Roll-up of every event emitted by the regime managers the harness owns.
@@ -747,7 +747,7 @@ object MultiPeerHeadHarness:
             cardanoInfo: CardanoInfo,
             headMultisigAddress: ShelleyAddress,
             tracer: ContraTracer[IO, CardanoBackendEvent],
-            extraSnapshotAddresses: List[ShelleyAddress],
+            extraSnapshotAddresses: Set[ShelleyAddress],
         ): IO[(L1Backend[IO], IO[Utxos])] =
             mode match
                 case Mode.Mock => mkMock(preinitPeerUtxosL1, scriptReferenceUtxos, cardanoInfo)
@@ -765,9 +765,8 @@ object MultiPeerHeadHarness:
                     val peerAddresses = preinitPeerUtxosL1.values
                         .flatMap(_.values.map(_.address))
                         .collect { case a: ShelleyAddress => a }
-                        .toList
-                        .distinct
-                    val scriptAddresses = List(
+                        .toSet
+                    val scriptAddresses = Set(
                       HydrozoaBlueprint.mkTreasuryAddress(cardanoInfo.network),
                       HydrozoaBlueprint.mkDisputeAddress(cardanoInfo.network),
                       DeploymentTx.mkBurnAddress(cardanoInfo.network),
@@ -776,7 +775,7 @@ object MultiPeerHeadHarness:
                     mkYaci(
                       network,
                       url,
-                      (peerAddresses ++ scriptAddresses ++ extraSnapshotAddresses).distinct,
+                      peerAddresses ++ scriptAddresses ++ extraSnapshotAddresses,
                       tracer
                     )
 
@@ -788,12 +787,12 @@ object MultiPeerHeadHarness:
         def mkYaci(
             network: CardanoNetwork.Custom,
             url: String,
-            snapshotAddresses: List[ShelleyAddress],
+            snapshotAddresses: Set[ShelleyAddress],
             tracer: ContraTracer[IO, CardanoBackendEvent],
         ): IO[(L1Backend[IO], IO[Utxos])] =
             CardanoBackendBlockfrost(Right((network, url)), tracer = tracer).map { backend =>
                 val snapshot: IO[Utxos] =
-                    snapshotAddresses
+                    snapshotAddresses.toList
                         .traverse(a => backend.utxosAt(a).flatMap(IO.fromEither))
                         .map(_.foldLeft(Map.empty: Utxos)(_ ++ _))
                 (backend, snapshot)

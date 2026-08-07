@@ -230,7 +230,7 @@ case class RbrMbtSuite(
               // nor a head script address — so the Yaci `l1Snapshot` would otherwise miss every
               // evacuation output and `beta` would undercount. (The mock backend sees the whole
               // ledger and ignores this.)
-              extraSnapshotAddresses = List(RbrSeed.payoutAddress),
+              extraSnapshotAddresses = Set(RbrSeed.payoutAddress),
             )
         yield Sut(
           harness,
