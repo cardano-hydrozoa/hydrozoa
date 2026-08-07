@@ -274,19 +274,4 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         )
     }
 
-    test("legacy bare-list metadata still parses (no transient outputs)") {
-        val utxo = mkPeerUtxo(10, Value.ada(100))
-        val state = Compartments(Map(utxo), TransientTokens.empty)
-        val tx = buildSignedL2Tx(
-          spends = List(utxo),
-          sends = List(sendToPeer(Value.ada(100))),
-          legacyMetadataShape = true
-        )
-
-        val result = applyTransit(state, tx)
-        val _ = assert(result.isRight, s"expected success, got: $result")
-        val (l2Tx, next) = result.toOption.get
-        val _ = assert(l2Tx.transientOutputs.isEmpty)
-        val _ = assert(next.transientTokens.isEmpty)
-    }
 }

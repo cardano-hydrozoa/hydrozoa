@@ -4,7 +4,7 @@ import cats.syntax.all.*
 import scala.collection.immutable.SortedMap
 import scalus.cardano.ledger.{AssetName, Metadatum, MultiAsset, PolicyId, ScriptHash}
 
-/** Codec for the optional `transientOutputs` field of the L2 transaction metadata: a map from
+/** Codec for the optional `l2TransientTokens` field of the L2 transaction metadata: a map from
   * transaction output index to the transient token content declared for that output. An output
   * index absent from the map carries no transient tokens.
   *
@@ -20,7 +20,7 @@ import scalus.cardano.ledger.{AssetName, Metadatum, MultiAsset, PolicyId, Script
   */
 object TransientOutputs {
 
-    /** Encode per-output transient declarations as the `transientOutputs` metadatum. */
+    /** Encode per-output transient declarations as the `l2TransientTokens` metadatum. */
     def encodeMetadatum(declarations: Map[Int, MultiAsset]): Metadatum =
         Metadatum.Map(
           declarations.map { case (index, bundle) =>
@@ -28,7 +28,7 @@ object TransientOutputs {
           }
         )
 
-    /** Decode the `transientOutputs` metadatum, rejecting malformed shapes: non-Int or negative
+    /** Decode the `l2TransientTokens` metadatum, rejecting malformed shapes: non-Int or negative
       * output indices, non-28-byte policy ids, over-32-byte asset names, quantities outside
       * `[1, Long.MaxValue]`, and empty bundles or token maps.
       */
@@ -43,14 +43,14 @@ object TransientOutputs {
                                     Right(i.toInt)
                                 case other =>
                                     Left(
-                                      s"transientOutputs: output index must be a non-negative Int, got $other"
+                                      s"l2TransientTokens: output index must be a non-negative Int, got $other"
                                     )
                             }
                             bundle <- decodeBundle(value)
                         } yield index -> bundle
                     }
                     .map(_.toMap)
-            case other => Left(s"transientOutputs must be a metadatum Map, got $other")
+            case other => Left(s"l2TransientTokens must be a metadatum Map, got $other")
         }
 
     private def encodeBundle(bundle: MultiAsset): Metadatum =
@@ -77,15 +77,15 @@ object TransientOutputs {
                                     Right(ScriptHash.fromByteString(bytes): PolicyId)
                                 case other =>
                                     Left(
-                                      s"transientOutputs: policy id must be 28 Bytes, got $other"
+                                      s"l2TransientTokens: policy id must be 28 Bytes, got $other"
                                     )
                             }
                             tokens <- decodeTokens(tokensMetadatum)
                         } yield policyId -> tokens
                     }
                     .map(policies => MultiAsset(SortedMap.from(policies)))
-            case Metadatum.Map(_) => Left("transientOutputs: empty bundle")
-            case other => Left(s"transientOutputs: bundle must be a metadatum Map, got $other")
+            case Metadatum.Map(_) => Left("l2TransientTokens: empty bundle")
+            case other => Left(s"l2TransientTokens: bundle must be a metadatum Map, got $other")
         }
 
     private def decodeTokens(
@@ -101,20 +101,20 @@ object TransientOutputs {
                                     Right(AssetName(bytes))
                                 case other =>
                                     Left(
-                                      s"transientOutputs: asset name must be at most 32 Bytes, got $other"
+                                      s"l2TransientTokens: asset name must be at most 32 Bytes, got $other"
                                     )
                             }
                             quantity <- quantityMetadatum match {
                                 case Metadatum.Int(quantity) if quantity >= 1 => Right(quantity)
                                 case other =>
                                     Left(
-                                      s"transientOutputs: quantity must be a positive Int, got $other"
+                                      s"l2TransientTokens: quantity must be a positive Int, got $other"
                                     )
                             }
                         } yield assetName -> quantity
                     }
                     .map(SortedMap.from)
-            case Metadatum.Map(_) => Left("transientOutputs: empty token map")
-            case other => Left(s"transientOutputs: token map must be a metadatum Map, got $other")
+            case Metadatum.Map(_) => Left("l2TransientTokens: empty token map")
+            case other => Left(s"l2TransientTokens: token map must be a metadatum Map, got $other")
         }
 }

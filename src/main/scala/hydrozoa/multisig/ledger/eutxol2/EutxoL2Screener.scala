@@ -21,7 +21,7 @@ final class EutxoL2Screener(config: EutxoL2Ledger.Config) extends L2Screener[IO]
         // MissingKeyHashes).
         EitherT.fromEither[IO](for {
             l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2ScreenError(_))
-            _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2ScreenError(_))
+            _ <- HeadIdPinValidator.validate(config, l2Tx.headId).left.map(L2ScreenError(_))
             _ <- HydrozoaTransactionMutator
                 .screenSignatures(config, l2Tx)
                 .left

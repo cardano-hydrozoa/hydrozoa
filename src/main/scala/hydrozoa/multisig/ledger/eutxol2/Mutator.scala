@@ -77,7 +77,7 @@ object HydrozoaTransactionMutator {
             _ <- L2ConformanceValidator.validate(config, state.main, l2Tx)
             // Cross-head-replay pin: the L2 tx must carry this head's headId (unless identity
             // isomorphism is on). Stateless — reclassified into screening in a later phase.
-            _ <- HeadIdPinValidator.validate(config, l2Tx.tx)
+            _ <- HeadIdPinValidator.validate(config, l2Tx.headId)
             // Upstream validators (applied alphabetically for ease of comparison in a file browser
             // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
             // but I've removed the rules that I'm certain won't apply
