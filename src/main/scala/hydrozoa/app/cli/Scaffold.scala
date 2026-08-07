@@ -8,8 +8,10 @@ import java.nio.file.{Files, Path}
 /** The `scaffold` subcommand: materialize the operator-facing workspace files that are baked into
   * the image, so a Docker-only user never has to clone the repo. Into `<dir>` (default `.`) it
   * writes `docker-compose.yml`, `hydrozoa.sh` (the CLI alias — `source` it), and
-  * `head/template/peer-private.template.json.local` (fill in `blockfrostApiKey`) — the layout every
-  * later command expects, so they run with no path flags. Refuses to overwrite existing files.
+  * `template/peer-private.template.json.local` (fill in `blockfrostApiKey`) — the layout every
+  * later command expects, so they run with no path flags. The scaffold dir itself is the head
+  * directory (the default `$HYDROZOA_HOME` that `hydrozoa.sh` sets), so the whole workspace is
+  * self-contained. Refuses to overwrite existing files.
   */
 object Scaffold:
 
@@ -17,7 +19,7 @@ object Scaffold:
     private val resources: List[(String, String)] = List(
       "/scaffold/docker-compose.yml" -> "docker-compose.yml",
       "/scaffold/hydrozoa.sh" -> "hydrozoa.sh",
-      "/scaffold/peer-private.template.json" -> "head/template/peer-private.template.json.local"
+      "/scaffold/peer-private.template.json" -> "template/peer-private.template.json.local"
     )
 
     private val dirArg: Opts[Path] =
@@ -52,7 +54,7 @@ object Scaffold:
             }
             _ <- IO.println(
               s"Scaffolded into $dir. Next: set blockfrostApiKey in " +
-                  "head/template/peer-private.template.json.local, then `source ./hydrozoa.sh`."
+                  "template/peer-private.template.json.local, then `source ./hydrozoa.sh`."
             )
         } yield ExitCode.Success
 
