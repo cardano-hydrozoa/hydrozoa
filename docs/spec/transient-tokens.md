@@ -32,7 +32,7 @@ overlay; nothing anywhere dispatches on policy id.
 
 ## Transaction metadata
 
-The head-label metadatum (`Word64(CIP67.Tags.head)`, tag 4937) reuses the L1 transaction layout —
+The head-label metadatum (label 4937, `L2Metadata.metadataLabel`) reuses the L1 transaction layout —
 role map → head-id map → fields — parsed in `L2Metadata.parse` (`eutxol2/tx/L2Metadata.scala`):
 
 ```

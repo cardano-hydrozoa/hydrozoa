@@ -62,7 +62,7 @@ the application already bakes a headId-like domain separator into its own txs. L
 | Element | Requirement | Checked by |
 |---|---|---|
 | Tx format | native Cardano tx (Babbage outputs), CBOR bytes as the request payload | `L2Tx.parse` |
-| L2 head-label metadata | metadatum label **4937** (`CIP67.Tags.head`), reusing the L1 layout: `{ "L2": { <headId hex>: { "l1BoundOutputs": List(Int), "l2TransientTokens": Map } } }`. `l1BoundOutputs` lists the withdrawal output indices (others stay on L2); `l2TransientTokens` is minting-only and omitted when empty. Mandatory on every tx | `L2Metadata.parse` (parse fails without it) |
+| L2 head-label metadata | metadatum label **4937** (`L2Metadata.metadataLabel`), reusing the L1 layout: `{ "L2": { <headId hex>: { "l1BoundOutputs": List(Int), "l2TransientTokens": Map } } }`. `l1BoundOutputs` lists the withdrawal output indices (others stay on L2); `l2TransientTokens` is minting-only and omitted when empty. Mandatory on every tx | `L2Metadata.parse` (parse fails without it) |
 | headId pin | the `<headId hex>` key of the label-**4937** metadata — mandatory unless `identityIsomorphism` | `HeadIdPinValidator` at screening |
 | Authentication | the tx's own vkey witnesses; no other signature exists | screening (stateless), against the tx id |
 | Validity | the tx's own slot interval, interpreted with the head's `SlotConfig`; block-creation start must fall inside it | submission (stateful) |

@@ -3,15 +3,14 @@ package hydrozoa.multisig.ledger.eutxol2.tx
 import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId.toHex
-import hydrozoa.multisig.ledger.l1.token.CIP67
 import scala.util.Try
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
 import scalus.cardano.ledger.{AssetName, AuxiliaryData, Metadatum, MultiAsset, Transaction, Word64}
 
 /** The head-label metadata every EUTXO L2 transaction carries. It reuses the L1 transaction
-  * metadata layout ([[hydrozoa.multisig.ledger.l1.tx.Metadata]]): the CIP-67 `HYDR` tag (4937)
-  * points at a role map, keyed by the transaction role, pointing at a head-id map, pointing at the
-  * role's fields.
+  * metadata layout ([[hydrozoa.multisig.ledger.l1.tx.Metadata]]): the head-tag label
+  * ([[metadataLabel]]) points at a role map, keyed by the transaction role, pointing at a head-id
+  * map, pointing at the role's fields.
   *
   * {{{
   * { 4937: { "L2": { <headId hex>: {
@@ -36,7 +35,13 @@ final case class L2Metadata(
 
 object L2Metadata {
 
-    /** The transaction role under the CIP-67 head tag (the L1 layout's transaction-type slot). */
+    /** The transaction-metadata label carrying the head-label metadata. Declared here independently
+      * of the beacon-token prefix constants (it happens to share the value): the metadata layer
+      * must not depend on token-naming details.
+      */
+    val metadataLabel: Long = 4937
+
+    /** The transaction role under the head-tag label (the L1 layout's transaction-type slot). */
     val role: String = "L2"
 
     private val l1BoundOutputsKey: Metadatum = Metadatum.Text("l1BoundOutputs")
@@ -60,7 +65,7 @@ object L2Metadata {
             )
         val headMap = Metadatum.Map(Map(Metadatum.Text(headId.toHex) -> Metadatum.Map(fields)))
         val roleMap = Metadatum.Map(Map(Metadatum.Text(role) -> headMap))
-        MD(Map(Word64(CIP67.Tags.head) -> roleMap))
+        MD(Map(Word64(metadataLabel) -> roleMap))
     }
 
     /** Parse the head-label metadata out of `tx`, returning the pinned headId and the L2 metadata.
@@ -78,8 +83,8 @@ object L2Metadata {
                 case None => Left("L2 metadata: transaction carries no auxiliary data")
             }
             roleMap <- requireMap(
-              md.metadata.get(Word64(CIP67.Tags.head)),
-              s"HYDR tag ${CIP67.Tags.head}"
+              md.metadata.get(Word64(metadataLabel)),
+              s"head-tag label $metadataLabel"
             )
             headMap <- requireMap(roleMap.entries.get(Metadatum.Text(role)), s"role '$role'")
             headEntry <- headMap.entries.toList match {

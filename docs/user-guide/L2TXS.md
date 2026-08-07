@@ -14,7 +14,7 @@ carry* is the authoritative reference. The `hydrozoa submit-l2-tx` subcommand
 
 ## Mandatory metadata
 
-Attach **one** auxiliary-data entry at label **`4937`** (the `HYDR` tag). It reuses the same layout
+Attach **one** auxiliary-data entry at label **`4937`** (the Hydrozoa head-tag label). It reuses the same layout
 as Hydrozoa's L1 transactions: the tag points at a role map, keyed by the role `"L2"`, pointing at a
 head-id map, pointing at the transaction's fields.
 
