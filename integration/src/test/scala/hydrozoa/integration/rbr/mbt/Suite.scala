@@ -7,7 +7,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness.CardanoBackend as HarnessCardanoBackend
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.harness.{DiagnosticTracers, MultiPeerHeadHarness}
+import hydrozoa.integration.harness.{DiagnosticTracers, MultiPeerHeadHarness, ScenarioSummary}
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet
 import hydrozoa.integration.rbr.property.{ObservableMarking, RbrSeed}
 import hydrozoa.integration.stage4.Model
@@ -189,6 +189,9 @@ case class RbrMbtSuite(
 
     override def sutResource(state: Model.ModelState): Resource[IO, Sut] =
         for
+            // Acquired first so its finalizer runs last: the run-scoped scenario summary is
+            // rendered at the very end, after harness teardown.
+            summary <- ScenarioSummary.resource(s"$label-ws")
             fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
             evacuationDone <- Resource.eval(Deferred[IO, Unit])
             firstPayoutsLeft <- Resource.eval(Ref[IO].of(Option.empty[Int]))
@@ -208,6 +211,8 @@ case class RbrMbtSuite(
                   // Reusable test-side diagnostic tracer (composed, not baked into production
                   // formatting) that surfaces the RBA's candidate-map / resolved-kzg detail.
                   DiagnosticTracers.rbrDiagnostics |+|
+                  // Run-scoped summarizer: collects only successful actions, prints once at the end.
+                  summary.tracer |+|
                   observerTracer(
                     fallbackDispatched,
                     evacuationDone,
