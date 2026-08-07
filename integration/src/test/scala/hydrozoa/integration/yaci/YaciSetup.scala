@@ -74,7 +74,7 @@ object YaciSetup {
     ): IO[Unit] =
         backend.utxosAt(address).flatMap {
             case Right(u) if u.nonEmpty => log.info(s"topup confirmed for $address")
-            case _ if attemptsLeft > 0 =>
+            case _ if attemptsLeft > 0  =>
                 // Log every ~10s (5 * 2s) so a stalled devnet is visible rather than silent.
                 IO.whenA(attemptsLeft % 5 == 0)(
                   log.info(s"awaiting topup for $address ($attemptsLeft attempts left)")

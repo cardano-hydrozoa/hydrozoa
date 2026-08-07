@@ -31,10 +31,10 @@ object Model {
           */
         absorptionSlack: FiniteDuration,
         meanInterArrivalTimes: Map[HeadPeerNumber, FiniteDuration],
-        /** The (seed-derived) test peers used by this run. Kept in `Params` so `sutResource` — which
-          * only receives `State` — can pass them into the harness; matters for the Yaci-backed
-          * MBT, where `testPeers` is built lazily from the devnet's `Custom` network and can't be
-          * hardcoded at suite-construction time.
+        /** The (seed-derived) test peers used by this run. Kept in `Params` so `sutResource` —
+          * which only receives `State` — can pass them into the harness; matters for the
+          * Yaci-backed MBT, where `testPeers` is built lazily from the devnet's `Custom` network
+          * and can't be hardcoded at suite-construction time.
           */
         testPeers: TestPeers,
         /** L1 backend selector for the harness. Defaults to `Mock`; the Yaci-backed MBT overrides

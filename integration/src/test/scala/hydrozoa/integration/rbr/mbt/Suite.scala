@@ -19,10 +19,7 @@ import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, StackComposerEvent}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.eutxol2.toUtxos
 import hydrozoa.multisig.ledger.event.RequestNumber
-import hydrozoa.multisig.ledger.l1.tx.{
-  EnrichedTx,
-  SettlementTx
-}
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
@@ -249,9 +246,9 @@ case class RbrMbtSuite(
     /** Firewall observer that records, for every settlement the SUT actually submits (i.e. clears
       * the firewall and reaches the backend), its L1 inputs (`submittedSettlementInputs`) and its
       * produced major (`settledMajors`). Crossed against the L1 snapshot at fallback,
-      * `submittedSettlementInputs` distinguishes a deposit genuinely absorbed by a landed settlement
-      * from one whose deposit tx simply hasn't surfaced yet; `settledMajors.max` is the last major
-      * that settled on-chain — the fallback major `M` the head resolves against.
+      * `submittedSettlementInputs` distinguishes a deposit genuinely absorbed by a landed
+      * settlement from one whose deposit tx simply hasn't surfaced yet; `settledMajors.max` is the
+      * last major that settled on-chain — the fallback major `M` the head resolves against.
       */
     private def settlementAbsorptionObserver(
         submittedSettlementInputs: Ref[IO, Set[TransactionInput]],
@@ -342,13 +339,14 @@ case class RbrMbtSuite(
         if depositUtxos.isEmpty then IO.unit else loop
 
     /** The committed evacuation map size the head resolves to under fallback, read from the
-      * `CommittedMap` peer traces. `M` is the last major that settled on-chain (`settledMajors`), or
-      * 0 (the bootstrap major) when nothing settled — the treasury sits at whichever major it last
-      * settled, and the dispute resolves scoped to that major. `N` is the size at the max-minor
-      * committed block of major `M`: the head resolves to the latest minor SEC of `M` (or the base
-      * `(M, 0)` when there are none). Majors above `M` (e.g. the hard-confirmed-but-dropped fallback
-      * major) are excluded, so this tracks the on-chain treasury rather than the off-chain
-      * hard-confirmation frontier. `None` only if no committed map for `M` was ever traced.
+      * `CommittedMap` peer traces. `M` is the last major that settled on-chain (`settledMajors`),
+      * or 0 (the bootstrap major) when nothing settled — the treasury sits at whichever major it
+      * last settled, and the dispute resolves scoped to that major. `N` is the size at the
+      * max-minor committed block of major `M`: the head resolves to the latest minor SEC of `M` (or
+      * the base `(M, 0)` when there are none). Majors above `M` (e.g. the
+      * hard-confirmed-but-dropped fallback major) are excluded, so this tracks the on-chain
+      * treasury rather than the off-chain hard-confirmation frontier. `None` only if no committed
+      * map for `M` was ever traced.
       */
     private def observedCommittedSize(
         committedMaps: List[(BlockVersion.Full, Int)],
@@ -357,7 +355,7 @@ case class RbrMbtSuite(
         val m = settledMajors.maxOption.getOrElse(0)
         committedMaps
             .filter((v, _) => (v.major: Int) == m)
-            .maxByOption((v, _) => (v.minor: Int))
+            .maxByOption((v, _) => v.minor: Int)
             .map((_, size) => size)
 
     /** The model's all-evacuated terminal projection: instantiate `RBRHlNet` seeded with

@@ -22,11 +22,12 @@ import scalus.cardano.ledger.TransactionInput
   * cardano-liaison refund path — so the model can agree with the SUT on each deposit's fate without
   * racing "peer submitted the tx" against "the tx appears on chain".
   *
-  * `committedMaps` accumulates every `StackComposer.CommittedMap` peer trace — the `(version, size)`
-  * of each committed evacuation map. `settledMajors` accumulates the majors of every settlement that
-  * cleared the firewall (i.e. settled on-chain). Together they let `beforeFinalize` read the
-  * committed map size the head resolves to under the last on-chain major `M` directly from the peer
-  * traces, instead of reconstructing it from the model's deposit accounting.
+  * `committedMaps` accumulates every `StackComposer.CommittedMap` peer trace — the
+  * `(version, size)` of each committed evacuation map. `settledMajors` accumulates the majors of
+  * every settlement that cleared the firewall (i.e. settled on-chain). Together they let
+  * `beforeFinalize` read the committed map size the head resolves to under the last on-chain major
+  * `M` directly from the peer traces, instead of reconstructing it from the model's deposit
+  * accounting.
   */
 final case class Sut(
     harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],

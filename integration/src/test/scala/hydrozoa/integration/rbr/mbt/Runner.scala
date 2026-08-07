@@ -11,7 +11,7 @@ object RbrMbtProperties extends YetAnotherProperties("RBR MBT"):
         p.withWorkers(1).withMinSuccessfulTests(1)
 
     val _ = property("ws: autonomous evacuation matches the RBRHlNet terminal") =
-        RbrMbtSuite(nHeadPeers = 3, nCoilPeers = 3, maxVersionMinor = 2).property()
+        RbrMbtSuite(nHeadPeers = 3, nCoilPeers = 3, maxVersionMinor = 2, nCommands = 12).property()
 
 /** Yaci-backed variant of [[RbrMbtProperties]]. Same shape, same shrink cap, but runs the SUT
   * against a real Testcontainers-managed Yaci devnet — one JVM-wide container reset + redeployed
