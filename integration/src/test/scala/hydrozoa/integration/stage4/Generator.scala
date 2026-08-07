@@ -16,16 +16,16 @@ import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, Transact
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
-import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Metadata
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, TransactionInput, TransactionOutput, Utxo, Value, Word64}
+import scalus.cardano.ledger.{AuxiliaryData, Coin, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.uplc.builtin.ByteString
@@ -115,18 +115,21 @@ object CommandGenerators:
 
     private def genAuxiliaryData(
         outputs: List[TransactionOutput],
-        txStrategy: TxStrategy
+        txStrategy: TxStrategy,
+        headId: HeadId
     ): Gen[AuxiliaryData] = for {
         flags <- txStrategy match {
             case TxStrategy.RandomWithdrawals => Gen.listOfN(outputs.size, Gen.choose(1, 2))
             case _                            => Gen.const(outputs.map(_ => 2))
         }
-    } yield Metadata(
-      Map(
-        Word64(CIP67.Tags.head)
-            -> Metadatum.List(flags.map(Metadatum.Int(_)).toIndexedSeq)
-      )
-    )
+    } yield {
+        // Flag 1 marks an L1-bound (withdrawal) output; every other output stays on L2.
+        val l1BoundOutputs = flags.zipWithIndex.collect { case (1, index) => index }
+        L2Metadata.asAuxData(
+          headId,
+          L2Metadata(l1BoundOutputs = l1BoundOutputs, l2TransientTokens = Map.empty)
+        )
+    }
 
     def genL2TxCommand(
         peerNum: HeadPeerNumber,
@@ -155,7 +158,11 @@ object CommandGenerators:
                   outputValues.map(v => Gen.oneOf(l2AddressesInUse.toSeq).map(a => Babbage(a, v)))
                 )
 
-                auxiliaryData <- genAuxiliaryData(outputs, txStrategy).map(Some.apply)
+                auxiliaryData <- genAuxiliaryData(
+                  outputs,
+                  txStrategy,
+                  config.nodeConfigs(HeadPeerNumber.zero).headId
+                ).map(Some.apply)
 
                 txUnsigned = TransactionBuilder
                     .build(
