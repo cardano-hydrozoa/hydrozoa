@@ -5,9 +5,9 @@ import hydrozoa.lib.cardano.scalus.ledger.withZeroFees
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody}
-import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, TransactionHash, TransactionInput, Utxo, Value, Word64}
+import scalus.cardano.ledger.{Coin, TransactionHash, TransactionInput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.uplc.builtin.Builtins.blake2b_256
@@ -36,9 +36,10 @@ object KickRequest {
           0
         )
         val output = Babbage(peerAddress, Value.ada(5), None, None)
-        // The mandatory CIP-67 output-designation list: the single output stays on L2.
-        val metadata = AuxiliaryData.Metadata(
-          Map(Word64(CIP67.Tags.head) -> Metadatum.List(IndexedSeq(Metadatum.Int(2))))
+        // The mandatory L2 head-label metadata: no L1-bound outputs (the single output stays on L2).
+        val metadata = L2Metadata.asAuxData(
+          multiNodeConfig.nodeConfigs(peerNum).headId,
+          L2Metadata(l1BoundOutputs = Nil, l2TransientTokens = Map.empty)
         )
         val txSigned = TransactionBuilder
             .build(

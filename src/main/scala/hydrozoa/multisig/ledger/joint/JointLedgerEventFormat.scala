@@ -27,8 +27,8 @@ object JointLedgerEventFormat:
                   s"brief produced: block=${b.blockNum: Int} type=${briefTypeName(b)} v${v.major: Int}.${v.minor: Int} requests=${b.body.requests.size}",
                   "blockNum" -> s"${b.blockNum: Int}"
                 )
-            case L2CommandFailed(err) =>
-                error(s"L2 command failed: $err")
+            case L2CommandFailed(message) =>
+                error(s"L2 command failed: $message")
             case InvalidStateExpectedProducing =>
                 error(
                   "Expected a `Producing` State, but got `Done`. This indicates that a request was issued to the JointLedger that is only valid when the hydrozoa node is producing a block."

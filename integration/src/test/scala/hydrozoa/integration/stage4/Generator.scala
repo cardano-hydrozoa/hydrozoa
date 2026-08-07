@@ -3,6 +3,7 @@ package hydrozoa.integration.stage4
 import cats.data.NonEmptyList
 import cats.effect.IO
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.integration.stage4.Commands.{*, given}
 import hydrozoa.integration.stage4.Model.{ModelState, given}
@@ -15,18 +16,16 @@ import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiff
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
-import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
+import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Metadata}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
-import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, SutCommand, noOp}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AuxiliaryData, Coin, DatumOption, Metadatum, TransactionInput, TransactionOutput, Utxo, Value, Word64}
+import scalus.cardano.ledger.{AuxiliaryData, Coin, DatumOption, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.uplc.builtin.ByteString
@@ -116,8 +115,8 @@ object CommandGenerators:
 
     /** Per-output l1/l2 designation flags — one per output, in output order: `1` = l1-bound (a
       * withdrawal, exits L2 to L1), `2` = l2-bound (stays on L2). `RandomWithdrawals` mixes them;
-      * every other strategy keeps all outputs on L2. See `L2Tx.utxoPartition` for the consuming
-      * end.
+      * every other strategy keeps all outputs on L2. [[headFlagsMetadata]] turns the flag-1 indices
+      * into the `L2Metadata` `l1BoundOutputs` the L2 ledger consumes.
       */
     private def genOutputFlags(numOutputs: Int, txStrategy: TxStrategy): Gen[List[Int]] =
         txStrategy match {
@@ -125,13 +124,14 @@ object CommandGenerators:
             case _                            => Gen.const(List.fill(numOutputs)(2))
         }
 
-    /** The CIP67 head-tag metadata carrying the per-output l1/l2 [[genOutputFlags]]. */
-    private def headFlagsMetadata(flags: List[Int]): AuxiliaryData =
-        Metadata(
-          Map(
-            Word64(CIP67.Tags.head)
-                -> Metadatum.List(flags.map(Metadatum.Int(_)).toIndexedSeq)
-          )
+    /** The L2 head-tag metadata declaring which outputs are l1-bound (withdrawals), derived from
+      * the per-output l1/l2 [[genOutputFlags]] (flag 1 = l1-bound).
+      */
+    private def headFlagsMetadata(flags: List[Int], headId: HeadId): AuxiliaryData =
+        val l1BoundOutputs = flags.zipWithIndex.collect { case (1, index) => index }
+        L2Metadata.asAuxData(
+          headId,
+          L2Metadata(l1BoundOutputs = l1BoundOutputs, l2TransientTokens = Map.empty)
         )
 
     def genL2TxCommand(
@@ -191,7 +191,9 @@ object CommandGenerators:
                   }
                 )
 
-                auxiliaryData = Some(headFlagsMetadata(flags))
+                auxiliaryData = Some(
+                  headFlagsMetadata(flags, config.nodeConfigs(HeadPeerNumber.zero).headId)
+                )
 
                 txUnsigned = TransactionBuilder
                     .build(

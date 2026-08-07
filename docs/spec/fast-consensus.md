@@ -6,7 +6,7 @@ The **fast cycle** soft-confirms blocks: a single round of per-peer signatures o
 block header, collected eagerly to give clients an immediate guarantee on the head's
 per-block decisions — which requests it included vs. rejected, and which deposits it
 absorbed vs. refunded. It does not commit to L1; for that the slow cycle takes over
-(`docs/slow-consensus.md`).
+(`docs/spec/slow-consensus.md`).
 
 Soft-confirmation requires soft-acks from **every** head peer, including the leader's own
 — it is a saturation requirement, not a quorum. A single missing ack stalls the brief.

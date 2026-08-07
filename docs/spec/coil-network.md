@@ -1,4 +1,4 @@
-# Coil-Ready Peer (M5)
+# Coil-Ready Peer
 
 **Whitepaper sources:**
 - `single-head-gummiworm-protocol/peer-network` — coil topology, replicated set, hard-ack dissemination, communication flow
@@ -10,7 +10,7 @@
 
 ## 1. Goal
 
-Build the **coil-peer node type**: a process that joins a Gummiworm head as a
+The **coil-peer node type** is a process that joins a Gummiworm head as a
 custodial peer, **signs hard acks** to provide the coil quorum that
 hard-confirms stacks (slow-consensus follower role), **submits multisigned L1
 effects** alongside head peers (R8/R9), and **drives the rule-based regime
@@ -23,14 +23,9 @@ independently** if consensus breaks down (R10). Whitepaper anchors —
 
 (`peer-network`).
 
-The protocol is fully designed in the whitepaper; the codebase stops at the
-static config (`HeadConfig.coilPeers`, `HeadParameters.coilQuorum`,
-`config.head.coil.CoilPeers`) and never spawns coil-side actors. M5 closes
-that gap.
-
 Out of scope here:
 - **Persistence + crash-recovery for coil peers** — deferred to
-  `persistence-and-crash-recovery.md` §11 (parallel M5 workstream).
+  `persistence-and-crash-recovery.md` §11.
 - **Permissionless coil-peer marketplace mechanics** (registry, bonds, rent,
   dynamic membership) — separate future-work spec.
 
@@ -54,7 +49,7 @@ The "constant follower" intuition holds with **two precise breaks**:
    at all times"* (`peer-network`). Head peers must sign every stack; the whitepaper
    lets a coil peer decline. **The current implementation does not take this up** —
    a coil peer hard-acks **every** stack, so its `CoilHardAck` family is dense in
-   `StackNumber`; the skip-hard-ack optimization is deferred (§6.1, GUM-152).
+   `StackNumber`; the skip-hard-ack optimization is deferred (§6.1).
 
 On both consensus sides it only **follows** — reconstructing the same local state
 a head follower does, emitting no artifact of its own. **Fast side:** it consumes
@@ -232,10 +227,10 @@ Everything else a coil peer reads from the shared `HeadConfig`: the head set,
 independent `CardanoBackend` connection; the `L2Ledger` is constructed from
 the same configuration head peers use (byte-deterministic across head and coil).
 
-**Script accessor — coil context is type-level (done, Pc2).** `headMultisigScript`
+**Script accessor — coil context is type-level.** `headMultisigScript`
 / `headMultisigAddress` live on the coil-aware `HeadConfig.Bootstrap.Section`
-(which has `coilPeers` + `coilQuorum`); the head-only derivation on
-`HeadPeers.Section` was deleted, so coil context is a *type* requirement — a bare
+(which has `coilPeers` + `coilQuorum`); `HeadPeers.Section` carries no head-only
+derivation, so coil context is a *type* requirement — a bare
 `HeadPeers` value can no longer silently drop the coil branch.
 
 ### 5.2 Actor topology
@@ -268,7 +263,7 @@ unthrottled `BlockWeaver` / `StackComposer` handles directly. A `Limiter` paces 
 *leader*'s output against L1 timing; a coil peer never leads, so there is nothing
 to pace.
 
-### 5.3 New actor `CoilAckSequencer` — the `HubHardAckLane` (per hub, standalone)
+### 5.3 `CoilAckSequencer` — the `HubHardAckLane` (per hub, standalone)
 
 A coil-peer hard-ack has `author = coil`, but the per-author `HardAck` satellites
 are keyed by head-peer author. So coil-peer hard-acks ride their own lane family.
@@ -296,15 +291,14 @@ hub forwarding all `nHubs` lanes. The re-sequenced ack is a `HardAckWithId` whos
 of one lane family (re-sequencing coil acks), while `CoilRelay` is the *fan-out*
 of all lane families to coil peers.
 
-### 5.4 New actor `CoilRelay` — the hub fan-out actor
+### 5.4 `CoilRelay` — the hub fan-out actor
 
-**Why a separate actor.** Earlier the relay tapped the core consensus actors —
-`FastConsensusActor` teed every soft-ack and `SlowConsensusActor` every hard-ack
-to the relay. But a core actor's job ends earlier than the relay's: a
-`SlowConsensusActor` cell saturates at *all head peers + `coilQuorum`* and can
-ignore further hard-acks. As a tap it would have to keep accepting and forwarding
-every *received* hard-ack past that point, purely to relay it — complicating the
-actor we most want to keep simple. So relaying moves out of the core actors into a
+**Why a separate actor.** A core consensus actor's job ends earlier than the
+relay's: a `SlowConsensusActor` cell saturates at *all head peers + `coilQuorum`*
+and ignores further hard-acks. The relay, by contrast, must keep forwarding every
+*received* hard-ack past that point. Tapping the core actors for the fan-out would
+force them to keep accepting and forwarding hard-acks purely to relay them —
+complicating the actors we most want to keep simple. So the fan-out lives in a
 dedicated **`CoilRelay`** (one per hub).
 
 **What it does.** `CoilRelay` is a pure, **stateless** fan-out: it receives each
@@ -331,8 +325,8 @@ stay separate end-to-end.
   `FastConsensusActor` (own soft-acks), `SlowConsensusActor` (own hard-acks), and
   `CoilAckSequencer` (the hub's own `HubHardAckLane`) each send their **own**
   output to `CoilRelay`. This is a single extra recipient for an artifact the
-  actor already produces and broadcasts — *not* the received-traffic relay that
-  was the problem. The core actors send their own; they never relay others'.
+  actor already produces and broadcasts — *not* a relay of received traffic. The
+  core actors send their own; they never relay others'.
 
 So *others' production* reaches `CoilRelay` through the mesh liaisons and *own
 production* through the local producers — and no core consensus actor ever has to
@@ -426,7 +420,7 @@ degenerate one. A coil peer's `Round2Payload.Initial.individualSig` is always
 `None`: only head peers fund the init tx from individual addresses.
 
 
-## 6. Scope and phasing
+## 6. Scope
 
 ### 6.1 Deferred work
 
@@ -434,24 +428,14 @@ Coil-peer follow-ups outside the implemented spine, each tracked separately:
 
 - **Skip-hard-ack policy.** A coil peer may skip producing its own hard-ack when
   the stack has already reached `coilQuorum` without it — designed, not yet
-  plumbed. [GUM-152](https://linear.app/gummiworm-labs/issue/GUM-152/coil-peer-skip-own-hard-ack-production-when-quorum-already-satisfied)
+  plumbed.
 - **Persistence + crash-recovery.** Lands as §11 of
   `persistence-and-crash-recovery.md`, a delta on the head-peer recovery
-  architecture. [GUM-153](https://linear.app/gummiworm-labs/issue/GUM-153/persistence-recovery-update-for-the-coil-peers)
+  architecture.
 - **Rule-based-regime handover.** Spawning `DisputeActor` + `EvacuationActor` for a
-  coil peer. [GUM-150](https://linear.app/gummiworm-labs/issue/GUM-150/switching-to-rule-based-regime-for-coil-peers)
+  coil peer.
 - **R8/R9 effect submission.** Verify a coil peer submits happy-path + fallback
-  effects alongside the head peers. _(link: TBD)_
-
-### 6.2 Implementation phasing
-
-| Step | Deliverable |
-|---|---|
-| Pc1 — **DONE** | `PeerId` tagged sum + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator; threshold `HeadMultisigScript` with the mandatory-head / fixed-count-coil signer split |
-| Pc2 — **DONE** | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); role-gated actor wiring; fixed-count aggregator; `headMultisigScript` moved to `Bootstrap.Section`; `CardanoLiaison` + `RuleBasedRegimeManager` shared |
-| Pc3 — **DONE** (spine) | The single-hub liaison spine + `CoilAckSequencer` / `HubHardAckLane`; 1h/1c stage4 reaches stack hard-confirmation at `coilQuorum = 1`. **Carve-out open:** the app-level coil bootstrap entry point (`Main` dispatch + config loader) |
-| Pc4 — **DONE** | §4 relay/lane rework: `CoilRelay` fan-out + separate per-author lanes (no `relayedMsg`); three composition liaisons, each with its own `Mesh`/`Population`/`OwnHardAck` batches; reshaped `Connections` (contravariant `ActorRef` lets each producer broadcast its own artifact); hub↔coil WS transport (§4.3) |
-| Pc5 — **DONE** | Stage-4 multi-peer model-based test with coil follower(s): Direct + WS 2h1c runs where the coil peer follows every leader's blocks and co-signs every stack |
+  effects alongside the head peers.
 
 ## 7. What changes vs. a head peer
 
@@ -480,8 +464,8 @@ Coil-peer follow-ups outside the implemented spine, each tracked separately:
 - The three liaison shapes (§5.5): `PeerLiaisonHeadToHead`, `PeerLiaisonHubToCoil`,
   `PeerLiaisonCoilToHub`, over a shared per-lane protocol.
 
-The coil bootstrap entry point (`app/` layer, parallel to head's) is the one piece
-still unwired — the Pc3 carve-out (§6).
+The coil bootstrap entry point lives in the `app/` layer parallel to head's —
+`Serve.buildCoilNode` / `runCoilNode`, dispatched on `PeerId.Coil`.
 
 **Changed — slow-side identity.** Coil-authored hard-acks travel the same lanes as
 head-peer ones, so every slow-side identity slot is the tagged

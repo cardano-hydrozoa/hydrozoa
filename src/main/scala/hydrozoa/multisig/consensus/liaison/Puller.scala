@@ -3,7 +3,7 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{IO, Ref}
 import hydrozoa.lib.logging.ContraTracer
 
-/** The pull half of one liaison link (§5.5 of `design/coil-network.md`) [doc-ref]: send
+/** The pull half of one liaison link (§5.5 of `docs/spec/coil-network.md`) [doc-ref]: send
   * `GetMsgBatch`es, consume the remote's `NewMsgBatch` replies, and advance our inbound lane
   * cursors. A single-outstanding-request chain — each reply triggers the next request only after it
   * verifies and advances.

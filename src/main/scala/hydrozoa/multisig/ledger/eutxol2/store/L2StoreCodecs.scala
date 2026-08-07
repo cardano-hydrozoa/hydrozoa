@@ -9,12 +9,12 @@ import io.circe.generic.semiauto.deriveCodec
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, DecodingFailure, Encoder, Json}
 import scala.util.Try
-import scalus.cardano.ledger.{Utxo, Utxos}
+import scalus.cardano.ledger.{MultiAsset, TransactionInput, Utxo, Utxos}
 import scalus.uplc.builtin.ByteString
 
 /** JSON codecs for the values the RocksDB [[RocksDbL2Store]] persists: the logged
-  * [[L2LedgerCommand.Real]] (the log) and the [[L2Snapshot]] (the restore accelerator). The
-  * in-memory store needs none of this; these exist only for the on-disk byte form (§R2b).
+  * [[L2LedgerCommand]] (the log) and the [[L2Snapshot]] (the restore accelerator). The in-memory
+  * store needs none of this; these exist only for the on-disk byte form (§R2b).
   *
   * These are deliberately *store-local* and not the codecs `L2LedgerCommand` exports for the
   * SugarRush wire: those encode `Destination` as a lossy object, so they do not round-trip (see the
@@ -50,7 +50,7 @@ object L2StoreCodecs:
         cborHexCodec[L2Genesis]
     }
 
-    // -- L2LedgerCommand.Real (the log value) --------------------------------
+    // -- L2LedgerCommand (the log value) --------------------------------
 
     private given Codec[L2LedgerCommand.RegisterDeposit] = deriveCodec
     private given Codec[L2LedgerCommand.ApplyDepositDecisions] = deriveCodec
@@ -60,7 +60,7 @@ object L2StoreCodecs:
     private val ApplyDepositDecisionsTag = "ApplyDepositDecisions"
     private val ApplyTransactionTag = "ApplyTransaction"
 
-    given realCommandCodec: Codec[L2LedgerCommand.Real] = Codec.from(
+    given commandCodec: Codec[L2LedgerCommand] = Codec.from(
       Decoder.instance(c =>
           c.keys
               .flatMap(_.headOption)
@@ -94,19 +94,34 @@ object L2StoreCodecs:
       Encoder.encodeList[Utxo].contramap(_.iterator.map((i, o) => Utxo(i, o)).toList)
     )
 
+    private given Codec[MultiAsset] = cborHexCodec[MultiAsset]
+
     given snapshotCodec: Codec[L2Snapshot] = Codec.from(
       Decoder.instance(c =>
           for
               commandNumber <- c.downField("commandNumber").as[Long]
               activeUtxos <- c.downField("activeUtxos").as[Utxos]
+              // transientTokens: list of (TransactionInput, MultiAsset) — no KeyEncoder needed.
+              // Absent field (pre-compartment snapshot) decodes to an empty overlay: none could
+              // have existed before the field did.
+              transientTokens <- c
+                  .downField("transientTokens")
+                  .as[Option[List[(TransactionInput, MultiAsset)]]]
+                  .map(_.getOrElse(Nil))
               // pendingDeposits: list of (RequestId, L2Genesis) — no KeyEncoder[RequestId] needed.
               pendingDeposits <- c.downField("pendingDeposits").as[List[(RequestId, L2Genesis)]]
-          yield L2Snapshot(L2CommandNumber(commandNumber), activeUtxos, pendingDeposits.toMap)
+          yield L2Snapshot(
+            L2CommandNumber(commandNumber),
+            activeUtxos,
+            transientTokens.toMap,
+            pendingDeposits.toMap
+          )
       ),
       Encoder.instance(s =>
           Json.obj(
             "commandNumber" -> (s.commandNumber: Long).asJson,
             "activeUtxos" -> s.activeUtxos.asJson,
+            "transientTokens" -> s.transientTokens.toList.asJson,
             "pendingDeposits" -> s.pendingDeposits.toList.asJson
           )
       )

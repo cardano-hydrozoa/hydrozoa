@@ -16,7 +16,7 @@ import hydrozoa.multisig.persistence.{BackendStore, JournalKey, JournalValue}
   *
   * Payloads are returned **encoded** (the framed `[stamp : 12][wire …]` bytes) — recovery ordering
   * needs only the stamp, and the typed payload is decoded later by the consumer with the key's own
-  * codec. See `design/recovery-implementation-plan.md` R1.
+  * codec.
   */
 object JournalScan:
 

@@ -9,7 +9,7 @@ import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.eutxol2.store.{InMemoryL2Store, L2Snapshot, L2Store}
+import hydrozoa.multisig.ledger.eutxol2.store.{L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -17,6 +17,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, Evacuation
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
+import hydrozoa.multisig.ledger.l2.L2LedgerResponse.UnrecoverableError
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
@@ -68,12 +69,24 @@ object EutxoL2Ledger {
 
     case class State(
         activeUtxos: Utxos,
+        /** The transient-token compartment overlaying `activeUtxos` (the main compartment). Only
+          * the combined view is visible to the ledger rules; evacuation diffs and payouts derive
+          * from `activeUtxos` alone.
+          */
+        transientTokens: TransientTokens,
         pendingDeposits: Map[RequestId, L2Genesis],
         headId: Option[HeadId],
-        /** Monotonic commit counter — the recovery anchor (§R2b). Bumped once per successful
-          * state-mutating command.
+        /** The command number of the last command evaluated — applied *or* rejected (the
+          * coordination index / recovery tip). JointLedger assigns it; the ledger validates and
+          * adopts it (it does not self-increment). A trailing rejection advances it past the last
+          * logged command, so it is not derivable from the log alone.
           */
         commandNumber: L2CommandNumber,
+        /** The command number of the `ApplyDepositDecisions` that froze the ledger, or `None` when
+          * not frozen. A frozen ledger refuses every command (fail-stop) until [[restoreTo]]
+          * rewinds to before the freeze; persisted via `store.putFrozenAt` so it survives a crash.
+          */
+        frozenAt: Option[L2CommandNumber],
     )
 
     object State:
@@ -84,20 +97,17 @@ object EutxoL2Ledger {
         def genesis(config: EutxoL2Ledger.Config): State =
             State(
               activeUtxos = config.initialEvacuationMap.toUtxos,
+              transientTokens = TransientTokens.empty,
               pendingDeposits = Map.empty,
               headId = None,
-              commandNumber = L2CommandNumber.zero
+              commandNumber = L2CommandNumber.zero,
+              frozenAt = None
             )
 
-    /** Build a ledger whose state lives only in memory (no recovery store). Convenience for callers
-      * that do not need crash recovery (e.g. pure model tests).
-      */
-    def apply(config: EutxoL2Ledger.Config): IO[EutxoL2Ledger] =
-        InMemoryL2Store.create.flatMap(store => apply(config, store))
-
-    /** Build a ledger backed by `store` for crash recovery (§R2b): each real command appends to the
-      * store's log and snapshots every [[L2Store.SnapshotInterval]] commits, so
-      * [[EutxoL2Ledger.restoreTo]] can rebuild the state at any past commandNumber.
+    /** Build a ledger backed by `store` for crash recovery: each *applied* command appends to the
+      * store's (sparse) log, and every [[L2Store.SnapshotInterval]]-th command number snapshots; a
+      * rejected command advances the tip only. [[EutxoL2Ledger.restoreTo]] rebuilds the state at
+      * any past commandNumber.
       */
     def apply(config: EutxoL2Ledger.Config, store: L2Store[IO]): IO[EutxoL2Ledger] =
         for ref <- Ref[IO].of(State.genesis(config))
@@ -115,25 +125,30 @@ case class EutxoL2Ledger private (
       EutxoL2LedgerReader[IO] {
     implicit def monadF: Monad[IO] = Async[IO]
 
-    /** Apply one **real** (state-mutating) command to `s`, returning the next state with
-      * `commandNumber` bumped, or an `L2LedgerError`. This is the **single deterministic
-      * transition** — the live mutators call it (then derive their return value + persist), and
+    /** Apply one state-mutating command to `s`, returning the next state with `commandNumber` set
+      * to the caller-assigned value, or an error message. This is the **single deterministic
+      * transition** — the live path ([[submit]], which validates the number first) calls it, and
       * [[restoreTo]] re-folds it over the logged commands. Keeping both paths on one function is
       * what guarantees a restored state is byte-identical to the live one (§R2b "factoring"). Pure
-      * given `(s, command)`: the `transit` core and the deposit folds depend only on their inputs.
+      * given `(commandNumber, s, command)`: the `transit` core and the deposit folds depend only on
+      * their inputs.
       */
     private def applyMutation(
+        commandNumber: L2CommandNumber,
         s: EutxoL2Ledger.State,
-        command: L2LedgerCommand.Real
-    ): Either[L2LedgerError, EutxoL2Ledger.State] = command match
+        command: L2LedgerCommand
+    ): Either[String, EutxoL2Ledger.State] = command match
         case req: L2LedgerCommand.RegisterDeposit =>
+            // No validity gate here — this transition is re-folded by `restoreTo`, and replay must
+            // reconstruct state, not re-litigate validity. The gate lives on the live path, in
+            // `registerDeposit` (see [[validateSpawnedOutputs]]).
             Try(L2Genesis.fromDepositEventRegistration(req)).toEither.left
-                .map(e => L2LedgerError(s"Invalid deposit transaction payload $e"))
+                .map(e => s"Invalid deposit transaction payload $e")
                 .map(l2Genesis =>
                     s.focus(_.pendingDeposits)
                         .modify(_.updated(req.requestId, l2Genesis))
                         .focus(_.commandNumber)
-                        .modify(_.increment)
+                        .replace(commandNumber)
                 )
 
         case req: L2LedgerCommand.ApplyDepositDecisions =>
@@ -144,134 +159,170 @@ case class EutxoL2Ledger private (
                   .focus(_.pendingDeposits)
                   .modify(_.removedAll(req.absorbedDeposits ++ req.rejectedDeposits))
                   .focus(_.commandNumber)
-                  .modify(_.increment)
+                  .replace(commandNumber)
             )
 
         case req: L2LedgerCommand.ApplyTransaction =>
             for
-                l2Tx <- L2Tx.parse(req.l2Payload.bytes, config).left.map(L2LedgerError(_))
-                newActiveUtxos <- HydrozoaTransactionMutator
+                l2Tx <- L2Tx.parse(req.l2Payload.bytes, config)
+                compartments <- HydrozoaTransactionMutator
                     .transit(
                       config = config,
                       time = QuantizedInstant
                           .fromPlutusPosixTime(config.slotConfig, req.blockCreationStartTime),
-                      state = s.activeUtxos,
+                      state = Compartments(s.activeUtxos, s.transientTokens),
                       l2Tx = l2Tx
                     )
                     .left
-                    .map(error => L2LedgerError(error.toString))
+                    .map(error => error.toString)
             yield s
                 .focus(_.activeUtxos)
-                .replace(newActiveUtxos)
+                .replace(compartments.main)
+                .focus(_.transientTokens)
+                .replace(compartments.transientTokens)
                 .focus(_.commandNumber)
-                .modify(_.increment)
+                .replace(commandNumber)
 
-    /** Run a real command: apply the transition, persist it (append to the log; snapshot every
-      * [[L2Store.SnapshotInterval]] commits), and commit the new state. Returns the new state so
-      * each mutator can derive its own return value (diffs / payouts). The append + snapshot happen
-      * **before** `state.set` so a crash can never leave a committed in-memory state with no
-      * durable record of it (write-before-advance, §R2b).
+    /** The gate shared by all three command methods: fail-stop unless `commandNumber` is the
+      * ledger's next expected number. A **frozen** ledger yields a
+      * [[L2LedgerResponse.UnrecoverableError.LedgerFreeze]] to answer; an out-of-order number
+      * yields a [[L2LedgerResponse.UnrecoverableError.OutOfOrder]] (a desync, not a per-request
+      * verdict — JointLedger fail-stops on it). Otherwise it yields the current state to evaluate
+      * the command against. The command number advances on **every** evaluated command (it is a
+      * coordination index, not ledger state): a fresh command that applies is persisted (log + tip
+      * + state); a fresh command the ledger rejects advances the tip alone. Unreachable while
+      * JointLedger drives strictly single-in-flight and in lock-step, but keeps the invariant
+      * self-checking if that ever breaks.
       */
-    private def commitReal(
-        command: L2LedgerCommand.Real
-    ): EitherT[IO, L2LedgerError, EutxoL2Ledger.State] =
-        for
-            s <- EitherT.right(state.get)
-            next <- EitherT.fromEither[IO](applyMutation(s, command))
-            _ <- EitherT.right(store.appendLog(next.commandNumber, command))
-            _ <- EitherT.right(
-              IO.whenA(next.commandNumber.value % L2Store.SnapshotInterval == 0L)(
-                store.putSnapshot(next.commandNumber, L2Snapshot.fromState(next))
-              )
-            )
-            _ <- EitherT.right(state.set(next))
-        yield next
+    private def freshOrFail(
+        commandNumber: L2CommandNumber
+    ): IO[Either[
+      UnrecoverableError.OutOfOrder | UnrecoverableError.LedgerFreeze,
+      EutxoL2Ledger.State
+    ]] =
+        state.get.map { before =>
+            before.frozenAt match
+                case Some(frozen) => Left(UnrecoverableError.LedgerFreeze(commandNumber, frozen))
+                case None =>
+                    val expected = before.commandNumber.increment
+                    if commandNumber != expected then
+                        Left(UnrecoverableError.OutOfOrder(commandNumber, expected))
+                    else Right(before)
+        }
 
-    override def sendScreenTx(l2Payload: ByteString): EitherT[IO, L2LedgerError, Unit] =
-        // The native L2 tx must parse, carry this head's headId pin, and have valid vkey-witness
-        // signatures over the tx id. All stateless; the stateful required-signers / balance / input
-        // checks stay at submission (an unsigned tx that slips past here is still rejected there by
-        // MissingKeyHashes).
-        EitherT.fromEither[IO](for {
-            l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2LedgerError(_))
-            _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2LedgerError(_))
-            _ <- HydrozoaTransactionMutator
-                .screenSignatures(config, l2Tx)
-                .left
-                .map(e => L2LedgerError(e.toString))
-        } yield ())
+    /** Advance the tip for a *rejected* fresh command — durably and in memory — without logging or
+      * changing state, so the coordination index stays in lock-step with JointLedger's. Snapshots
+      * on an interval boundary just like [[persist]] (the state is unchanged, but the snapshot
+      * anchors the boundary), so a reject landing on a boundary can't leave a permanent gap in the
+      * snapshot cadence.
+      */
+    private def rejectAndAdvance(commandNumber: L2CommandNumber): IO[Unit] =
+        store.putTip(commandNumber) >>
+            state.get.flatMap { s =>
+                val advanced = s.focus(_.commandNumber).replace(commandNumber)
+                IO.whenA(commandNumber.value % L2Store.SnapshotInterval == 0L)(
+                  store.putSnapshot(commandNumber, L2Snapshot.fromState(advanced))
+                ) >> state.set(advanced)
+            }
 
-    override def sendScreenDeposit(
-        req: L2LedgerCommand.ScreenDeposit
-    ): EitherT[IO, L2LedgerError, Unit] =
-        EitherT.fromEither[IO](for {
-            // The l2Payload must decode to the deposit's GenesisObligations — the utxos this ledger
-            // will spawn when the deposit is absorbed. Shares the decode with registration
-            // (fromDepositPayload), so nothing screened here can fail to register later.
-            l2Genesis <- Try(
-              L2Genesis.fromDepositPayload(req.depositId, req.l2Payload)
-            ).toEither.left.map(e => L2LedgerError(s"Invalid deposit transaction payload $e"))
-            // depositL2Value must cover the spawned outputs: the treasury absorbs depositL2Value,
-            // so the L2 state the deposit creates cannot exceed it. Covers = the difference is
-            // non-negative in the coin and every asset.
-            spawnedValue = Value.combine(l2Genesis.genesisObligations.map(_.l2OutputValue))
-            diff = req.depositL2Value - spawnedValue
-            _ <- Either.cond(
-              diff.coin.value >= 0 && diff.assets.assets.values.forall(_.values.forall(_ >= 0)),
-              (),
-              L2LedgerError(
-                s"deposit l2Payload outputs ($spawnedValue) exceed depositL2Value (${req.depositL2Value})"
-              )
-            )
-        } yield ())
+    /** Reject a decision the ledger could not apply and **freeze**: advance the tip (the command
+      * was evaluated, like any reject) and record the freeze — in the store and in memory — so
+      * every subsequent command fail-stops until [[restoreTo]] rewinds to before `commandNumber`.
+      */
+    private def rejectAndFreeze(commandNumber: L2CommandNumber): IO[Unit] =
+        rejectAndAdvance(commandNumber) >>
+            store.putFrozenAt(Some(commandNumber)) >>
+            state.update(_.focus(_.frozenAt).replace(Some(commandNumber)))
 
-    override def sendApplyTransaction(
+    /** Durably advance to `next`: append the command to the log, snapshot every
+      * [[L2Store.SnapshotInterval]] commits, record the tip, then set the in-memory state — in that
+      * order, so a crash can never leave a committed in-memory state with no durable record of it
+      * (write-before-advance). The ledger's only apply-advance, run **last** on a successful
+      * command.
+      */
+    private def persist(next: EutxoL2Ledger.State, command: L2LedgerCommand): IO[Unit] =
+        store.appendLog(next.commandNumber, command) >>
+            IO.whenA(next.commandNumber.value % L2Store.SnapshotInterval == 0L)(
+              store.putSnapshot(next.commandNumber, L2Snapshot.fromState(next))
+            ) >>
+            store.putTip(next.commandNumber) >>
+            state.set(next)
+
+    override def applyTransaction(
+        commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyTransaction
-    ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] =
-        for {
-            before <- EitherT.right(state.get)
-            l2Tx <- EitherT.fromEither(
-              L2Tx.parse(req.l2Payload.bytes, config).left.map(error => L2LedgerError(error))
-            )
-            after <- commitReal(req)
-            // Diffs are the symmetric difference between the pre- and post-commit utxo sets.
-            adds <-
-                EitherT.fromEither(
-                  after.activeUtxos
-                      .removedAll(before.activeUtxos.keys)
-                      .map((ti, to) =>
-                          Payout
-                              .Obligation(KeepRaw(to), config)
-                              .map(obligation =>
-                                  EvacuationDiff.Update(ti.toEvacuationKey, obligation)
-                              )
-                      )
-                      .toVector
-                      .sequence
-                      .left
-                      .map(error => L2LedgerError(error.toString))
-                )
-            deletes =
-                before.activeUtxos
-                    .removedAll(after.activeUtxos.keys)
-                    .map((ti, _) => EvacuationDiff.Delete(ti.toEvacuationKey))
-                    .toVector
-            obligations <- EitherT.fromEither(
-              l2Tx.l1utxos
-                  .traverse((utxo: (TransactionInput, TransactionOutput)) =>
-                      Payout.Obligation(KeepRaw(utxo._2), config)
+    ): IO[ApplyTransactionResponse] =
+        freshOrFail(commandNumber).flatMap {
+            case Left(failure) => IO.pure(failure)
+            case Right(before) =>
+                val attempt = for {
+                    l2Tx <- L2Tx.parse(req.l2Payload.bytes, config)
+                    next <- applyMutation(commandNumber, before, req)
+                    // Diffs are the symmetric difference between the pre- and post-apply utxo sets.
+                    adds <- next.activeUtxos
+                        .removedAll(before.activeUtxos.keys)
+                        .map((ti, to) =>
+                            Payout
+                                .Obligation(KeepRaw(to), config)
+                                .map(obligation =>
+                                    EvacuationDiff.Update(ti.toEvacuationKey, obligation)
+                                )
+                        )
+                        .toVector
+                        .sequence
+                        .left
+                        .map(error => error.toString)
+                    deletes = before.activeUtxos
+                        .removedAll(next.activeUtxos.keys)
+                        .map((ti, _) => EvacuationDiff.Delete(ti.toEvacuationKey))
+                        .toVector
+                    obligations <- l2Tx.l1utxos
+                        .traverse((utxo: (TransactionInput, TransactionOutput)) =>
+                            Payout.Obligation(KeepRaw(utxo._2), config)
+                        )
+                        .left
+                        .map(error => error.toString)
+                } yield (
+                  next,
+                  L2LedgerResponse.Applied.ApplyTransaction(
+                    commandNumber,
+                    adds ++ deletes,
+                    Vector.from(obligations)
                   )
-                  .left
-                  .map(error => L2LedgerError(error.toString))
-            )
-        } yield (adds ++ deletes, Vector.from(obligations))
+                )
+                attempt match
+                    case Right((next, applied)) => persist(next, req).as(applied)
+                    case Left(reject) =>
+                        rejectAndAdvance(commandNumber)
+                            .as(L2LedgerResponse.Rejected.ApplyTransaction(commandNumber, reject))
+        }
 
-    override def sendRegisterDeposit(
+    override def registerDeposit(
+        commandNumber: L2CommandNumber,
         req: RegisterDeposit
-    ): EitherT[IO, L2LedgerError, Unit] =
-        commitReal(req).void
-
-    override def currentCommandNumber: IO[L2CommandNumber] = state.get.map(_.commandNumber)
+    ): IO[RegisterDepositResponse] =
+        freshOrFail(commandNumber).flatMap {
+            case Left(failure) => IO.pure(failure)
+            case Right(before) =>
+                val attempt = for {
+                    l2Genesis <- Try(L2Genesis.fromDepositEventRegistration(req)).toEither.left
+                        .map(e => s"Invalid deposit transaction payload $e")
+                    // Reject a deposit that fails value conservation (cover) or spawns a sub-min-ada
+                    // output on the live path, before applyMutation — deliberately not inside
+                    // applyMutation, so restoreTo's replay never re-litigates validity.
+                    _ <- EutxoDepositGates.validateDepositCover(l2Genesis, req.depositL2Value)
+                    _ <- EutxoDepositGates.validateSpawnedOutputs(l2Genesis, config)
+                    next <- applyMutation(commandNumber, before, req)
+                } yield next
+                attempt match
+                    case Right(next) =>
+                        persist(next, req).as(
+                          L2LedgerResponse.Applied.RegisterDeposit(commandNumber)
+                        )
+                    case Left(reject) =>
+                        rejectAndAdvance(commandNumber)
+                            .as(L2LedgerResponse.Rejected.RegisterDeposit(commandNumber, reject))
+        }
 
     /** The committed L2 utxos this address controls — a live filter over `activeUtxos`. Concurrent
       * with the JointLedger-driven command path (a plain `Ref` read), so it observes the state as
@@ -312,19 +363,28 @@ case class EutxoL2Ledger private (
                 collect(current, Vector.empty).map(_.take(limit))
             }
 
-    /** Read the full in-memory state — package-private, for recovery tests that assert a restored
-      * ledger matches the live one. Not part of the [[L2Ledger]] interface.
+    /** Read the full in-memory state — for recovery tests that assert a restored ledger matches the
+      * live one (and observe the command number). Not part of the [[L2Ledger]] interface.
       */
-    private[eutxol2] def peekState: IO[EutxoL2Ledger.State] = state.get
+    private[multisig] def peekState: IO[EutxoL2Ledger.State] = state.get
 
-    /** Reconstruct the committed state as of `commandNumber` (§R2b): load the latest snapshot
-      * `<= commandNumber` (or genesis), then re-fold the logged commands in
+    /** Reconstruct the committed state as of `commandNumber`: load the latest snapshot
+      * `<= commandNumber` (or genesis), then re-fold the *logged* (applied) commands in
       * `(snapshot.commandNumber, commandNumber]` through the same [[applyMutation]] the live path
-      * uses — no re-logging, no re-snapshot, no commandNumber re-bump. Replaces the in-memory
-      * state; afterwards [[currentCommandNumber]] equals `commandNumber`.
+      * uses — no re-logging, no re-snapshot. The command number is a coordination index with gaps
+      * where commands were rejected, so `commandNumber` may land on a gap; the applied subset still
+      * yields the state at that point, and the target is adopted as the tip. Guarded against a
+      * target beyond the recorded tip (a corruption tripwire — the co-anchoring ordering prevents
+      * it).
       */
-    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
+    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
         for {
+            tip <- EitherT.right(store.getTip.map(_.getOrElse(L2CommandNumber.zero)))
+            _ <- EitherT.cond[IO](
+              Ordering[L2CommandNumber].lteq(commandNumber, tip),
+              (),
+              RestoreError.CommandNumberTooHigh(commandNumber, tip)
+            )
             base <- EitherT.right(
               store
                   .latestSnapshotAtOrBefore(commandNumber)
@@ -332,22 +392,33 @@ case class EutxoL2Ledger private (
             )
             commands <- EitherT.right(store.logRange(base.commandNumber, commandNumber))
             restored <- EitherT.fromEither[IO](
-              commands.foldLeft[Either[L2LedgerError, EutxoL2Ledger.State]](Right(base))(
-                (acc, cmd) => acc.flatMap(applyMutation(_, cmd))
+              commands
+                  .foldLeft[Either[String, EutxoL2Ledger.State]](Right(base))((acc, cmd) =>
+                      acc.flatMap(s => applyMutation(s.commandNumber.increment, s, cmd))
+                  )
+                  .left
+                  .map(RestoreError.OtherError(_))
+            )
+            // Respect the freeze: it survives only if it happened at or before the target — rewinding
+            // to before the freezing decision clears it.
+            frozenAt <- EitherT.right(
+              store.getFrozenAt.map(_.filter(Ordering[L2CommandNumber].lteq(_, commandNumber)))
+            )
+            _ <- EitherT.right(store.putTip(commandNumber))
+            _ <- EitherT.right(store.putFrozenAt(frozenAt))
+            _ <- EitherT.right(
+              state.set(
+                restored
+                    .focus(_.commandNumber)
+                    .replace(commandNumber)
+                    .focus(_.frozenAt)
+                    .replace(frozenAt)
               )
             )
-            _ <- EitherT.cond[IO](
-              restored.commandNumber == commandNumber,
-              (),
-              L2LedgerError(
-                s"restoreTo($commandNumber) reached commandNumber ${restored.commandNumber}: log is missing entries"
-              )
-            )
-            _ <- EitherT.right(state.set(restored))
         } yield ()
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
-      * `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).
+      * `transientTokens`, `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).
       */
     private def restoreFromSnapshot(entry: (L2CommandNumber, L2Snapshot)): EutxoL2Ledger.State =
         val snapshot = entry._2
@@ -355,33 +426,61 @@ case class EutxoL2Ledger private (
             .genesis(config)
             .copy(
               activeUtxos = snapshot.activeUtxos,
+              transientTokens = snapshot.transientTokens,
               pendingDeposits = snapshot.pendingDeposits,
               commandNumber = snapshot.commandNumber
             )
 
-    override def sendApplyDepositDecisions(
+    override def applyDepositDecisions(
+        commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
-    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] =
-        for {
-            before <- EitherT.right(state.get)
-            // Diffs are derived from the pre-commit pending deposits (the ones being absorbed).
-            addedL2Utxos = req.absorbedDeposits.flatMap(id => before.pendingDeposits(id).asUtxos)
-            _ <- commitReal(req)
-            evacuationDiffs <-
-                EitherT.fromEither(
-                  Vector
-                      .from(
-                        addedL2Utxos.map((i, o) =>
+    ): IO[ApplyDepositDecisionsResponse] =
+        freshOrFail(commandNumber).flatMap {
+            case Left(failure) => IO.pure(failure)
+            case Right(before) =>
+                val attempt: Either[
+                  UnrecoverableError,
+                  (EutxoL2Ledger.State, L2LedgerResponse.Applied.ApplyDepositDecisions)
+                ] = for {
+                    // Unknown deposit compartments: the decision names deposits the ledger never
+                    // registered (a JointLedger bug, not a deposit-validity failure) — reject +
+                    // freeze. All missing ids are reported, not just the first.
+                    absorbed <- {
+                        val (missing, found) = req.absorbedDeposits.partitionMap(id =>
+                            before.pendingDeposits.get(id).toRight(id)
+                        )
+                        Either.cond(
+                          missing.isEmpty,
+                          found,
+                          UnrecoverableError.CompartmentsNotFound(commandNumber, missing)
+                        )
+                    }
+                    next <- applyMutation(commandNumber, before, req).left
+                        .map(UnrecoverableError.OtherError(commandNumber, _))
+                    // Registration validated each output's min-ada, so this should not fail; if it
+                    // does it is an internal merge error (a ledger bug) — reject + freeze.
+                    diffs <- absorbed
+                        .flatMap(_.asUtxos)
+                        .toVector
+                        .traverse((i, o) =>
                             Payout
                                 .Obligation(o, config)
                                 .map(obligation =>
                                     EvacuationDiff.Update(i.toEvacuationKey, obligation)
                                 )
                         )
-                      )
-                      .sequence
-                      .left
-                      .map(e => L2LedgerError(e.toString))
-                )
-        } yield evacuationDiffs
+                        .leftMap(e =>
+                            UnrecoverableError.OtherError(
+                              commandNumber,
+                              s"internal merge error: $e"
+                            )
+                        )
+                } yield (next, L2LedgerResponse.Applied.ApplyDepositDecisions(commandNumber, diffs))
+                // A rejected decision is a coordination bug, so instead of advancing the tip alone it
+                // **freezes** the ledger: every later command then answers LedgerFreeze until
+                // restoreTo rewinds past it. JointLedger panics on the returned UnrecoverableError.
+                attempt match
+                    case Right((next, applied)) => persist(next, req).as(applied)
+                    case Left(error)            => rejectAndFreeze(commandNumber).as(error)
+        }
 }

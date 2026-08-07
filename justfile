@@ -51,7 +51,7 @@ test:
 build-werror:
   #!/usr/bin/env bash
   trap 'just notify "build-werror"' EXIT
-  CI=true sbt Test/compile integration/Test/compile
+  CI=true sbt "Test/compile; integration/Test/compile"
 
 # Build the packaged `hydrozoa` launcher (target/universal/stage/bin/hydrozoa). Run this once after
 # changing code; the deployment recipes below then invoke it directly, with no sbt startup cost.
@@ -80,8 +80,9 @@ docker-stage:
   trap 'just notify "docker-stage"' EXIT
   sbt Docker/stage
 
-# Scaffold the head workspace files: head/template/peer-private.template.json.local (fill in the
-# Blockfrost key), plus docker-compose.yml + hydrozoa.sh in a fresh dir. Existing files are skipped.
+# Scaffold the head workspace files: head/demo/template/peer-private.template.json.local (fill in
+# the Blockfrost key), plus docker-compose.yml + hydrozoa.sh in a fresh dir. Existing files are
+# skipped.
 scaffold DIR=".": _require-launcher
   {{hydrozoa}} scaffold {{DIR}}
 
@@ -112,7 +113,7 @@ deploy-scripts-and-g2-setup HOME="head/demo" LADDER_REFS="": _require-launcher
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "deploy-scripts-and-g2-setup"' EXIT
-  template="head/template/peer-private.template.json.local"
+  template="{{HOME}}/template/peer-private.template.json.local"
   key="${BLOCKFROST_API_KEY:-}"
   if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
@@ -128,7 +129,7 @@ build-head-config HOME="head/demo": _require-launcher
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "build-head-config"' EXIT
-  template="head/template/peer-private.template.json.local"
+  template="{{HOME}}/template/peer-private.template.json.local"
   key="${BLOCKFROST_API_KEY:-}"
   if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi

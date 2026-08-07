@@ -598,15 +598,15 @@ class HydrozoaRoutes(
     val routes: HttpRoutes[IO] =
         Http4sServerInterpreter[IO]().toRoutes(coreEndpoints ++ coreDocsEndpoints ++ l2Routes)
 
-    /** The core OpenAPI document as YAML — pinned by the golden test (docs/openapi.yaml). */
+    /** The core OpenAPI document as YAML — pinned by the golden test (docs/api/openapi.yaml). */
     def openApiYaml: String =
         OpenAPIDocsInterpreter(docsOptions)
             .toOpenAPI(coreEndpoints.map(_.endpoint), apiTitle, apiVersion)
             .toYaml
 
     /** The EUTXO L2-ledger OpenAPI document as YAML — pinned by the golden test
-      * (docs/openapi-eutxo-l2.yaml). Generated from the endpoint definitions, so it exists whether
-      * or not the L2 routes are mounted on this node.
+      * (docs/api/openapi-eutxo-l2.yaml). Generated from the endpoint definitions, so it exists
+      * whether or not the L2 routes are mounted on this node.
       */
     def l2OpenApiYaml: String =
         OpenAPIDocsInterpreter(docsOptions)

@@ -1,7 +1,7 @@
 # A multi-peer Hydrozoa head: 2 head peers + 4 coil peers, each a single hydrozoa node running the
 # built-in EUTXO L2 ledger in-process — no ledger sidecar, no external database. Every node mounts
 # the shared head-config.json plus its own private.json; head peers publish their user/admin HTTP
-# API, coil peers dial out only. See DEPLOYMENT.md §6.
+# API, coil peers dial out only. See docs/user-guide/DEPLOYMENT.md §6.
 #
 # Because the ledger is in-process, each service is one full container with a single mesh interface,
 # so hydrozoa's mesh WS server binds cleanly to its own service name (bind == dialed address,

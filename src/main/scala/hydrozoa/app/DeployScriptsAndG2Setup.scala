@@ -94,6 +94,7 @@ object DeployScriptsAndG2Setup:
               deployScriptsAndG2Setup(
                 walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
                 mbKey,
+                Bootstrap.defaultPrivateTemplate(home),
                 ladder,
                 Bootstrap.HomeLayout.refUtxos(home)
               )
@@ -102,6 +103,7 @@ object DeployScriptsAndG2Setup:
     private def deployScriptsAndG2Setup(
         walletPath: Path,
         mbBlockfrostKey: Option[String],
+        template: Path,
         ladderRefsPath: Option[Path],
         outPath: Path
     ): IO[ExitCode] =
@@ -110,8 +112,8 @@ object DeployScriptsAndG2Setup:
             blockfrostKey <- mbBlockfrostKey.fold(
               log.info(
                 "no --blockfrost-key / $BLOCKFROST_API_KEY; using blockfrostApiKey from " +
-                    s"${Bootstrap.defaultPrivateTemplate}"
-              ) *> Bootstrap.blockfrostKeyFrom(Bootstrap.defaultPrivateTemplate)
+                    s"$template"
+              ) *> Bootstrap.blockfrostKeyFrom(template)
             )(IO.pure)
             cardanoNetwork <- IO.fromEither[StandardCardanoNetwork](
               networkOfBlockfrostKey(blockfrostKey)

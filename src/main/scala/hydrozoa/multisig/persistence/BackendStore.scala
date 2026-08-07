@@ -16,7 +16,7 @@ import cats.effect.Resource
   *
   * Values are opaque bytes at this layer; the typed view lives one layer up.
   *
-  * See `design/persistence-and-crash-recovery.md` §7.
+  * See `docs/spec/persistence-and-crash-recovery.md` §7.
   */
 trait BackendStore[F[_]]:
     /** Read the value at `(cf, key)`. `None` if the key is absent. */

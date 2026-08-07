@@ -3,13 +3,13 @@ package hydrozoa.multisig.ledger.remote
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputDecoder, keepRawTransactionOutputEncoder}
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand}
-import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.Response
+import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-import io.circe.{Decoder, Encoder}
+import io.circe.{Codec, Decoder, Encoder}
 import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, MultiAsset, PolicyId, ScriptHash, TransactionOutput, Value}
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
@@ -101,33 +101,164 @@ object RemoteL2LedgerCodecs {
         }
     }
 
-    // Response codecs
-    given responseSuccessEncoder: Encoder[Response.Success] = deriveEncoder
-    given responseSuccessDecoder(using CardanoNetwork.Section): Decoder[Response.Success] =
-        deriveDecoder
+    // Applied codecs: one concrete descendant per command. Each is a single-key object tagging the
+    // command; RegisterDeposit carries just the commandNumber, ApplyDepositDecisions adds the diffs,
+    // ApplyTransaction adds diffs + payouts.
+    import L2LedgerResponse.Applied
+    given registerDepositAppliedEncoder: Encoder[Applied.RegisterDeposit] = deriveEncoder
+    given registerDepositAppliedDecoder: Decoder[Applied.RegisterDeposit] = deriveDecoder
+    given applyDepositDecisionsAppliedEncoder: Encoder[Applied.ApplyDepositDecisions] =
+        deriveEncoder
+    given applyDepositDecisionsAppliedDecoder(using
+        CardanoNetwork.Section
+    ): Decoder[Applied.ApplyDepositDecisions] = deriveDecoder
+    given applyTransactionAppliedEncoder: Encoder[Applied.ApplyTransaction] = deriveEncoder
+    given applyTransactionAppliedDecoder(using
+        CardanoNetwork.Section
+    ): Decoder[Applied.ApplyTransaction] = deriveDecoder
 
-    given responseFailureEncoder: Encoder[Response.Failure] = deriveEncoder
-    given responseFailureDecoder: Decoder[Response.Failure] = deriveDecoder
-
-    given responseEncoder: Encoder[Response] = {
-        case s: Response.Success => s.asJson
-        case e: Response.Failure => e.asJson
+    given appliedEncoder: Encoder[Applied] = {
+        case a: Applied.RegisterDeposit => io.circe.Json.obj("RegisterDeposit" -> a.asJson)
+        case a: Applied.ApplyDepositDecisions =>
+            io.circe.Json.obj("ApplyDepositDecisions" -> a.asJson)
+        case a: Applied.ApplyTransaction => io.circe.Json.obj("ApplyTransaction" -> a.asJson)
     }
 
-    given responseDecoder(using CardanoNetwork.Section): Decoder[Response] = Decoder.instance { c =>
-        c.keys
-            .flatMap(_.headOption)
-            .toRight(
-              io.circe.DecodingFailure("Response must have exactly one field", c.history)
+    given appliedDecoder(using CardanoNetwork.Section): Decoder[Applied] =
+        Decoder.instance { c =>
+            c.keys
+                .flatMap(_.headOption)
+                .toRight(io.circe.DecodingFailure("Applied must have exactly one field", c.history))
+                .flatMap {
+                    case "RegisterDeposit" =>
+                        c.downField("RegisterDeposit").as[Applied.RegisterDeposit]
+                    case "ApplyDepositDecisions" =>
+                        c.downField("ApplyDepositDecisions").as[Applied.ApplyDepositDecisions]
+                    case "ApplyTransaction" =>
+                        c.downField("ApplyTransaction").as[Applied.ApplyTransaction]
+                    case other =>
+                        Left(io.circe.DecodingFailure(s"Unknown Applied type: $other", c.history))
+                }
+        }
+
+    // Rejected is a per-command family (RegisterDeposit / ApplyTransaction), each carrying a
+    // free-form reason. circe's sealed-trait derivation nests by variant name (same shape as Applied).
+    given rejectedEncoder: Encoder[L2LedgerResponse.Rejected] = deriveEncoder
+    given rejectedDecoder: Decoder[L2LedgerResponse.Rejected] = deriveDecoder
+
+    // UnrecoverableError cases. Each is emitted as a flat, single-key object at the response level
+    // (below), so OutOfOrder / LedgerFreeze keep the exact wire tags they had before the
+    // decision-reject reasons and the desync / freeze branches were unified under one type.
+    import L2LedgerResponse.UnrecoverableError
+    given compartmentsNotFoundEncoder: Encoder[UnrecoverableError.CompartmentsNotFound] = {
+        import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
+        deriveEncoder
+    }
+    given compartmentsNotFoundDecoder: Decoder[UnrecoverableError.CompartmentsNotFound] = {
+        import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
+        deriveDecoder
+    }
+    given outOfOrderEncoder: Encoder[UnrecoverableError.OutOfOrder] = deriveEncoder
+    given outOfOrderDecoder: Decoder[UnrecoverableError.OutOfOrder] = deriveDecoder
+    given ledgerFreezeEncoder: Encoder[UnrecoverableError.LedgerFreeze] = deriveEncoder
+    given ledgerFreezeDecoder: Decoder[UnrecoverableError.LedgerFreeze] = deriveDecoder
+    given otherErrorEncoder: Encoder[UnrecoverableError.OtherError] = deriveEncoder
+    given otherErrorDecoder: Decoder[UnrecoverableError.OtherError] = deriveDecoder
+
+    // Each response is a single-key object tagging the outcome kind (Applied / Rejected are nested
+    // families; the UnrecoverableError cases are flat so OutOfOrder / LedgerFreeze keep their tags).
+    given responseEncoder: Encoder[L2LedgerResponse] = {
+        case a: L2LedgerResponse.Applied  => io.circe.Json.obj("Applied" -> a.asJson)
+        case r: L2LedgerResponse.Rejected => io.circe.Json.obj("Rejected" -> r.asJson)
+        case e: UnrecoverableError.CompartmentsNotFound =>
+            io.circe.Json.obj("CompartmentsNotFound" -> e.asJson)
+        case o: UnrecoverableError.OutOfOrder   => io.circe.Json.obj("OutOfOrder" -> o.asJson)
+        case f: UnrecoverableError.LedgerFreeze => io.circe.Json.obj("LedgerFreeze" -> f.asJson)
+        case e: UnrecoverableError.OtherError   => io.circe.Json.obj("OtherError" -> e.asJson)
+    }
+
+    given responseDecoder(using CardanoNetwork.Section): Decoder[L2LedgerResponse] =
+        Decoder.instance { c =>
+            c.keys
+                .flatMap(_.headOption)
+                .toRight(
+                  io.circe.DecodingFailure("Response must have exactly one field", c.history)
+                )
+                .flatMap {
+                    case "Applied"  => c.downField("Applied").as[L2LedgerResponse.Applied]
+                    case "Rejected" => c.downField("Rejected").as[L2LedgerResponse.Rejected]
+                    case "CompartmentsNotFound" =>
+                        c.downField("CompartmentsNotFound")
+                            .as[UnrecoverableError.CompartmentsNotFound]
+                    case "OutOfOrder" =>
+                        c.downField("OutOfOrder").as[UnrecoverableError.OutOfOrder]
+                    case "LedgerFreeze" =>
+                        c.downField("LedgerFreeze").as[UnrecoverableError.LedgerFreeze]
+                    case "OtherError" =>
+                        c.downField("OtherError").as[UnrecoverableError.OtherError]
+                    case other =>
+                        Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
+                }
+        }
+
+    // Request codecs. Each request is a single-key object tagging the command variant, whose value
+    // carries the Hydrozoa-assigned `commandNumber` and the `command` payload.
+    import RemoteL2Ledger.Request
+    given requestCodec: Codec[Request] = {
+        def tagged(
+            tag: String,
+            commandNumber: L2CommandNumber,
+            command: io.circe.Json
+        ): io.circe.Json =
+            io.circe.Json.obj(
+              tag -> io.circe.Json.obj(
+                "commandNumber" -> commandNumber.asJson,
+                "command" -> command
+              )
             )
-            .flatMap {
-                case "Success" =>
-                    c.downField("Success").as[Response.Success]
-                case "Failure" =>
-                    c.downField("Failure").as[Response.Failure]
-                case other =>
-                    Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
-            }
+
+        Codec.from(
+          encodeA = {
+              case Request.RegisterDeposit(cn, command) =>
+                  tagged("RegisterDeposit", cn, command.asJson)
+              case Request.ApplyDepositDecisions(cn, command) =>
+                  tagged("ApplyDepositDecisions", cn, command.asJson)
+              case Request.ApplyTransaction(cn, command) =>
+                  tagged("ApplyTransaction", cn, command.asJson)
+          },
+          decodeA = c =>
+              c.keys
+                  .flatMap(_.headOption)
+                  .toRight(
+                    io.circe.DecodingFailure("Request must have exactly one field", c.history)
+                  )
+                  .flatMap { tag =>
+                      val body = c.downField(tag)
+                      val cn = body.downField("commandNumber").as[L2CommandNumber]
+                      val command = body.downField("command")
+                      tag match {
+                          case "RegisterDeposit" =>
+                              for {
+                                  n <- cn
+                                  cmd <- command.as[L2LedgerCommand.RegisterDeposit]
+                              } yield Request.RegisterDeposit(n, cmd)
+                          case "ApplyDepositDecisions" =>
+                              for {
+                                  n <- cn
+                                  cmd <- command.as[L2LedgerCommand.ApplyDepositDecisions]
+                              } yield Request.ApplyDepositDecisions(n, cmd)
+                          case "ApplyTransaction" =>
+                              for {
+                                  n <- cn
+                                  cmd <- command.as[L2LedgerCommand.ApplyTransaction]
+                              } yield Request.ApplyTransaction(n, cmd)
+                          case other =>
+                              Left(
+                                io.circe.DecodingFailure(s"Unknown request type: $other", c.history)
+                              )
+                      }
+                  }
+        )
     }
 
     // KeepRaw[TransactionOutput] CBOR-hex codec is hoisted into

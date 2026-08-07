@@ -25,7 +25,7 @@ import hydrozoa.multisig.consensus.{FastConsensusActor, StackComposer, UserReque
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
+import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
@@ -92,7 +92,7 @@ given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
   */
 object JointLedgerTestHelpers {
     type JLTest[A] = TestM[TestR, A]
-    val jlTest = TestMFixedEnv[TestR]()
+    val jlTest: TestMFixedEnv[TestR] = TestMFixedEnv[TestR]()
     import jlTest.*
 
     /** An agent of this test, pretending to be a [[FastConsensusActor]] for [[JointLedger]]. */
@@ -142,7 +142,7 @@ object JointLedgerTestHelpers {
                     consensusAgent <- Resource.eval(system.actorOf(ConsensusAgent()))
                     stackComposerSink <- Resource.eval(system.actorOf(StackComposerSink()))
 
-                    eutxoLedger <- Resource.eval(EutxoL2Ledger(config))
+                    eutxoLedger <- Resource.eval(InMemoryL2Store.ledger(config))
                     persistenceTracer =
                         Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
                     persistenceBackend <- InMemoryBackendStore.open(persistenceTracer)

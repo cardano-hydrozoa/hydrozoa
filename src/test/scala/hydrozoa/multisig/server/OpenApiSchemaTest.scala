@@ -16,16 +16,16 @@ import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Golden tests pinning the two committed OpenAPI documents to the schemas generated from the tapir
-  * endpoint definitions: `docs/openapi.yaml` (the core node API) and `docs/openapi-eutxo-l2.yaml`
-  * (the EUTXO L2-ledger query API, served only on a node running the EUTXO ledger). Each
-  * regenerates its document and fails if the committed copy is stale, so the checked-in schemas can
-  * never silently drift from the routes. Regenerate by re-running these tests (a stale run
-  * overwrites the file) and committing the result.
+  * endpoint definitions: `docs/api/openapi.yaml` (the core node API) and
+  * `docs/api/openapi-eutxo-l2.yaml` (the EUTXO L2-ledger query API, served only on a node running
+  * the EUTXO ledger). Each regenerates its document and fails if the committed copy is stale, so
+  * the checked-in schemas can never silently drift from the routes. Regenerate by re-running these
+  * tests (a stale run overwrites the file) and committing the result.
   */
 class OpenApiSchemaTest extends AnyFunSuite:
 
-    private val coreSchema: Path = Path.of("docs/openapi.yaml")
-    private val l2Schema: Path = Path.of("docs/openapi-eutxo-l2.yaml")
+    private val coreSchema: Path = Path.of("docs/api/openapi.yaml")
+    private val l2Schema: Path = Path.of("docs/api/openapi-eutxo-l2.yaml")
 
     private val spec = defaultSpec.copy(nPeers = 1)
 
@@ -77,11 +77,11 @@ class OpenApiSchemaTest extends AnyFunSuite:
                   s"Review and commit the updated $path."
             )
 
-    test("docs/openapi.yaml is up to date with the core tapir endpoint definitions") {
+    test("docs/api/openapi.yaml is up to date with the core tapir endpoint definitions") {
         checkGolden(coreSchema, withRoutes(_.openApiYaml))
     }
 
-    test("docs/openapi-eutxo-l2.yaml is up to date with the EUTXO L2 endpoint definitions") {
+    test("docs/api/openapi-eutxo-l2.yaml is up to date with the EUTXO L2 endpoint definitions") {
         checkGolden(l2Schema, withRoutes(_.l2OpenApiYaml))
     }
 

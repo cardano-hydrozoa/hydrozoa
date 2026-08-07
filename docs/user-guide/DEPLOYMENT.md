@@ -63,7 +63,7 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
 - **Roles.** Head peers: full consensus participants (lead blocks/stacks, sign soft- and
   hard-acks, serve the user HTTP API). Coil peers: constant followers that sign hard-acks only;
   they run no HTTP server and no WS server — each dials its hub head peer's `/hub` route
-  (`design/coil-network.md` §2, §4.3). The L1 multisig is
+  (`docs/spec/coil-network.md` §2, §4.3). The L1 multisig is
   `AllOf(headVKeys) ∧ AtLeast(coilQuorum, coilVKeys)`.
 - **State.** Each node keeps two RocksDB stores under its data dir: the consensus store
   (`peer-<label>/rocksdb`) and the EUTXO ledger store
@@ -80,8 +80,9 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
   - **L2 EUTXO queries** (EUTXO ledger only — a remote-ledger node serves neither):
     `GET /l2/cardano-eutxo/utxos/{address}`, `GET /l2/cardano-eutxo/transactions`.
 
-  Interactive **Swagger UI at `/docs`**; the authoritative machine-readable contract is
-  [`docs/openapi.yaml`](docs/openapi.yaml) (regenerated from the endpoint definitions).
+  Interactive **Swagger UI at `/docs`**; the authoritative machine-readable contract is published as
+  the [API reference](../api/) — Redoc over the OpenAPI documents, regenerated from the endpoint
+  definitions.
 
 ### Network matrix
 
@@ -91,7 +92,7 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
 | 8081 | head-1 user/admin HTTP API | users, admins | `peer-private.json` (`httpHost`/`httpPort`) — in-container `8080`, published to host `8081` |
 | 4001 | hydrozoa mesh WS server: `/head` (mesh), `/hub` (hub→coil) | other head peers; hubbed coil peers | `webSocketAddress` in the shared head config — **bind address == dialed address** |
 
-Head-mesh dialing convention: lower-numbered peer dials higher (`design/coil-network.md` §4.3).
+Head-mesh dialing convention: lower-numbered peer dials higher (`docs/spec/coil-network.md` §4.3).
 Coil peers dial out only; they need no inbound port at all. Every node also needs outbound HTTPS
 to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
@@ -100,8 +101,8 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 ## 2. Getting Hydrozoa
 
 > Assumes **rootless Docker** (the tested setup): the alias runs the container as root, which under
-> rootless maps to *your* host user, so it can write the mounted `head/`. On rootful Docker, add
-> `-u "$(id -u):$(id -g)"` to the alias instead.
+> rootless maps to *your* host user, so it can write the mounted head directory. On rootful Docker,
+> add `-u "$(id -u):$(id -g)"` to the alias instead.
 
 **You do not need to clone this repo.** The published image carries the whole CLI plus the workspace
 files (`docker-compose.yml`, `hydrozoa.sh`, config template), so pull it and scaffold a head
@@ -112,13 +113,14 @@ mkdir myhead && cd myhead
 docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1
 docker run --rm -v "$PWD:/work" -w /work --user root \
   ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1 scaffold .
-# writes docker-compose.yml, hydrozoa.sh, head/template/peer-private.template.json.local
+# writes docker-compose.yml, hydrozoa.sh, template/peer-private.template.json.local
 ```
 
-Then load the CLI alias and check you are on the version you expect:
+The scaffold dir is itself the head directory — everything the CLI reads and writes lives directly
+under it. Then load the CLI alias and check you are on the version you expect:
 
 ```bash
-source ./hydrozoa.sh   # sets the `hydrozoa` alias + HYDROZOA_HOME=./head/demo
+source ./hydrozoa.sh   # sets the `hydrozoa` alias + HYDROZOA_HOME (this folder, an absolute path)
 
 hydrozoa version       # verify the image you are running
 #   hydrozoa 0.1.1
@@ -142,7 +144,7 @@ not using Nix (the runtime passes `--sun-misc-unsafe-memory-access=allow`).
 
 ```bash
 nix develop            # or direnv (.envrc = use flake .)
-sbt compile            # sbtn for the resident client
+sbt compile            # compile the project
 just test              # unit tests
 just integration-fast  # multi-peer integration subset
 ```
@@ -222,8 +224,9 @@ pipeline turns operator-authored files into the two runtime files each node need
 
 ### Step 1 — Edit the template
 
-Set `blockfrostApiKey` in `head/template/peer-private.template.json.local` (scaffolded in §2;
-Nix users create it with `just scaffold`).
+Set `blockfrostApiKey` in `$HYDROZOA_HOME/template/peer-private.template.json.local` — i.e.
+`template/peer-private.template.json.local` in the Docker workspace, or `head/demo/template/…` for a
+local `just` run (scaffolded in §2; Nix users create it with `just scaffold`).
 
 - **Blockfrost key** — keygen-fleet reads only the `.local` file and refuses to run without it,
   so the real key never lands in a committed file. The build steps that query the chain
@@ -238,8 +241,8 @@ The template is read at generation time — regenerating means fresh keys, so re
 ### Step 2 — Generate keys, roster, and defaults
 
 ```bash
-hydrozoa keygen-fleet 2 4 2        # Docker; HEADS COILS QUORUM, → head/demo/
-just keygen-fleet 2 4 2            # local; custom dir: just keygen-fleet 2 4 2 head/mydir
+hydrozoa keygen-fleet 2 4 2        # Docker; HEADS COILS QUORUM, → $HYDROZOA_HOME/ (the workspace)
+just keygen-fleet 2 4 2            # local; → head/demo/ (custom dir: just keygen-fleet 2 4 2 head/mydir)
 ```
 
 One command generates a key pair per peer (registered in the roster, with a filled private config),
@@ -247,7 +250,7 @@ then the shared `defaults.json` + `l2-cardano-eutxo.json`; the network comes fro
 Blockfrost-key prefix. Output layout:
 
 ```
-head/demo/
+$HYDROZOA_HOME/                    # Docker: your scaffold dir; local just: head/demo/
 ├── bootstrap/                     # the operator-facing bootstrap directory (build-head-config input)
 │   ├── roster.json                #   peer topology
 │   ├── defaults.json              #   network + head params (coilQuorum, timing…) + per-peer equity
@@ -309,7 +312,7 @@ tx fee; step 5 logs the exact lovelace required and fails with the shortfall if 
 ```bash
 hydrozoa deploy-scripts-and-g2-setup   # Docker
 just deploy-scripts-and-g2-setup        # local
-# -> head/demo/bootstrap/ref-utxos.json (funded by head-0's wallet under the head dir)
+# -> $HYDROZOA_HOME/bootstrap/ref-utxos.json (funded by head-0's wallet under the head dir)
 ```
 
 The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators — and
@@ -326,7 +329,7 @@ the ladder never changes.
 ### Step 5 — Build the shared head config
 
 ```bash
-hydrozoa build-head-config   # Docker; reads head/demo/bootstrap/, writes head/demo/head-config/head-config.json
+hydrozoa build-head-config   # Docker; reads $HYDROZOA_HOME/bootstrap/, writes $HYDROZOA_HOME/head-config/head-config.json
 just build-head-config       # local
 ```
 
@@ -361,7 +364,7 @@ Caveats:
   `/opt/docker/.hydrozoa-data`.
 - **The head initializes only when all head peers + at least `coilQuorum` coil peers are up.** Start
   order doesn't matter (dialers retry); stack 0 hard-confirms with all head signatures +
-  `coilQuorum` coil signatures (`design/coil-network.md` §5.7).
+  `coilQuorum` coil signatures (`docs/spec/coil-network.md` §5.7).
 - **Rootless docker (NixOS):** the mesh network pins `com.docker.network.driver.mtu: 1400` and each
   node sets an upstream `dns:` — with slirp4netns's default MTU / resolver, outbound TLS to
   Blockfrost can fail. If containers have no outbound connectivity at all, restart the daemon
@@ -369,7 +372,8 @@ Caveats:
 
 ### Bringing up the head
 
-Default — pull the published image and run `head/demo`:
+Default — pull the published image and run the scaffolded head (`hydrozoa.sh` exports
+`HYDROZOA_HOME`, so `docker compose` mounts the same workspace the CLI generated into):
 
 ```bash
 docker compose up -d           # pulls ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1 on first run
@@ -382,12 +386,13 @@ locally built one (§3):
 HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.1 docker compose up -d
 ```
 
-**Another configuration** — `HYDROZOA_HOME` (default `./head/demo`) selects the directory each
-container mounts `head-config.json` + its `private.json` from. It's the same variable the CLI
-generates into, so one value drives both the build and the run:
+**Another configuration** — `HYDROZOA_HOME` selects the directory each container mounts
+`head-config.json` + its `private.json` from (`hydrozoa.sh` sets it to your scaffolded workspace; the
+compose file itself falls back to `./head/demo`, the local `just` default). It's the same variable
+the CLI generates into, so one value drives both the build and the run:
 
 ```bash
-HYDROZOA_HOME=./head/other docker compose up -d
+HYDROZOA_HOME=/abs/path/to/other-head docker compose up -d
 ```
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
@@ -440,8 +445,8 @@ just build-head-config
 docker compose up -d           # right after the build — the config is freshest now
 ```
 
-**Reusable across restarts:** the whole `head/demo/bootstrap/` directory and every
-`head/demo/private/` config — identities and keys are not time- or UTxO-bound, and the
+**Reusable across restarts:** the whole `$HYDROZOA_HOME/bootstrap/` directory and every
+`$HYDROZOA_HOME/private/` config — identities and keys are not time- or UTxO-bound, and the
 reference-script UTxOs sit at an unspendable burn address. Only `head-config/head-config.json` is
 single-use. Regenerate the fleet (`just keygen-fleet`) only for fresh identities; that changes head
 peer 0's address, so re-fund it. The hydrozoa docker image only needs rebuilding after hydrozoa
@@ -464,7 +469,7 @@ just submit-l2-tx        # local; or: just submit-l2-tx head/demo http://localho
 Pick a peer (its key signs), pick one of its L2 utxos (fetched from `GET /l2/cardano-eutxo/utxos/{address}`
 — the opening `l2-cardano-eutxo.json` outputs sit at the head peers' addresses), enter a
 destination (bech32, or a peer name like `head-1`) and a value. The tool builds the zero-fee
-native tx (with the CIP-67 output designations and the headId pin in the metadata), signs it with
+native tx (with the output designations and the headId pin in the metadata), signs it with
 the peer wallet, and posts it to `POST /head/requests`. An example session — send 2 of head-0's
 opening 5 ADA to head-1:
 

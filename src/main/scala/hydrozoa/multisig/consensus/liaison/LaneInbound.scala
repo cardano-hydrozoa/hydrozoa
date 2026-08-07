@@ -2,8 +2,8 @@ package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.{IO, Ref}
 
-/** An **inbound** next-expected lane (§4.2 of `design/coil-network.md`) [doc-ref]: a lane we only
-  * receive on. Wraps an [[inboundCursor]] naming the next number we expect from the remote; we
+/** An **inbound** next-expected lane (§4.2 of `docs/spec/coil-network.md`) [doc-ref]: a lane we
+  * only receive on. Wraps an [[inboundCursor]] naming the next number we expect from the remote; we
   * [[verify]] a received slice against it (pure) and [[advanceTo]] its successor on accept. On a
   * link that produces *and* receives on this number space it is paired with a [[LaneOutbound]] (see
   * [[LaneBidirectional]]); on a receive-only link it stands alone.

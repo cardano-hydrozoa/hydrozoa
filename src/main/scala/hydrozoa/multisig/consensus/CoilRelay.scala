@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.stack.StackBrief
 
 /** The hub-side fan-out that distributes the whole population stream down to a hub's coil peers
-  * (§5.4 of `design/coil-network.md`) [doc-ref].
+  * (§5.4 of `docs/spec/coil-network.md`) [doc-ref].
   *
   * '''Stateless — no buffer, no cursors, no reordering.''' It forwards each artifact it is handed
   * to '''every''' [[PeerLiaisonHubToCoil]] the hub runs; each liaison appends it to its own

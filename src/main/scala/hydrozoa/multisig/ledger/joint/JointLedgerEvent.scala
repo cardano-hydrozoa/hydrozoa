@@ -6,7 +6,6 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockHeaderEvent
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMapEvent
-import hydrozoa.multisig.ledger.l2.L2LedgerError
 
 /** Typed events emitted by [[JointLedger]]. Pure data; formatters in [[JointLedgerEventFormat]]
   * decide how each variant is rendered to a particular sink (SLF4J text, JSONL protocol trace,
@@ -23,7 +22,7 @@ object JointLedgerEvent:
 
     // ===== L2 ledger failures =====
 
-    final case class L2CommandFailed(err: L2LedgerError) extends JointLedgerEvent
+    final case class L2CommandFailed(message: String) extends JointLedgerEvent
 
     // ===== Internal-state errors =====
 
