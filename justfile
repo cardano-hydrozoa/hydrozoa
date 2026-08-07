@@ -51,7 +51,7 @@ test:
 build-werror:
   #!/usr/bin/env bash
   trap 'just notify "build-werror"' EXIT
-  CI=true sbt Test/compile integration/Test/compile
+  CI=true sbt "Test/compile; integration/Test/compile"
 
 # Build the packaged `hydrozoa` launcher (target/universal/stage/bin/hydrozoa). Run this once after
 # changing code; the deployment recipes below then invoke it directly, with no sbt startup cost.
