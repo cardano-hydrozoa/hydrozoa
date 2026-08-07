@@ -200,10 +200,18 @@ integration-yaci:
 
 # Yaci suites that spin up their own devnet via Testcontainers (require Docker).
 # Bypasses the build.sbt Tests.Exclude that keeps these out of `just integration`.
+#
+# The probes and the RBR MBT run in SEPARATE sbt/JVM invocations on purpose: they share a JVM-wide
+# singleton devnet container (the probes via `YaciDevnet.resource`, the MBT via `acquireShared`
+# without a reset). In one JVM the probes' script deploy spends head-peer-0's genesis inputs before
+# the MBT's own deploy, which then fails "all inputs are spent". A fresh JVM per group gives each a
+# pristine container.
 integration-yaci-docker:
   #!/usr/bin/env bash
+  set -eo pipefail
   trap 'just notify "integration-yaci-docker"' EXIT
-  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.* hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
+  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
+  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
 
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"
