@@ -78,6 +78,7 @@ object RBRHlNet {
         case VotableVersions
         case PayoutObligations
         case EvacuationOutput
+        case WithdrawalOutput
 
     object RBRPlaceId {
         given Ordering[RBRPlaceId] = Ordering.by(_.ordinal)
@@ -142,6 +143,11 @@ object RBRHlNet {
         payoutObligations: PlaceRef[RBRPlaceId, (BigInt, TransactionOutput)],
         resolvedVersion: PlaceRef[RBRPlaceId, BigInt],
         evacuationOutput: PlaceRef[RBRPlaceId, (BigInt, TransactionOutput)],
+        // A static, inert tally of L2 outputs that withdrew to L1 *before* fallback (via
+        // `RolloutTx`). They sit outside the dispute entirely — seeded once and never touched by a
+        // transition — so the terminal marking reports exactly the withdrawal count. Distinct from
+        // `evacuationOutput` (the resolved SEC's committed obligations, drained by `Evacuation`).
+        withdrawalOutput: PlaceRef[RBRPlaceId, TransactionOutput],
     )
 
     /** The listing of structurally-valid ballot colors: version is meaningful only for `Voted`
@@ -189,6 +195,9 @@ object RBRHlNet {
         // TODO: a strictly-positive count — retype to a positive Int type.
         nHeadPeers: Int,
         committedObligations: Map[BigInt, List[TransactionOutput]],
+        // L2 outputs that withdrew to L1 before fallback — seeds the inert `WithdrawalOutput` place.
+        // Defaults to empty: a run with no withdrawals (and every non-MBT caller) leaves it 0.
+        withdrawnOutputs: List[TransactionOutput] = List.empty,
     ): ValidatedNel[NetBuilder.Error, HlNet[RBRPlaceId, RBRTransitionId, Any]] = {
         import RBRPlaceId.*
 
@@ -317,6 +326,9 @@ object RBRHlNet {
             }*)
         val noVersions: MultiSet[BigInt] = bagOf[BigInt]()
         val noOutputs: MultiSet[(BigInt, TransactionOutput)] = bagOf[(BigInt, TransactionOutput)]()
+        // The pre-fallback withdrawals, one inert token per L2 output that reached L1 (multiplicity
+        // preserved so identical outputs still count separately).
+        val withdrawnBag: MultiSet[TransactionOutput] = bagOf(withdrawnOutputs.map(_ -> 1)*)
 
         val b = NetBuilder[RBRPlaceId, RBRTransitionId]()
 
@@ -384,6 +396,7 @@ object RBRHlNet {
                 )
                 resolvedVersion <- b.place(ResolvedVersion, RBRPlace(noVersions, versionClass))
                 evacuationOutput <- b.place(EvacuationOutput, RBRPlace(noOutputs, payoutSort))
+                withdrawalOutput <- b.place(WithdrawalOutput, RBRPlace(withdrawnBag, outputClass))
             } yield RBRPlaces(
               ballots,
               owner,
@@ -399,7 +412,8 @@ object RBRHlNet {
               votableVersionsPlace,
               payoutObligations,
               resolvedVersion,
-              evacuationOutput
+              evacuationOutput,
+              withdrawalOutput
             )
 
         // ---- Vote (mirrors VoteTx.Build.buildVoteTx) ----

@@ -114,30 +114,43 @@ object CommandGenerators:
         }
     } yield values
 
-    private def genAuxiliaryData(
-        outputs: List[TransactionOutput],
-        txStrategy: TxStrategy
-    ): Gen[AuxiliaryData] = for {
-        flags <- txStrategy match {
-            case TxStrategy.RandomWithdrawals => Gen.listOfN(outputs.size, Gen.choose(1, 2))
-            case _                            => Gen.const(outputs.map(_ => 2))
+    /** Per-output l1/l2 designation flags — one per output, in output order: `1` = l1-bound (a
+      * withdrawal, exits L2 to L1), `2` = l2-bound (stays on L2). `RandomWithdrawals` mixes them;
+      * every other strategy keeps all outputs on L2. See `L2Tx.utxoPartition` for the consuming end.
+      */
+    private def genOutputFlags(numOutputs: Int, txStrategy: TxStrategy): Gen[List[Int]] =
+        txStrategy match {
+            case TxStrategy.RandomWithdrawals => Gen.listOfN(numOutputs, Gen.choose(1, 2))
+            case _                            => Gen.const(List.fill(numOutputs)(2))
         }
-    } yield Metadata(
-      Map(
-        Word64(CIP67.Tags.head)
-            -> Metadatum.List(flags.map(Metadatum.Int(_)).toIndexedSeq)
-      )
-    )
+
+    /** The CIP67 head-tag metadata carrying the per-output l1/l2 [[genOutputFlags]]. */
+    private def headFlagsMetadata(flags: List[Int]): AuxiliaryData =
+        Metadata(
+          Map(
+            Word64(CIP67.Tags.head)
+                -> Metadatum.List(flags.map(Metadatum.Int(_)).toIndexedSeq)
+          )
+        )
 
     def genL2TxCommand(
         peerNum: HeadPeerNumber,
         interArrivalDelay: FiniteDuration,
         txStrategy: TxStrategy,
         txMutator: TxMutator,
-        // Optional inline datum stamped on each L2 output — e.g. the RBR MBT passes the "evacuation"
-        // sentinel so its RBRClassifier buckets L2-tx-derived evacuation outputs on L1, mirroring
-        // `genRegisterDepositCommand`'s `l2OutputDatum`.
+        // Optional inline datum stamped on l2-bound (flag-2) outputs — e.g. the RBR MBT passes the
+        // "evacuation" sentinel so its RBRClassifier buckets L2-tx-derived evacuation outputs on L1,
+        // mirroring `genRegisterDepositCommand`'s `l2OutputDatum`.
         l2OutputDatum: Option[scalus.cardano.ledger.DatumOption] = None,
+        // Optional inline datum stamped on withdrawal (flag-1, l1-bound) outputs specifically — the
+        // RBR MBT passes a distinct "withdrawal" sentinel so its RBRClassifier buckets withdrawals
+        // separately from evacuation outputs on L1. Defaults to None (a plain stage4 run stamps
+        // nothing, matching its l2-bound outputs).
+        withdrawalDatum: Option[scalus.cardano.ledger.DatumOption] = None,
+        // Optional address for withdrawal outputs; defaults to the normal in-use L2 address
+        // selection. The RBR MBT pins this to a script address so a withdrawn output on L1 can't be
+        // re-selected as a peer's fee/collateral (which would drop it from the L1 withdrawal count).
+        withdrawalAddress: Option[ShelleyAddress] = None,
     )(state: ModelState): Gen[Option[L2TxCommand]] = {
         val config = state.params.multiNodeConfig
         val cardanoNetwork = config.headConfig.cardanoNetwork
@@ -156,14 +169,27 @@ object CommandGenerators:
                 totalValue = Value.combine(inputs.map(ownedUtxos(_).value))
 
                 outputValues <- genOutputValues(totalValue, txStrategy, generateCappedValueC)
+                // Per-output l1/l2 flags first, so each output's datum + address reflect its fate: a
+                // flag-1 (withdrawal) output carries `withdrawalDatum` at `withdrawalAddress`, a
+                // flag-2 (stay-on-L2) output carries `l2OutputDatum` at an in-use L2 address. The
+                // same flags drive the CIP67 metadata, keeping designation and datum consistent.
+                flags <- genOutputFlags(outputValues.size, txStrategy)
                 outputs <- Gen.sequence[List[TransactionOutput], TransactionOutput](
-                  outputValues.map(v =>
-                      Gen.oneOf(l2AddressesInUse.toSeq)
-                          .map(a => Babbage(a, v, datumOption = l2OutputDatum))
-                  )
+                  outputValues.zip(flags).map { (v, flag) =>
+                      if flag == 1 then
+                          withdrawalAddress match {
+                              case Some(a) => Gen.const(Babbage(a, v, datumOption = withdrawalDatum))
+                              case None =>
+                                  Gen.oneOf(l2AddressesInUse.toSeq)
+                                      .map(a => Babbage(a, v, datumOption = withdrawalDatum))
+                          }
+                      else
+                          Gen.oneOf(l2AddressesInUse.toSeq)
+                              .map(a => Babbage(a, v, datumOption = l2OutputDatum))
+                  }
                 )
 
-                auxiliaryData <- genAuxiliaryData(outputs, txStrategy).map(Some.apply)
+                auxiliaryData = Some(headFlagsMetadata(flags))
 
                 txUnsigned = TransactionBuilder
                     .build(
@@ -417,20 +443,27 @@ object SetupScenarioGen:
     /** Downstream-specific output stamping / deposit timing. The defaults reproduce stage4 exactly.
       */
     final case class Config(
-        // Inline datum stamped on every generated L2 output (both L2-tx and deposit outputs). The
-        // RBR MBT passes its "evacuation" sentinel so `beta` can bucket the eventual L1 evacuation
-        // outputs; stage4 leaves it unset.
+        // Inline datum stamped on l2-bound (flag-2) L2 outputs and on deposit outputs. The RBR MBT
+        // passes its "evacuation" sentinel so `beta` can bucket the eventual L1 evacuation outputs;
+        // stage4 leaves it unset.
         l2OutputDatum: Option[DatumOption] = None,
         // Optional pin for deposit L2 output addresses; defaults to the depositing peer's address.
         l2OutputAddress: Option[ShelleyAddress] = None,
+        // Inline datum stamped on withdrawal (flag-1) L2 outputs. The RBR MBT passes a distinct
+        // "withdrawal" sentinel so `beta` buckets withdrawals separately from evacuation outputs
+        // (the committed `EvacuationMap`, and hence `N`, is flag-2 only — withdrawals are separate
+        // payout obligations). stage4 leaves it unset.
+        withdrawalDatum: Option[DatumOption] = None,
+        // Optional pin for withdrawal (flag-1) output addresses; defaults to the in-use L2 address
+        // selection. The RBR MBT pins this to a script address so a withdrawn output on L1 can't be
+        // re-selected as a peer's fee/collateral (which would drop it from the L1 withdrawal count).
+        withdrawalAddress: Option[ShelleyAddress] = None,
         // Deposit validity window. The RBR MBT shortens it so deposits absorb within its commit
         // window instead of taking the refund path; stage4 keeps the 2-minute default.
         depositValidityDuration: FiniteDuration = 2.minutes,
-        // L2-tx strategy mix. stage4 exercises the full spread. A downstream suite whose terminal
-        // invariant only holds for outputs that *stay on L2* must restrict this: `RandomWithdrawals`
-        // exits value to L1, and the RBR MBT — which counts committed-map obligations against the
-        // L1 evacuation outputs — would see the withdrawn (still datum-stamped) output on L1 with no
-        // matching committed-map entry, so it pins this to `Regular`.
+        // L2-tx strategy mix; the default exercises stage4's full spread, including
+        // `RandomWithdrawals`. A downstream suite inherits it as-is provided it can account for
+        // withdrawals (the RBR MBT does, via `withdrawalDatum` + its `WithdrawalOutput` place).
         l2TxStrategies: Gen[TxStrategy] = Gen.frequency(
           5 -> Gen.const(TxStrategy.Regular),
           2 -> Gen.const(TxStrategy.RandomWithdrawals),
@@ -500,6 +533,8 @@ object SetupScenarioGen:
                               strategy,
                               TxMutator.Identity,
                               l2OutputDatum = config.l2OutputDatum,
+                              withdrawalDatum = config.withdrawalDatum,
+                              withdrawalAddress = config.withdrawalAddress,
                             )(state)
                             .map(
                               _.map(AnyCommand.apply[L2TxCommand, ValidityFlag, ModelState, S](_))

@@ -26,6 +26,15 @@ object RbrSeed:
     def committedObligations(maxVersionMinor: Int): Map[BigInt, List[TransactionOutput]] =
         (1 to maxVersionMinor).map(v => BigInt(v) -> committedOutputs(v)).toMap
 
+    /** `n` distinct outputs seeding the model's inert `WithdrawalOutput` place — one per withdrawal
+      * that reached L1 pre-fallback. Only the count is projected (the place is never fired), so the
+      * content is immaterial; distinct lovelace just keeps the tokens separate. Empty for `n <= 0`.
+      */
+    def withdrawnOutputs(n: Int): List[TransactionOutput] =
+        (1 to n).toList.map { j =>
+            TransactionOutput(payoutAddress, Value(Coin(j * 1_000_000L + 777_777L)))
+        }
+
     /** The single address every committed payout / evacuation output is sent to. An enterprise
       * **script** address (null delegation): it satisfies `GenesisObligation`'s Shelley/null-stake
       * requirement, and — being script-locked — no peer's key wallet can ever select an evacuation

@@ -24,6 +24,7 @@ type RBRHistogram = Histogram[RBRPlaceId, Utxo]
   *   - Treasury and vote UTxOs carry a distinctive policy token
   *   - Collateral UTxOs carry the datum sentinel `"collateral"`
   *   - Evacuation outputs carry the datum sentinel `"evacuation"`
+  *   - Withdrawal outputs (L2 outputs that exited to L1 pre-fallback) carry the sentinel `"withdrawal"`
   *   - Script reference UTxOs are identified by their known
   *     [[scalus.cardano.ledger.TransactionInput]] keys
   *   - Everything else falls into the [[RBRPlaceId.Ambient]] default bucket
@@ -42,6 +43,7 @@ class RBRClassifier(using env: MultiNodeConfig) extends Classifier[RBRPlaceId, U
         val regimeWitnessToken = env.headConfig.headTokenNames.regimeWitnessTokenName
         val collateralDatumMarker = RbrDatumSentinels.marker("collateral")
         val evacuationDatumMarker = RbrDatumSentinels.marker("evacuation")
+        val withdrawalDatumMarker = RbrDatumSentinels.marker("withdrawal")
 
         def hasTreasuryToken(out: TransactionOutput): Boolean =
             out.value.assets.assets.get(policyId).exists(_.contains(treasuryToken))
@@ -82,4 +84,6 @@ class RBRClassifier(using env: MultiNodeConfig) extends Classifier[RBRPlaceId, U
           (u: Utxo) => Option.when(hasInlineDatum(collateralDatumMarker)(u.output))(Collateral),
           (u: Utxo) =>
               Option.when(hasInlineDatum(evacuationDatumMarker)(u.output))(EvacuationOutput),
+          (u: Utxo) =>
+              Option.when(hasInlineDatum(withdrawalDatumMarker)(u.output))(WithdrawalOutput),
         )

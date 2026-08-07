@@ -28,6 +28,13 @@ import scalus.cardano.ledger.TransactionInput
   * `beforeFinalize` read the committed map size the head resolves to under the last on-chain major
   * `M` directly from the peer traces, instead of reconstructing it from the model's deposit
   * accounting.
+  *
+  * `withdrawnOutputRefs` accumulates the L1 position (`TransactionInput`) of every withdrawal output
+  * — an L2 output that exited to L1 pre-fallback, carrying the `"withdrawal"` datum sentinel — that
+  * cleared the firewall on a settlement or rollout tx. Its size is `W`, the withdrawal count
+  * `beforeFinalize` seeds into the model's inert `WithdrawalOutput` place; the L1 snapshot's
+  * `"withdrawal"`-bucketed outputs must match it. Deduped by input so a resubmitted tx can't
+  * inflate the count.
   */
 final case class Sut(
     harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
@@ -38,6 +45,7 @@ final case class Sut(
     submittedSettlementInputs: Ref[IO, Set[TransactionInput]],
     committedMaps: Ref[IO, List[(BlockVersion.Full, Int)]],
     settledMajors: Ref[IO, Set[Int]],
+    withdrawnOutputRefs: Ref[IO, Set[TransactionInput]],
 )
 
 /** SUT-side command execution. */

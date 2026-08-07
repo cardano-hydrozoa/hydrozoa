@@ -22,10 +22,12 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
+import hydrozoa.rulebased.ledger.l1.RbrDatumSentinels
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.*
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput, Utxos}
 import scalus.testing.yaci.YaciConfig
 import test.{SeedPhrase, TestPeerName, TestPeers}
@@ -195,6 +197,7 @@ case class RbrMbtSuite(
             submittedSettlementInputs <- Resource.eval(Ref[IO].of(Set.empty[TransactionInput]))
             committedMaps <- Resource.eval(Ref[IO].of(List.empty[(BlockVersion.Full, Int)]))
             settledMajors <- Resource.eval(Ref[IO].of(Set.empty[Int]))
+            withdrawnOutputRefs <- Resource.eval(Ref[IO].of(Set.empty[TransactionInput]))
             harness <- MultiPeerHeadHarness.disputeHarnessResource(
               label = s"$label-ws",
               transportMode = TransportMode.WebSocket,
@@ -220,10 +223,15 @@ case class RbrMbtSuite(
                     shouldDrop = (etx: EnrichedTx[?]) =>
                         settlementFirewallArmed.get
                             .map(_ && etx.transactionFamily == "SettlementTx"),
-                    // Record the inputs of every settlement that clears the firewall, so the
-                    // committed-deposit set can be derived at fallback (see [[Sut]]).
+                    // Record the inputs of every settlement that clears the firewall (for the
+                    // committed-deposit set) and the L1 position of every withdrawal that lands
+                    // (for `W`) — both derived at fallback (see [[Sut]]).
                     firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId) |+|
-                        settlementAbsorptionObserver(submittedSettlementInputs, settledMajors),
+                        firewallLedgerObserver(
+                          submittedSettlementInputs,
+                          settledMajors,
+                          withdrawnOutputRefs,
+                        ),
                   ),
               cardanoBackendMode = state.params.cardanoBackendMode,
               // Evacuation payouts land at `RbrSeed.payoutAddress`, which is neither a peer wallet
@@ -241,23 +249,45 @@ case class RbrMbtSuite(
           submittedSettlementInputs,
           committedMaps,
           settledMajors,
+          withdrawnOutputRefs,
         )
 
-    /** Firewall observer that records, for every settlement the SUT actually submits (i.e. clears
-      * the firewall and reaches the backend), its L1 inputs (`submittedSettlementInputs`) and its
-      * produced major (`settledMajors`). Crossed against the L1 snapshot at fallback,
-      * `submittedSettlementInputs` distinguishes a deposit genuinely absorbed by a landed
-      * settlement from one whose deposit tx simply hasn't surfaced yet; `settledMajors.max` is the
-      * last major that settled on-chain — the fallback major `M` the head resolves against.
+    /** Firewall observer over every outbound tx that clears the firewall (a `SubmittedTx`):
+      *   - For a settlement: record its L1 inputs (`submittedSettlementInputs`) and produced major
+      *     (`settledMajors`). Crossed against the L1 snapshot at fallback, the inputs distinguish a
+      *     deposit genuinely absorbed by a landed settlement from one whose deposit tx simply hasn't
+      *     surfaced yet; `settledMajors.max` is the last major that settled on-chain — the fallback
+      *     major `M` the head resolves against.
+      *   - For any accepted tx: record the L1 position of each `"withdrawal"`-stamped output
+      *     (`withdrawnOutputRefs`). Withdrawal payouts ride on whichever settlement or rollout has
+      *     room, so this is not settlement-specific; keying on the accepted (`Right`) result and
+      *     deduping by input means a dropped fallback settlement's withdrawals (which never land,
+      *     staying in the committed map to evacuate) and any resubmission are both excluded.
       */
-    private def settlementAbsorptionObserver(
+    private def firewallLedgerObserver(
         submittedSettlementInputs: Ref[IO, Set[TransactionInput]],
         settledMajors: Ref[IO, Set[Int]],
+        withdrawnOutputRefs: Ref[IO, Set[TransactionInput]],
     ): ContraTracer[IO, FirewalledCardanoBackendEvent] =
+        val withdrawalMarker = RbrDatumSentinels.marker("withdrawal")
+        def hasWithdrawalDatum(out: TransactionOutput): Boolean =
+            out.datumOption.exists { case Inline(d) => d == withdrawalMarker; case _ => false }
         ContraTracer[IO, FirewalledCardanoBackendEvent] {
-            case FirewalledCardanoBackendEvent.SubmittedTx(etx: SettlementTx, _) =>
-                submittedSettlementInputs.update(_ ++ etx.tx.body.value.inputs.toSet) *>
-                    settledMajors.update(_ + (etx.majorVersionProduced: Int))
+            case FirewalledCardanoBackendEvent.SubmittedTx(etx, result) =>
+                val settlementUpdate = etx match
+                    case s: SettlementTx =>
+                        submittedSettlementInputs.update(_ ++ s.tx.body.value.inputs.toSet) *>
+                            settledMajors.update(_ + (s.majorVersionProduced: Int))
+                    case _ => IO.unit
+                val withdrawalUpdate = result match
+                    case Right(()) =>
+                        val txId = etx.tx.id
+                        val withdrawals = etx.tx.body.value.outputs.zipWithIndex.collect {
+                            case (o, i) if hasWithdrawalDatum(o.value) => TransactionInput(txId, i)
+                        }.toSet
+                        IO.whenA(withdrawals.nonEmpty)(withdrawnOutputRefs.update(_ ++ withdrawals))
+                    case Left(_) => IO.unit
+                settlementUpdate *> withdrawalUpdate
             case _ => IO.unit
         }
 
@@ -297,12 +327,17 @@ case class RbrMbtSuite(
             // on L1 — so racing stragglers need no separate committed-set accounting.
             committedMaps <- sut.committedMaps.get
             settledMajors <- sut.settledMajors.get
+            withdrawnOutputRefs <- sut.withdrawnOutputRefs.get
             obligationCount =
                 observedCommittedSize(committedMaps, settledMajors).getOrElse(initialMapSize)
-            alpha = alphaTerminal(obligationCount)
+            // `W`: the withdrawals that landed on L1 pre-fallback, read from the firewall traces —
+            // matched against the L1 snapshot's `"withdrawal"`-bucketed outputs by `beta`.
+            withdrawalCount = withdrawnOutputRefs.size
+            alpha = alphaTerminal(obligationCount, withdrawalCount)
             betaEither = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
             _ <- log.info(
               s"beforeFinalize: firstPayoutsLeft=$payouts obligationCount=$obligationCount " +
+                  s"withdrawalCount=$withdrawalCount " +
                   s"(M=${settledMajors.maxOption} initialMapSize=$initialMapSize " +
                   s"${depositUtxos.size} deposit(s), " +
                   s"committedMaps=${committedMaps.sortBy((v, _) => (v.major: Int, v.minor: Int))})\n" +
@@ -359,14 +394,16 @@ case class RbrMbtSuite(
             .map((_, size) => size)
 
     /** The model's all-evacuated terminal projection: instantiate `RBRHlNet` seeded with
-      * `obligationCount` committed outputs and drive it through the dispute to full evacuation.
+      * `obligationCount` committed outputs (drained to `EvacuationOutput` by the dispute) and
+      * `withdrawalCount` inert `WithdrawalOutput` tokens (already on L1 pre-fallback), then drive it
+      * through the dispute to full evacuation.
       */
-    private def alphaTerminal(obligationCount: Int): ObservableMarking =
+    private def alphaTerminal(obligationCount: Int, withdrawalCount: Int): ObservableMarking =
         val obligations: Map[BigInt, List[TransactionOutput]] =
             (1 to maxVersionMinor)
                 .map(v => BigInt(v) -> RbrSeed.committedOutputs(obligationCount))
                 .toMap
-        val seed = RBRHlNet(nHeadPeers, obligations) match
+        val seed = RBRHlNet(nHeadPeers, obligations, RbrSeed.withdrawnOutputs(withdrawalCount)) match
             case Validated.Valid(net) => net
             case Validated.Invalid(errs) =>
                 throw RuntimeException(
