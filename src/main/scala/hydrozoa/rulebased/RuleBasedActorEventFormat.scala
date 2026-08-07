@@ -81,6 +81,8 @@ object RuleBasedActorEventFormat:
             case Evacuation.PayoutsLeft(n) =>
                 info(s"$n payout obligations left")
 
-            // Diagnostic events carry no production rendering — a test-side diagnostic tracer
+            // Diagnostic-only events carry no production rendering — a test-side diagnostic tracer
             // (composed with `|+|`) formats them. Kept at trace so production stays silent.
-            case d: RuleBasedActorEvent.Diagnostic => trace(d.toString)
+            case d: Evacuation.CandidateMaps    => trace(d.toString)
+            case d: Evacuation.ResolvedKzg      => trace(d.toString)
+            case d: Evacuation.EvacuationAnchor => trace(d.toString)
