@@ -1,6 +1,6 @@
 # Integration Test Stages
 
-This document explains the two integration test stages that live under the `integration/` subproject. The goal is to give a new contributor enough orientation to know **which stage tests what**, **where to add a new test**, and **what every property is checking**. It assumes familiarity with the basics of the protocol (fast/slow consensus split, head peers, blocks vs stacks). For deeper architectural background, see `docs/fast-consensus.md`, `docs/slow-consensus.md`, and `docs/testcontrol-driver.md`.
+This document explains the two integration test stages that live under the `integration/` subproject. The goal is to give a new contributor enough orientation to know **which stage tests what**, **where to add a new test**, and **what every property is checking**. It assumes familiarity with the basics of the protocol (fast/slow consensus split, head peers, blocks vs stacks). For deeper architectural background, see `docs/spec/fast-consensus.md`, `docs/spec/slow-consensus.md`, and `docs/spec/testcontrol-driver.md`.
 
 Both stages are built on the same `ModelBasedSuite` framework (`org.scalacheck.commands.ModelBasedSuite`), which runs ScalaCheck-generated command sequences against:
 
@@ -112,20 +112,20 @@ Effect-presence semantics — the assertion that the right txs landed on L1 — 
 
 ```bash
 # Default run (Mock + Public Preview included)
-sbtn "integration / test"
+sbt "integration / test"
 
 # Specific suite
-sbtn "integration / testOnly *Stage1Suite*"
+sbt "integration / testOnly *Stage1Suite*"
 
 # Yaci-backed (requires a Yaci DevKit container running locally)
-sbtn "integration / Test / runMain hydrozoa.integration.stage1.YaciRunner"
+sbt "integration / Test / runMain hydrozoa.integration.stage1.YaciRunner"
 ```
 
 The `Mock` runs in seconds, `Yaci`/`Blockfrost` take minutes per scenario depending on network latency.
 
 ### Stage 1 Gotchas
 
-- **`TestControl` timing anchor.** For the Mock backend, `genInitialState` produces an `Instant` deep in the future (Jan 2026 + random offset) and `startupSut` jumps the virtual clock to that instant before starting any actor. This is required because `TestControl.advance` only advances when no actor fibers are running — once the system is up, the per-actor 1-second ping loop competes for ticks and a multi-decade `IO.sleep` would never complete. See `docs/testcontrol-driver.md`.
+- **`TestControl` timing anchor.** For the Mock backend, `genInitialState` produces an `Instant` deep in the future (Jan 2026 + random offset) and `startupSut` jumps the virtual clock to that instant before starting any actor. This is required because `TestControl.advance` only advances when no actor fibers are running — once the system is up, the per-actor 1-second ping loop competes for ticks and a multi-decade `IO.sleep` would never complete. See `docs/spec/testcontrol-driver.md`.
 - **`takeoffTime` for Yaci/Blockfrost.** When the model clock must coincide with the wall clock at command 1, the model anchors `currentModelTime` at `Instant.now() + 60s` and `startupSut` sleeps until that anchor. 60 s is enough for the head's actor wiring; if startup overruns the test fails loudly rather than starting with already-violated timing.
 - **`waitForIdle(5.minutes)` in `shutdownSut`.** Virtual under `TestControl`, wall-clock for Yaci/Blockfrost. The 5-minute cap is the upper bound on how long shutdown is allowed to take in real time before the test aborts.
 
@@ -257,10 +257,10 @@ Happy txs landed: 6/6  Fallback txs landed: 0/2
 
 ```bash
 # Default (Direct + TestControl)
-sbtn "integration / testOnly *Stage4Suite*"
+sbt "integration / testOnly *Stage4Suite*"
 
 # WebSocket transport (real clock)
-sbtn "integration / Test / runMain hydrozoa.integration.stage4.WsRunner"
+sbt "integration / Test / runMain hydrozoa.integration.stage4.WsRunner"
 ```
 
 The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a few minutes.
@@ -268,7 +268,7 @@ The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a fe
 ### Stage 4 Gotchas
 
 - **Slow-cycle tail drain.** `waitForIdle()` returns when mailboxes are empty + child set is stable + deadLetters are drained, but it does **not** wait for scheduled future sleeps. The `PeerLiaison.startResendTimer` fiber sleeps between ticks; under WS-real-clock the last stack's hard-acks may not propagate before `terminate()`. `shutdownSut` sleeps `2 × peerLiaisonResendInterval` between `waitForIdle()` and `terminate()` to guarantee one full resend cycle.
-- **Settling is `IO.cede`, not `IO.sleep`.** Under TestControl, `IO.sleep` doesn't make ticks happen — only `tc.tickOne` does. Settling between commands uses `IO.cede.replicateA_(N * nPeers)` to drain immediately-eligible fibers. See `docs/testcontrol-driver.md`.
+- **Settling is `IO.cede`, not `IO.sleep`.** Under TestControl, `IO.sleep` doesn't make ticks happen — only `tc.tickOne` does. Settling between commands uses `IO.cede.replicateA_(N * nPeers)` to drain immediately-eligible fibers. See `docs/spec/testcontrol-driver.md`.
 - **Polling vs maturity invariant.** `pollingPeriod * 5 ≤ depositMaturityDuration` — checked in `NodeConfig`. Otherwise `JointLedger` can race a deposit observation and panic.
 - **No fallback-timing test.** Stage 4 has no `AfterCompetingFallbackStartTime` analogue and no commands that advance time past happy-path expiration without producing more blocks. `propEffectsLanded` accepts whichever path the protocol takes; the fallback branch is structurally testable but not currently exercised.
 
@@ -306,5 +306,5 @@ A scenario that needs **both** real L1 and slow-cycle multi-peer consensus does 
   - `stage4/Sut.scala` — `Stage4Sut` + ContraTracer capture refs + command typeclass instances.
   - `stage4/EffectsLanded.scala` — per-block happy-or-fallback assertion + stats table.
 - `org/scalacheck/commands/ModelBasedSuite.scala` — shared framework.
-- `docs/testcontrol-driver.md` — how virtual time works in the SUT.
-- `docs/fast-consensus.md`, `docs/slow-consensus.md` — the two protocol cycles tested here.
+- `docs/spec/testcontrol-driver.md` — how virtual time works in the SUT.
+- `docs/spec/fast-consensus.md`, `docs/spec/slow-consensus.md` — the two protocol cycles tested here.

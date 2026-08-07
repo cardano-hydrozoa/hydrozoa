@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{{ page.title | default: "API reference" }} · Hydrozoa</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .apibar {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 8px 16px; border-bottom: 1px solid #e2e8e8; background: #fafcfc; font-size: 14px;
+    }
+    .apibar a { color: #0b7a85; text-decoration: none; font-weight: 600; }
+    .apibar a:hover { text-decoration: underline; }
+    .apibar .sep { color: #cdd8d8; }
+    .apibar label { color: #566065; }
+    .apibar select {
+      font: inherit; padding: 3px 8px; border: 1px solid #cdd8d8; border-radius: 6px; background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="apibar">
+    <a href="{{ '/' | relative_url }}">← Hydrozoa docs</a>
+    <span class="sep">|</span>
+    <label for="specpick">API:</label>
+    <select id="specpick">
+      <option value="{{ '/api/openapi.yaml' | relative_url }}">Head node API</option>
+      <option value="{{ '/api/openapi-eutxo-l2.yaml' | relative_url }}">L2 EUTXO (query) API</option>
+    </select>
+  </div>
+  <div id="redoc"></div>
+  <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+  <script>
+    (function () {
+      var pick = document.getElementById("specpick");
+      function render(url) {
+        Redoc.init(url, { hideDownloadButton: false, expandResponses: "200,201" },
+                   document.getElementById("redoc"));
+      }
+      pick.addEventListener("change", function () { render(pick.value); });
+      render(pick.value);
+    })();
+  </script>
+</body>
+</html>

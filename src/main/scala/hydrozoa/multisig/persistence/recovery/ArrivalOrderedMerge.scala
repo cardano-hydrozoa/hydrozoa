@@ -22,8 +22,7 @@ package hydrozoa.multisig.persistence.recovery
   * entries. Consensus is interleaving-robust (§5.6), so any deterministic choice within a tie is
   * valid; the tiebreak only has to make the merge a pure function of its input.
   *
-  * See `design/persistence-and-crash-recovery.md` §5.4 and `design/recovery-implementation-plan.md`
-  * R1.
+  * See `docs/spec/persistence-and-crash-recovery.md` §5.4.
   */
 object ArrivalOrderedMerge:
 

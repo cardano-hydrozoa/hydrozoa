@@ -13,7 +13,7 @@ Hard-confirmation requires hard-acks from **every** head peer (leader's own incl
 single missing ack stalls the stack. The cycle may lag arbitrarily behind the fast cycle —
 that is the point: amortize L1 cost (and, in a future PR, coil-quorum round-trips).
 
-See `docs/fast-consensus.md` for the fast cycle that gates this one.
+See `docs/spec/fast-consensus.md` for the fast cycle that gates this one.
 
 ## Terminology
 
@@ -191,7 +191,7 @@ exist only for the rule-based dispute regime.
 
 ### `PeerLiaison` slow lanes (`multisig/consensus/PeerLiaison.scala`)
 
-Two slow-side lanes on top of the fast-side ones (see `docs/fast-consensus.md`):
+Two slow-side lanes on top of the fast-side ones (see `docs/spec/fast-consensus.md`):
 
 | lane | family | producer |
 |---|---|---|

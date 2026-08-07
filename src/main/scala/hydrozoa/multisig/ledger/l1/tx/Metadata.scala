@@ -84,7 +84,7 @@ object Metadata {
       * @param l2PayloadHash
       *   `blake2b_256` of the deposit's L2 payload — the payload itself is passed out-of-band, and
       *   the parse verifies this hash pins it to the deposit. Once the deposit tx is signed, its
-      *   witnesses commit to the pin via the auxiliary-data hash (docs/l2-isomorphism.md).
+      *   witnesses commit to the pin via the auxiliary-data hash (docs/spec/l2-isomorphism.md).
       */
     case class Deposit(
         depositIx: Int,

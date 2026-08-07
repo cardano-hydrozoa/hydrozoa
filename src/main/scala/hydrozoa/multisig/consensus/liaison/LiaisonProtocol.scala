@@ -7,7 +7,7 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, SoftAck}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.stack.StackBrief
 
-/** The message protocol shared by the three liaison actors (§5.5 of `design/coil-network.md`)
+/** The message protocol shared by the three liaison actors (§5.5 of `docs/spec/coil-network.md`)
   * [doc-ref].
   *
   * Each actor's `Request` and `Handle` live here rather than in its own companion to cut a compile

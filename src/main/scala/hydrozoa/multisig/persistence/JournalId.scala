@@ -9,7 +9,7 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
   * per-author: one journal per author per journal type. Request/SoftAck are per [[HeadPeerNumber]];
   * HardAck is per [[PeerId]] (one journal per head peer and per coil peer).
   *
-  * See `design/persistence-and-crash-recovery.md` §3.2, §7.1.
+  * See `docs/spec/persistence-and-crash-recovery.md` §3.2, §7.1.
   */
 enum JournalId:
     case BlockSpine

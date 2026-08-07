@@ -21,7 +21,7 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
-/** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
+/** A hub head peer's liaison toward one coil peer it serves (§5.5 of `docs/spec/coil-network.md`)
   * [doc-ref] — the mirror of [[PeerLiaisonCoilToHub]].
   *
   * Asymmetric: it **serves the full population** down to the coil peer (block + stack spines,

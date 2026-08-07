@@ -25,7 +25,7 @@ object L2TxSummary:
       * one summary per absorbed deposit followed by one per rejected deposit (so a no-op decisions
       * command with empty lists yields none).
       */
-    def fromCommand(command: L2LedgerCommand.Real): Vector[L2TxSummary] = command match
+    def fromCommand(command: L2LedgerCommand): Vector[L2TxSummary] = command match
         case c: L2LedgerCommand.ApplyTransaction =>
             Vector(L2TxSummary(c.requestId, c.blockNumber, L2TxKind.Transaction))
         case c: L2LedgerCommand.RegisterDeposit =>

@@ -21,7 +21,7 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
-/** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
+/** A head peer's mesh liaison toward one other head peer (§5.5 of `docs/spec/coil-network.md`)
   * [doc-ref].
   *
   * Symmetric and full-duplex: each side serves its **own** production and pulls the remote head
