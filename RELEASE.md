@@ -24,7 +24,24 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    version, separate from the release version). Commit the bump on `main` (via PR; `main` is
    protected).
 
-2. **Sanity-check the image locally** (optional but recommended):
+2. **Check the baked-in reference-script UTxOs are current.** The image ships per-network default
+   reference UTxOs at `src/main/resources/scaffold/ref-utxos/` (Preview and Preprod): the treasury +
+   dispute validators and the G2 setup ladder that `build-head-config` falls back to when a head has
+   no local `bootstrap/ref-utxos.json` (see
+   [DEPLOYMENT.md § Step 4](docs/user-guide/DEPLOYMENT.md)). They sit at the unspendable burn
+   address, so they never need redeploying **unless the compiled on-chain scripts changed** since
+   they were last deployed.
+
+   - **If this release touches the `cardanoOnchain` scripts** (the treasury/dispute validators or the
+     setup ladder), the baked refs are **stale** — a head booting from the released image on those
+     networks fails with "invalid treasury/dispute script utxos". Redeploy on each affected network
+     with `deploy-scripts-and-g2-setup` and update the corresponding `ref-utxos/<network>.json`
+     resource **before tagging**.
+   - **If the scripts are unchanged**, the existing refs stay valid — nothing to do. Smoke-test by
+     booting a head on Preprod/Preview from the image (`docker run … serve`); a clean start confirms
+     the refs resolve.
+
+3. **Sanity-check the image locally** (optional but recommended):
 
    ```bash
    just docker-image                                   # builds cardano-hydrozoa/hydrozoa:X.Y.Z
@@ -32,7 +49,7 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    #   hydrozoa X.Y.Z / git: v… / built: …
    ```
 
-3. **Tag and push** from the merged commit on `main`:
+4. **Tag and push** from the merged commit on `main`:
 
    ```bash
    git checkout main && git pull
@@ -40,10 +57,10 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    git push origin vX.Y.Z
    ```
 
-4. **Watch the release workflow** (Actions → Release). It publishes three tags:
+5. **Watch the release workflow** (Actions → Release). It publishes three tags:
    `ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z`, `:X.Y`, and `:latest`.
 
-5. **Verify** the published image:
+6. **Verify** the published image:
 
    ```bash
    docker pull ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z
