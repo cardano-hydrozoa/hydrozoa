@@ -32,16 +32,27 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    address, so they never need redeploying **unless the compiled on-chain scripts changed** since
    they were last deployed.
 
-   - **If this release touches the `cardanoOnchain` scripts** (the treasury/dispute validators or the
-     setup ladder), the baked refs are **stale** — a head booting from the released image on those
-     networks fails with "invalid treasury/dispute script utxos". Redeploy on each affected network
-     with `deploy-scripts-and-g2-setup` and update the corresponding `ref-utxos/<network>.json`
-     resource **before tagging**.
+   - **If this release changes the compiled `cardanoOnchain` scripts** — either the validator/ladder
+     source changed, or Scalus was bumped (a compiler bump can alter the compiled UPLC even with no
+     source change) — the baked refs are **stale**: a head booting from the released image on those
+     networks fails with "invalid treasury/dispute script utxos". Before tagging, on each affected
+     network:
+
+     1. `just export` — recompile and export the latest script blueprint to
+        `src/main/resources/hydrozoa/scripts/plutus.json`.
+     2. `just stage` — rebuild the launcher so the deploy step below runs the freshly exported
+        scripts.
+     3. `just deploy-scripts-and-g2-setup HYDROZOA_HOME=…` — deploy the new reference UTxOs, then
+        update the corresponding `ref-utxos/<network>.json` resource with the new refs.
    - **If the scripts are unchanged**, the existing refs stay valid — nothing to do. Smoke-test by
      booting a head on Preprod/Preview from the image (`docker run … serve`); a clean start confirms
      the refs resolve.
 
-3. **Sanity-check the image locally** (optional but recommended):
+3. **Review the shipped logger levels.** The image runs `src/main/resources/logback-docker.xml`
+   (console-only, `root` at `warn`), not the verbose local `logback.xml`. Before tagging, confirm
+   its levels are what you want to ship.
+
+4. **Sanity-check the image locally** (optional but recommended):
 
    ```bash
    just docker-image                                   # builds cardano-hydrozoa/hydrozoa:X.Y.Z
@@ -49,7 +60,7 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    #   hydrozoa X.Y.Z / git: v… / built: …
    ```
 
-4. **Tag and push** from the merged commit on `main`:
+5. **Tag and push** from the merged commit on `main`:
 
    ```bash
    git checkout main && git pull
@@ -57,10 +68,10 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    git push origin vX.Y.Z
    ```
 
-5. **Watch the release workflow** (Actions → Release). It publishes three tags:
+6. **Watch the release workflow** (Actions → Release). It publishes three tags:
    `ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z`, `:X.Y`, and `:latest`.
 
-6. **Verify** the published image:
+7. **Verify** the published image:
 
    ```bash
    docker pull ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z
