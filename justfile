@@ -86,54 +86,54 @@ docker-stage:
 scaffold DIR=".": _require-launcher
   {{hydrozoa}} scaffold {{DIR}}
 
-# Generate a whole head's keys + configs into the head directory (HOME, default head/demo):
-#   HOME/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}
-#   HOME/private/{head,coil}-N/private.json
+# Generate a whole head's keys + configs into the head directory (HYDROZOA_HOME, default head/demo):
+#   HYDROZOA_HOME/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}
+#   HYDROZOA_HOME/private/{head,coil}-N/private.json
 # Coil peers are hubbed round-robin across the head peers. Next: `just head-zero-address` and fund
 # it, edit bootstrap/l2-cardano-eutxo.json, run `just deploy-scripts-and-g2-setup`, then
 # `just build-head-config`.
-keygen-fleet HEADS COILS QUORUM HOME="head/demo": _require-launcher
+keygen-fleet HEADS COILS QUORUM HYDROZOA_HOME="head/demo": _require-launcher
   #!/usr/bin/env bash
   trap 'just notify "keygen-fleet"' EXIT
-  {{hydrozoa}} keygen-fleet {{HEADS}} {{COILS}} {{QUORUM}} --home {{HOME}}
+  {{hydrozoa}} keygen-fleet {{HEADS}} {{COILS}} {{QUORUM}} --home {{HYDROZOA_HOME}}
 
 # Print head peer 0's L1 funding address (derived from the roster + defaults on demand — no
 # address files to go stale).
-head-zero-address HOME="head/demo": _require-launcher
+head-zero-address HYDROZOA_HOME="head/demo": _require-launcher
   #!/usr/bin/env bash
   trap 'just notify "head-zero-address"' EXIT
-  {{hydrozoa}} head-zero-address --home {{HOME}}
+  {{hydrozoa}} head-zero-address --home {{HYDROZOA_HOME}}
 
 # Deploy the treasury + dispute validators (and, unless reused, the G2 setup ladder), funded by
-# head peer 0's wallet under HOME (change returns to it). The network is derived from the Blockfrost
-# key (read from the .local template, else $BLOCKFROST_API_KEY). Writes HOME/bootstrap/ref-utxos.json
+# head peer 0's wallet under HYDROZOA_HOME (change returns to it). The network is derived from the Blockfrost
+# key (read from the .local template, else $BLOCKFROST_API_KEY). Writes HYDROZOA_HOME/bootstrap/ref-utxos.json
 # for build-head-config. Pass LADDER_REFS (an existing ref-utxos.json) to reuse the already-deployed
 # ladder and redeploy only the validators.
-deploy-scripts-and-g2-setup HOME="head/demo" LADDER_REFS="": _require-launcher
+deploy-scripts-and-g2-setup HYDROZOA_HOME="head/demo" LADDER_REFS="": _require-launcher
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "deploy-scripts-and-g2-setup"' EXIT
-  template="{{HOME}}/template/peer-private.template.json.local"
+  template="{{HYDROZOA_HOME}}/template/peer-private.template.json.local"
   key="${BLOCKFROST_API_KEY:-}"
   if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
-  args=(--home {{HOME}} --blockfrost-key "$key")
+  args=(--home {{HYDROZOA_HOME}} --blockfrost-key "$key")
   if [ -n "{{LADDER_REFS}}" ]; then args+=(--ladder-refs {{LADDER_REFS}}); fi
   {{hydrozoa}} deploy-scripts-and-g2-setup "${args[@]}"
 
-# Build the shared head-config.json from HOME's bootstrap files (roster, defaults, l2-cardano-eutxo,
-# ref-utxos), writing HOME/head-config/head-config.json. Reads the Blockfrost key from the .local
+# Build the shared head-config.json from HYDROZOA_HOME's bootstrap files (roster, defaults, l2-cardano-eutxo,
+# ref-utxos), writing HYDROZOA_HOME/head-config/head-config.json. Reads the Blockfrost key from the .local
 # template (else $BLOCKFROST_API_KEY); head peer 0's address must be funded on the target network
 # first (the tool logs the exact lovelace required and fails with the shortfall if not).
-build-head-config HOME="head/demo": _require-launcher
+build-head-config HYDROZOA_HOME="head/demo": _require-launcher
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "build-head-config"' EXIT
-  template="{{HOME}}/template/peer-private.template.json.local"
+  template="{{HYDROZOA_HOME}}/template/peer-private.template.json.local"
   key="${BLOCKFROST_API_KEY:-}"
   if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
-  {{hydrozoa}} build-head-config --home {{HOME}} --blockfrost-key "$key"
+  {{hydrozoa}} build-head-config --home {{HYDROZOA_HOME}} --blockfrost-key "$key"
 
 # Run a head node in the foreground from a generated head-config + a peer's private config.
 serve HEAD_CONFIG PRIVATE_CONFIG: _require-launcher
@@ -141,13 +141,13 @@ serve HEAD_CONFIG PRIVATE_CONFIG: _require-launcher
 
 # Interactively build, sign, and submit an L2 transaction to a running head: pick a peer key,
 # pick one of its L2 utxos, enter destination + value.
-submit-l2-tx HOME="head/demo" HEAD_URI="http://localhost:8080": _require-launcher
-  {{hydrozoa}} submit-l2-tx --home {{HOME}} --head-uri {{HEAD_URI}}
+submit-l2-tx HYDROZOA_HOME="head/demo" HEAD_URI="http://localhost:8080": _require-launcher
+  {{hydrozoa}} submit-l2-tx --home {{HYDROZOA_HOME}} --head-uri {{HEAD_URI}}
 
 # Interactively deposit into a running head: pick a peer key, pick one of its L1 utxos, enter the
 # L2 outputs to spawn; registers with the head, then submits the deposit tx to L1 via Blockfrost.
-submit-deposit HOME="head/demo" HEAD_URI="http://localhost:8080": _require-launcher
-  {{hydrozoa}} submit-deposit --home {{HOME}} --head-uri {{HEAD_URI}}
+submit-deposit HYDROZOA_HOME="head/demo" HEAD_URI="http://localhost:8080": _require-launcher
+  {{hydrozoa}} submit-deposit --home {{HYDROZOA_HOME}} --head-uri {{HEAD_URI}}
 
 export:
   #!/usr/bin/env bash
