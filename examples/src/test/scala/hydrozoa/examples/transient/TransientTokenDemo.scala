@@ -7,6 +7,7 @@ import cats.syntax.all.*
 import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.InitParamsType.Constant
 import hydrozoa.config.head.initialization.InitializationParameters
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{HeadConfig, generateHeadConfig, generateHeadConfigBootstrap}
@@ -23,10 +24,9 @@ import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{RequestSequencer, SlowConsensusActorEvent, UserRequest}
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
-import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, TransientOutputs}
+import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Metadata}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.stack.StackEffects
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import org.scalacheck.Prop.propBoolean
@@ -35,9 +35,8 @@ import org.scalacheck.{Gen, Prop, Properties}
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, KeepRaw, Metadatum, MultiAsset, PolicyId, Script, Timelock, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
+import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, KeepRaw, MultiAsset, PolicyId, Script, Timelock, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{NativeScriptWitness, PubKeyWitness, TransactionBuilder, TransactionBuilderStep}
 import scalus.uplc.builtin.Builtins.blake2b_256
@@ -127,26 +126,20 @@ object TransientTokenDemo extends Properties("Transient token demo") {
           rateLimits = RateLimits(softBlockMinPeriod = 5.seconds, hardStackMinPeriod = 2.seconds)
         )
 
-    /** The head-label metadata for an L2 transaction: per-output L1(1)/L2(2) markers plus the
-      * transient declarations (Map shape when declarations exist, bare list otherwise).
+    /** The [[L2Metadata]] head-label metadata for an L2 transaction: the headId pin, the L1-bound
+      * output indices (marker 1), and the transient-token declarations.
       */
     private def mkHeadMetadata(
+        headId: HeadId,
         markers: List[Int],
         transientOutputs: Map[Int, MultiAsset]
     ): AuxiliaryData = {
-        val markerList =
-            Metadatum.List(markers.map(marker => Metadatum.Int(marker.toLong)).toIndexedSeq)
-        val headMetadatum =
-            if transientOutputs.isEmpty then markerList
-            else
-                Metadatum.Map(
-                  Map(
-                    Metadatum.Text("outputs") -> markerList,
-                    Metadatum.Text("transientOutputs") ->
-                        TransientOutputs.encodeMetadatum(transientOutputs)
-                  )
-                )
-        Metadata(Map(Word64(CIP67.Tags.head) -> headMetadatum))
+        // Marker 1 = L1-bound (withdrawal); every other output stays on L2.
+        val l1BoundOutputs = markers.zipWithIndex.collect { case (1, index) => index }
+        L2Metadata.asAuxData(
+          headId,
+          L2Metadata(l1BoundOutputs = l1BoundOutputs, l2TransientTokens = transientOutputs)
+        )
     }
 
     /** Build the deterministic chain of signed demo txs off the initial pot utxo. Tx ids are stable
@@ -184,7 +177,15 @@ object TransientTokenDemo extends Properties("Transient token demo") {
               Spend(Utxo(spentInput, Babbage(spentAddress, spentValue)), PubKeyWitness),
               Send(output),
               Fee(Coin.zero),
-              ModifyAuxiliaryData(_ => Some(mkHeadMetadata(List(marker), transientOutputs)))
+              ModifyAuxiliaryData(_ =>
+                  Some(
+                    mkHeadMetadata(
+                      mnc.nodeConfigs(HeadPeerNumber(0)).headId,
+                      List(marker),
+                      transientOutputs
+                    )
+                  )
+              )
             ) ++ mint.map(amount =>
                 Mint(policyId, demoAssetName, amount, NativeScriptWitness.attached(mintScript))
             )
