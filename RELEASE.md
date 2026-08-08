@@ -42,7 +42,7 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
         `src/main/resources/hydrozoa/scripts/plutus.json`.
      2. `just stage` — rebuild the launcher so the deploy step below runs the freshly exported
         scripts.
-     3. `just deploy-scripts-and-g2-setup HYDROZOA_HOME=…` — deploy the new reference UTxOs, then
+     3. `HYDROZOA_HOME=… just deploy-scripts-and-g2-setup` — deploy the new reference UTxOs, then
         update the corresponding `ref-utxos/<network>.json` resource with the new refs.
    - **If the scripts are unchanged**, the existing refs stay valid — nothing to do. Smoke-test by
      booting a head on Preprod/Preview from the image (`docker run … serve`); a clean start confirms

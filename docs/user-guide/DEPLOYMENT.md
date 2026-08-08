@@ -242,7 +242,7 @@ The template is read at generation time — regenerating means fresh keys, so re
 
 ```bash
 hydrozoa keygen-fleet 2 4 2        # Docker; HEADS COILS QUORUM, → $HYDROZOA_HOME/ (the workspace)
-just keygen-fleet 2 4 2            # local; → head/demo/ (custom dir: just keygen-fleet 2 4 2 head/mydir)
+just keygen-fleet 2 4 2            # local; → head/demo/ (custom dir: HYDROZOA_HOME=head/mydir just keygen-fleet 2 4 2)
 ```
 
 One command generates a key pair per peer (registered in the roster, with a filled private config),
@@ -463,7 +463,7 @@ the `hydrozoa` alias from §2 already enables the TTY and host networking they n
 
 ```bash
 hydrozoa submit-l2-tx    # Docker; add --head-uri http://localhost:8081 to hit head-1
-just submit-l2-tx        # local; or: just submit-l2-tx head/demo http://localhost:8081
+just submit-l2-tx        # local; or: HYDROZOA_HOME=head/demo just submit-l2-tx http://localhost:8081
 ```
 
 Pick a peer (its key signs), pick one of its L2 utxos (fetched from `GET /l2/cardano-eutxo/utxos/{address}`
