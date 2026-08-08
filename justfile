@@ -128,7 +128,10 @@ prepush: precommit test integration-fast build-werror
 stage:
   #!/usr/bin/env bash
   trap 'just notify "stage"' EXIT
-  sbt stage
+  # native-packager's `stage` doesn't rewrite bin/hydrozoa when its content is unchanged, so its
+  # mtime would keep pointing at the first-ever stage. Touch it so `_require-launcher`'s staleness
+  # check sees a real "last staged" time.
+  sbt stage && touch "{{hydrozoa}}"
 
 # Build the hydrozoa Docker image locally (cardano-hydrozoa/hydrozoa:<version>); publish via RELEASE.md.
 docker-image:
@@ -155,8 +158,8 @@ _require-launcher:
     echo "error: the 'hydrozoa' launcher isn't built — run 'just stage' first" >&2
     exit 1
   fi
-  stale=$(find src cardano-onchain/src project build.sbt -type f \
-            \( -name '*.scala' -o -name '*.sbt' -o -name '*.properties' \) \
+  stale=$(find src cardano-onchain/src build.sbt project/plugins.sbt project/build.properties \
+            -type f \( -name '*.scala' -o -name '*.sbt' -o -name '*.properties' \) \
             -newer "{{hydrozoa}}" 2>/dev/null | head -n1)
   if [ -n "$stale" ]; then
     echo "warning: sources changed since the last 'just stage' (e.g. $stale);" \
