@@ -35,15 +35,31 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    - **If this release changes the compiled `cardanoOnchain` scripts** — either the validator/ladder
      source changed, or Scalus was bumped (a compiler bump can alter the compiled UPLC even with no
      source change) — the baked refs are **stale**: a head booting from the released image on those
-     networks fails with "invalid treasury/dispute script utxos". Before tagging, on each affected
-     network:
+     networks fails with "invalid treasury/dispute script utxos".
 
-     1. `just export` — recompile and export the latest script blueprint to
-        `src/main/resources/hydrozoa/scripts/plutus.json`.
-     2. `just stage` — rebuild the launcher so the deploy step below runs the freshly exported
-        scripts.
-     3. `HYDROZOA_HOME=… just deploy-scripts-and-g2-setup` — deploy the new reference UTxOs, then
-        update the corresponding `ref-utxos/<network>.json` resource with the new refs.
+     First, re-export the scripts and rebuild the launcher (once):
+
+     ```bash
+     just export    # re-export the blueprint to src/main/resources/hydrozoa/scripts/plutus.json
+     just stage     # rebuild the launcher so the deploy below runs the freshly exported scripts
+     ```
+
+     Then, on **each** affected network, deploy fresh reference UTxOs from a throwaway single-peer
+     head — only head peer 0's wallet funds the deploy, so 1 head / 0 coils / quorum 0 is enough:
+
+     ```bash
+     export HYDROZOA_HOME=./head/release/preprod   # or ./head/release/preview
+     just scaffold                                 # writes the workspace + config template
+     # set blockfrostApiKey in $HYDROZOA_HOME/template/peer-private.template.json.local
+     #   (a preprod…/preview… key selects the network)
+     just keygen-fleet 1 0 0                        # minimal fleet → head-0's funding wallet
+     just head-zero-address                         # prints head-0's L1 address — fund it, then wait
+     just deploy-scripts-and-g2-setup               # deploys; prints the new script hashes
+     ```
+
+     Then copy the deployed refs from `$HYDROZOA_HOME/bootstrap/ref-utxos.json` into the matching
+     `src/main/resources/scaffold/ref-utxos/<network>.json` resource, and confirm the printed script
+     hashes match `just export`'s output.
    - **If the scripts are unchanged**, the existing refs stay valid — nothing to do. Smoke-test by
      booting a head on Preprod/Preview from the image (`docker run … serve`); a clean start confirms
      the refs resolve.
