@@ -181,14 +181,12 @@ scaffold: _require-launcher
 # `just build-head-config`.
 keygen-fleet HEADS COILS QUORUM: _require-launcher
   #!/usr/bin/env bash
-  trap 'just notify "keygen-fleet"' EXIT
   {{hydrozoa}} keygen-fleet {{HEADS}} {{COILS}} {{QUORUM}} --home {{HYDROZOA_HOME}}
 
 # Print head peer 0's L1 funding address (derived from the roster + defaults on demand — no
 # address files to go stale).
 head-zero-address: _require-launcher
   #!/usr/bin/env bash
-  trap 'just notify "head-zero-address"' EXIT
   {{hydrozoa}} head-zero-address --home {{HYDROZOA_HOME}}
 
 # Deploy the treasury + dispute validators (and, unless reused, the G2 setup ladder), funded by
