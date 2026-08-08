@@ -5,6 +5,10 @@
 #
 # HYDROZOA_HOME overrides where the generated configs are read from (default ./head/demo);
 # HYDROZOA_IMAGE overrides the image (e.g. a locally built cardano-hydrozoa/hydrozoa:<version>).
+#
+# Each service pins a fixed container_name (head-0, coil-0, …) so container names stay clean (no
+# compose `-N` index suffix). Because those names are host-global, only one head can run per machine
+# at a time — bring one down before starting another (e.g. a different HYDROZOA_HOME / network).
 
 name: hydrozoa
 
@@ -36,16 +40,18 @@ services:
 
   head-0:
     <<: *hydrozoa
+    container_name: head-0
     ports:
-      - "8080:8080"   # hydrozoa-head-0 user/admin HTTP API
+      - "8080:8080"   # head-0 user/admin HTTP API
     volumes:
       - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
       - ${HYDROZOA_HOME:-./head/demo}/private/head-0/private.json:/configs/private.json:ro
 
   head-1:
     <<: *hydrozoa
+    container_name: head-1
     ports:
-      - "8081:8080"   # hydrozoa-head-1 user/admin HTTP API
+      - "8081:8080"   # head-1 user/admin HTTP API
     volumes:
       - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
       - ${HYDROZOA_HOME:-./head/demo}/private/head-1/private.json:/configs/private.json:ro
@@ -54,24 +60,28 @@ services:
 
   coil-0:
     <<: *hydrozoa
+    container_name: coil-0
     volumes:
       - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
       - ${HYDROZOA_HOME:-./head/demo}/private/coil-0/private.json:/configs/private.json:ro
 
   coil-1:
     <<: *hydrozoa
+    container_name: coil-1
     volumes:
       - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
       - ${HYDROZOA_HOME:-./head/demo}/private/coil-1/private.json:/configs/private.json:ro
 
   coil-2:
     <<: *hydrozoa
+    container_name: coil-2
     volumes:
       - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
       - ${HYDROZOA_HOME:-./head/demo}/private/coil-2/private.json:/configs/private.json:ro
 
   coil-3:
     <<: *hydrozoa
+    container_name: coil-3
     volumes:
       - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
       - ${HYDROZOA_HOME:-./head/demo}/private/coil-3/private.json:/configs/private.json:ro
