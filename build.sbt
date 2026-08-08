@@ -13,6 +13,23 @@ lazy val gitRevision: String =
 
 Global / excludeLintKeys += Docker / dockerLabels
 Global / excludeLintKeys += Docker / dockerEnvVars
+// native-packager's JavaAppPackaging archetype propagates executableScriptName/name/sourceDirectory
+// into the Debian/Rpm/Universal-docs/Universal-src packaging scopes. We only build the Universal
+// `stage` output and the Docker image, so those scoped copies are never consumed; silence sbt's
+// lintUnused for them rather than leaving noise on every load (the plugins can't be disabled — the
+// native-packager graph requires them).
+Global / excludeLintKeys ++= Set(
+  Debian / executableScriptName,
+  Debian / sourceDirectory,
+  Rpm / daemonStdoutLogFile,
+  Rpm / executableScriptName,
+  Rpm / name,
+  Rpm / sourceDirectory,
+  Universal / executableScriptName,
+  UniversalDocs / name,
+  UniversalSrc / name,
+  rpmScriptsDirectory
+)
 
 val scalusVersion = "1.0.0"
 val bloxbeanVersion = "0.7.1"
