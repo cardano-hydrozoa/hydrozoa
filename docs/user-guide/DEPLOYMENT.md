@@ -151,21 +151,27 @@ just integration-fast  # multi-peer integration subset
 
 Two ways to use your build:
 
-**A local Docker image** — the same image as the published one, from your sources; point
-`docker compose` (§5) at it with `HYDROZOA_IMAGE`:
+**A local Docker image** — the same image as the published one, from your sources. It is tagged
+both `cardano-hydrozoa/hydrozoa:0.1.2` and `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2`, so it matches
+`docker compose`'s default image name — no `HYDROZOA_IMAGE` override needed:
 
 ```bash
-just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.2 (base eclipse-temurin:25-jre, EXPOSE 8080)
-# then: HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.2 docker compose up -d
+just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.2 + ghcr.io/… (base eclipse-temurin:25-jre)
+docker compose up -d   # picks up the local ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2 build
 ```
 
 **Locally-compiled code (development)** — `just stage` builds the `hydrozoa` launcher from the
 current sources, and the `just` recipes invoke it directly, with no Docker and no sbt startup per
-command:
+command. `just scaffold` then populates the head directory ($HYDROZOA_HOME, default `head/demo`)
+with the config template the §4 recipes fill in:
 
 ```bash
 just stage             # -> target/universal/stage/bin/hydrozoa
+just scaffold          # -> $HYDROZOA_HOME/ (default head/demo): config template + docker-compose.yml + hydrozoa.sh
 ```
+
+`$HYDROZOA_HOME` selects which head directory every recipe reads and writes — default `head/demo`;
+export it (e.g. `export HYDROZOA_HOME=./head/release/preview`) to keep separate per-network heads.
 
 Every command in §4–§6 is shown **both ways**: a `# Docker` line (`hydrozoa <cmd>`, via the image and
 the alias from §2) and the `just` equivalent (`just <cmd>`, which runs the staged launcher). Use
