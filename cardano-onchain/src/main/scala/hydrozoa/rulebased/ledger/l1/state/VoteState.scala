@@ -72,15 +72,14 @@ object VoteState:
       *
       *   - [[VoteStatus.AwaitingVote]] — Reserved phase: the named peer can transition this box to
       *     [[VoteStatus.Voted]] or [[VoteStatus.Abstain]] via the permissioned one-shot path.
-      *   - [[VoteStatus.Voted]] — Open phase: a KZG commitment + minor block version. Any multisigned
-      *     SEC with a strictly higher `versionMinor` (under the same `versionMajor`) can ratchet this
-      *     status forward, regardless of who signs the transaction.
+      *   - [[VoteStatus.Voted]] — Open phase: a KZG commitment + minor block version. Any
+      *     multisigned SEC with a strictly higher `versionMinor` (under the same `versionMajor`)
+      *     can ratchet this status forward, regardless of who signs the transaction.
       *   - [[VoteStatus.Abstain]] — Open phase: the reserved peer opted out (e.g. when no SEC is
       *     available because the latest hard-confirmed stack is Initial or a Major with no trailing
       *     minors — closes the gap left by the KZG-out-of-BlockHeader refactor). A subsequent
       *     multisigned SEC can still ratchet this to [[VoteStatus.Voted]] (with any
-      *     `versionMinor > 0`), enlarging the
-      *     open-phase pool.
+      *     `versionMinor > 0`), enlarging the open-phase pool.
       */
     enum VoteStatus:
         case AwaitingVote(peer: PubKeyHash)
