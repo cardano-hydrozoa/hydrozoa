@@ -213,6 +213,6 @@ prepush: precommit test integration-fast build-werror
   just notify "prepush"
 
 notify name:
-  if [ -f .just/notify ]; \
+  @if [ -f .just/notify ]; \
   then notify-send -i "{{justfile_dir()}}/.just/notify-icon.jpg" -a "Hydrozoa Justfile" "{{name}} finished"; \
   fi
