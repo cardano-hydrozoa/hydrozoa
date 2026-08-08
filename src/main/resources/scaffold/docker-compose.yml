@@ -3,13 +3,13 @@
 # the shared head-config.json plus its own private.json; head peers publish their user/admin HTTP
 # API, coil peers dial out only. See docs/user-guide/DEPLOYMENT.md §6.
 #
-# This file is scaffolded into the head directory itself, so config paths default to `.` (this
-# directory): `docker compose up` from here mounts ./head-config and ./private. HYDROZOA_HOME
-# overrides that; HYDROZOA_IMAGE overrides the image (e.g. a local cardano-hydrozoa/hydrozoa:<version>).
+# This file is scaffolded into the head directory itself, so config paths are relative to it (`.`):
+# `docker compose up` from here mounts ./head-config and ./private. HYDROZOA_IMAGE overrides the
+# image (e.g. a local cardano-hydrozoa/hydrozoa:<version>).
 #
 # Each service pins a fixed container_name (head-0, coil-0, …) so container names stay clean (no
 # compose `-N` index suffix). Because those names are host-global, only one head can run per machine
-# at a time — bring one down before starting another (e.g. a different HYDROZOA_HOME / network).
+# at a time — bring one down before starting another (e.g. a different network's head directory).
 
 name: hydrozoa
 
@@ -45,8 +45,8 @@ services:
     ports:
       - "8080:8080"   # head-0 user/admin HTTP API
     volumes:
-      - ${HYDROZOA_HOME:-.}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_HOME:-.}/private/head-0/private.json:/configs/private.json:ro
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/head-0/private.json:/configs/private.json:ro
 
   head-1:
     <<: *hydrozoa
@@ -54,8 +54,8 @@ services:
     ports:
       - "8081:8080"   # head-1 user/admin HTTP API
     volumes:
-      - ${HYDROZOA_HOME:-.}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_HOME:-.}/private/head-1/private.json:/configs/private.json:ro
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/head-1/private.json:/configs/private.json:ro
 
   ## ---------------------------------------------------------- coil peers (dial out only)
 
@@ -63,26 +63,26 @@ services:
     <<: *hydrozoa
     container_name: coil-0
     volumes:
-      - ${HYDROZOA_HOME:-.}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_HOME:-.}/private/coil-0/private.json:/configs/private.json:ro
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-0/private.json:/configs/private.json:ro
 
   coil-1:
     <<: *hydrozoa
     container_name: coil-1
     volumes:
-      - ${HYDROZOA_HOME:-.}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_HOME:-.}/private/coil-1/private.json:/configs/private.json:ro
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-1/private.json:/configs/private.json:ro
 
   coil-2:
     <<: *hydrozoa
     container_name: coil-2
     volumes:
-      - ${HYDROZOA_HOME:-.}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_HOME:-.}/private/coil-2/private.json:/configs/private.json:ro
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-2/private.json:/configs/private.json:ro
 
   coil-3:
     <<: *hydrozoa
     container_name: coil-3
     volumes:
-      - ${HYDROZOA_HOME:-.}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_HOME:-.}/private/coil-3/private.json:/configs/private.json:ro
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-3/private.json:/configs/private.json:ro
