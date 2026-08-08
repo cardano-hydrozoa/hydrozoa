@@ -84,6 +84,9 @@ object SubmitL2Transaction:
                 (input, output) = selected
 
                 destination <- Prompts.promptDestination(configDir.resolve("private"))
+                destinationBech32 <- IO.fromOption(destination.toBech32.toOption)(
+                  RuntimeException("could not render the destination address as bech32")
+                )
                 value <- promptSpendValue(output.value)
 
                 txSigned <- IO
@@ -102,8 +105,8 @@ object SubmitL2Transaction:
                       )
                     )
                 _ <- IO.println(
-                  s"Accepted: requestId=$requestId. Watch GET $headUri/l2/cardano-eutxo/utxos/$ownBech32 " +
-                      "for the result."
+                  s"Accepted: requestId=$requestId. Watch GET " +
+                      s"$headUri/l2/cardano-eutxo/utxos/$destinationBech32 for the result."
                 )
             } yield ExitCode.Success
         }
