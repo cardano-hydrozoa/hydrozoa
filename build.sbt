@@ -78,6 +78,12 @@ lazy val core: Project = (project in file("."))
         // logback.xml. `$1` here is the subcommand (runs before the launcher's own arg processing).
         """if [ "${1:-}" != "serve" ]; then addJava "-Dlogback.configurationFile=logback-cli.xml"; fi"""
       ),
+      // sbt 2 stages under target/out/jvm/scala-<v>/core/; pin the local `stage` output to the
+      // stable repo-root path the justfile's deployment recipes expect
+      // (target/universal/stage/bin/hydrozoa). Docker packaging keeps its own staging dir. The key
+      // is qualified because JavaAppPackaging and DockerPlugin both re-export `stagingDirectory`.
+      Universal / com.typesafe.sbt.packager.Keys.stagingDirectory :=
+          baseDirectory.value / "target" / "universal" / "stage",
       // Docker settings
       Docker / packageName := "cardano-hydrozoa/hydrozoa",
       Docker / version := version.value,

@@ -4,10 +4,10 @@ import cats.data.{NonEmptyMap, ReaderT}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
+import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.InitParamsType.Constant
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{HeadConfig, generateHeadConfig, generateHeadConfigBootstrap}
@@ -16,21 +16,19 @@ import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, Rat
 import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.integration.harness.{MultiPeerHeadHarness, Signal}
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.withZeroFees
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.multisig.CommonChildEvent
 import hydrozoa.multisig.backend.cardano.CardanoBackend as L1Backend
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{RequestSequencer, SlowConsensusActorEvent, UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.{RequestSequencer, SlowConsensusActorEvent, UserRequest}
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Metadata}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.stack.StackEffects
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
-import java.time.Instant
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
@@ -38,10 +36,9 @@ import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, KeepRaw, MultiAsset, PolicyId, Script, SlotConfig, Timelock, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, KeepRaw, MultiAsset, PolicyId, Script, Timelock, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{NativeScriptWitness, PubKeyWitness, TransactionBuilder, TransactionBuilderStep}
-import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers, genMonad}
@@ -321,17 +318,20 @@ object TransientTokenDemo extends Properties("Transient token demo") {
                         .get
               )
             )
+            funding = InitializationFunding(
+              seedUtxo = seedUtxo,
+              additionalFundingUtxos = Map.empty,
+              changeOutputs = Nil
+            )
             params = InitializationParameters(
               initialEvacuationMap = evacuationMap,
               initialEquityContributions = equity,
-              seedUtxo = seedUtxo,
-              additionalFundingUtxos = Map.empty,
-              initialChangeOutputs = Nil
+              headId = funding.headId
             )
 
             bootstrap <- generateHeadConfigBootstrap(
               generateHeadParams = ReaderT.pure(headParams)(using genMonad),
-              generateInitializationParameters = Constant(params)
+              generateInitializationParameters = Constant(params, funding)
             ).run(testPeers)
 
             mnc <- MultiNodeConfig.generateWith(testPeers)(
@@ -392,16 +392,16 @@ object TransientTokenDemo extends Properties("Transient token demo") {
 
     private def hooksFor(
         sig: Signal[Unit]
-    ): MultiPeerHeadHarness.Hooks[RequestSequencer.Handle, Unit] =
-        MultiPeerHeadHarness.Hooks[RequestSequencer.Handle, Unit](
+    ): MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]] =
+        MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]](
           tracer = sig.tracer,
-          peerHandle = (_, conns) =>
-              conns.requestSequencer.fold(
-                IO.raiseError[RequestSequencer.Handle](
-                  new RuntimeException("head peer has no RequestSequencer")
-                )
-              )(IO.pure),
-          coilHandle = (_, _) => IO.unit
+          handle = {
+              case (PeerId.Head(peerNum), conns) =>
+                  IO.fromOption(conns.requestSequencer)(
+                    new RuntimeException(s"head peer $peerNum has no RequestSequencer")
+                  ).map(Some(_))
+              case (_: PeerId.Coil, _) => IO.pure(None)
+          }
         )
 
     private def pollTxKnown(
@@ -432,33 +432,13 @@ object TransientTokenDemo extends Properties("Transient token demo") {
 
     private def submitRequest(
         requestSequencer: RequestSequencer.Handle,
-        headConfig: HeadConfig,
-        userVk: VerificationKey,
-        tx: Transaction,
-        now: Instant
+        tx: Transaction
     ): IO[Unit] = {
-        val body = TransactionRequestBody(ByteString.fromArray(tx.toCbor))
-        val slotConfig: SlotConfig = headConfig.slotConfig
-        val header = UserRequestHeader(
-          headId = headConfig.headId,
-          validityStart = RequestValidityStartTime(
-            QuantizedInstant.ofEpochSeconds(slotConfig, now.minusSeconds(60).getEpochSecond)
-          ),
-          validityEnd = RequestValidityEndTime(
-            QuantizedInstant.ofEpochSeconds(slotConfig, now.plusSeconds(3600).getEpochSecond)
-          ),
-          bodyHash = body.hash
-        )
-        val request = UserRequest.TransactionRequest(
-          header,
-          body.asInstanceOf[UserRequestBody.TransactionRequestBody],
-          userVk
-        )
-        (requestSequencer ?: request).void
+        val body: TransactionRequestBody = TransactionRequestBody(ByteString.fromArray(tx.toCbor))
+        (requestSequencer ?: UserRequest.TransactionRequest(body)).void
     }
 
     private def runDemo(scenario: Scenario): IO[Prop] = {
-        val headConfig = scenario.mnc.headConfig
         for {
             sig <- stackZeroSignal
             _ <- log(
@@ -476,12 +456,9 @@ object TransientTokenDemo extends Properties("Transient token demo") {
                         initLanded <- pollTxKnown(backend, scenario.headInitTxId, 120, 500.millis)
                         _ <- log(s"init tx landed on L1: $initLanded")
 
-                        requestSequencer = harness.peers(HeadPeerNumber(0)).handle
-                        userVk = scenario.mnc
-                            .nodeConfigs(HeadPeerNumber(0))
-                            .ownWallet
-                            .exportVerificationKey
-                        now <- IO.realTimeInstant
+                        requestSequencer <- IO.fromOption(
+                          harness.peers(HeadPeerNumber(0)).handle
+                        )(new RuntimeException("head peer has no RequestSequencer"))
 
                         // The doomed withdrawal first: it must be REJECTED (transient tokens
                         // cannot leave the head), leaving its input unspent for the burn.
@@ -489,17 +466,11 @@ object TransientTokenDemo extends Properties("Transient token demo") {
                           "submitting a withdrawal that carries the transient tokens — " +
                               "the head must reject it"
                         )
-                        _ <- submitRequest(
-                          requestSequencer,
-                          headConfig,
-                          userVk,
-                          scenario.txs.rejectedWithdrawal,
-                          now
-                        )
+                        _ <- submitRequest(requestSequencer, scenario.txs.rejectedWithdrawal)
 
                         _ <- scenario.txs.accepted.traverse_ { case (label, tx) =>
                             log(s"submitting L2 tx: $label") >>
-                                submitRequest(requestSequencer, headConfig, userVk, tx, now)
+                                submitRequest(requestSequencer, tx)
                         }
                         _ <- log("all L2 txs submitted; settling the withdrawal on L1")
 
