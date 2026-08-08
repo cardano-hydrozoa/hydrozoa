@@ -110,9 +110,9 @@ workspace from it:
 
 ```bash
 mkdir myhead && cd myhead
-docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1
+docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2
 docker run --rm -v "$PWD:/work" -w /work --user root \
-  ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1 scaffold .
+  ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2 scaffold .
 # writes docker-compose.yml, hydrozoa.sh, template/peer-private.template.json.local
 ```
 
@@ -123,13 +123,13 @@ under it. Then load the CLI alias and check you are on the version you expect:
 source ./hydrozoa.sh   # sets the `hydrozoa` alias + HYDROZOA_HOME (this folder, an absolute path)
 
 hydrozoa version       # verify the image you are running
-#   hydrozoa 0.1.1
-#   git:   v0.1.1
+#   hydrozoa 0.1.2
+#   git:   v0.1.2
 #   built: 2026-07-28 14:00:37.834-0600
 ```
 
-(The `git:` line is `git describe` provenance; a published image built from the `v0.1.1` tag reads a
-clean `v0.1.1`. A locally built image between releases shows the distance from the newest tag, e.g.
+(The `git:` line is `git describe` provenance; a published image built from the `v0.1.2` tag reads a
+clean `v0.1.2`. A locally built image between releases shows the distance from the newest tag, e.g.
 `v0.1.0-10-gaa9d7c69`.)
 
 Need a version that isn't in the registry? Build it from this repo — see §3.
@@ -155,8 +155,8 @@ Two ways to use your build:
 `docker compose` (§5) at it with `HYDROZOA_IMAGE`:
 
 ```bash
-just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.1 (base eclipse-temurin:25-jre, EXPOSE 8080)
-# then: HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.1 docker compose up -d
+just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.2 (base eclipse-temurin:25-jre, EXPOSE 8080)
+# then: HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.2 docker compose up -d
 ```
 
 **Locally-compiled code (development)** — `just stage` builds the `hydrozoa` launcher from the
@@ -354,8 +354,8 @@ At this point every node has its two files, and the composition (§5) mounts
 
 - Config mounts come from `${HYDROZOA_HOME:-./head/demo}`: the shared `head-config.json` plus
   `head-N/private.json` or `coil-N/private.json` per node. The image defaults to the published
-  `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1` (pulled on first run); set `${HYDROZOA_IMAGE}` to use
-  another, e.g. a locally built `cardano-hydrozoa/hydrozoa:0.1.1`.
+  `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2` (pulled on first run); set `${HYDROZOA_IMAGE}` to use
+  another, e.g. a locally built `cardano-hydrozoa/hydrozoa:0.1.2`.
 
 Caveats:
 - **State is ephemeral.** No data volumes are mounted (only read-only config bind mounts), so both
@@ -376,14 +376,14 @@ Default — pull the published image and run the scaffolded head (`hydrozoa.sh` 
 `HYDROZOA_HOME`, so `docker compose` mounts the same workspace the CLI generated into):
 
 ```bash
-docker compose up -d           # pulls ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1 on first run
+docker compose up -d           # pulls ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2 on first run
 ```
 
-**Another image** — `HYDROZOA_IMAGE` (default `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1`), e.g. a
+**Another image** — `HYDROZOA_IMAGE` (default `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2`), e.g. a
 locally built one (§3):
 
 ```bash
-HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.1 docker compose up -d
+HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.2 docker compose up -d
 ```
 
 **Another configuration** — `HYDROZOA_HOME` selects the directory each container mounts

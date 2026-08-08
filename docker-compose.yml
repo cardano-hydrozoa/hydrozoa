@@ -3,14 +3,6 @@
 # the shared head-config.json plus its own private.json; head peers publish their user/admin HTTP
 # API, coil peers dial out only. See docs/user-guide/DEPLOYMENT.md §6.
 #
-# Because the ledger is in-process, each service is one full container with a single mesh interface,
-# so hydrozoa's mesh WS server binds cleanly to its own service name (bind == dialed address,
-# ws://head-N:4001; Main.scala) and coil peers dial their hub's /hub route over the mesh.
-#
-# Bring-up (in the hydrozoa repo):
-#   1. just keygen-fleet 2 4 2     (then fund head-0, build-bootstrap, build-head-config — §5)
-#   2. docker compose up -d        (pulls ghcr.io/cardano-hydrozoa/hydrozoa by default)
-#
 # HYDROZOA_HOME overrides where the generated configs are read from (default ./head/demo);
 # HYDROZOA_IMAGE overrides the image (e.g. a locally built cardano-hydrozoa/hydrozoa:<version>).
 
@@ -23,7 +15,7 @@ networks:
       com.docker.network.driver.mtu: 1400
 
 x-hydrozoa: &hydrozoa
-  image: ${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1}
+  image: ${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2}
   # root: the image's non-root user cannot write the RocksDB stores / logs under the /opt/docker
   # workdir. State is ephemeral here (no volumes) — restarting re-initializes a fresh head (§5b).
   user: root
