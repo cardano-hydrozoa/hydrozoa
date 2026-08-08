@@ -72,11 +72,11 @@ lazy val core: Project = (project in file("."))
       bashScriptExtraDefines ++= Seq(
         """addJava "--enable-native-access=ALL-UNNAMED"""",
         """addJava "--sun-misc-unsafe-memory-access=allow"""",
-        // The one-shot CLI subcommands use a quiet, console-only logback config: no
-        // hydrozoa-trace.jsonl / hydrozoa.log written into a possibly read-only cwd (e.g. inside the
-        // Docker image), and no trace-level spam. Only `serve` keeps the verbose, file-writing
-        // logback.xml. `$1` here is the subcommand (runs before the launcher's own arg processing).
-        """if [ "${1:-}" != "serve" ]; then addJava "-Dlogback.configurationFile=logback-cli.xml"; fi"""
+        // Select the logback config. Local runs default to the verbose, file-writing logback.xml;
+        // the Docker image sets HYDROZOA_LOGBACK=logback-docker.xml (see Docker/dockerEnvVars) for a
+        // quiet, console-only config so no subcommand writes hydrozoa.log / hydrozoa-trace.jsonl into
+        // the container's filesystem.
+        """addJava "-Dlogback.configurationFile=${HYDROZOA_LOGBACK:-logback.xml}""""
       ),
       // sbt 2 stages under target/out/jvm/scala-<v>/core/; pin the local `stage` output to the
       // stable repo-root path the justfile's deployment recipes expect
@@ -102,7 +102,12 @@ lazy val core: Project = (project in file("."))
         "org.opencontainers.image.revision" -> gitRevision
       ),
       Docker / dockerEnvVars := Map(
-        "JAVA_OPTS" -> "-Xmx2g -Xms512m"
+        "JAVA_OPTS" -> "-Xmx2g -Xms512m",
+        // Every subcommand in the image uses a quiet, console-only logback config so the container
+        // writes no hydrozoa.log / hydrozoa-trace.jsonl; the launcher reads this (see
+        // bashScriptExtraDefines above). Kept out of JAVA_OPTS so `docker run -e JAVA_OPTS=…` can't
+        // clobber the log config.
+        "HYDROZOA_LOGBACK" -> "logback-docker.xml"
       ),
       // Ensure proper signal handling for graceful shutdown.
       // NB: native-packager emits multi-stage `FROM <img> AS <stage>` (several args), so match

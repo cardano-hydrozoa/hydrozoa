@@ -41,7 +41,11 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
      booting a head on Preprod/Preview from the image (`docker run … serve`); a clean start confirms
      the refs resolve.
 
-3. **Sanity-check the image locally** (optional but recommended):
+3. **Review the shipped logger levels.** The image runs `src/main/resources/logback-docker.xml`
+   (console-only, `root` at `warn`), not the verbose local `logback.xml`. Before tagging, confirm
+   its levels are what you want to ship.
+
+4. **Sanity-check the image locally** (optional but recommended):
 
    ```bash
    just docker-image                                   # builds cardano-hydrozoa/hydrozoa:X.Y.Z
@@ -49,7 +53,7 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    #   hydrozoa X.Y.Z / git: v… / built: …
    ```
 
-4. **Tag and push** from the merged commit on `main`:
+5. **Tag and push** from the merged commit on `main`:
 
    ```bash
    git checkout main && git pull
@@ -57,10 +61,10 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    git push origin vX.Y.Z
    ```
 
-5. **Watch the release workflow** (Actions → Release). It publishes three tags:
+6. **Watch the release workflow** (Actions → Release). It publishes three tags:
    `ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z`, `:X.Y`, and `:latest`.
 
-6. **Verify** the published image:
+7. **Verify** the published image:
 
    ```bash
    docker pull ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z
