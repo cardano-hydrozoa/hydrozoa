@@ -153,11 +153,11 @@ Two ways to use your build:
 
 **A local Docker image** — the same image as the published one, from your sources. It is tagged
 both `cardano-hydrozoa/hydrozoa:0.1.2` and `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2`, so it matches
-`docker compose`'s default image name — no `HYDROZOA_IMAGE` override needed:
+`docker compose`'s default image name — the scaffolded head (§5) picks it up with no `HYDROZOA_IMAGE`
+override:
 
 ```bash
 just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.2 + ghcr.io/… (base eclipse-temurin:25-jre)
-docker compose up -d   # picks up the local ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2 build
 ```
 
 **Locally-compiled code (development)** — `just stage` builds the `hydrozoa` launcher from the
@@ -358,8 +358,9 @@ At this point every node has its two files, and the composition (§5) mounts
 `docker-compose.yml` — one `hydrozoa` container per node on a single user-defined bridge network,
 `mesh`.
 
-- Config mounts come from `${HYDROZOA_HOME:-./head/demo}`: the shared `head-config.json` plus
-  `head-N/private.json` or `coil-N/private.json` per node. The image defaults to the published
+- Config mounts resolve against `.` — the head directory the compose file was scaffolded into — so
+  running compose from there mounts that dir's shared `head-config.json` plus each node's
+  `head-N/private.json` or `coil-N/private.json`. The image defaults to the published
   `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2` (pulled on first run); set `${HYDROZOA_IMAGE}` to use
   another, e.g. a locally built `cardano-hydrozoa/hydrozoa:0.1.2`.
 
@@ -378,27 +379,14 @@ Caveats:
 
 ### Bringing up the head
 
-Default — pull the published image and run the scaffolded head (`hydrozoa.sh` exports
-`HYDROZOA_HOME`, so `docker compose` mounts the same workspace the CLI generated into):
+The `docker-compose.yml` is scaffolded into the head directory, so `cd` there first — its config
+paths resolve against `.` (that directory).
+
+Default — pull the published image and run the scaffolded head:
 
 ```bash
-docker compose up -d           # pulls ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2 on first run
-```
-
-**Another image** — `HYDROZOA_IMAGE` (default `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2`), e.g. a
-locally built one (§3):
-
-```bash
-HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.2 docker compose up -d
-```
-
-**Another configuration** — `HYDROZOA_HOME` selects the directory each container mounts
-`head-config.json` + its `private.json` from (`hydrozoa.sh` sets it to your scaffolded workspace; the
-compose file itself falls back to `./head/demo`, the local `just` default). It's the same variable
-the CLI generates into, so one value drives both the build and the run:
-
-```bash
-HYDROZOA_HOME=/abs/path/to/other-head docker compose up -d
+cd "$HYDROZOA_HOME"            # the scaffolded head dir (default head/demo)
+docker compose up -d          # pulls ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2 on first run
 ```
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
@@ -422,6 +410,16 @@ this section:
 The `(0,0)` entry under `happyPathEffects` is the initialization tx — open its hash in the
 network's explorer to check it out. Every following happy-path effect (settlements, the
 finalization) appears in the same section as the head progresses.
+
+**Another image** — `HYDROZOA_IMAGE` (default `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.2`), e.g. a
+locally built one (§3):
+
+```bash
+HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.2 docker compose up -d
+```
+
+**Another head** — each head directory carries its own `docker-compose.yml`, so switch heads by
+`cd`-ing into a different one (e.g. a per-network `head/release/preview`) before `docker compose up`.
 
 ### Restarting the head
 
