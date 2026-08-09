@@ -30,6 +30,7 @@ class CodecsTest extends AnyFunSuite {
       block = BlockNumber(1),
       stack = StackNumber(1),
       request = RequestNumber.zero,
+      requestCeiling = RequestNumber.zero,
       softAck = SoftAckNumber.zero.increment,
       headHardAck = HardAckNumber.zero,
       hubHardAck = HubHardAckNumber.zero
@@ -69,6 +70,7 @@ class CodecsTest extends AnyFunSuite {
           block = BlockNumber(99),
           stack = StackNumber(4),
           request = RequestNumber(7),
+          requestCeiling = RequestNumber(1007),
           softAck = SoftAckNumber(13),
           headHardAck = HardAckNumber(8),
           hubHardAck = HubHardAckNumber(5)
@@ -80,6 +82,7 @@ class CodecsTest extends AnyFunSuite {
                 val _ = assert(decoded.block == get.block)
                 val _ = assert(decoded.stack == get.stack)
                 val _ = assert(decoded.request == get.request)
+                val _ = assert(decoded.requestCeiling == get.requestCeiling)
                 val _ = assert(decoded.softAck == get.softAck)
                 val _ = assert(decoded.headHardAck == get.headHardAck)
                 assert(decoded.hubHardAck == get.hubHardAck)

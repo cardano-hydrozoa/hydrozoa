@@ -34,6 +34,11 @@ object BatchMessages {
             block: BlockNumber,
             stack: StackNumber,
             request: RequestNumber,
+            // Backpressure: the highest request number the puller is willing to accept from this
+            // remote author right now — its confirmed high-water for this author plus one block's
+            // cap. The server truncates its request slice at this ceiling so the puller never buffers
+            // more than one cap of the author's unconfirmed requests (docs/spec/fast-consensus.md).
+            requestCeiling: RequestNumber,
             softAck: SoftAckNumber,
             headHardAck: HardAckNumber,
             hubHardAck: HubHardAckNumber
