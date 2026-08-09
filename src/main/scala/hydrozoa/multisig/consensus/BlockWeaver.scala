@@ -3,6 +3,7 @@ import cats.effect.IO
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
@@ -14,6 +15,7 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.State.Leader.AwaitingConfirmation.StartedBlock.{NotStarted, Started}
 import hydrozoa.multisig.consensus.mempool.Mempool
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -72,7 +74,17 @@ final case class BlockWeaver(
 
 object BlockWeaver {
     type Config = CardanoNetwork.Section & OwnPeerPublic.Section &
-        NodeOperationMultisigConfig.Section
+        NodeOperationMultisigConfig.Section & BlockConfig.Section
+
+    /** This peer's head-peer number. Only ever called on the leader path, which a coil peer never
+      * reaches ([[OwnPeerPublic.Section.canLeadFast]] is always false there).
+      */
+    private def ownHeadPeerNum(config: OwnPeerPublic.Section): HeadPeerNumber =
+        config.ownPeerId match {
+            case PeerId.Head(n) => n
+            case PeerId.Coil(_) =>
+                throw IllegalStateException("BlockWeaver leader path reached on a coil peer")
+        }
 
     final case class Connections private[BlockWeaver] (
         blockWeaver: BlockWeaver.Handle,
@@ -639,7 +651,8 @@ object BlockWeaver {
                 override def act(config: Config): IO[Some[NextReactiveState]] = for {
                     _ <- logStateTransition
                     _ <- realTimeQuantizedInstant(config.slotConfig)
-                    requests <- extractRequestsInOrder
+                    extracted <- extractRequestsForBlock(config)
+                    (requests, survivingMempool) = extracted
                     isBlockStarted <-
                         if requests.isEmpty
                         then IO.pure(NotStarted)
@@ -652,16 +665,28 @@ object BlockWeaver {
                       Leader.AwaitingConfirmation(
                         this,
                         leadingBlockNum,
-                        isBlockStarted
+                        isBlockStarted,
+                        survivingMempool,
+                        requestsInBlock = requests.size
                       )
                     )
                 } yield newState
 
-                private def extractRequestsInOrder: IO[List[UserRequestWithId]] = {
-                    val requests = mempool.extractRequestsInOrder
+                /** Extract at most [[BlockConfig.Section.maxRequestsPerBlock]] requests for the
+                  * block this peer is leading, preferring this peer's own requests (fairness); the
+                  * overflow stays in the surviving mempool for later blocks.
+                  */
+                private def extractRequestsForBlock(
+                    config: Config
+                ): IO[(List[UserRequestWithId], Mempool)] = {
+                    val (requests, survivingMempool) =
+                        mempool.extractInOrderPreferring(
+                          ownHeadPeerNum(config),
+                          config.maxRequestsPerBlock
+                        )
                     tracer.traceWith(
                       BlockWeaverEvent.MempoolExtracted(requests.map(_.requestId))
-                    ) >> IO.pure(requests)
+                    ) >> IO.pure((requests, survivingMempool))
                 }
             }
 
@@ -691,8 +716,16 @@ object BlockWeaver {
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 leadingBlockNumber: BlockNumber,
-                isBlockStarted: Leader.AwaitingConfirmation.StartedBlock
-            ) extends Reactive {
+                isBlockStarted: Leader.AwaitingConfirmation.StartedBlock,
+                // Overflow held back once the open block reached its request cap; rolls into the next
+                // block. Empty while the block is below the cap.
+                override val mempool: Mempool,
+                // How many requests the open block already holds. Once it reaches
+                // `config.maxRequestsPerBlock`, further requests are held in `mempool` instead of
+                // being forwarded to the joint ledger.
+                requestsInBlock: Int
+            ) extends Reactive,
+                  WithMempool {
                 override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
 
                 export Leader.AwaitingConfirmation.{NextReactiveState, Unexpected}
@@ -702,7 +735,8 @@ object BlockWeaver {
                         case ur: UserRequestWithId =>
                             // First block is implicitly confirmed, so we complete it immediately —
                             // as the final block when finalization was requested (mirroring
-                            // completeNextBlock below), regular otherwise.
+                            // completeNextBlock below), regular otherwise. Any capped-out overflow
+                            // rolls into the next block.
                             def completeFirstBlock =
                                 if finalizationLocallyTriggered.asBoolean
                                 then sendCompleteFinalBlockAsLeader(config) >> stop()
@@ -714,25 +748,49 @@ object BlockWeaver {
                                           tracer,
                                           pollResults,
                                           finalizationLocallyTriggered,
-                                          mempool = Mempool.empty,
+                                          mempool = mempool,
                                           nextBlockNumber = leadingBlockNumber.increment
                                         ).act(config)
                                     } yield newState
 
-                            for {
-                                _ <- IO.whenA(isBlockStarted == NotStarted)(
-                                  sendStartBlock(config)(leadingBlockNumber)
-                                )
+                            def forwardIntoBlock =
+                                for {
+                                    _ <- IO.whenA(isBlockStarted == NotStarted)(
+                                      sendStartBlock(config)(leadingBlockNumber)
+                                    )
+                                    _ <- tracer.traceWith(
+                                      BlockWeaverEvent.RequestSentToJointLedger(ur.requestId)
+                                    )
+                                    _ <- connections.jointLedger ! ur
+                                    res <-
+                                        if leadingBlockNumber == BlockNumber.zero.increment
+                                        then completeFirstBlock
+                                        else
+                                            pure(
+                                              this.copy(
+                                                isBlockStarted = Started,
+                                                requestsInBlock = requestsInBlock + 1
+                                              )
+                                            )
+                                } yield res
 
-                                _ <- tracer.traceWith(
-                                  BlockWeaverEvent.RequestSentToJointLedger(ur.requestId)
-                                )
-                                _ <- connections.jointLedger ! ur
-                                res <-
-                                    if leadingBlockNumber == BlockNumber.zero.increment
-                                    then completeFirstBlock
-                                    else pure(this.copy(isBlockStarted = Started))
-                            } yield res
+                            // Once the open block reaches the cap, hold further requests in the
+                            // mempool for the next block instead of forwarding them to the joint
+                            // ledger. The first block is exempt: it completes on its first request,
+                            // so it is below the cap by construction.
+                            def holdForNextBlock =
+                                for {
+                                    _ <- tracer.traceWith(
+                                      BlockWeaverEvent.RequestAddedToMempool(ur.requestId)
+                                    )
+                                    newMempool <- storeRequest(ur)
+                                    res <- pure(this.copy(mempool = newMempool))
+                                } yield res
+
+                            if leadingBlockNumber == BlockNumber.zero.increment ||
+                                requestsInBlock < config.maxRequestsPerBlock
+                            then forwardIntoBlock
+                            else holdForNextBlock
 
                         case bc: Block.SoftConfirmed.NonFinal =>
                             def completeBlockRegular =
@@ -742,7 +800,7 @@ object BlockWeaver {
                                       tracer,
                                       pollResults,
                                       finalizationLocallyTriggered = finalizationLocallyTriggered,
-                                      mempool = Mempool.empty,
+                                      mempool = mempool,
                                       nextBlockNumber = leadingBlockNumber.increment
                                     ).act(config)
 
@@ -761,6 +819,10 @@ object BlockWeaver {
                                 if isBlockStarted == Started
                                 then completeNextBlock
                                 else
+                                    // NotStarted here implies no request was ever forwarded, hence an
+                                    // empty mempool (a non-empty mempool would have been extracted at
+                                    // arming and started the block), so no overflow is dropped by
+                                    // handing off to AwaitingRequest.
                                     tracer.traceWith(
                                       BlockWeaverEvent.PreviousBlockConfirmation(bc.blockNum)
                                     ) >> scheduleWakeupFiber(config, bc) >>
@@ -900,7 +962,9 @@ object BlockWeaver {
                 private[State] def apply(
                     state: State,
                     blockNumber: BlockNumber,
-                    isBlockStarted: StartedBlock
+                    isBlockStarted: StartedBlock,
+                    mempool: Mempool,
+                    requestsInBlock: Int
                 ): Leader.AwaitingConfirmation =
                     import state.*
                     Leader.AwaitingConfirmation(
@@ -909,7 +973,9 @@ object BlockWeaver {
                       pollResults,
                       finalizationLocallyTriggered,
                       blockNumber,
-                      isBlockStarted
+                      isBlockStarted,
+                      mempool,
+                      requestsInBlock
                     )
 
                 enum StartedBlock:

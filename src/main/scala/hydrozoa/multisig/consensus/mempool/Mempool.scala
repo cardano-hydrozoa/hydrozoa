@@ -1,6 +1,7 @@
 package hydrozoa.multisig.consensus.mempool
 
 import hydrozoa.multisig.consensus.UserRequestWithId
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId
 import scala.annotation.tailrec
 
@@ -122,6 +123,39 @@ final case class Mempool(
                 )
             })
             .toList
+
+    /** Extract up to `limit` requests for block production, preferring those authored by
+      * `preferredPeer` so a leader's own users are not starved when the mempool is full (fairness).
+      * Within each author the arrival (i.e. request-number) order is preserved — only the
+      * cross-author interleaving changes — so the per-author stream ordering is unaffected.
+      *
+      * @return
+      *   the chosen requests, in the order they should enter the block, and the surviving mempool
+      *   with those requests removed.
+      */
+    def extractInOrderPreferring(
+        preferredPeer: HeadPeerNumber,
+        limit: Int
+    ): (List[UserRequestWithId], Mempool) = {
+        val ordered: Vector[UserRequestWithId] = arrivalOrder.map(id =>
+            requests.getOrElse(
+              id,
+              throw RuntimeException(
+                s"Panic: the mempool's `arrivalOrder` vector has a request ID (${id.asI64}) that" +
+                    " is missing from the mempool's `requests` map."
+              )
+            )
+        )
+        // `partition` is stable, so each side keeps its arrival order; own requests lead.
+        val (own, others) = ordered.partition(_.requestId.peerNum == preferredPeer)
+        val chosen = (own ++ others).take(limit).toList
+        val chosenIds = chosen.iterator.map(_.requestId).toSet
+        val survivingMempool = copy(
+          requests = requests -- chosenIds,
+          arrivalOrder = arrivalOrder.filterNot(chosenIds.contains)
+        )
+        (chosen, survivingMempool)
+    }
 }
 
 object Mempool {
