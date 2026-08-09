@@ -24,7 +24,51 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    version, separate from the release version). Commit the bump on `main` (via PR; `main` is
    protected).
 
-2. **Sanity-check the image locally** (optional but recommended):
+2. **Check the baked-in reference-script UTxOs are current.** The image ships per-network default
+   reference UTxOs at `src/main/resources/scaffold/ref-utxos/` (Preview and Preprod): the treasury +
+   dispute validators and the G2 setup ladder that `build-head-config` falls back to when a head has
+   no local `bootstrap/ref-utxos.json` (see
+   [DEPLOYMENT.md § Step 4](docs/user-guide/DEPLOYMENT.md)). They sit at the unspendable burn
+   address, so they never need redeploying **unless the compiled on-chain scripts changed** since
+   they were last deployed.
+
+   - **If this release changes the compiled `cardanoOnchain` scripts** — either the validator/ladder
+     source changed, or Scalus was bumped (a compiler bump can alter the compiled UPLC even with no
+     source change) — the baked refs are **stale**: a head booting from the released image on those
+     networks fails with "invalid treasury/dispute script utxos".
+
+     First, re-export the scripts and rebuild the launcher (once):
+
+     ```bash
+     just export    # re-export the blueprint to src/main/resources/hydrozoa/scripts/plutus.json
+     just stage     # rebuild the launcher so the deploy below runs the freshly exported scripts
+     ```
+
+     Then, on **each** affected network, deploy fresh reference UTxOs from a throwaway single-peer
+     head — only head peer 0's wallet funds the deploy, so 1 head / 0 coils / quorum 0 is enough:
+
+     ```bash
+     export HYDROZOA_HOME=./head/release/preprod   # or ./head/release/preview
+     just scaffold                                 # writes the workspace + config template
+     # set blockfrostApiKey in $HYDROZOA_HOME/template/peer-private.template.json.local
+     #   (a preprod…/preview… key selects the network)
+     just keygen-fleet 1 0 0                        # minimal fleet → head-0's funding wallet
+     just head-zero-address                         # prints head-0's L1 address — fund it, then wait
+     just deploy-scripts-and-g2-setup               # deploys; prints the new script hashes
+     ```
+
+     Then copy the deployed refs from `$HYDROZOA_HOME/bootstrap/ref-utxos.json` into the matching
+     `src/main/resources/scaffold/ref-utxos/<network>.json` resource, and confirm the printed script
+     hashes match `just export`'s output.
+   - **If the scripts are unchanged**, the existing refs stay valid — nothing to do. Smoke-test by
+     booting a head on Preprod/Preview from the image (`docker run … serve`); a clean start confirms
+     the refs resolve.
+
+3. **Review the shipped logger levels.** The image runs `src/main/resources/logback-docker.xml`
+   (console-only, `root` at `warn`), not the verbose local `logback.xml`. Before tagging, confirm
+   its levels are what you want to ship.
+
+4. **Sanity-check the image locally** (optional but recommended):
 
    ```bash
    just docker-image                                   # builds cardano-hydrozoa/hydrozoa:X.Y.Z
@@ -32,7 +76,7 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    #   hydrozoa X.Y.Z / git: v… / built: …
    ```
 
-3. **Tag and push** from the merged commit on `main`:
+5. **Tag and push** from the merged commit on `main`:
 
    ```bash
    git checkout main && git pull
@@ -40,10 +84,10 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    git push origin vX.Y.Z
    ```
 
-4. **Watch the release workflow** (Actions → Release). It publishes three tags:
+6. **Watch the release workflow** (Actions → Release). It publishes three tags:
    `ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z`, `:X.Y`, and `:latest`.
 
-5. **Verify** the published image:
+7. **Verify** the published image:
 
    ```bash
    docker pull ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z

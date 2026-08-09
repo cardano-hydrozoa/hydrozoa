@@ -12,7 +12,9 @@
     </appender>
     <appender name="LOG_FILE" class="ch.qos.logback.core.FileAppender">
         <file>hydrozoa.log</file>
-        <encoder><pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n</pattern></encoder>
+        <!-- Plain pattern: no %highlight/%cyan colour macros, so the file has no ANSI escape codes
+             (those belong on the console, not in a file you grep/less). -->
+        <encoder><pattern>%d{HH:mm:ss.SSS} %-5level %logger{64} %n%msg%n</pattern></encoder>
     </appender>
     <logger name="hydrozoa.trace" level="info" additivity="false">
         <appender-ref ref="TRACE_FILE"/>
