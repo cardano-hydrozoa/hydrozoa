@@ -24,14 +24,31 @@
         # The nixpkgs sbt launcher (1.x) reads project/build.properties and bootstraps whatever
         # sbt version it names — including sbt 2.x — so no launcher pin is needed here.
         sbt0 = pkgs.sbt.override { jre = jdk; };
+        # sbt 2's `bspConfig` writes `.bsp/sbt.json` with argv `[<sbt>, "bsp"]`, but the nixpkgs
+        # launcher script has no `bsp` handling and sbt 2 has no `bsp` command, so IDEA's BSP sync
+        # (`sbt bsp`) dies on startup and the import times out. sbt only starts its BSP server via
+        # the `-bsp` launcher flag, so translate a bare `bsp` arg to `-bsp`. Pin `sbt.script` to
+        # this wrapper so `bspConfig` records the wrapper (not the inner launcher) in .bsp/sbt.json.
+        sbtBspShim = pkgs.writeShellScriptBin "sbt" ''
+          self="$(readlink -f "$0")"
+          args=()
+          for a in "$@"; do
+            [ "$a" = "bsp" ] && a="-bsp"
+            args+=("$a")
+          done
+          exec ${sbt0}/bin/sbt "-Dsbt.script=$self" "''${args[@]}"
+        '';
         # The nixpkgs `sbt` package also bundles the `sbtn` thin client (sbt 1.x), which cannot
         # drive an sbt 2 server (it reports `unknown event: sbt/exec`). Strip it so only `sbt` is on
         # PATH — nobody should reach for the broken client by habit. Restore once nixpkgs ships an
-        # sbt 2 `sbtn`.
+        # sbt 2 `sbtn`. `sbt` itself is the BSP shim above.
         sbtNoSbtn = pkgs.symlinkJoin {
           name = "sbt-no-sbtn";
           paths = [ sbt0 ];
-          postBuild = "rm -f $out/bin/sbtn";
+          postBuild = ''
+            rm -f $out/bin/sbtn $out/bin/sbt
+            ln -s ${sbtBspShim}/bin/sbt $out/bin/sbt
+          '';
         };
         visualvm = pkgs.visualvm.override { jdk = jdk; };
         # Define the hooks
