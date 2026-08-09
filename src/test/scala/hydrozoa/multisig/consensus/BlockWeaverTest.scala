@@ -372,6 +372,11 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          // The leader packs at most maxRequestsPerBlock requests, its own author's first
+          // (fairness), each author's order preserved; the overflow stays in the mempool.
+          cap = config.maxRequestsPerBlock
+          partitioned = requests.partition(_.requestId.peerNum == Carol.headPeerNumber)
+          expected = (partitioned._1 ++ partitioned._2).take(cap)
           _ <- lift(requests.traverse_(weaver ! _))
           brief <- mkDummyBlockBrief1(config.headConfig)
           _ <- lift(weaver ! brief)
@@ -387,12 +392,12 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   ) =>
                   ()
           })
-          _ <- settle(env.jointLedgerMock.events.get == requests)
+          _ <- settle(env.jointLedgerMock.events.get == expected)
           fedRequests <- lift(IO(env.jointLedgerMock.events.get))
           _ <- assertWith(
-            fedRequests == requests,
-            "feed all residual/recovered mempool requests in order: " +
-                s"expected ${requests.map(_.requestId)}, got ${fedRequests.map(_.requestId)}"
+            fedRequests == expected,
+            "feed the first block's worth of residual mempool requests, own author first, in order: " +
+                s"expected ${expected.map(_.requestId)}, got ${fedRequests.map(_.requestId)}"
           )
       } yield true
     )
@@ -404,13 +409,15 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       resource = defaultResource,
       testM = for {
           env <- ask
+          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          // Feed at most one block's worth so every event is forwarded rather than held back by the
+          // cap — this property is about immediate pass-through, not the overflow behaviour.
           events <- pick(
             Gen
                 .nonEmptyListOf(genUserRequest)
-                .map(_.distinctBy(_.requestId))
+                .map(_.distinctBy(_.requestId).take(config.maxRequestsPerBlock))
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
-          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
           brief <- mkDummyBlockBrief1(config.headConfig)
           _ <- lift(weaver ! brief)
           _ <- lift(events.traverse_ { e =>
