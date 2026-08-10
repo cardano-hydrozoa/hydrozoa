@@ -13,6 +13,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
+import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{Persistence, StoreKey, Timestamped, WriteBatch}
 import scala.util.control.NonFatal
 import scalus.crypto.ed25519.VerificationKey
@@ -313,6 +314,15 @@ class FastConsensusActor(
         // new lane protocol prunes per-reply, not on local confirmation.)
         _ <- conn.blockWeaver ! confirmed
         _ <- conn.stackComposer ! confirmed
+
+        // Backpressure: tell the sequencer and the mesh liaisons this block's per-author high-water
+        // request number so they can advance their confirmed-high-water windows. A block carries
+        // only the authors that appear in it, so an empty map is a no-op (docs/spec/fast-consensus).
+        requestHighWater = ReplayCursors.maxRequestNumberPerPeer(confirmed.requests.map(_._1))
+        _ <- IO.whenA(requestHighWater.nonEmpty) {
+            val msg = SoftConfirmedHighWater(requestHighWater)
+            conn.requestSequencer.traverse_(_ ! msg) >> conn.headPeerLiaisons.traverse_(_ ! msg)
+        }
 
         // Announce any postponed own-ack for the next block now that this cell is done.
         _ <- cell.postponedNextBlockOwnAck.traverse_(announceAck)

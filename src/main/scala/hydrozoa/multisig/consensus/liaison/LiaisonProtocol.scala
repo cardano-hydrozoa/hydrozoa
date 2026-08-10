@@ -2,8 +2,8 @@ package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.IO
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, SoftAck}
+import hydrozoa.multisig.consensus.{SoftConfirmedHighWater, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.stack.StackBrief
 
@@ -48,7 +48,7 @@ object LiaisonProtocol {
       * shape), and accepts that head peer's artifacts to append to its outbox.
       */
     type HeadToHeadRequest =
-        Control | BatchMessages.Mesh.Get | BatchMessages.Mesh.New |
+        Control | BatchMessages.Mesh.Get | BatchMessages.Mesh.New | SoftConfirmedHighWater |
             (BlockBrief.Next | StackBrief | UserRequestWithId | SoftAck | HardAck | HardAckWithId)
 
     /** Hub → coil: serves the full population pull ([[BatchMessages.Population.Get]] →

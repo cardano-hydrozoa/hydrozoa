@@ -28,5 +28,9 @@ object RequestNumber {
             x.convert.compare(y.convert)
     }
 
-    extension (self: RequestNumber) def increment: RequestNumber = RequestNumber(self + 1)
+    extension (self: RequestNumber)
+        def increment: RequestNumber = RequestNumber(self + 1)
+
+        /** The preceding request number, clamped at zero. */
+        def previousOrZero: RequestNumber = if self <= 0L then zero else RequestNumber(self - 1)
 }
