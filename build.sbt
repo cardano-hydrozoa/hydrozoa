@@ -13,6 +13,23 @@ lazy val gitRevision: String =
 
 Global / excludeLintKeys += Docker / dockerLabels
 Global / excludeLintKeys += Docker / dockerEnvVars
+// native-packager's JavaAppPackaging archetype propagates executableScriptName/name/sourceDirectory
+// into the Debian/Rpm/Universal-docs/Universal-src packaging scopes. We only build the Universal
+// `stage` output and the Docker image, so those scoped copies are never consumed; silence sbt's
+// lintUnused for them rather than leaving noise on every load (the plugins can't be disabled — the
+// native-packager graph requires them).
+Global / excludeLintKeys ++= Set(
+  Debian / executableScriptName,
+  Debian / sourceDirectory,
+  Rpm / daemonStdoutLogFile,
+  Rpm / executableScriptName,
+  Rpm / name,
+  Rpm / sourceDirectory,
+  Universal / executableScriptName,
+  UniversalDocs / name,
+  UniversalSrc / name,
+  rpmScriptsDirectory
+)
 
 val scalusVersion = "1.0.0"
 val bloxbeanVersion = "0.7.1"
@@ -72,15 +89,30 @@ lazy val core: Project = (project in file("."))
       bashScriptExtraDefines ++= Seq(
         """addJava "--enable-native-access=ALL-UNNAMED"""",
         """addJava "--sun-misc-unsafe-memory-access=allow"""",
-        // The one-shot CLI subcommands use a quiet, console-only logback config: no
-        // hydrozoa-trace.jsonl / hydrozoa.log written into a possibly read-only cwd (e.g. inside the
-        // Docker image), and no trace-level spam. Only `serve` keeps the verbose, file-writing
-        // logback.xml. `$1` here is the subcommand (runs before the launcher's own arg processing).
-        """if [ "${1:-}" != "serve" ]; then addJava "-Dlogback.configurationFile=logback-cli.xml"; fi"""
+        // Select the logback config. Local runs default to the verbose, file-writing logback.xml;
+        // the Docker image sets HYDROZOA_LOGBACK=logback-docker.xml (see Docker/dockerEnvVars) for a
+        // quiet, console-only config so no subcommand writes hydrozoa.log / hydrozoa-trace.jsonl into
+        // the container's filesystem.
+        """addJava "-Dlogback.configurationFile=${HYDROZOA_LOGBACK:-logback.xml}""""
       ),
+      // sbt 2 stages under target/out/jvm/scala-<v>/core/; pin the local `stage` output to the
+      // stable repo-root path the justfile's deployment recipes expect
+      // (target/universal/stage/bin/hydrozoa). Docker packaging keeps its own staging dir. The key
+      // is qualified because JavaAppPackaging and DockerPlugin both re-export `stagingDirectory`.
+      Universal / com.typesafe.sbt.packager.Keys.stagingDirectory :=
+          baseDirectory.value / "target" / "universal" / "stage",
+      // Same for the Docker build context: sbt 2 would stage it under target/out/.../core/docker/,
+      // but the release workflow's docker build-push-action expects `target/docker/stage`. Pin it.
+      Docker / com.typesafe.sbt.packager.Keys.stagingDirectory :=
+          baseDirectory.value / "target" / "docker" / "stage",
       // Docker settings
       Docker / packageName := "cardano-hydrozoa/hydrozoa",
       Docker / version := version.value,
+      // Also tag local `just docker-image` builds as ghcr.io/… so docker-compose's default image
+      // (ghcr.io/cardano-hydrozoa/hydrozoa:<version>) resolves to the local build without a
+      // HYDROZOA_IMAGE override. Only affects publishLocal — the release workflow tags/pushes via
+      // docker/metadata-action off `Docker/stage`, so this leaves the published tags untouched.
+      dockerAliases ++= Seq(dockerAlias.value.withRegistryHost(Some("ghcr.io"))),
       Docker / daemonUser := "hydrozoa",
       Docker / daemonGroup := "hydrozoa",
       // JDK 25 to match the project's language/runtime flags (--sun-misc-unsafe-memory-access is 23+).
@@ -96,14 +128,31 @@ lazy val core: Project = (project in file("."))
         "org.opencontainers.image.revision" -> gitRevision
       ),
       Docker / dockerEnvVars := Map(
-        "JAVA_OPTS" -> "-Xmx2g -Xms512m"
+        "JAVA_OPTS" -> "-Xmx2g -Xms512m",
+        // Every subcommand in the image uses a quiet, console-only logback config so the container
+        // writes no hydrozoa.log / hydrozoa-trace.jsonl; the launcher reads this (see
+        // bashScriptExtraDefines above). Kept out of JAVA_OPTS so `docker run -e JAVA_OPTS=…` can't
+        // clobber the log config.
+        "HYDROZOA_LOGBACK" -> "logback-docker.xml"
       ),
-      // Ensure proper signal handling for graceful shutdown.
+      // Ensure proper signal handling for graceful shutdown, and set the container env vars.
       // NB: native-packager emits multi-stage `FROM <img> AS <stage>` (several args), so match
-      // `Cmd("FROM", _*)` rather than the single-arg `Cmd("FROM", _)`.
-      dockerCommands := dockerCommands.value.flatMap {
-          case cmd @ Cmd("FROM", _*) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
-          case other                 => List(other)
+      // `Cmd("FROM", _*)` rather than the single-arg `Cmd("FROM", _)`. The multi-stage output also
+      // drops the `dockerEnvVars` ENV commands, so inject them explicitly into the final stage
+      // (before ENTRYPOINT); values are quoted so ones with spaces (JAVA_OPTS) stay a single value.
+      Docker / dockerCommands := {
+          val base = (Docker / dockerCommands).value.flatMap {
+              case cmd @ Cmd("FROM", _*) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
+              case other                 => List(other)
+          }
+          // native-packager's multi-stage output doesn't render `dockerEnvVars`, so append the ENV
+          // commands to the final stage ourselves (ENV applies to the runtime env regardless of
+          // position). Values are quoted so ones with spaces (JAVA_OPTS) stay a single value.
+          val envCommands =
+              (Docker / dockerEnvVars).value.toList
+                  .sortBy(_._1)
+                  .map((k, v) => Cmd("ENV", s"""$k="$v""""))
+          base ++ envCommands
       },
       resolvers +=
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
@@ -197,20 +246,6 @@ lazy val core: Project = (project in file("."))
       // The interactive `submit-deposit` / `submit-l2-tx` subcommands read console prompts; wire
       // stdin through to the forked `sbt run` JVM. The packaged launcher gets stdin natively.
       run / connectInput := true,
-      // Copy the repo-root `docker-compose.yml` + `hydrozoa.sh` into the `/scaffold/*` classpath
-      // resources at build time (the template + script-refs defaults live directly under
-      // src/main/resources/scaffold/). The `scaffold` subcommand materializes these for a
-      // Docker-only user, and `build-head-config` reads the baked script-refs — no repo clone.
-      Compile / resourceGenerators += Def.task {
-          val out = (Compile / resourceManaged).value / "scaffold"
-          IO.createDirectory(out)
-          val copies = Seq(
-            baseDirectory.value / "docker-compose.yml" -> out / "docker-compose.yml",
-            baseDirectory.value / "hydrozoa.sh" -> out / "hydrozoa.sh"
-          )
-          copies.foreach { case (src, dst) => IO.copyFile(src, dst) }
-          copies.map(_._2)
-      }.taskValue,
       // Fork each test run into a fresh JVM: isolates native state (RocksDB JNI), the
       // cats-effect IORuntime, and daemon threads, and makes re-running a `testOnly` in a
       // warm sbt session actually re-run instead of reporting 0 tests.
@@ -317,7 +352,7 @@ inThisBuild(
   List(
     // Release version — drives the Docker image tag, `hydrozoa.BuildInfo.version`, and `GET
     // /version`. Bump here for a release (see RELEASE.md), then tag `v<version>`.
-    version := "0.1.1",
+    version := "0.1.3",
     scalaVersion := "3.3.7",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision
