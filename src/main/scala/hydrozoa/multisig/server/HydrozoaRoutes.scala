@@ -622,7 +622,7 @@ class HydrozoaRoutes(
         path: String,
         body: SubmitRequestView
     ): IO[Either[(StatusCode, ErrorResponse), RequestAcceptedResponse]] =
-        val handled =
+        val handled: IO[Either[(StatusCode, ErrorResponse), RequestAcceptedResponse]] =
             for {
                 userRequest <- ApiDto.toUserRequest(body) match {
                     case Left(message) =>
@@ -631,20 +631,23 @@ class HydrozoaRoutes(
                     case Right(request) => IO.pure(request)
                 }
                 _ <- tracer.traceWith(RequestDecoded(path, userRequest.toString))
-                requestId <- (requestSequencer ?: userRequest).flatMap {
-                    case Right(id) => IO.pure(id)
-                    // A screen rejection surfaces as a 400 via handleErrorWith below.
-                    case Left(rejected) => IO.raiseError(new RuntimeException(rejected.reason))
+                result <- (requestSequencer ?: userRequest).flatMap {
+                    case Right(id) =>
+                        IO.pure(Right(ApiDto.mkRequestAcceptedResponse(id)))
+                    // Screening / backpressure rejection: an expected 400, not a fault — log the
+                    // client-facing reason concisely (no exception/stack) instead of raising.
+                    case Left(rejected) =>
+                        tracer
+                            .traceWith(RequestRejected(path, rejected.reason))
+                            .as(Left(fail(StatusCode.BadRequest, rejected.reason)))
                 }
-            } yield ApiDto.mkRequestAcceptedResponse(requestId)
+            } yield result
 
-        handled
-            .map(Right(_))
-            .handleErrorWith(err =>
-                tracer
-                    .traceWith(RequestFailed(path, err))
-                    .as(Left(fail(StatusCode.BadRequest, err.getMessage)))
-            )
+        handled.handleErrorWith(err =>
+            tracer
+                .traceWith(RequestFailed(path, err))
+                .as(Left(fail(StatusCode.BadRequest, err.getMessage)))
+        )
 
     /** The block-details body for `num`: block 0 is synthesized from the head config; any other
       * block resolves through its persisted brief, or a 404.
