@@ -850,14 +850,12 @@ object Stage4Suite:
               generateNodeOperationMultisigConfig = hc =>
                   hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig(
                     maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
-                    // Narrow both periods to fit the WS test wall-clock budget (see
-                    // docs/rate-limiter.md). The 20s production `softBlockMinPeriod` paces every
-                    // soft-confirmed block on the real clock under WS, stretching each scenario to
-                    // tens of minutes and delaying settlement submission past the effects-landed
-                    // poll budget; 5s keeps block production (and the model command-batching that
-                    // tracks it) brisk while preserving the throttle's cross-block batching intent.
-                    // `hardStackMinPeriod`'s 3-minute production value would likewise starve
-                    // CardanoLiaison of PushResults within the budget; 2s preserves batching too.
+                    // Pin `softBlockMinPeriod` to 5s and narrow `hardStackMinPeriod` from its
+                    // 3-minute production value to 2s to fit the WS test wall-clock budget (see
+                    // docs/rate-limiter.md). 5s paces soft-confirmed block production (and the
+                    // model command-batching that tracks it) on the real clock under WS so the
+                    // test exercises the throttle's cross-block batching intent; 2s keeps
+                    // CardanoLiaison fed with PushResults within the effects-landed poll budget.
                     rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
                       softBlockMinPeriod = 5.seconds,
                       hardStackMinPeriod = 2.seconds

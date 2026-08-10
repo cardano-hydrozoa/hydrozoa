@@ -1,6 +1,7 @@
 package hydrozoa.bootstrap
 
 import cats.effect.unsafe.implicits.global
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -147,6 +148,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
           fallbackContingency = network.mkFallbackContingencyWithDefaults(Coin.ada(3), Coin.ada(3)),
           disputeResolutionConfig = DisputeResolutionConfig.default(network.slotConfig),
           settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
+          blockConfig = BlockConfig(PositiveInt.unsafeApply(1000)),
           coilQuorum = coilQuorum
         )
         Bootstrap.BootstrapDefaults(

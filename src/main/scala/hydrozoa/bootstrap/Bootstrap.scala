@@ -9,6 +9,7 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -157,6 +158,7 @@ object Bootstrap:
         fallbackContingency: FallbackContingency,
         disputeResolutionConfig: DisputeResolutionConfig,
         settlementConfig: SettlementConfig,
+        blockConfig: BlockConfig,
         coilQuorum: Int
     )
 
@@ -334,6 +336,7 @@ object Bootstrap:
           fallbackContingency = bhp.fallbackContingency,
           disputeResolutionConfig = bhp.disputeResolutionConfig,
           settlementConfig = bhp.settlementConfig,
+          blockConfig = bhp.blockConfig,
           coilQuorum = bhp.coilQuorum,
           // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
           // a zero hash rather than empty bytes (which fail the length check).
@@ -1231,6 +1234,7 @@ object InitBootstrapFiles:
               ),
               disputeResolutionConfig = DisputeResolutionConfig.default(network.slotConfig),
               settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
+              blockConfig = BlockConfig(PositiveInt.unsafeApply(1000)),
               coilQuorum = coilQuorum
             )
             // Demo equity: head peer 0 funds the whole head, the rest contribute zero and co-sign.
