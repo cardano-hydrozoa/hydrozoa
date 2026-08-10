@@ -47,7 +47,7 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
     protected def tracers: HasCoreTracers
 
     /** The peer metrics registry, supplied by the subclass and threaded into the instrumented
-      * actors (see `design/peer-stats-endpoint.md`).
+      * actors (see `docs/spec/peer-stats-endpoint.md`).
       */
     protected def metrics: PeerMetrics
 

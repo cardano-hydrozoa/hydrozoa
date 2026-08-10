@@ -108,7 +108,7 @@ object Serve {
             result <- Resource.eval(setupIO)
             (backend, nodeConfig) = result
 
-            // Peer stats registry (design/peer-stats-endpoint.md): created once, threaded into the
+            // Peer stats registry (docs/spec/peer-stats-endpoint.md): created once, threaded into the
             // instrumented actors and the HTTP server, with its 1 Hz sampler running for the node's
             // lifetime. In-memory only — counters reset on restart.
             metrics <- Resource.eval(

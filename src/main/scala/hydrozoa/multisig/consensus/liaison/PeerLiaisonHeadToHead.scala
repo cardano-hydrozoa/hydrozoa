@@ -256,7 +256,7 @@ abstract class PeerLiaisonHeadToHead(
                 _ <- m.block.traverse_(conn.blockWeaver ! _)
                 _ <- m.stack.traverse_(conn.stackComposer ! _)
                 _ <- m.requests.traverse_(conn.blockWeaver ! _)
-                // Peer stats (design/peer-stats-endpoint.md): count requests ingested from this
+                // Peer stats (docs/spec/peer-stats-endpoint.md): count requests ingested from this
                 // remote head peer.
                 _ <- IO.whenA(m.requests.nonEmpty)(
                   IO(metrics.onPeerRequests(remoteHead.peerNum.convert, m.requests.size))

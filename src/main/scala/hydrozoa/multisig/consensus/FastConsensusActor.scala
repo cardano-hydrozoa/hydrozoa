@@ -301,7 +301,7 @@ class FastConsensusActor(
             confirmed.blockBrief.blockVersion.minor: Int
           )
         )
-        // Peer stats (design/peer-stats-endpoint.md): count the block and its events. A final block
+        // Peer stats (docs/spec/peer-stats-endpoint.md): count the block and its events. A final block
         // is bucketed with major for the minor/major split.
         _ <- IO(metrics.onBlockConfirmed(confirmedBlockType != "minor", brief.requests.size))
 

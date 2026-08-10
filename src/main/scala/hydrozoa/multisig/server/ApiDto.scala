@@ -172,7 +172,7 @@ object ApiDto {
         case NodeStatus.Finalized            => NodeStatusView.Finalized
         case NodeStatus.HandedOffToRuleBased => NodeStatusView.HandedOffToRuleBased
 
-    // ---- Peer statistics (GET /head/stats); see design/peer-stats-endpoint.md ----
+    // ---- Peer statistics (GET /head/stats); see docs/spec/peer-stats-endpoint.md ----
 
     /** A rate as an instantaneous value plus top-style 1m/5m/15m EWMA load averages (req/s). */
     final case class RateStatsView(now: Double, load1m: Double, load5m: Double, load15m: Double)

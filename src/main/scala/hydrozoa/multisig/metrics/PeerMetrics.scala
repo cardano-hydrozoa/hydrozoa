@@ -11,7 +11,7 @@ enum RejectionKind:
     case Screening, Backpressure
 
 /** Process-lifetime, in-memory peer metrics behind `GET /head/stats` and `GET /head/metrics` (see
-  * `design/peer-stats-endpoint.md`).
+  * `docs/spec/peer-stats-endpoint.md`).
   *
   * The hot-path `on*` methods are lock-free side effects (a single atomic add). Each counter except
   * the peer-request map is written by exactly one actor — cats actors drain their mailbox serially

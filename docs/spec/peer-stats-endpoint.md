@@ -1,7 +1,8 @@
 # Peer statistics endpoint
 
-Status: **design / in-flight**. A cheap, always-on `GET /head/stats` that reports live operational
-metrics for a single peer without touching storage or perturbing the hot path.
+Status: **as-built reference**. A cheap, always-on `GET /head/stats` (and Prometheus
+`GET /head/metrics`) that reports live operational metrics for a single peer without touching storage
+or perturbing the hot path.
 
 ## Motivation
 

@@ -370,7 +370,7 @@ final case class SlowConsensusActor(
         _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
         _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
-        // Peer stats (design/peer-stats-endpoint.md): count the stack and the blocks it absorbed.
+        // Peer stats (docs/spec/peer-stats-endpoint.md): count the stack and the blocks it absorbed.
         blocksAbsorbed = (hardConfirmed.brief.lastBlockNum: Int) -
             (hardConfirmed.brief.firstBlockNum: Int) + 1
         _ <- IO.realTime.flatMap(t =>
