@@ -15,12 +15,13 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    and `GET /version` — keep it equal to the git tag below. The same image tag is **hard-coded** in
    a few deployment files that do *not* read `build.sbt`, so bump them in lockstep:
 
-   - `hydrozoa.sh` — `HYDROZOA_VERSION` default
-   - `docker-compose.yml` — the default `${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z}`
+   - `src/main/resources/scaffold/hydrozoa.sh` — `HYDROZOA_VERSION` default
+   - `src/main/resources/scaffold/docker-compose.yml` — the default
+     `${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z}`
    - `docs/user-guide/DEPLOYMENT.md` — the `…/hydrozoa:X.Y.Z` pull/run examples
 
    Catch stragglers with `grep -rn "hydrozoa:<previous-version>"` (and the bare previous version in
-   `hydrozoa.sh`). Not bumped: `HydrozoaRoutes.apiVersion` + `docs/openapi*.yaml` (the API-contract
+   `scaffold/hydrozoa.sh`). Not bumped: `HydrozoaRoutes.apiVersion` + `docs/openapi*.yaml` (the API-contract
    version, separate from the release version). Commit the bump on `main` (via PR; `main` is
    protected).
 
