@@ -356,6 +356,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessResponse'
+  /head/stats:
+    get:
+      tags:
+      - Observability
+      description: 'Live operational metrics for this peer (in-memory, process-lifetime;
+        reset on restart). Cheap: served from a snapshot, no storage reads.'
+      operationId: getHeadStats
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PeerStats'
+  /head/metrics:
+    get:
+      tags:
+      - Observability
+      description: The same peer metrics in Prometheus text exposition format.
+      operationId: getHeadMetrics
+      responses:
+        '200':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
   /version:
     get:
       description: The build identity (version, git commit, build time) baked in at
@@ -835,6 +862,33 @@ components:
         type:
           type: string
           const: SOFT_CONFIRMED
+    BlockStats:
+      title: BlockStats
+      type: object
+      required:
+      - minor
+      - major
+      - avgEvents
+      - maxEvents
+      - blocksPerWindow
+      - requestsPerWindow
+      properties:
+        minor:
+          type: integer
+          format: int64
+        major:
+          type: integer
+          format: int64
+        avgEvents:
+          type: number
+          format: double
+        maxEvents:
+          type: integer
+          format: int64
+        blocksPerWindow:
+          $ref: '#/components/schemas/WindowStats'
+        requestsPerWindow:
+          $ref: '#/components/schemas/WindowStats'
     BlockSummary:
       title: BlockSummary
       type: object
@@ -1093,6 +1147,26 @@ components:
         type:
           type: string
           const: initialization
+    LocalRequestStats:
+      title: LocalRequestStats
+      type: object
+      required:
+      - total
+      - rate
+      - rejectedScreening
+      - rejectedBackpressure
+      properties:
+        total:
+          type: integer
+          format: int64
+        rate:
+          $ref: '#/components/schemas/RateStats'
+        rejectedScreening:
+          type: integer
+          format: int64
+        rejectedBackpressure:
+          type: integer
+          format: int64
     Major:
       title: Major
       type: object
@@ -1163,6 +1237,65 @@ components:
         type:
           type: string
           const: minor
+    PeerRequestStats:
+      title: PeerRequestStats
+      type: object
+      required:
+      - peer
+      - total
+      - rate
+      properties:
+        peer:
+          type: integer
+          format: int32
+        total:
+          type: integer
+          format: int64
+        rate:
+          $ref: '#/components/schemas/RateStats'
+    PeerStats:
+      title: PeerStats
+      type: object
+      required:
+      - uptimeSeconds
+      - localRequests
+      - blocks
+      - stacks
+      properties:
+        uptimeSeconds:
+          type: integer
+          format: int64
+        localRequests:
+          $ref: '#/components/schemas/LocalRequestStats'
+        peerRequests:
+          type: array
+          items:
+            $ref: '#/components/schemas/PeerRequestStats'
+        blocks:
+          $ref: '#/components/schemas/BlockStats'
+        stacks:
+          $ref: '#/components/schemas/StackStats'
+    RateStats:
+      title: RateStats
+      type: object
+      required:
+      - now
+      - load1m
+      - load5m
+      - load15m
+      properties:
+        now:
+          type: number
+          format: double
+        load1m:
+          type: number
+          format: double
+        load5m:
+          type: number
+          format: double
+        load15m:
+          type: number
+          format: double
     ReadinessResponse:
       title: ReadinessResponse
       type: object
@@ -1401,6 +1534,35 @@ components:
         type:
           type: string
           const: settlement
+    StackStats:
+      title: StackStats
+      type: object
+      required:
+      - total
+      - lastStackNumber
+      - secondsSinceLastHardConfirm
+      - meanInterStackGapSeconds
+      - avgBlocksAbsorbed
+      - maxBlocksAbsorbed
+      properties:
+        total:
+          type: integer
+          format: int64
+        lastStackNumber:
+          type: integer
+          format: int64
+        secondsSinceLastHardConfirm:
+          type: integer
+          format: int64
+        meanInterStackGapSeconds:
+          type: number
+          format: double
+        avgBlocksAbsorbed:
+          type: number
+          format: double
+        maxBlocksAbsorbed:
+          type: integer
+          format: int64
     SubmitDeposit:
       title: SubmitDeposit
       type: object
@@ -1502,6 +1664,31 @@ components:
           type: string
         buildTime:
           type: string
+    WindowStats:
+      title: WindowStats
+      type: object
+      required:
+      - last10s
+      - last30s
+      - last60s
+      - last5m
+      - last10m
+      properties:
+        last10s:
+          type: integer
+          format: int64
+        last30s:
+          type: integer
+          format: int64
+        last60s:
+          type: integer
+          format: int64
+        last5m:
+          type: integer
+          format: int64
+        last10m:
+          type: integer
+          format: int64
   securitySchemes:
     httpAuth:
       type: http

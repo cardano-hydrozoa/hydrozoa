@@ -27,6 +27,7 @@ import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, RequestSequencer, StackComposer}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.eutxol2.toUtxos
@@ -584,7 +585,13 @@ case class Suite(
                     stackComposer = stackComposerStub,
                   )
                   consensusActor <- system.actorOf(
-                    FastConsensusActor(nodeConfig, consensusConnections, fcaTracer, persistence)
+                    FastConsensusActor(
+                      nodeConfig,
+                      consensusConnections,
+                      fcaTracer,
+                      persistence,
+                      PeerMetrics.create(0L, Vector.empty)
+                    )
                   )
                   _ <- consensusActorD.complete(consensusActor)
               } yield Stage1Sut(

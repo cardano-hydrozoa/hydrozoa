@@ -23,6 +23,7 @@ import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, S
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.*
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Screener
@@ -1028,12 +1029,17 @@ object MultiPeerHeadHarness:
                             Persistence.fromBackend(backendStore, persistenceTracer)
                         }
                         l2Ledger <- Resource.eval(InMemoryL2Store.ledger(nodeConfig))
+                        metrics = PeerMetrics.create(
+                          0L,
+                          nodeConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
+                        )
                         mrm <- HeadMultisigRegimeManager.resource(
                           nodeConfig,
                           cardanoBackend,
                           l2Ledger,
                           EutxoL2Screener(nodeConfig),
                           persistence,
+                          metrics,
                           mrmTracer,
                           peerFactory,
                           hubFactory,
@@ -1071,11 +1077,16 @@ object MultiPeerHeadHarness:
                         Persistence.fromBackend(backendStore, persistenceTracer)
                     }
                     l2Ledger <- Resource.eval(InMemoryL2Store.ledger(coilConfig))
+                    metrics = PeerMetrics.create(
+                      0L,
+                      coilConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
+                    )
                     mrm <- CoilMultisigRegimeManager.resource(
                       coilConfig,
                       cardanoBackend,
                       l2Ledger,
                       persistence,
+                      metrics,
                       mrmTracer,
                       uplinkFactory,
                     )
@@ -1114,6 +1125,10 @@ object MultiPeerHeadHarness:
             )
             val httpTracer: ContraTracer[IO, HydrozoaHttpEvent] =
                 Slf4jTracer.sink.contramap(HydrozoaHttpEventFormat.humanFormat)
+            val metrics = PeerMetrics.create(
+              0L,
+              nodeConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
+            )
             HydrozoaRoutes(
               requestSequencer,
               conns.blockWeaver,
@@ -1125,6 +1140,7 @@ object MultiPeerHeadHarness:
               None,
               nodeConfig.headConfig,
               serverConfig,
+              metrics,
               httpTracer,
             ).map { hydrozoaRoutes =>
                 val client: Http4sClient[IO] =

@@ -13,6 +13,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{Persistence, StoreKey, Timestamped, WriteBatch}
 import scala.util.control.NonFatal
@@ -113,7 +114,8 @@ object FastConsensusActor:
         pendingConnections: HeadMultisigRegimeManager.PendingConnections |
             FastConsensusActor.Connections,
         tracer: ContraTracer[IO, FastConsensusActorEvent],
-        persistence: Persistence[IO]
+        persistence: Persistence[IO],
+        metrics: PeerMetrics
     ): IO[FastConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.initial)
@@ -122,7 +124,8 @@ object FastConsensusActor:
           pendingConnections = pendingConnections,
           stateRef = stateRef,
           tracer = tracer,
-          persistence = persistence
+          persistence = persistence,
+          metrics = metrics
         )
 
     enum Error extends Throwable:
@@ -154,7 +157,8 @@ class FastConsensusActor(
         FastConsensusActor.Connections,
     stateRef: Ref[IO, FastConsensusActor.State],
     tracer: ContraTracer[IO, FastConsensusActorEvent],
-    persistence: Persistence[IO]
+    persistence: Persistence[IO],
+    metrics: PeerMetrics
 ) extends Actor[IO, FastConsensusActor.Request]:
     import FastConsensusActor.*
 
@@ -297,6 +301,9 @@ class FastConsensusActor(
             confirmed.blockBrief.blockVersion.minor: Int
           )
         )
+        // Peer stats (design/peer-stats-endpoint.md): count the block and its events. A final block
+        // is bucketed with major for the minor/major split.
+        _ <- IO(metrics.onBlockConfirmed(confirmedBlockType != "minor", brief.requests.size))
 
         // Persist the SoftConfirmation record (header + aggregated multisig) before fanning out
         // (CR4 write-before-send). `softConfirmed` derives as max(SoftConfirmation.key); we keep
