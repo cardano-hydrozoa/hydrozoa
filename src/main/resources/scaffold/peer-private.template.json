@@ -17,7 +17,7 @@
     "peerLiaisonMaxRequestsPerBatch": 42,
     "peerLiaisonResendInterval": 5000,
     "rateLimits": {
-      "softBlockMinPeriod": 20000,
+      "softBlockMinPeriod": 250,
       "hardStackMinPeriod": 180000
     }
   },
