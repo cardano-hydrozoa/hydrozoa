@@ -301,9 +301,12 @@ class FastConsensusActor(
             confirmed.blockBrief.blockVersion.minor: Int
           )
         )
-        // Peer stats (docs/spec/peer-stats-endpoint.md): count the block and its events. A final block
-        // is bucketed with major for the minor/major split.
-        _ <- IO(metrics.onBlockConfirmed(confirmedBlockType != "minor", brief.requests.size))
+        // Peer stats (docs/spec/peer-stats-endpoint.md): count the block and its events. A final
+        // block is bucketed with major for the minor/major split.
+        isMajorBlock = brief match
+            case _: BlockBrief.Minor => false
+            case _                   => true
+        _ <- IO(metrics.onBlockConfirmed(isMajorBlock, brief.requests.size))
 
         // Persist the SoftConfirmation record (header + aggregated multisig) before fanning out
         // (CR4 write-before-send). `softConfirmed` derives as max(SoftConfirmation.key); we keep
