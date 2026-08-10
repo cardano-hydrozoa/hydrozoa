@@ -48,7 +48,7 @@ object HydrozoaBlueprint {
                     if s == null then {
                         throw new IllegalStateException(
                           s"Blueprint resource not found: $blueprintResourcePath. " +
-                              "Make sure to run 'nix develop --command sbtn compile' first."
+                              "Make sure to run 'nix develop --command sbt compile' first."
                         )
                     }
                     s

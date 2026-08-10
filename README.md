@@ -40,7 +40,7 @@ operational substrate of a Hydrozoa head.
 * Read the [Gummiworm whitepaper](https://gummiworm.net/whitepaper/introduction)
   (the protocol spec), or browse the in-repo design specs — see
   [Specification](#specification) below.
-* Deploy a multi-party head — [`DEPLOYMENT.md`](DEPLOYMENT.md) is an end-to-end
+* Deploy a multi-party head — [`DEPLOYMENT.md`](docs/user-guide/DEPLOYMENT.md) is an end-to-end
   runbook: fleet configuration, node image, head initialization on a Cardano
   testnet, and running the peers.
 * Join the discussion =>
@@ -53,9 +53,11 @@ operational substrate of a Hydrozoa head.
 The authoritative protocol description is the **Gummiworm whitepaper**:
 <https://gummiworm.net/whitepaper/introduction>.
 
-In-repo design documentation complements it: [`design/`](design/) holds
-forward-looking design specs for individual features, and [`docs/`](docs/)
-documents the system as built.
+In-repo documentation complements it: [`docs/`](docs/) documents the system as
+built — [`docs/user-guide/`](docs/user-guide/) task-oriented how-tos and
+[`docs/spec/`](docs/spec/) design/reference. The top-level [`design/`](design/)
+directory is a scratchpad for in-flight feature specs, which graduate into
+`docs/spec/` once built.
 
 ## Developer's Guide
 
@@ -79,8 +81,7 @@ Launch IDEA from within the Nix shell so `sbt` and the other tools are on `PATH`
 
 ### Building and testing
 
-Enter the sbt shell with `sbt` (or `sbtn` for a faster, resident server inside
-the Nix shell):
+Enter the sbt shell with `sbt`:
 
 ```shell
 sbt

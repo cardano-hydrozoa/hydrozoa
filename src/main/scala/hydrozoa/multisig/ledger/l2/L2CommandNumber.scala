@@ -2,17 +2,17 @@ package hydrozoa.multisig.ledger.l2
 
 import io.circe.{Codec, Decoder, Encoder}
 
-/** A monotonic commit counter internal to an [[L2Ledger]] — the recovery anchor for L2 state.
+/** A monotonic command number for an [[L2Ledger]] — the recovery anchor for L2 state.
   *
   * The L2 ledger is a black box that knows nothing of acks, blocks, stacks, or confirmations, so
-  * its persisted snapshots / command log are keyed by *this* (its own commit count), never by a
-  * consensus marker. It increments by one on each successful state-mutating command (the "real"
-  * commands — deposit registration, deposit decisions, transaction application — not the transient
-  * proxy commands). Recovery addresses a committed L2 state purely by command number:
-  * [[L2Ledger.restoreTo]] reconstructs the state as of a given command number from
-  * `(initial state, command number)`.
+  * its persisted snapshots / command log are keyed by *this*, never by a consensus marker.
+  * JointLedger assigns each command (deposit registration, deposit decisions, transaction
+  * application) the next number and the ledger validates and adopts it — one number per command
+  * evaluated (applied *or* rejected), in lock-step across every peer's replica. Recovery addresses
+  * a committed L2 state purely by command number: [[L2Ledger.restoreTo]] reconstructs the state as
+  * of a given command number from `(initial state, command number)`.
   *
-  * See `design/recovery-implementation-plan.md` R2b.
+  * See `docs/spec/l2-ledger-command-coordination.md`.
   */
 type L2CommandNumber = L2CommandNumber.L2CommandNumber
 

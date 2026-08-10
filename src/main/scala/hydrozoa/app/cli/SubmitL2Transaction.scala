@@ -11,8 +11,7 @@ import hydrozoa.lib.cardano.scalus.ledger.withZeroFees
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.multisig.consensus.UserRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
-import hydrozoa.multisig.ledger.eutxol2.HeadIdPin
-import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Metadata
 import hydrozoa.multisig.server.ApiDto.{L2UtxoView, given}
 import hydrozoa.multisig.server.SubmissionClient
 import java.nio.file.Path
@@ -22,7 +21,7 @@ import org.http4s.ember.client.EmberClientBuilder
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, Metadatum, ScriptHash, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value, Word64}
+import scalus.cardano.ledger.{AssetName, Coin, ScriptHash, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.uplc.builtin.ByteString
@@ -31,9 +30,9 @@ import scalus.uplc.builtin.ByteString
   *
   * Select a peer (its key signs), pick one of the peer's L2 utxos (fetched from the head's
   * `GET /l2/cardano-eutxo/utxos/{address}`), enter a destination + value, and the tool builds the
-  * zero-fee native tx (destination output + change back to the sender, the CIP-67 all-L2 output
-  * designation and the headId pin in the metadata), signs it with the peer wallet, and posts it to
-  * `POST /head/requests`.
+  * zero-fee native tx (destination output + change back to the sender, plus the L2 head-label
+  * metadata — the headId pin with no L1-bound outputs), signs it with the peer wallet, and posts it
+  * to `POST /head/requests`.
   *
   * Usage:
   * {{{
@@ -85,6 +84,9 @@ object SubmitL2Transaction:
                 (input, output) = selected
 
                 destination <- Prompts.promptDestination(configDir.resolve("private"))
+                destinationBech32 <- IO.fromOption(destination.toBech32.toOption)(
+                  RuntimeException("could not render the destination address as bech32")
+                )
                 value <- promptSpendValue(output.value)
 
                 txSigned <- IO
@@ -103,8 +105,8 @@ object SubmitL2Transaction:
                       )
                     )
                 _ <- IO.println(
-                  s"Accepted: requestId=$requestId. Watch GET $headUri/l2/cardano-eutxo/utxos/$ownBech32 " +
-                      "for the result."
+                  s"Accepted: requestId=$requestId. Watch GET " +
+                      s"$headUri/l2/cardano-eutxo/utxos/$destinationBech32 for the result."
                 )
             } yield ExitCode.Success
         }
@@ -134,8 +136,8 @@ object SubmitL2Transaction:
         }
 
     /** Build the unsigned zero-fee L2 tx: the selected input, the destination output, change back
-      * to the sender when nonzero, and the mandatory metadata (the CIP-67 all-L2 output designation
-      * + the headId pin).
+      * to the sender when nonzero, and the mandatory L2 head-label metadata (the headId pin; no
+      * outputs bound for L1).
       */
     private def buildTx(
         headId: HeadId,
@@ -148,14 +150,12 @@ object SubmitL2Transaction:
         val outputs =
             Babbage(destination, value, None, None) ::
                 (if change.isZero then Nil else List(Babbage(output.address, change, None, None)))
-        val metadata = AuxiliaryData.Metadata(
-          Map(
-            // Every output stays on L2 (Int(2)); Int(1) would mark a withdrawal.
-            Word64(CIP67.Tags.head) ->
-                Metadatum.List(outputs.map(_ => Metadatum.Int(2)).toIndexedSeq),
-            HeadIdPin.metadatum(headId)
-          )
-        )
+        // Every output stays on L2 — no L1-bound (withdrawal) indices — and no transient tokens.
+        val metadata =
+            L2Metadata.asAuxData(
+              headId,
+              L2Metadata(l1BoundOutputs = Nil, l2TransientTokens = Map.empty)
+            )
         TransactionBuilder
             .build(
               config.network,

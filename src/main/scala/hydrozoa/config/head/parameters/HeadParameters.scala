@@ -1,5 +1,6 @@
 package hydrozoa.config.head.parameters
 
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -18,6 +19,7 @@ final case class HeadParameters(
     override val fallbackContingency: FallbackContingency,
     override val disputeResolutionConfig: DisputeResolutionConfig,
     override val settlementConfig: SettlementConfig,
+    override val blockConfig: BlockConfig,
     // QUESTION: (from Peter to Ilia): I don't think we need to pin the coil quorum here, do we?
     //   It will be in the multisig native script; the hash will change if the peers don't agree.
     override val coilQuorum: Int,
@@ -39,7 +41,8 @@ object HeadParameters {
         extends TxTiming.Section,
           FallbackContingency.Section,
           DisputeResolutionConfig.Section,
-          SettlementConfig.Section {
+          SettlementConfig.Section,
+          BlockConfig.Section {
         def headParameters: HeadParameters
 
         /** A black-box, L2-specific blake2b-256 hash of the L2 parameters that the peers agree upon
@@ -53,7 +56,7 @@ object HeadParameters {
 
         /** Identity isomorphism: when `true`, the exact L1 tx runs on L2 unchanged — the ledger
           * does NOT enforce the `headId` pin, which reopens cross-head replay
-          * (docs/l2-isomorphism.md). Default `false` (format isomorphism only; pin enforced).
+          * (docs/spec/l2-isomorphism.md). Default `false` (format isomorphism only; pin enforced).
           * Agreed by all peers — it changes the trust model.
           */
         def identityIsomorphism: Boolean = headParameters.identityIsomorphism
@@ -72,5 +75,8 @@ object HeadParameters {
 
         def settlementConfig: SettlementConfig =
             headParameters.settlementConfig
+
+        def blockConfig: BlockConfig =
+            headParameters.blockConfig
     }
 }

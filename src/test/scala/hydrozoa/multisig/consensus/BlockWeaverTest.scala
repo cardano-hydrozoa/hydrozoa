@@ -8,15 +8,20 @@ import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
-import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.{HeadConfig, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import java.time.Instant
@@ -30,7 +35,7 @@ import test.{PeersNumberSpec, TestM, TestMFixedEnv, TestPeersSpec}
 
 object BlockWeaverTestHelpers {
     type BWTest[A] = TestM[TestR, A]
-    val bwTest = TestMFixedEnv[TestR]()
+    val bwTest: TestMFixedEnv[TestR] = TestMFixedEnv[TestR]()
     import bwTest.*
 
     case class TestR(
@@ -40,14 +45,11 @@ object BlockWeaverTestHelpers {
         jointLedgerMockActor: JointLedger.Handle
     )
 
-    val defaultResource: PropertyM[IO, Resource[IO, TestR]] =
+    private def mkResource(
+        genConfig: Gen[MultiNodeConfig]
+    ): PropertyM[IO, Resource[IO, TestR]] =
         PropertyM
-            .pick[IO, MultiNodeConfig](
-              MultiNodeConfig
-                  .generate(
-                    TestPeersSpec.default.withPeersNumberSpec(PeersNumberSpec.Exact(3))
-                  )()
-            )
+            .pick[IO, MultiNodeConfig](genConfig)
             .map { multiNodeConfig =>
                 for {
                     system <- ActorSystem[IO]("Weaver SUT")
@@ -57,6 +59,34 @@ object BlockWeaverTestHelpers {
                     )
                 } yield TestR(multiNodeConfig, system, jointLedgerMock, jointLedgerMockActor)
             }
+
+    val defaultResource: PropertyM[IO, Resource[IO, TestR]] =
+        mkResource(
+          MultiNodeConfig.generate(
+            TestPeersSpec.default.withPeersNumberSpec(PeersNumberSpec.Exact(3))
+          )()
+        )
+
+    /** The block-request cap pinned by [[smallCapResource]] — small enough that a modest request
+      * list overflows it, exercising the overflow-to-next-block path.
+      */
+    val smallCap: Int = 3
+
+    /** A three-peer config with `maxRequestsPerBlock` pinned to [[smallCap]]. */
+    val smallCapResource: PropertyM[IO, Resource[IO, TestR]] =
+        mkResource(
+          MultiNodeConfig.generate(
+            TestPeersSpec.default.withPeersNumberSpec(PeersNumberSpec.Exact(3))
+          )(
+            generateHeadConfig = generateHeadConfig(
+              genHeadConfigBootstrap = generateHeadConfigBootstrap(
+                generateHeadParams = generateHeadParameters(
+                  generateBlockConfig = Gen.const(BlockConfig(PositiveInt.unsafeApply(smallCap)))
+                )
+              )
+            )
+          )
+        )
 
     /** A dummy user request whose content is not interesting to the block weaver — only the request
       * id matters.
@@ -127,6 +157,36 @@ object BlockWeaverTestHelpers {
                 requests = List.empty,
                 depositsRejected = List.empty
               )
+            )
+        })
+
+    /** A minor block brief for `blockNum` carrying `requests`, used to drive a follower
+      * reproduction (the follower re-feeds exactly these ids from its mempool).
+      */
+    def mkMinorBriefWith(
+        blockNum: BlockNumber,
+        config: HeadConfig,
+        requests: List[(RequestId, ValidityFlag)]
+    ): BWTest[BlockBrief.Minor] =
+        lift(for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+        } yield {
+            val blockCreationStartTime = BlockCreationStartTime(now)
+            val blockCreationEndTime = BlockCreationEndTime(now + 1.second)
+            val fallbackTxStartTime = config.txTiming.newFallbackStartTime(blockCreationEndTime)
+            val forcedMajorBlockWakeupTime =
+                config.txTiming.forcedMajorBlockWakeupTime(fallbackTxStartTime)
+            BlockBrief.Minor(
+              BlockHeader.Minor(
+                blockNum = blockNum,
+                blockVersion = BlockVersion.Full(0, 0),
+                startTime = blockCreationStartTime,
+                endTime = blockCreationEndTime,
+                fallbackTxStartTime = fallbackTxStartTime,
+                forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+                mDepositDecisionWakeupTime = None
+              ),
+              BlockBody.Minor(requests = requests, depositsRejected = List.empty)
             )
         })
 
@@ -372,6 +432,11 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          // The leader packs at most maxRequestsPerBlock requests, its own author's first
+          // (fairness), each author's order preserved; the overflow stays in the mempool.
+          cap = config.maxRequestsPerBlock
+          partitioned = requests.partition(_.requestId.peerNum == Carol.headPeerNumber)
+          expected = (partitioned._1 ++ partitioned._2).take(cap)
           _ <- lift(requests.traverse_(weaver ! _))
           brief <- mkDummyBlockBrief1(config.headConfig)
           _ <- lift(weaver ! brief)
@@ -387,12 +452,67 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   ) =>
                   ()
           })
-          _ <- settle(env.jointLedgerMock.events.get == requests)
+          _ <- settle(env.jointLedgerMock.events.get == expected)
           fedRequests <- lift(IO(env.jointLedgerMock.events.get))
           _ <- assertWith(
-            fedRequests == requests,
-            "feed all residual/recovered mempool requests in order: " +
-                s"expected ${requests.map(_.requestId)}, got ${fedRequests.map(_.requestId)}"
+            fedRequests == expected,
+            "feed the first block's worth of residual mempool requests, own author first, in order: " +
+                s"expected ${expected.map(_.requestId)}, got ${fedRequests.map(_.requestId)}"
+          )
+      } yield true
+    )
+
+    // ===================================
+    // Carol (2) rolls capped-out overflow into the next block (held, not dropped)
+    // ===================================
+    val _ = property("Carol (2) rolls capped-out overflow into the next block") = run(
+      resource = smallCapResource,
+      testM = for {
+          env <- ask
+          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          cap = config.maxRequestsPerBlock
+          // More than one block's worth, but at most two, so block 2 fills to the cap and the
+          // remainder must roll into block 3.
+          requests <- pick(
+            Gen
+                .listOfN(2 * smallCap, genUserRequest)
+                .map(_.distinctBy(_.requestId))
+                .retryUntil(reqs => reqs.sizeIs > cap)
+          )
+          // The leader packs its own author's requests first: block 2 takes the cap, the rest spill.
+          partitioned = requests.partition(_.requestId.peerNum == Carol.headPeerNumber)
+          ordered = partitioned._1 ++ partitioned._2
+          block2Expected = ordered.take(cap)
+          overflowExpected = ordered.drop(cap)
+          weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
+          _ <- lift(requests.traverse_(weaver ! _))
+          // Follow block 1 and arm as leader of block 2: block 2 gets exactly the cap.
+          brief1 <- mkDummyBlockBrief1(config.headConfig)
+          _ <- lift((weaver ! brief1) >> env.system.waitForIdle())
+          _ <- settle(env.jointLedgerMock.events.get == block2Expected)
+          // Soft-confirm block 1 so Carol completes block 2 and becomes the follower of block 3,
+          // still holding the overflow in her mempool.
+          _ <- lift(
+            (weaver ! Block.SoftConfirmed.Minor(
+              brief1,
+              headerMultiSigned = List.empty,
+              finalizationRequested = false
+            )) >> env.system.waitForIdle()
+          )
+          // Block 3's brief carries the overflow ids; the follower can only reproduce them if it
+          // retained (did not drop) the overflow when block 2 filled up.
+          brief3 <- mkMinorBriefWith(
+            BlockNumber(3),
+            config.headConfig,
+            overflowExpected.map(r => (r.requestId, ValidityFlag.Valid))
+          )
+          _ <- lift((weaver ! brief3) >> env.system.waitForIdle())
+          _ <- settle(env.jointLedgerMock.events.get == ordered)
+          fed <- lift(IO(env.jointLedgerMock.events.get))
+          _ <- assertWith(
+            fed == ordered,
+            "capped-out overflow must roll into block 3, not be dropped: " +
+                s"expected ${ordered.map(_.requestId)}, got ${fed.map(_.requestId)}"
           )
       } yield true
     )
@@ -404,13 +524,15 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       resource = defaultResource,
       testM = for {
           env <- ask
+          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          // Feed at most one block's worth so every event is forwarded rather than held back by the
+          // cap — this property is about immediate pass-through, not the overflow behaviour.
           events <- pick(
             Gen
                 .nonEmptyListOf(genUserRequest)
-                .map(_.distinctBy(_.requestId))
+                .map(_.distinctBy(_.requestId).take(config.maxRequestsPerBlock))
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
-          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
           brief <- mkDummyBlockBrief1(config.headConfig)
           _ <- lift(weaver ! brief)
           _ <- lift(events.traverse_ { e =>

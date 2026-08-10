@@ -44,7 +44,7 @@ object RateLimits {
     }
 
     lazy val default: RateLimits = RateLimits(
-      softBlockMinPeriod = 20.seconds,
+      softBlockMinPeriod = 250.milliseconds,
       hardStackMinPeriod = 3.minutes
     )
 

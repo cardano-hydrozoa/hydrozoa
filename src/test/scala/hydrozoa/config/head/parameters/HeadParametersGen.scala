@@ -1,6 +1,7 @@
 package hydrozoa.config.head.parameters
 
 import cats.data.*
+import hydrozoa.config.head.multisig.block.{BlockConfig, generateBlockConfig}
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, generateFallbackContingency}
 import hydrozoa.config.head.multisig.settlement.{SettlementConfig, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.{TxTiming, generateDefaultTxTiming}
@@ -17,6 +18,7 @@ def generateHeadParameters(
     generateDisputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
         generateDisputeResolutionConfig,
     generateSettlementConfig: Gen[SettlementConfig] = generateSettlementConfig,
+    generateBlockConfig: Gen[BlockConfig] = generateBlockConfig,
     generateL2ParamsHash: Gen[Hash32] = Arbitrary.arbitrary[Hash32],
     generateL2Ledger: Gen[L2LedgerKind] = Gen.const(L2LedgerKind.CardanoEutxo),
     // Default identity-isomorphism ON (headId pin NOT enforced) so generated L2 txs, which carry no
@@ -28,6 +30,7 @@ def generateHeadParameters(
         fallbackContingency <- generateFallbackContingency
         disputeResolutionConfig <- generateDisputeResolutionConfig
         settlementConfig <- ReaderT.liftF(generateSettlementConfig)
+        blockConfig <- ReaderT.liftF(generateBlockConfig)
         l2ParamsHash <- ReaderT.liftF(generateL2ParamsHash)
         l2Ledger <- ReaderT.liftF(generateL2Ledger)
         identityIsomorphism <- ReaderT.liftF(generateIdentityIsomorphism)
@@ -36,6 +39,7 @@ def generateHeadParameters(
       fallbackContingency = fallbackContingency.fallbackContingency,
       disputeResolutionConfig = disputeResolutionConfig,
       settlementConfig = settlementConfig,
+      blockConfig = blockConfig,
       // TODO: Generate
       coilQuorum = 0,
       l2ParamsHash = l2ParamsHash,

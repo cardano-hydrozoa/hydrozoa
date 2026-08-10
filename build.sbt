@@ -1,14 +1,9 @@
-enablePlugins(
-  JavaAppPackaging,
-  DockerPlugin,
-  BuildInfoPlugin
-)
+import com.typesafe.sbt.packager.docker._
 
-Compile / mainClass := Some("hydrozoa.app.Main")
-// Name the packaged launcher `hydrozoa`, and generate only the dispatcher's script (not forwarder
-// scripts for every other discovered main); every command is a `hydrozoa <subcommand>`.
-executableScriptName := "hydrozoa"
-Compile / discoveredMainClasses := Seq("hydrozoa.app.Main")
+// NB (sbt 2): bare settings written at the top level of build.sbt are applied to *every*
+// subproject, not just the root. Anything specific to the root application (Docker packaging,
+// mainClass, launcher script) therefore lives inside the `core` project's `.settings(...)` /
+// `.enablePlugins(...)` block below, not at the top level.
 
 // The git revision baked into the Docker image labels; matches `hydrozoa.BuildInfo.gitCommit`.
 lazy val gitRevision: String =
@@ -16,52 +11,25 @@ lazy val gitRevision: String =
         .Try(scala.sys.process.Process("git describe --tags --always --dirty --abbrev=8").!!.trim)
         .getOrElse("unknown")
 
-// Bake the clean-output JVM flags into the generated launcher scripts (both `stage` and the Docker
-// image), matching the `run` / `Test` settings: silence blst-java's JNI `System::load` and Scala
-// `LazyVals`' `sun.misc.Unsafe` restricted-method warnings.
-bashScriptExtraDefines ++= Seq(
-  """addJava "--enable-native-access=ALL-UNNAMED"""",
-  """addJava "--sun-misc-unsafe-memory-access=allow"""",
-  // The one-shot CLI subcommands use a quiet, console-only logback config: no hydrozoa-trace.jsonl /
-  // hydrozoa.log written into a possibly read-only cwd (e.g. inside the Docker image), and no
-  // trace-level spam. Only `serve` keeps the verbose, file-writing logback.xml. `$1` here is the
-  // subcommand (this runs before the launcher's own arg processing).
-  """if [ "${1:-}" != "serve" ]; then addJava "-Dlogback.configurationFile=logback-cli.xml"; fi"""
-)
-
-// Docker settings
-Docker / packageName := "cardano-hydrozoa/hydrozoa"
-Docker / version := version.value
-Docker / daemonUser := "hydrozoa"
-Docker / daemonGroup := "hydrozoa"
-// JDK 25 to match the project's language/runtime flags (--sun-misc-unsafe-memory-access is 23+).
-dockerBaseImage := "eclipse-temurin:25-jre"
-dockerExposedPorts ++= Seq(8080)
-
-// Skip documentation generation for Docker
-Compile / packageDoc / mappings := Seq()
-Compile / doc / sources := Seq()
-
 Global / excludeLintKeys += Docker / dockerLabels
 Global / excludeLintKeys += Docker / dockerEnvVars
-
-Docker / dockerLabels := Map(
-  "org.opencontainers.image.title" -> "Hydrozoa",
-  "org.opencontainers.image.description" -> "Cardano Hydrozoa L2 State Channel",
-  "org.opencontainers.image.version" -> version.value,
-  "org.opencontainers.image.revision" -> gitRevision
+// native-packager's JavaAppPackaging archetype propagates executableScriptName/name/sourceDirectory
+// into the Debian/Rpm/Universal-docs/Universal-src packaging scopes. We only build the Universal
+// `stage` output and the Docker image, so those scoped copies are never consumed; silence sbt's
+// lintUnused for them rather than leaving noise on every load (the plugins can't be disabled — the
+// native-packager graph requires them).
+Global / excludeLintKeys ++= Set(
+  Debian / executableScriptName,
+  Debian / sourceDirectory,
+  Rpm / daemonStdoutLogFile,
+  Rpm / executableScriptName,
+  Rpm / name,
+  Rpm / sourceDirectory,
+  Universal / executableScriptName,
+  UniversalDocs / name,
+  UniversalSrc / name,
+  rpmScriptsDirectory
 )
-
-Docker / dockerEnvVars := Map(
-  "JAVA_OPTS" -> "-Xmx2g -Xms512m"
-)
-
-// Ensure proper signal handling for graceful shutdown
-import com.typesafe.sbt.packager.docker._
-dockerCommands := dockerCommands.value.flatMap {
-    case cmd @ Cmd("FROM", _) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
-    case other                => List(other)
-}
 
 val scalusVersion = "1.0.0"
 val bloxbeanVersion = "0.7.1"
@@ -77,10 +45,15 @@ lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
       resolvers += Resolver.defaultLocal,
       libraryDependencies ++= Seq(
-        "org.scalus" %% "scalus" % scalusVersion withSources (),
-        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion withSources (),
+        ("org.scalus" %% "scalus" % scalusVersion).withSources(),
+        ("org.scalus" %% "scalus-cardano-ledger" % scalusVersion).withSources(),
         "org.typelevel" %% "cats-core" % "2.13.0",
       ),
+      // The Scalus compiler plugin compiles on-chain `@Compile` code to UPLC. Scope it per-project
+      // (here + `core`) rather than as a bare top-level setting: under sbt 2 a bare setting applies
+      // to *every* subproject, and enabling the plugin on a project that lacks the `scalus` library
+      // on its classpath (e.g. `petri`) fails compilation with `package scalus.compiler ... does not
+      // have a member method compile`. Published with CrossVersion.full → scalus-plugin_<full-scala>.
       addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
     )
 
@@ -102,16 +75,93 @@ lazy val petri: Project = (project in file("petri"))
 
 // Main application
 lazy val core: Project = (project in file("."))
+    .enablePlugins(JavaAppPackaging, DockerPlugin, BuildInfoPlugin)
     .dependsOn(cardanoOnchain)
     .settings(
+      Compile / mainClass := Some("hydrozoa.app.Main"),
+      // Name the packaged launcher `hydrozoa`, and generate only the dispatcher's script (not
+      // forwarder scripts for every other discovered main); every command is a `hydrozoa <sub>`.
+      executableScriptName := "hydrozoa",
+      Compile / discoveredMainClasses := Seq("hydrozoa.app.Main"),
+      // Bake the clean-output JVM flags into the generated launcher scripts (both `stage` and the
+      // Docker image), matching the `run` / `Test` settings: silence blst-java's JNI `System::load`
+      // and Scala `LazyVals`' `sun.misc.Unsafe` restricted-method warnings.
+      bashScriptExtraDefines ++= Seq(
+        """addJava "--enable-native-access=ALL-UNNAMED"""",
+        """addJava "--sun-misc-unsafe-memory-access=allow"""",
+        // Select the logback config. Local runs default to the verbose, file-writing logback.xml;
+        // the Docker image sets HYDROZOA_LOGBACK=logback-docker.xml (see Docker/dockerEnvVars) for a
+        // quiet, console-only config so no subcommand writes hydrozoa.log / hydrozoa-trace.jsonl into
+        // the container's filesystem.
+        """addJava "-Dlogback.configurationFile=${HYDROZOA_LOGBACK:-logback.xml}""""
+      ),
+      // sbt 2 stages under target/out/jvm/scala-<v>/core/; pin the local `stage` output to the
+      // stable repo-root path the justfile's deployment recipes expect
+      // (target/universal/stage/bin/hydrozoa). Docker packaging keeps its own staging dir. The key
+      // is qualified because JavaAppPackaging and DockerPlugin both re-export `stagingDirectory`.
+      Universal / com.typesafe.sbt.packager.Keys.stagingDirectory :=
+          baseDirectory.value / "target" / "universal" / "stage",
+      // Same for the Docker build context: sbt 2 would stage it under target/out/.../core/docker/,
+      // but the release workflow's docker build-push-action expects `target/docker/stage`. Pin it.
+      Docker / com.typesafe.sbt.packager.Keys.stagingDirectory :=
+          baseDirectory.value / "target" / "docker" / "stage",
+      // Docker settings
+      Docker / packageName := "cardano-hydrozoa/hydrozoa",
+      Docker / version := version.value,
+      // Also tag local `just docker-image` builds as ghcr.io/… so docker-compose's default image
+      // (ghcr.io/cardano-hydrozoa/hydrozoa:<version>) resolves to the local build without a
+      // HYDROZOA_IMAGE override. Only affects publishLocal — the release workflow tags/pushes via
+      // docker/metadata-action off `Docker/stage`, so this leaves the published tags untouched.
+      dockerAliases ++= Seq(dockerAlias.value.withRegistryHost(Some("ghcr.io"))),
+      Docker / daemonUser := "hydrozoa",
+      Docker / daemonGroup := "hydrozoa",
+      // JDK 25 to match the project's language/runtime flags (--sun-misc-unsafe-memory-access is 23+).
+      dockerBaseImage := "eclipse-temurin:25-jre",
+      dockerExposedPorts ++= Seq(8080),
+      // Skip documentation generation for Docker
+      Compile / packageDoc / mappings := Seq(),
+      Compile / doc / sources := Seq(),
+      Docker / dockerLabels := Map(
+        "org.opencontainers.image.title" -> "Hydrozoa",
+        "org.opencontainers.image.description" -> "Cardano Hydrozoa L2 State Channel",
+        "org.opencontainers.image.version" -> version.value,
+        "org.opencontainers.image.revision" -> gitRevision
+      ),
+      Docker / dockerEnvVars := Map(
+        "JAVA_OPTS" -> "-Xmx2g -Xms512m",
+        // Every subcommand in the image uses a quiet, console-only logback config so the container
+        // writes no hydrozoa.log / hydrozoa-trace.jsonl; the launcher reads this (see
+        // bashScriptExtraDefines above). Kept out of JAVA_OPTS so `docker run -e JAVA_OPTS=…` can't
+        // clobber the log config.
+        "HYDROZOA_LOGBACK" -> "logback-docker.xml"
+      ),
+      // Ensure proper signal handling for graceful shutdown, and set the container env vars.
+      // NB: native-packager emits multi-stage `FROM <img> AS <stage>` (several args), so match
+      // `Cmd("FROM", _*)` rather than the single-arg `Cmd("FROM", _)`. The multi-stage output also
+      // drops the `dockerEnvVars` ENV commands, so inject them explicitly into the final stage
+      // (before ENTRYPOINT); values are quoted so ones with spaces (JAVA_OPTS) stay a single value.
+      Docker / dockerCommands := {
+          val base = (Docker / dockerCommands).value.flatMap {
+              case cmd @ Cmd("FROM", _*) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
+              case other                 => List(other)
+          }
+          // native-packager's multi-stage output doesn't render `dockerEnvVars`, so append the ENV
+          // commands to the final stage ourselves (ENV applies to the runtime env regardless of
+          // position). Values are quoted so ones with spaces (JAVA_OPTS) stay a single value.
+          val envCommands =
+              (Docker / dockerEnvVars).value.toList
+                  .sortBy(_._1)
+                  .map((k, v) => Cmd("ENV", s"""$k="$v""""))
+          base ++ envCommands
+      },
       resolvers +=
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
       resolvers += Resolver.defaultLocal,
       resolvers += "jitpack" at "https://jitpack.io",
       libraryDependencies ++= Seq(
         // Scalus
-        "org.scalus" %% "scalus" % scalusVersion withSources (),
-        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion withSources (),
+        ("org.scalus" %% "scalus" % scalusVersion).withSources(),
+        ("org.scalus" %% "scalus-cardano-ledger" % scalusVersion).withSources(),
         // Cardano Client library
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
         // Logging
@@ -164,6 +214,9 @@ lazy val core: Project = (project in file("."))
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test,
         "co.fs2" %% "fs2-io" % "3.12.2" % Test
       ),
+      // Scalus compiler plugin — compiles on-chain `@Compile` code to UPLC (see `cardanoOnchain`
+      // for why this is scoped per-project rather than declared once at the top level).
+      addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
       // Bake the version, git revision, and build time into `hydrozoa.BuildInfo` so they can be
       // logged at startup, served from `GET /version`, and stamped onto the Docker image labels.
       buildInfoPackage := "hydrozoa",
@@ -193,20 +246,6 @@ lazy val core: Project = (project in file("."))
       // The interactive `submit-deposit` / `submit-l2-tx` subcommands read console prompts; wire
       // stdin through to the forked `sbt run` JVM. The packaged launcher gets stdin natively.
       run / connectInput := true,
-      // Copy the repo-root `docker-compose.yml` + `hydrozoa.sh` into the `/scaffold/*` classpath
-      // resources at build time (the template + script-refs defaults live directly under
-      // src/main/resources/scaffold/). The `scaffold` subcommand materializes these for a
-      // Docker-only user, and `build-head-config` reads the baked script-refs — no repo clone.
-      Compile / resourceGenerators += Def.task {
-          val out = (Compile / resourceManaged).value / "scaffold"
-          IO.createDirectory(out)
-          val copies = Seq(
-            baseDirectory.value / "docker-compose.yml" -> out / "docker-compose.yml",
-            baseDirectory.value / "hydrozoa.sh" -> out / "hydrozoa.sh"
-          )
-          copies.foreach { case (src, dst) => IO.copyFile(src, dst) }
-          copies.map(_._2)
-      }.taskValue,
       // Fork each test run into a fresh JVM: isolates native state (RocksDB JNI), the
       // cats-effect IORuntime, and daemon threads, and makes re-running a `testOnly` in a
       // warm sbt session actually re-run instead of reporting 0 tests.
@@ -265,10 +304,28 @@ lazy val integration: Project = (project in file("integration"))
       )
     )
 
+// Runnable examples + tutorials (Catalyst deliverable). Reuses the integration harness
+// (MultiPeerHeadHarness, TestPeers, mock L1) in test scope; each example is a demo suite run with
+// `sbt "examples/testOnly *TransientTokenDemo*"`. See examples/README.md.
+lazy val examples: Project = (project in file("examples"))
+    .dependsOn(core % "compile->compile;test->test", integration % "test->test")
+    .settings(
+      name := "hydrozoa-examples",
+      publish / skip := true,
+      libraryDependencies ++= Seq(
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.typelevel" %% "cats-effect" % "3.6.3" % Test
+      )
+    )
+
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.7"
 
-ThisBuild / scalacOptions ++= Seq(
+// NB (sbt 2): a bare setting is added to every subproject. Written as `ThisBuild / scalacOptions
+// ++=`, each per-subproject addition would append to the *shared* ThisBuild scope, so the flags
+// accumulate once per subproject (4×) and `-Werror` then fails on "flag set repeatedly". Keep it
+// bare (no `ThisBuild /`): each subproject gets exactly one copy.
+scalacOptions ++= Seq(
   "-feature",
   "-deprecation",
   "-unchecked",
@@ -282,9 +339,6 @@ ThisBuild / scalacOptions ++= Seq(
   "-Wconf:msg=interpolation uses toString:s",
   "-Yretain-trees", // Essential for incremental compilation
 ) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil)
-
-// Add the Scalus compiler plugin (published with CrossVersion.full → scalus-plugin_<full-scala-version>)
-addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full)
 
 // Custom commands to format and lint all subprojects
 addCommandAlias(
@@ -304,8 +358,10 @@ addCommandAlias(
   ";cardanoOnchain/scalafixAll --check ;petri/scalafixAll --check ;core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check"
 )
 
-// Test dependencies
-ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
+// Test dependencies.
+// NB (sbt 2): bare (not `ThisBuild /`) for the same reason as `scalacOptions` above — otherwise the
+// framework is registered once per subproject (4×) in the shared ThisBuild scope.
+testFrameworks += new TestFramework("org.scalatest.tools.Framework")
 
 // Tests are wall-clock/sleep-bound (real System timestamps in the cats-actors), so run more
 // suites concurrently than CPU cores to overlap the waits. sbt's default caps concurrency at the
@@ -319,7 +375,7 @@ inThisBuild(
   List(
     // Release version — drives the Docker image tag, `hydrozoa.BuildInfo.version`, and `GET
     // /version`. Bump here for a release (see RELEASE.md), then tag `v<version>`.
-    version := "0.1.1",
+    version := "0.1.3",
     scalaVersion := "3.3.7",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision
@@ -349,7 +405,7 @@ lazy val benchmark: Project = (project in file("benchmark"))
     )
 
 // An attempt in exclude some folder
-excludeFilter in Global := {
-    val default = (excludeFilter in Global).value
+Global / excludeFilter := {
+    val default = (Global / excludeFilter).value
     default || ".direnv" || ".bloop" || ".metals" || ".idea" || ".vscode"
 }

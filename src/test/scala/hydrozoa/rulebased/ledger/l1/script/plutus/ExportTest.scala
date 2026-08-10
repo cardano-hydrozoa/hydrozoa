@@ -56,7 +56,7 @@ class ExportTest extends AnyFunSuite {
           "Dispute Resolution script hash mismatch. " +
               s"Expected: ${existingDispute.hash}, " +
               s"Got: ${freshDispute.hash}. " +
-              "Please run: nix develop --command sbtn 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
         ) {
             freshDispute.hash
         }
@@ -64,7 +64,7 @@ class ExportTest extends AnyFunSuite {
         assertResult(
           existingDispute.compiledCode,
           "Dispute Resolution compiled code should match. " +
-              "Please run: nix develop --command sbtn 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
         ) {
             freshDispute.compiledCode
         }
@@ -78,7 +78,7 @@ class ExportTest extends AnyFunSuite {
           "Rule-Based Treasury script hash mismatch. " +
               s"Expected: ${existingTreasury.hash}, " +
               s"Got: ${freshTreasury.hash}. " +
-              "Please run: nix develop --command sbtn 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
         ) {
             freshTreasury.hash
         }
@@ -86,7 +86,7 @@ class ExportTest extends AnyFunSuite {
         assertResult(
           existingTreasury.compiledCode,
           "Rule-Based Treasury compiled code should match. " +
-              "Please run: nix develop --command sbtn 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
         ) {
             freshTreasury.compiledCode
         }

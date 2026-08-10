@@ -1,0 +1,88 @@
+# A multi-peer Hydrozoa head: 2 head peers + 4 coil peers, each a single hydrozoa node running the
+# built-in EUTXO L2 ledger in-process — no ledger sidecar, no external database. Every node mounts
+# the shared head-config.json plus its own private.json; head peers publish their user/admin HTTP
+# API, coil peers dial out only. See docs/user-guide/DEPLOYMENT.md §6.
+#
+# This file is scaffolded into the head directory itself, so config paths are relative to it (`.`):
+# `docker compose up` from here mounts ./head-config and ./private. HYDROZOA_IMAGE overrides the
+# image (e.g. a local cardano-hydrozoa/hydrozoa:<version>).
+#
+# Each service pins a fixed container_name (head-0, coil-0, …) so container names stay clean (no
+# compose `-N` index suffix). Because those names are host-global, only one head can run per machine
+# at a time — bring one down before starting another (e.g. a different network's head directory).
+
+name: hydrozoa
+
+networks:
+  mesh:
+    driver_opts:
+      # Rootless docker (slirp4netns) can drop outbound TLS to Blockfrost at the default MTU.
+      com.docker.network.driver.mtu: 1400
+
+x-hydrozoa: &hydrozoa
+  image: ${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:${HYDROZOA_VERSION:-0.1.3}}
+  # root: the image's non-root user cannot write the RocksDB stores / logs under the /opt/docker
+  # workdir. State is ephemeral here (no volumes) — restarting re-initializes a fresh head (§5b).
+  user: root
+  environment:
+    JAVA_OPTS: -Xmx1g -Xms256m
+  command: ["serve", "/configs/head-config.json", "/configs/private.json"]
+  networks: [mesh]
+  # Upstream resolver so the node can reach Blockfrost; the embedded DNS still resolves the
+  # mesh service names (head-0, head-1, …) for the inter-peer WS mesh.
+  dns:
+    - 8.8.8.8
+    - 8.8.4.4
+  stop_grace_period: 120s
+  restart: on-failure
+
+services:
+  ## ---------------------------------------------------------- head peers (publish the HTTP API)
+
+  head-0:
+    <<: *hydrozoa
+    container_name: head-0
+    ports:
+      - "8080:8080"   # head-0 user/admin HTTP API
+    volumes:
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/head-0/private.json:/configs/private.json:ro
+
+  head-1:
+    <<: *hydrozoa
+    container_name: head-1
+    ports:
+      - "8081:8080"   # head-1 user/admin HTTP API
+    volumes:
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/head-1/private.json:/configs/private.json:ro
+
+  ## ---------------------------------------------------------- coil peers (dial out only)
+
+  coil-0:
+    <<: *hydrozoa
+    container_name: coil-0
+    volumes:
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-0/private.json:/configs/private.json:ro
+
+  coil-1:
+    <<: *hydrozoa
+    container_name: coil-1
+    volumes:
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-1/private.json:/configs/private.json:ro
+
+  coil-2:
+    <<: *hydrozoa
+    container_name: coil-2
+    volumes:
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-2/private.json:/configs/private.json:ro
+
+  coil-3:
+    <<: *hydrozoa
+    container_name: coil-3
+    volumes:
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-3/private.json:/configs/private.json:ro

@@ -94,6 +94,7 @@ object DeployScriptsAndG2Setup:
               deployScriptsAndG2Setup(
                 walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
                 mbKey,
+                Bootstrap.defaultPrivateTemplate(home),
                 ladder,
                 Bootstrap.HomeLayout.refUtxos(home)
               )
@@ -102,6 +103,7 @@ object DeployScriptsAndG2Setup:
     private def deployScriptsAndG2Setup(
         walletPath: Path,
         mbBlockfrostKey: Option[String],
+        template: Path,
         ladderRefsPath: Option[Path],
         outPath: Path
     ): IO[ExitCode] =
@@ -110,8 +112,8 @@ object DeployScriptsAndG2Setup:
             blockfrostKey <- mbBlockfrostKey.fold(
               log.info(
                 "no --blockfrost-key / $BLOCKFROST_API_KEY; using blockfrostApiKey from " +
-                    s"${Bootstrap.defaultPrivateTemplate}"
-              ) *> Bootstrap.blockfrostKeyFrom(Bootstrap.defaultPrivateTemplate)
+                    s"$template"
+              ) *> Bootstrap.blockfrostKeyFrom(template)
             )(IO.pure)
             cardanoNetwork <- IO.fromEither[StandardCardanoNetwork](
               networkOfBlockfrostKey(blockfrostKey)
@@ -148,6 +150,14 @@ object DeployScriptsAndG2Setup:
                 Files.writeString(outPath, unresolved.asJson.spaces2)
             }
             _ <- log.info(s"Wrote script reference inputs to $outPath")
+            // Print the deployed script hashes so the operator can diff them against the release's
+            // expected hashes (and the head config) without resolving the reference UTxOs by hand.
+            _ <- log.info(
+              s"Deployed treasury script hash: ${HydrozoaBlueprint.treasuryScriptHash.toHex}"
+            )
+            _ <- log.info(
+              s"Deployed dispute script hash:  ${HydrozoaBlueprint.disputeScriptHash.toHex}"
+            )
             _ <- log.info(
               s"Explorer: https://$explorerHost/tx/" +
                   unresolved.rulebasedTreasuryScriptInput.transactionId.toHex

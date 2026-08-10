@@ -8,13 +8,13 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand}
+import hydrozoa.multisig.ledger.l2.{Destination, L2Screener}
 import scala.language.implicitConversions
 import scala.math.Ordering.Implicits.infixOrderingOps
 import scalus.uplc.builtin.ByteString
 
-/** Deposit L1 screening — Hydrozoa's stage of deposit screening (docs/l2-isomorphism.md), run
-  * before the ledger's [[hydrozoa.multisig.ledger.l2.L2Ledger.sendScreenDeposit]]. A deposit is not
+/** Deposit L1 screening — Hydrozoa's stage of deposit screening (docs/spec/l2-isomorphism.md), run
+  * before the ledger's [[hydrozoa.multisig.ledger.l2.L2Screener.screenDeposit]]. A deposit is not
   * an L2 tx, and its `l2Payload` arrives out-of-band, so unlike transactions (which have no L1
   * screening stage) it is payload-checked and time-gated here:
   *
@@ -24,7 +24,7 @@ import scalus.uplc.builtin.ByteString
   *     derived from the deposit tx's TTL). The block-time accept-by check at application
   *     (`JointLedger.registerDeposit`) still runs; this is the earlier, wall-clock gate.
   *
-  * On success it yields the [[L2LedgerCommand.ScreenDeposit]] reference data the ledger's screening
+  * On success it yields the [[L2Screener.ScreenDeposit]] reference data the ledger's screening
   * stage consumes.
   */
 object DepositL1Screening {
@@ -51,7 +51,7 @@ object DepositL1Screening {
         l1Payload: ByteString,
         l2Payload: ByteString,
         now: QuantizedInstant
-    )(config: Config): Either[Error, L2LedgerCommand.ScreenDeposit] =
+    )(config: Config): Either[Error, L2Screener.ScreenDeposit] =
         for {
             // NB: the l2Payload pin check happens INSIDE the parse — DepositTx.Parse verifies that
             // the metadata's l2PayloadHash equals blake2b_256(l2Payload), so a failed pin surfaces
@@ -74,7 +74,7 @@ object DepositL1Screening {
               config.network,
               config.slotConfig
             )
-        } yield L2LedgerCommand.ScreenDeposit(
+        } yield L2Screener.ScreenDeposit(
           depositId = depositProduced.utxoId,
           depositFee = depositProduced.depositFee,
           depositL2Value = depositProduced.l2Value,
