@@ -85,7 +85,13 @@ final class LaneOutbound[T, N] private (
       * [[OutOfBounds]] if the remote's cursor is ahead of what we could have produced (protocol
       * desync — the caller raises), else the (possibly empty) slice.
       */
-    def reply(remoteCursor: N): IO[Reply[T]] =
+    def reply(remoteCursor: N, ceiling: Option[N] = None): IO[Reply[T]] =
+        // `ceiling`, when set, is an absolute upper bound on the item numbers we may serve this reply
+        // (on top of `maxPerReply` and the released high-water) — the request lane passes the
+        // puller's backpressure ceiling. Items are monotonic ascending, so a `takeWhile`/`filter`
+        // keeps the contiguous prefix at or below it.
+        def withinCeiling(items: List[T]): List[T] =
+            ceiling.fold(items)(c => items.takeWhile(item => numberOf(item) <= c))
         lastAppended.get.flatMap { last =>
             // The remote may never legitimately ask past our next-producible number.
             val bound = next(last)
@@ -106,7 +112,7 @@ final class LaneOutbound[T, N] private (
                     .flatMap { pruned =>
                         pruned.headOption match
                             case Some(head) if numberOf(head) == remoteCursor =>
-                                IO.pure(Items(pruned.take(maxPerReply).toList))
+                                IO.pure(Items(withinCeiling(pruned.take(maxPerReply).toList)))
                             case _ =>
                                 // The store can hold entries already persisted but **not yet
                                 // released** onto this lane (e.g. a postponed own soft-ack that the
@@ -117,8 +123,10 @@ final class LaneOutbound[T, N] private (
                                 // out-of-bounds.
                                 backfill(remoteCursor, maxPerReply).map(fromStore =>
                                     Items(
-                                      last.fold(List.empty[T])(hw =>
-                                          fromStore.filter(item => numberOf(item) <= hw)
+                                      withinCeiling(
+                                        last.fold(List.empty[T])(hw =>
+                                            fromStore.filter(item => numberOf(item) <= hw)
+                                        )
                                       )
                                     )
                                 )
