@@ -870,8 +870,8 @@ components:
       - major
       - avgEvents
       - maxEvents
-      - blocksPerWindow
-      - requestsPerWindow
+      - blockRate
+      - requestRate
       properties:
         minor:
           type: integer
@@ -885,10 +885,10 @@ components:
         maxEvents:
           type: integer
           format: int64
-        blocksPerWindow:
-          $ref: '#/components/schemas/WindowStats'
-        requestsPerWindow:
-          $ref: '#/components/schemas/WindowStats'
+        blockRate:
+          $ref: '#/components/schemas/RateStats'
+        requestRate:
+          $ref: '#/components/schemas/RateStats'
     BlockSummary:
       title: BlockSummary
       type: object
@@ -1664,31 +1664,6 @@ components:
           type: string
         buildTime:
           type: string
-    WindowStats:
-      title: WindowStats
-      type: object
-      required:
-      - last10s
-      - last30s
-      - last60s
-      - last5m
-      - last10m
-      properties:
-        last10s:
-          type: integer
-          format: int64
-        last30s:
-          type: integer
-          format: int64
-        last60s:
-          type: integer
-          format: int64
-        last5m:
-          type: integer
-          format: int64
-        last10m:
-          type: integer
-          format: int64
   securitySchemes:
     httpAuth:
       type: http

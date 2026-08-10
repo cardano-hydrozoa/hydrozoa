@@ -20,8 +20,8 @@ cannot measurably affect throughput.
 - Report, per peer:
   - **local incoming requests** — total counter + TPS (now / 1m / 5m / 15m, `top`-style).
   - **peer-to-peer requests** — total counter *per head peer* + TPS the same way.
-  - **block statistics** — total minor/major, average and maximum block size (events), and block +
-    request counts over fixed trailing windows (10s / 30s / 60s / 5m / 10m) with their TPS.
+  - **block statistics** — total minor/major, average and maximum block size (events), and EWMA
+    throughput rates for blocks/sec and requests-in-blocks/sec (now / 1m / 5m / 15m).
   - **stack statistics** — total hard-confirmed, last stack number, seconds since last hard-confirm,
     mean inter-stack gap, and average/maximum stack size (blocks absorbed).
 - Ship **two representations of the same registry**: a human/dashboard JSON view (`GET /head/stats`)
@@ -41,8 +41,7 @@ cannot measurably affect throughput.
 1. **Push, don't pull.** Each counter is incremented at the moment its event happens — a single
    atomic add (nanoseconds, no allocation, no lock). The endpoint never scans anything.
 2. **Derive rolling views off the hot path.** One background fiber, waking at a fixed cadence (1 Hz),
-   rolls the trailing-window ring and updates the EWMA load averages. The hot path only ever
-   increments.
+   updates the EWMA load averages. The hot path only ever increments.
 3. **Snapshot read, no actor ask.** The endpoint materializes the current numbers from an in-memory
    registry, mirroring how `/ready` reads a `NodeStatus` value instead of issuing a `GetState` to an
    actor (`HydrozoaServer` already threads `nodeStatus: IO[NodeStatus]` into the routes — the stats
@@ -100,7 +99,7 @@ buys nothing):
 Only the **peer-request** counters can be written concurrently (ingestion fans in from multiple
 peer-liaison actors/threads), so those use `LongAdder`, which is built for high-contention adds.
 
-The `rolling` view (ring + EWMAs) is written only by the single sampler fiber, so a `@volatile`
+The `rolling` view (the EWMA rates) is written only by the single sampler fiber, so a `@volatile`
 reference / `AtomicReference` publishes it to readers.
 
 ## Metrics catalog
@@ -114,8 +113,8 @@ reference / `AtomicReference` publishes it to readers.
 | `blocksMinor` / `blocksMajor` | counter | soft-confirmed blocks by type |
 | avg block size | derived | `blockEventsSum / (blocksMinor + blocksMajor)` |
 | max block size | gauge | `blockEventsMax` |
-| blocks per window | derived | 10s / 30s / 60s / 5m / 10m, from the ring |
-| requests-in-blocks per window + TPS | derived | same windows, from the ring |
+| block rate | EWMA | blocks/sec: now / 1m / 5m / 15m |
+| requests-in-blocks rate | EWMA | req/sec: now / 1m / 5m / 15m |
 | local & peer TPS | EWMA | now / 1m / 5m / 15m |
 | `stacksTotal` | counter | hard-confirmed stacks |
 | last stack number | gauge | `lastStackNum` |
@@ -138,19 +137,12 @@ Three call sites, all on paths that already exist — no new plumbing:
 Because `completeCell` / `completeStack` are the *only* places a soft-confirmed block / hard-confirmed
 stack is produced, those stats need exactly one line each and can never drift from reality.
 
-## Rolling windows: a cumulative ring
+## All rates are EWMA
 
-Keep a ring of **per-second cumulative snapshots** — 900 slots = 15 min (covers every requested
-window with headroom). Each second the sampler writes the current cumulative counters into
-`ring[t % 900]`. A windowed count is then a subtraction:
-
-```
-countOverLast(W seconds) = cumulativeNow − ring[(t − W) % 900]
-```
-
-This is race-free (nothing is zeroed), exact, and diffing a few longs is free. Memory: 900 × a
-handful of longs ≈ a few KB. Blocks and requests-in-blocks share the same ring, so
-"requests in those blocks + corresponding TPS" falls straight out (`requestsInWindow / W`).
+There are **no fixed-window rings**. Every rate — local requests, per-peer requests, block
+production, and requests-in-blocks — is a top-style EWMA load average (now / 1m / 5m / 15m). The
+sampler holds one small set of EWMA accumulators (a few doubles each) and never stores per-second
+history, so nothing has to be recomputed or aged out.
 
 ## TPS load averages (EWMA)
 
@@ -223,24 +215,8 @@ Cost: three `exp` + three multiply-adds per second.
   bias correction `v / (1 − decayⁿ)` for the first few ticks — not worth it, the ramp is expected.
 - **Idle decay is free and correct.** No traffic → `instant = 0` → averages glide to 0, matching
   `top` when load drops.
-- **Single-writer visibility.** Only the sampler writes the EWMAs and the ring → `@volatile` is
-  sufficient for the endpoint to read a fresh value.
-
-### EWMA vs the ring — use both
-
-They answer different questions:
-
-| | EWMA (1m/5m/15m) | Cumulative ring (10s…10m) |
-|---|---|---|
-| memory | one double per horizon | ~900 slots × few longs |
-| semantics | smoothed, soft-edged (top-style) | **exact** count in the window |
-| boundary artifacts | none | a sample leaving the window is a step |
-| best for | load-average feel, trend | precise "how many in the last 30s" |
-
-Use **EWMA for the load-average triple** and the **ring for the exact fixed-window counts + TPS**. The
-sampler computes `delta`/`instant` once and feeds both — zero marginal cost. EWMA-5m and the exact
-5m-window value will not read identically (decayed vs hard average); that is expected, so label them
-distinctly (`load5m` vs `avg5m`).
+- **Single-writer visibility.** Only the sampler writes the EWMA accumulators → the published
+  `Rolling` snapshot (one `AtomicReference`) is what the endpoint reads.
 
 ## The endpoints
 
@@ -271,7 +247,6 @@ DTO sketch (final shapes live in `ApiDto`):
 
 ```scala
 final case class RateView(now: Double, load1m: Double, load5m: Double, load15m: Double)
-final case class WindowCounts(last10s: Long, last30s: Long, last60s: Long, last5m: Long, last10m: Long)
 final case class CounterWithRate(total: Long, rate: RateView)
 
 final case class BlockStatsView(
@@ -279,9 +254,8 @@ final case class BlockStatsView(
     major: Long,
     avgEvents: Double,
     maxEvents: Long,
-    blocksPerWindow: WindowCounts,
-    requestsPerWindow: WindowCounts,
-    requestsTpsPerWindow: WindowCounts  // requestsPerWindow / window, as rates
+    blockRate: RateView,   // blocks/sec, EWMA
+    requestRate: RateView  // requests-in-blocks/sec, EWMA
 )
 
 final case class StackStatsView(
@@ -307,7 +281,7 @@ final case class PeerStatsView(
 ### Prometheus mapping
 
 The Prometheus idiom is to expose **monotonic counters** (`_total`) and let the server compute rates
-with `rate(...[5m])`; the EWMA/window rates are a human convenience and are exposed as *gauges*. Both
+with `rate(...[5m])`; the EWMA rates are a human convenience and are exposed as *gauges*. Both
 endpoints read the same snapshot, so they never disagree. Naming (`hydrozoa_` prefix, `_total`
 suffix on counters, labels for dimensions):
 
@@ -349,11 +323,12 @@ It cannot meaningfully affect throughput — which is the requirement.
 
 ## Resolved decisions
 
-- **Both EWMA and exact windows.** EWMA for the 1m/5m/15m load-average triple; the cumulative ring for
-  the exact 10s–10m windows. Both are shipped.
+- **EWMA only — no fixed-window rings.** Every rate (local, per-peer, block, requests-in-blocks) is a
+  top-style EWMA load average (now / 1m / 5m / 15m). No per-second history is kept, so nothing has to
+  be recomputed or aged out.
 - **No persistence.** Counters are in-memory and process-lifetime; they reset on restart. Documented in
   the endpoint descriptions. (Persisting would add hot-path cost for little operational value.)
-- **Sampler cadence: 1 Hz.** The ring depth (900) and EWMA τ are independent of it.
+- **Sampler cadence: 1 Hz.** The EWMA τ values are independent of it.
 - **Stacks are first-class**, not an extension — instrumented at `SlowConsensusActor.completeStack`.
 - **Prometheus from day one** — `GET /head/metrics` alongside the JSON `GET /head/stats`, both over the
   same snapshot.

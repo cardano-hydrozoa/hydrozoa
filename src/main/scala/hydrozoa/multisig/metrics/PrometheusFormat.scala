@@ -54,18 +54,8 @@ object PrometheusFormat:
         b.append(s"""hydrozoa_blocks_total{type="major"} ${s.blocks.major}\n""")
         gaugeD("hydrozoa_block_events_avg", "Average events per block.", s.blocks.avgEvents)
         gauge("hydrozoa_block_events_max", "Maximum events in any block.", s.blocks.maxEvents)
-        window(
-          "hydrozoa_blocks_window",
-          "Blocks in the trailing window.",
-          s.blocks.blocksPerWindow,
-          b
-        )
-        window(
-          "hydrozoa_block_requests_window",
-          "Requests in blocks in the trailing window.",
-          s.blocks.requestsPerWindow,
-          b
-        )
+        rate("hydrozoa_blocks", "Block production rate (blocks/s).", s.blocks.blockRate, b)
+        rate("hydrozoa_block_requests", "Requests-in-blocks rate (req/s).", s.blocks.requestRate, b)
 
         counter("hydrozoa_stacks_total", "Hard-confirmed stacks.", s.stacks.total)
         gauge(
@@ -103,14 +93,6 @@ object PrometheusFormat:
         b.append(s"""${name}_load{window="1m"} ${fmt(r.load1m)}\n""")
         b.append(s"""${name}_load{window="5m"} ${fmt(r.load5m)}\n""")
         b.append(s"""${name}_load{window="15m"} ${fmt(r.load15m)}\n""")
-
-    private def window(name: String, help: String, w: WindowCounts, b: StringBuilder): Unit =
-        b.append(s"# HELP $name $help\n# TYPE $name gauge\n")
-        b.append(s"""$name{window="10s"} ${w.last10s}\n""")
-        b.append(s"""$name{window="30s"} ${w.last30s}\n""")
-        b.append(s"""$name{window="60s"} ${w.last60s}\n""")
-        b.append(s"""$name{window="5m"} ${w.last5m}\n""")
-        b.append(s"""$name{window="10m"} ${w.last10m}\n""")
 
     /** Prometheus wants a plain decimal, not `1.0E-4` / `NaN`. Round to 4 dp and drop trailing
       * zeros; non-finite and zero collapse to `0`.

@@ -62,7 +62,7 @@ class PeerMetricsTest extends AnyFunSuite:
           s"stacks: $s"
         )
 
-    test("sampler fills the exact windows and moves the EWMA load average after activity"):
+    test("sampler moves the EWMA load averages for local, block, and request rates after activity"):
         val program = TestControl.executeEmbed {
             for {
                 m <- IO.realTime.map(t => PeerMetrics.create(t.toMillis, Vector(0, 1)))
@@ -81,9 +81,9 @@ class PeerMetricsTest extends AnyFunSuite:
         }
         val s = program.unsafeRunSync()
         assert(
-          s.blocks.minor == 5 && s.blocks.blocksPerWindow.last10s == 5 &&
-              s.blocks.blocksPerWindow.last60s == 5 &&
-              s.blocks.requestsPerWindow.last10s == 10 && // 5 blocks * 2 events
-              s.localRate.load1m > 0.0, // steady local traffic registers on the EWMA
+          s.blocks.minor == 5 &&
+              s.localRate.load1m > 0.0 && // steady local traffic registers on the EWMA
+              s.blocks.blockRate.load1m > 0.0 && // ~1 block/s
+              s.blocks.requestRate.load1m > s.blocks.blockRate.load1m, // 2 events per block
           s"snapshot: $s"
         )

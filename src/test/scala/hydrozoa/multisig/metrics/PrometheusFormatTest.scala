@@ -16,8 +16,8 @@ class PrometheusFormatTest extends AnyFunSuite:
         major = 2,
         avgEvents = 1.5,
         maxEvents = 1000,
-        blocksPerWindow = WindowCounts(1, 3, 6, 30, 60),
-        requestsPerWindow = WindowCounts(2, 6, 12, 60, 120)
+        blockRate = RateView(now = 2.0, load1m = 1.9, load5m = 1.5, load15m = 1.0),
+        requestRate = RateView(now = 3.0, load1m = 2.8, load5m = 2.0, load15m = 1.2)
       ),
       stacks = StackStats(
         total = 10,
@@ -52,13 +52,15 @@ class PrometheusFormatTest extends AnyFunSuite:
           out
         )
 
-    test("windows and load averages are gauges"):
+    test("load averages (including block/request throughput) are gauges"):
         val out = PrometheusFormat.render(sample)
         assert(
-          out.contains("""hydrozoa_blocks_window{window="10s"} 1""") &&
-              out.contains("""hydrozoa_block_requests_window{window="10m"} 120""") &&
-              out.contains("""hydrozoa_local_requests_load{window="1m"} 3.5""") &&
-              out.contains("hydrozoa_local_requests_per_second 3.7"),
+          out.contains("""hydrozoa_local_requests_load{window="1m"} 3.5""") &&
+              out.contains("hydrozoa_local_requests_per_second 3.7") &&
+              out.contains("hydrozoa_blocks_per_second 2") &&
+              out.contains("""hydrozoa_blocks_load{window="5m"} 1.5""") &&
+              out.contains("hydrozoa_block_requests_per_second 3") &&
+              out.contains("""hydrozoa_block_requests_load{window="1m"} 2.8"""),
           out
         )
 

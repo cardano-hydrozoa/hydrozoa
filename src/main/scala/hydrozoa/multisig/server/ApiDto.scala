@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
-import hydrozoa.multisig.metrics.{PeerStats, RateView, WindowCounts}
+import hydrozoa.multisig.metrics.{PeerStats, RateView}
 import hydrozoa.multisig.persistence.DepositDecision
 import io.bullet.borer.Cbor
 import io.circe.derivation.{Configuration as CirceConfig, ConfiguredCodec}
@@ -178,16 +178,6 @@ object ApiDto {
     final case class RateStatsView(now: Double, load1m: Double, load5m: Double, load15m: Double)
     given Codec[RateStatsView] = deriveCodec
 
-    /** A count over fixed trailing windows. */
-    final case class WindowStatsView(
-        last10s: Long,
-        last30s: Long,
-        last60s: Long,
-        last5m: Long,
-        last10m: Long
-    )
-    given Codec[WindowStatsView] = deriveCodec
-
     /** Requests ingested from one remote head peer. */
     final case class PeerRequestStatsView(peer: Int, total: Long, rate: RateStatsView)
     given Codec[PeerRequestStatsView] = deriveCodec
@@ -201,14 +191,14 @@ object ApiDto {
     )
     given Codec[LocalRequestStatsView] = deriveCodec
 
-    /** Block production: minor/major totals, event-size average+max, and per-window counts. */
+    /** Block production: minor/major totals, event-size average+max, and EWMA throughput rates. */
     final case class BlockStatsView(
         minor: Long,
         major: Long,
         avgEvents: Double,
         maxEvents: Long,
-        blocksPerWindow: WindowStatsView,
-        requestsPerWindow: WindowStatsView
+        blockRate: RateStatsView,
+        requestRate: RateStatsView
     )
     given Codec[BlockStatsView] = deriveCodec
 
@@ -236,8 +226,6 @@ object ApiDto {
     /** Map a [[hydrozoa.multisig.metrics.PeerStats]] snapshot to its JSON body. */
     def mkPeerStatsView(s: PeerStats): PeerStatsView =
         def rate(r: RateView): RateStatsView = RateStatsView(r.now, r.load1m, r.load5m, r.load15m)
-        def window(w: WindowCounts): WindowStatsView =
-            WindowStatsView(w.last10s, w.last30s, w.last60s, w.last5m, w.last10m)
         PeerStatsView(
           uptimeSeconds = s.uptimeSeconds,
           localRequests = LocalRequestStatsView(
@@ -254,8 +242,8 @@ object ApiDto {
             major = s.blocks.major,
             avgEvents = s.blocks.avgEvents,
             maxEvents = s.blocks.maxEvents,
-            blocksPerWindow = window(s.blocks.blocksPerWindow),
-            requestsPerWindow = window(s.blocks.requestsPerWindow)
+            blockRate = rate(s.blocks.blockRate),
+            requestRate = rate(s.blocks.requestRate)
           ),
           stacks = StackStatsView(
             total = s.stacks.total,

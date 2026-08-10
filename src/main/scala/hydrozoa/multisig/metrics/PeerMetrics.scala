@@ -17,9 +17,12 @@ enum RejectionKind:
   * the peer-request map is written by exactly one actor — cats actors drain their mailbox serially
   * — so a plain [[java.util.concurrent.atomic.AtomicLong AtomicLong]] publishes safely to the HTTP
   * reader without [[java.util.concurrent.atomic.LongAdder LongAdder]]'s striping. Peer-request
-  * ingestion fans in from multiple liaison actors, so those counters use `LongAdder`. The derived
-  * rolling view (EWMA load averages + exact windows) is owned by the single [[sampler]] fiber and
-  * published through one [[java.util.concurrent.atomic.AtomicReference AtomicReference]].
+  * ingestion fans in from multiple liaison actors, so those counters use `LongAdder`.
+  *
+  * All rates are top-style EWMA load averages (now / 1m / 5m / 15m), maintained by the single
+  * [[sampler]] fiber and published through one
+  * [[java.util.concurrent.atomic.AtomicReference AtomicReference]]. There are no fixed-window
+  * rings.
   *
   * Counters are not persisted: they reset on restart.
   */
@@ -49,7 +52,7 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
     private val stackBlocksSum = new AtomicLong(0)
     private val stackBlocksMax = new AtomicLong(0)
 
-    // ---- derived rolling view (written only by the sampler fiber) ----
+    // ---- derived rates (written only by the sampler fiber) ----
     private val rolling = new AtomicReference[Rolling](Rolling.empty(headPeerNums))
 
     /** Record a locally-sequenced request. */
@@ -106,8 +109,8 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
             major = major,
             avgEvents = if blocksTotal > 0 then eventsSum.toDouble / blocksTotal else 0.0,
             maxEvents = blockEventsMax.get(),
-            blocksPerWindow = roll.blocksPerWindow,
-            requestsPerWindow = roll.requestsPerWindow
+            blockRate = roll.blockRate,
+            requestRate = roll.blockRequestRate
           ),
           stacks = StackStats(
             total = stacks,
@@ -123,58 +126,61 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
           )
         )
 
-    /** The 1 Hz sampler: rolls the exact-window ring and updates the EWMA load averages, then
-      * publishes one immutable [[Rolling]]. Run as a background fiber for the node's lifetime. The
-      * ring and EWMA state are fiber-local (single writer), so they need no synchronization.
+    /** The 1 Hz sampler: feeds every rate's EWMAs from the cumulative counters, then publishes one
+      * immutable [[Rolling]]. Run as a background fiber for the node's lifetime. The EWMA state is
+      * fiber-local (single writer), so it needs no synchronization.
       */
     def sampler(period: FiniteDuration = 1.second): IO[Unit] =
-        val blocksRing = Array.fill(RingSize)(0L)
-        val eventsRing = Array.fill(RingSize)(0L)
         val ewmaLocal = mkEwmas()
         val ewmaPeer = headPeerNums.map(_ -> mkEwmas()).toMap
+        val ewmaBlocks = mkEwmas()
+        val ewmaBlockReqs = mkEwmas()
 
         def loop(
-            tick: Long,
             lastMillis: Long,
             lastLocal: Long,
-            lastPeer: Map[Int, Long]
+            lastPeer: Map[Int, Long],
+            lastBlocks: Long,
+            lastBlockReqs: Long
         ): IO[Unit] =
             IO.sleep(period) >> IO.realTime.flatMap { now =>
                 val nowMillis = now.toMillis
                 val dt = math.max(1e-3, (nowMillis - lastMillis) / 1000.0)
 
                 val curLocal = localAccepted.get()
-                observe(ewmaLocal, (curLocal - lastLocal) / dt, dt)
+                val localInst = (curLocal - lastLocal) / dt
+                observe(ewmaLocal, localInst, dt)
 
                 val curPeer = headPeerNums.map(p => p -> peerRequests(p).sum()).toMap
-                headPeerNums.foreach { p =>
-                    observe(ewmaPeer(p), (curPeer(p) - lastPeer.getOrElse(p, 0L)) / dt, dt)
-                }
+                val peerInst = headPeerNums.map { p =>
+                    p -> (curPeer(p) - lastPeer.getOrElse(p, 0L)) / dt
+                }.toMap
+                headPeerNums.foreach(p => observe(ewmaPeer(p), peerInst(p), dt))
 
-                val idx = (tick % RingSize).toInt
-                blocksRing(idx) = blocksMinor.get() + blocksMajor.get()
-                eventsRing(idx) = blockEventsSum.get()
+                val curBlocks = blocksMinor.get() + blocksMajor.get()
+                val blockInst = (curBlocks - lastBlocks) / dt
+                observe(ewmaBlocks, blockInst, dt)
+
+                val curBlockReqs = blockEventsSum.get()
+                val blockReqInst = (curBlockReqs - lastBlockReqs) / dt
+                observe(ewmaBlockReqs, blockReqInst, dt)
 
                 rolling.set(
                   Rolling(
-                    localRate = rateOf(ewmaLocal, (curLocal - lastLocal) / dt),
-                    peerRates = headPeerNums.map { p =>
-                        p -> rateOf(ewmaPeer(p), (curPeer(p) - lastPeer.getOrElse(p, 0L)) / dt)
-                    }.toMap,
-                    blocksPerWindow = windows(blocksRing, blocksRing(idx), tick),
-                    requestsPerWindow = windows(eventsRing, eventsRing(idx), tick)
+                    localRate = rateOf(ewmaLocal, localInst),
+                    peerRates = headPeerNums.map(p => p -> rateOf(ewmaPeer(p), peerInst(p))).toMap,
+                    blockRate = rateOf(ewmaBlocks, blockInst),
+                    blockRequestRate = rateOf(ewmaBlockReqs, blockReqInst)
                   )
                 )
-                loop(tick + 1, nowMillis, curLocal, curPeer)
+                loop(nowMillis, curLocal, curPeer, curBlocks, curBlockReqs)
             }
 
         IO.realTime.flatMap(t0 =>
-            loop(0L, t0.toMillis, localAccepted.get(), headPeerNums.map(_ -> 0L).toMap)
+            loop(t0.toMillis, localAccepted.get(), headPeerNums.map(_ -> 0L).toMap, 0L, 0L)
         )
 
 object PeerMetrics:
-    /** Ring depth in seconds — 15 min, covering every window with headroom. */
-    private val RingSize = 900
     private val Taus: Vector[Double] = Vector(60.0, 300.0, 900.0) // 1m / 5m / 15m
 
     def create(nowMillis: Long, headPeerNums: Vector[Int]): PeerMetrics =
@@ -198,28 +204,20 @@ object PeerMetrics:
         var cur = m.get()
         while v > cur && !m.compareAndSet(cur, v) do cur = m.get()
 
-    /** Windowed count from a cumulative ring: `cur - cumulative(tick - w)`; before enough history
-      * has accrued, everything since boot.
-      */
-    private def windows(ring: Array[Long], cur: Long, tick: Long): WindowCounts =
-        def ago(w: Int): Long =
-            if tick < w then cur else cur - ring(((tick - w) % RingSize).toInt)
-        WindowCounts(ago(10), ago(30), ago(60), ago(300), ago(600))
-
-    /** The sampler's published output. */
+    /** The sampler's published output — all rates as EWMA load averages. */
     private final case class Rolling(
         localRate: RateView,
         peerRates: Map[Int, RateView],
-        blocksPerWindow: WindowCounts,
-        requestsPerWindow: WindowCounts
+        blockRate: RateView,
+        blockRequestRate: RateView
     )
     private object Rolling:
         def empty(headPeerNums: Vector[Int]): Rolling =
             Rolling(
               RateView.zero,
               headPeerNums.map(_ -> RateView.zero).toMap,
-              WindowCounts.zero,
-              WindowCounts.zero
+              RateView.zero,
+              RateView.zero
             )
 
 // ---- snapshot data (plain, framework-free; ApiDto builds the JSON view, PrometheusFormat the text) ----
@@ -228,16 +226,6 @@ final case class RateView(now: Double, load1m: Double, load5m: Double, load15m: 
 object RateView:
     val zero: RateView = RateView(0.0, 0.0, 0.0, 0.0)
 
-final case class WindowCounts(
-    last10s: Long,
-    last30s: Long,
-    last60s: Long,
-    last5m: Long,
-    last10m: Long
-)
-object WindowCounts:
-    val zero: WindowCounts = WindowCounts(0, 0, 0, 0, 0)
-
 final case class CounterWithRate(total: Long, rate: RateView)
 
 final case class BlockStats(
@@ -245,8 +233,8 @@ final case class BlockStats(
     major: Long,
     avgEvents: Double,
     maxEvents: Long,
-    blocksPerWindow: WindowCounts,
-    requestsPerWindow: WindowCounts
+    blockRate: RateView,
+    requestRate: RateView
 )
 
 final case class StackStats(
