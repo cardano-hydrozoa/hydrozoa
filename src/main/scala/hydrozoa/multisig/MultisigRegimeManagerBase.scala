@@ -15,6 +15,7 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
 
@@ -44,6 +45,11 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       * coil); both implement [[HasCoreTracers]] so [[spawnCoreActors]] sees a uniform surface.
       */
     protected def tracers: HasCoreTracers
+
+    /** The peer metrics registry, supplied by the subclass and threaded into the instrumented
+      * actors (see `docs/spec/peer-stats-endpoint.md`).
+      */
+    protected def metrics: PeerMetrics
 
     /** Completed by the subclass's [[preStartLocal]] once every actor is spawned and the
       * `Connections` slots are populated.
@@ -131,7 +137,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 config,
                 pendingConnections,
                 tracers.fastConsensusActor,
-                persistence
+                persistence,
+                metrics
               )
             )
             jointLedger <- context.actorOf(
@@ -145,7 +152,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 config,
                 pendingConnections,
                 tracers.slowConsensusActor,
-                persistence
+                persistence,
+                metrics
               )
             )
         } yield CoreActors(

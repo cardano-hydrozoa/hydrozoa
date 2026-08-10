@@ -14,6 +14,7 @@ import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, Stack, StackBrief, StackEffects, StackNumber}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{Persistence, StoreKey, Timestamped, WriteBatch}
 
 /** Slow-consensus actor.
@@ -58,7 +59,8 @@ final case class SlowConsensusActor(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections |
         SlowConsensusActor.Connections,
     tracer: ContraTracer[IO, SlowConsensusActorEvent],
-    persistence: Persistence[IO]
+    persistence: Persistence[IO],
+    metrics: PeerMetrics
 ) extends Actor[IO, SlowConsensusActor.Request] {
     import SlowConsensusActor.*
 
@@ -368,6 +370,12 @@ final case class SlowConsensusActor(
         _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
         _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
+        // Peer stats (docs/spec/peer-stats-endpoint.md): count the stack and the blocks it absorbed.
+        blocksAbsorbed = (hardConfirmed.brief.lastBlockNum: Int) -
+            (hardConfirmed.brief.firstBlockNum: Int) + 1
+        _ <- IO.realTime.flatMap(t =>
+            IO(metrics.onStackConfirmed(stackNum, blocksAbsorbed, t.toMillis))
+        )
     } yield ()
 
     /** Persist the full multisigned `HardConfirmation` record for the just-confirmed stack — the §6

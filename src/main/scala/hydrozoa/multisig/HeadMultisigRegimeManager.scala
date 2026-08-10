@@ -16,6 +16,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2Screener}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
@@ -25,6 +26,7 @@ trait HeadMultisigRegimeManager(
     l2Ledger: L2Ledger[IO],
     l2Screener: L2Screener[IO],
     persistence: Persistence[IO],
+    override protected val metrics: PeerMetrics,
     override protected val tracer: ContraTracer[IO, HeadRegimeManagerEvent],
     peerTransport: ActorContext[IO, Request, Any] => PeerTransport,
     /** Hub-side coil transport, populated iff this peer hubs any coil peers; required when
@@ -70,7 +72,8 @@ trait HeadMultisigRegimeManager(
                 pendingConnections,
                 l2Screener,
                 tracers.eventSequencer,
-                persistence
+                persistence,
+                metrics
               )
             )
 
@@ -96,7 +99,8 @@ trait HeadMultisigRegimeManager(
                             pid,
                             pendingConnections,
                             tracers.peerLiaison(PeerId.Head(pid.peerNum)),
-                            persistence
+                            persistence,
+                            metrics
                           )
                         )
                     )
@@ -344,6 +348,7 @@ object HeadMultisigRegimeManager {
         virtualLedger: L2Ledger[IO],
         l2Screener: L2Screener[IO],
         persistence: Persistence[IO],
+        metrics: PeerMetrics,
         tracer: ContraTracer[IO, HeadRegimeManagerEvent],
         peerTransport: Resource[IO, ActorContext[IO, Request, Any] => PeerTransport],
         hubCoilTransport: Option[Resource[IO, ActorContext[IO, Request, Any] => HubTransport]] =
@@ -360,6 +365,7 @@ object HeadMultisigRegimeManager {
                   virtualLedger,
                   l2Screener,
                   persistence,
+                  metrics,
                   tracer,
                   peerFactory,
                   hubFactory,

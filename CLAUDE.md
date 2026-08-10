@@ -110,6 +110,9 @@ Working design and reference docs (`docs/spec/`):
   queries: `GET /l2/cardano-eutxo/utxos/{address}` and `GET /l2/cardano-eutxo/transactions` (EUTXO-only).
 - [`observability-endpoints.md`](docs/spec/observability-endpoints.md) — the user-facing server's
   `/health` (liveness) and `/ready` (readiness) endpoints and the `NodeStatus` behind them.
+- [`peer-stats-endpoint.md`](docs/spec/peer-stats-endpoint.md) — the per-peer statistics surface:
+  the push-based `PeerMetrics` registry (atomic counters + a 1 Hz EWMA sampler) behind
+  `GET /head/stats` (JSON) and `GET /head/metrics` (Prometheus).
 
 **Testing**
 - [`integration-stages.md`](docs/spec/integration-stages.md) — the stage1/stage4 integration test
