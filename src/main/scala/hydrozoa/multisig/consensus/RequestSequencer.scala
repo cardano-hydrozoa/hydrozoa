@@ -6,6 +6,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
@@ -16,7 +17,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.RequestSequencer.*
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.DepositL1Screening
 import hydrozoa.multisig.ledger.l2.L2Screener
@@ -38,6 +39,13 @@ trait RequestSequencer(
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[RequestSequencer.Connections]](None)
     private val state = State()
+
+    // The user-request surface is head-only, so the author is always a head peer.
+    private val ownHeadPeerNum: HeadPeerNumber = config.ownPeerId match {
+        case PeerId.Head(n) => n
+        case PeerId.Coil(_) =>
+            throw new IllegalStateException("RequestSequencer runs only on a head peer")
+    }
 
     /** `config` is a `CardanoNetwork.Section`; expose it as a given so the typed `Request`-lane
       * `WriteBatch.put` (the CR1 persist) picks it up.
@@ -78,7 +86,11 @@ trait RequestSequencer(
         PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
-        case RequestSequencer.PreStart => preStartLocal
+        case RequestSequencer.PreStart  => preStartLocal
+        case hw: SoftConfirmedHighWater =>
+            // Advance this peer's own confirmed request high-water (merge by max); backpressure
+            // reads it. A block that carries none of this peer's requests leaves it unchanged.
+            hw.highWater.get(ownHeadPeerNum).traverse_(state.advanceConfirmedHighWater)
         case req: UserRequest.Sync =>
             req.request.handleSync(
               req,
@@ -108,44 +120,48 @@ trait RequestSequencer(
                   }
                   screened.flatMap {
                       case Left(reason) => IO.pure(Left(UserRequest.Rejected(reason)))
-                      case Right(()) =>
-                          for {
-                              conn <- getConnections
-                              newNum <- state.nextRequestNum()
-                              // The user-request surface is head-only, so the author is always a head peer.
-                              ownHeadPeerNum <- config.ownPeerId match {
-                                  case PeerId.Head(n) => IO.pure(n)
-                                  case PeerId.Coil(_) =>
-                                      IO.raiseError(
-                                        new IllegalStateException(
-                                          "RequestSequencer runs only on a head peer"
-                                        )
+                      case Right(())    =>
+                          // Backpressure: refuse to author more than one block's worth of requests
+                          // beyond this peer's own confirmed high-water, so the mesh mempool cannot
+                          // exceed maxRequestsPerBlock * nHeadPeers (docs/spec/fast-consensus.md).
+                          state.tryNextRequestNum(config.maxRequestsPerBlock).flatMap {
+                              case None =>
+                                  IO.pure(
+                                    Left(
+                                      UserRequest.Rejected(
+                                        "Request rejected: too many unconfirmed requests" +
+                                            " (backpressure); retry shortly."
                                       )
-                              }
-                              newId = RequestId(ownHeadPeerNum, newNum)
-                              newRequestWithId = UserRequestWithId(
-                                userRequest = userRequest,
-                                requestId = newId
-                              )
-                              _ <- tracer.traceWith(
-                                EventSequencerEvent
-                                    .RequestIdAssigned(newId.peerNum, newId.requestNum)
-                              )
-                              // CR1: persist the assigned request to the Request lane BEFORE telling
-                              // the user the id (durable before observable; §4 CR1/CR4).
-                              stamp <- persistence.arrivalStamp
-                              _ <- persistence.write(
-                                WriteBatch.start
-                                    .put(JournalKey.Request(ownHeadPeerNum, newNum))(
-                                      JournalValue(stamp, newRequestWithId)
                                     )
-                              )
-                              _ <- conn.blockWeaver ! newRequestWithId
-                              // To the head-peer mesh, and (on a hub) to CoilRelay so its coil peers
-                              // get the request content they need to reproduce block bodies.
-                              _ <- (conn.headPeerLiaisons ! newRequestWithId).parallel
-                              _ <- conn.coilRelay.traverse_(_ ! newRequestWithId)
-                          } yield Right(newId)
+                                  )
+                              case Some(newNum) =>
+                                  val newId = RequestId(ownHeadPeerNum, newNum)
+                                  val newRequestWithId = UserRequestWithId(
+                                    userRequest = userRequest,
+                                    requestId = newId
+                                  )
+                                  for {
+                                      conn <- getConnections
+                                      _ <- tracer.traceWith(
+                                        EventSequencerEvent
+                                            .RequestIdAssigned(newId.peerNum, newId.requestNum)
+                                      )
+                                      // CR1: persist the assigned request to the Request lane BEFORE
+                                      // telling the user the id (durable before observable; CR1/CR4).
+                                      stamp <- persistence.arrivalStamp
+                                      _ <- persistence.write(
+                                        WriteBatch.start
+                                            .put(JournalKey.Request(ownHeadPeerNum, newNum))(
+                                              JournalValue(stamp, newRequestWithId)
+                                            )
+                                      )
+                                      _ <- conn.blockWeaver ! newRequestWithId
+                                      // To the head-peer mesh, and (on a hub) to CoilRelay so its coil
+                                      // peers get the content they need to reproduce block bodies.
+                                      _ <- (conn.headPeerLiaisons ! newRequestWithId).parallel
+                                      _ <- conn.coilRelay.traverse_(_ ! newRequestWithId)
+                                  } yield Right(newId)
+                          }
                   }
               }
             )
@@ -154,31 +170,45 @@ trait RequestSequencer(
     private def preStartLocal: IO[Unit] =
         for {
             _ <- initializeConnections
-            // The user-request surface is head-only, so the author is always a head peer.
-            ownHeadPeerNum <- config.ownPeerId match {
-                case PeerId.Head(n) => IO.pure(n)
-                case PeerId.Coil(_) =>
-                    IO.raiseError(
-                      new IllegalStateException(
-                        "RequestSequencer runs only on a head peer"
-                      )
-                    )
-            }
             // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
             // empty store -> RequestNumber(0), the same cold value.
             next <- Markers.recoverNextRequestNumber(persistence.backend, ownHeadPeerNum)
             _ <- state.seedNextRequestNum(next)
+            // Seed the confirmed high-water from the highest already-assigned own request (next - 1).
+            // Treating assigned-as-confirmed opens the backpressure window optimistically after a
+            // restart; the next real soft-confirmation re-tightens it.
+            _ <- state.seedConfirmedHighWater(next.previousOrZero)
         } yield ()
 
     private final class State {
         private val nextRequestNumRef = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
+        private val ownConfirmedHighWaterRef = Ref.unsafe[IO, RequestNumber](RequestNumber.zero)
 
-        def nextRequestNum(): IO[RequestNumber] =
-            nextRequestNumRef.getAndUpdate(_.increment)
+        /** Assign the next request number, but only while it stays within `maxAhead` of this peer's
+          * own confirmed high-water (backpressure). Returns None when that window is full, leaving
+          * the counter untouched.
+          */
+        def tryNextRequestNum(maxAhead: Int): IO[Option[RequestNumber]] =
+            ownConfirmedHighWaterRef.get.flatMap { confirmed =>
+                val confirmedLong: Long = confirmed
+                val ceiling = RequestNumber(confirmedLong + maxAhead)
+                nextRequestNumRef.modify { cur =>
+                    if Ordering[RequestNumber].lteq(cur, ceiling) then (cur.increment, Some(cur))
+                    else (cur, None)
+                }
+            }
+
+        /** Merge a confirmed high-water for this peer (by max). */
+        def advanceConfirmedHighWater(confirmed: RequestNumber): IO[Unit] =
+            ownConfirmedHighWaterRef.update(cur => Ordering[RequestNumber].max(cur, confirmed))
 
         /** Seed the next-to-assign request number on recovery (R3). */
         def seedNextRequestNum(next: RequestNumber): IO[Unit] =
             nextRequestNumRef.set(next)
+
+        /** Seed the confirmed high-water on recovery. */
+        def seedConfirmedHighWater(confirmed: RequestNumber): IO[Unit] =
+            ownConfirmedHighWaterRef.set(confirmed)
     }
 }
 
@@ -201,7 +231,7 @@ object RequestSequencer {
     // parse and time-gate a deposit tx (DepositL1Screening.Config).
     type Config = OwnPeerPublic.Section & CardanoNetwork.Section & HeadPeers.Section &
         InitialBlock.Section & TxTiming.Section & InitializationParameters.Section &
-        FallbackContingency.Section
+        FallbackContingency.Section & BlockConfig.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
@@ -214,7 +244,7 @@ object RequestSequencer {
 
     type Handle = ActorRef[IO, Request]
 
-    type Request = PreStart.type | UserRequest.Sync
+    type Request = PreStart.type | UserRequest.Sync | SoftConfirmedHighWater
 
     case object PreStart
 }

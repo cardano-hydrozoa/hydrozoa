@@ -5,6 +5,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
@@ -14,7 +15,7 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, H
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, SlowConsensusActor, StackComposer, UserRequestWithId}
+import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, SlowConsensusActor, SoftConfirmedHighWater, StackComposer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -138,6 +139,13 @@ abstract class PeerLiaisonHeadToHead(
               hubHardAckBacking.fold(IO.pure(List.empty[HardAckWithId]))(_.backfill(from, limit))
         )
 
+    // The remote head peer's confirmed request high-water, learned from the local FastConsensusActor
+    // on each soft-confirmation and merged by max. Anchors the request pull ceiling
+    // (confirmed + maxRequestsPerBlock) so this peer never buffers more than one cap of the remote's
+    // unconfirmed requests. Seeded on boot from the restored inbound request cursor.
+    private val confirmedRemoteRequestHighWater =
+        Ref.unsafe[IO, RequestNumber](RequestNumber.zero)
+
     // ---- Connections ----------------------------------------------------------------------------
     private val connections = Ref.unsafe[IO, Option[PeerLiaisonHeadToHead.Connections]](None)
 
@@ -154,6 +162,7 @@ abstract class PeerLiaisonHeadToHead(
       block = blockInitialCursor,
       stack = stackInitialCursor,
       request = RequestNumber.zero,
+      requestCeiling = requestCeiling(RequestNumber.zero),
       softAck = SoftAckNumber.zero.increment,
       headHardAck = HardAckNumber.zero,
       hubHardAck = HubHardAckNumber.zero
@@ -164,15 +173,21 @@ abstract class PeerLiaisonHeadToHead(
     private def stackInitialCursor: StackNumber =
         remoteHead.nextSlowLeaderStack(StackNumber.zero)
 
+    /** The request pull ceiling for a given confirmed high-water: one block's cap beyond it. */
+    private def requestCeiling(confirmed: RequestNumber): RequestNumber =
+        val confirmedLong: Long = confirmed
+        RequestNumber(confirmedLong + config.maxRequestsPerBlock)
+
     private def buildGet(batchNum: BatchNumber): IO[Mesh.Get] =
         for {
             b <- blockLane.cursor
             s <- stackLane.cursor
             r <- requestLane.cursor
+            confirmed <- confirmedRemoteRequestHighWater.get
             sa <- softAckLane.cursor
             hh <- hardAckLane.cursor
             hub <- hubHardAckLane.cursor
-        } yield Mesh.Get(batchNum, b, s, r, sa, hh, hub)
+        } yield Mesh.Get(batchNum, b, s, r, requestCeiling(confirmed), sa, hh, hub)
 
     private def accept(m: Mesh.New): IO[Either[String, Unit]] = {
         def check[T, N](
@@ -274,7 +289,8 @@ abstract class PeerLiaisonHeadToHead(
         for {
             blockR <- blockLane.reply(get.block)
             stackR <- stackLane.reply(get.stack)
-            reqR <- requestLane.reply(get.request)
+            // Cap the served request slice at the puller's backpressure ceiling.
+            reqR <- requestLane.reply(get.request, ceiling = Some(get.requestCeiling))
             saR <- softAckLane.reply(get.softAck)
             hhR <- hardAckLane.reply(get.headHardAck)
             hubR <- hubHardAckLane.reply(get.hubHardAck)
@@ -382,10 +398,19 @@ abstract class PeerLiaisonHeadToHead(
         PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: HeadToHeadRequest): IO[Unit] = req match {
-        case PreStart      => preStartLocal
-        case ResendCurrent => puller.resend
-        case get: Mesh.Get => server.handleGet(get)
-        case m: Mesh.New   => puller.handleReply(m)
+        case PreStart                   => preStartLocal
+        case ResendCurrent              => puller.resend
+        case get: Mesh.Get              => server.handleGet(get)
+        case m: Mesh.New                => puller.handleReply(m)
+        case hw: SoftConfirmedHighWater =>
+            // Advance the remote head peer's confirmed request high-water (merge by max); the pull
+            // ceiling reads it. A block that carries no request from this remote leaves it unchanged.
+            hw.highWater
+                .get(remoteHead.peerNum)
+                .traverse_(rn =>
+                    confirmedRemoteRequestHighWater
+                        .update(cur => Ordering[RequestNumber].max(cur, rn))
+                )
         case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId | _: SoftAck |
             _: HardAck | _: HardAckWithId) =>
             appendArtifact(artifact) >> server.afterAppend
@@ -402,6 +427,11 @@ abstract class PeerLiaisonHeadToHead(
             _ <- restoreOutboundHighWaters
             // Restore the inbound receive cursors so we re-pull only NEW remote entries.
             _ <- restoreInboundCursors
+            // Seed the remote's confirmed request high-water from the restored inbound request cursor
+            // (next-expected - 1 = highest received). Treating received-as-confirmed opens the pull
+            // ceiling optimistically after a restart; the next real soft-confirmation re-tightens it.
+            reqCursor <- requestLane.cursor
+            _ <- confirmedRemoteRequestHighWater.set(reqCursor.previousOrZero)
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
@@ -425,7 +455,8 @@ object PeerLiaisonHeadToHead {
         )
 
     type Config =
-        OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section
+        OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section &
+            BlockConfig.Section
 
     type Handle = ActorRef[IO, LiaisonProtocol.HeadToHeadRequest]
 

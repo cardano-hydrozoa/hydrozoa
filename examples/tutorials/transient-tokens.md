@@ -28,11 +28,18 @@ transaction itself declares which output tokens are transient, via a new optiona
 under the head's label:
 
 ```
-{HYDR}: {
-  "outputs":          [1|2, ...]                      # per-output L1/L2 marker, as before
-  "transientOutputs": { outputIndex: { policyId: { assetName: quantity } } }
+4937: {
+  "L2": {
+    <headId hex>: {
+      "l1BoundOutputs":    [outputIndex, ...]                            # withdrawal output indices (empty if none)
+      "l2TransientTokens": { outputIndex: { policyId: { assetName: quantity } } }
+    }
+  }
 }
 ```
+
+The metadata reuses Hydrozoa's L1 transaction layout (label 4937 → role `"L2"` → head-id → fields);
+outputs whose index is absent from `l1BoundOutputs` stay on L2.
 
 Validation then runs twice over two views of the same transaction:
 
@@ -54,8 +61,8 @@ lines:
 
 1. **Boot.** The head initializes; stack 0 hard-confirms; the init tx lands on the mock L1. The
    pot utxo exists only in L2.
-2. **Rejected withdrawal (submitted first).** A withdrawal marked `1` (L1-bound) whose output
-   declares the transient bundle. The head rejects it at validation — transient tokens cannot
+2. **Rejected withdrawal (submitted first).** A withdrawal (its output index listed in
+   `l1BoundOutputs`) whose output declares the transient bundle. The head rejects it at validation — transient tokens cannot
    leave the head. Its input stays unspent, which is what lets the rest of the chain proceed: the
    later burn spends the same utxo, so the burn's success doubles as proof of this rejection.
 3. **Mint.** The issuer submits an L2 transaction minting 1,000 DEMO under a native single-key
@@ -74,7 +81,7 @@ any kind appears on L1**, and the head produced no actor errors.
 ## What to take away
 
 - Minting/burning on L2 uses the standard Cardano mechanisms — mint fields, native or Plutus V3
-  policies, redeemers — with one addition: the `transientOutputs` declaration.
+  policies, redeemers — with one addition: the `l2TransientTokens` declaration.
 - The evacuation invariant is preserved *by construction*: the main compartment is validated by
   the same battle-tested conservation rule that validated it before this feature existed.
 - Applications issuing transient tokens should provide a redemption path (like the burn here), so

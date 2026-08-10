@@ -150,6 +150,14 @@ object DeployScriptsAndG2Setup:
                 Files.writeString(outPath, unresolved.asJson.spaces2)
             }
             _ <- log.info(s"Wrote script reference inputs to $outPath")
+            // Print the deployed script hashes so the operator can diff them against the release's
+            // expected hashes (and the head config) without resolving the reference UTxOs by hand.
+            _ <- log.info(
+              s"Deployed treasury script hash: ${HydrozoaBlueprint.treasuryScriptHash.toHex}"
+            )
+            _ <- log.info(
+              s"Deployed dispute script hash:  ${HydrozoaBlueprint.disputeScriptHash.toHex}"
+            )
             _ <- log.info(
               s"Explorer: https://$explorerHost/tx/" +
                   unresolved.rulebasedTreasuryScriptInput.transactionId.toHex
