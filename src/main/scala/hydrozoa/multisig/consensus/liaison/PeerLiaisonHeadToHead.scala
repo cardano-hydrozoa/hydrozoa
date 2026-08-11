@@ -19,6 +19,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, 
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
@@ -37,7 +38,8 @@ abstract class PeerLiaisonHeadToHead(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections |
         PeerLiaisonHeadToHead.Connections,
     tracer: ContraTracer[IO, PeerLiaisonEvent],
-    persistence: Persistence[IO]
+    persistence: Persistence[IO],
+    metrics: PeerMetrics
 ) extends Actor[IO, LiaisonProtocol.HeadToHeadRequest] {
 
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
@@ -258,6 +260,11 @@ abstract class PeerLiaisonHeadToHead(
                 _ <- m.block.traverse_(conn.blockWeaver ! _)
                 _ <- m.stack.traverse_(conn.stackComposer ! _)
                 _ <- m.requests.traverse_(conn.blockWeaver ! _)
+                // Peer stats (docs/spec/peer-stats-endpoint.md): count requests ingested from this
+                // remote head peer.
+                _ <- IO.whenA(m.requests.nonEmpty)(
+                  IO(metrics.onPeerRequests(remoteHead.peerNum.convert, m.requests.size))
+                )
                 _ <- m.softAck.traverse_(conn.consensusActor ! _)
                 _ <- m.headHardAck.traverse_(conn.slowConsensusActor ! _)
                 _ <- m.hubHardAck.traverse_(hc => conn.slowConsensusActor ! hc.ack)
@@ -285,7 +292,16 @@ abstract class PeerLiaisonHeadToHead(
       dispatch = dispatch,
       numberOfBatchRequest = _.batchNum,
       numberOfBatch = _.batchNum,
-      tracer = tracer
+      tracer = tracer,
+      describeGet = g =>
+          s"req=${g.request} reqCeil=${g.requestCeiling} sAck=${g.softAck} " +
+              s"blk=${g.block} stk=${g.stack} hAck=${g.headHardAck}",
+      describeBatch = m =>
+          s"req=${m.requests.size} sAck=${if m.softAck.isDefined then 1 else 0} " +
+              s"blk=${if m.block.isDefined then 1 else 0} stk=${
+                      if m.stack.isDefined then 1 else 0
+                  } " +
+              s"hAck=${if m.headHardAck.isDefined then 1 else 0}"
     )(g => getConnections.flatMap(_.remote ! g))
 
     // ---- Serve half (our own production) --------------------------------------------------------
@@ -460,10 +476,18 @@ object PeerLiaisonHeadToHead {
         remoteHead: HeadPeerId,
         pendingConnections: HeadMultisigRegimeManager.PendingConnections | Connections,
         tracer: ContraTracer[IO, PeerLiaisonEvent],
-        persistence: Persistence[IO]
+        persistence: Persistence[IO],
+        metrics: PeerMetrics
     ): IO[PeerLiaisonHeadToHead] =
         IO(
-          new PeerLiaisonHeadToHead(config, remoteHead, pendingConnections, tracer, persistence) {}
+          new PeerLiaisonHeadToHead(
+            config,
+            remoteHead,
+            pendingConnections,
+            tracer,
+            persistence,
+            metrics
+          ) {}
         )
 
     type Config =

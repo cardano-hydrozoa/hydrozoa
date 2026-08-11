@@ -1,5 +1,4 @@
 package hydrozoa.multisig.server
-
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -9,6 +8,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.ConsensusStoreReader
 import io.circe.Json
 import org.http4s.circe.*
@@ -55,6 +55,7 @@ class ReadyEndpointTest extends AnyFunSuite:
                       None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
+                      PeerMetrics.create(0L, Vector.empty),
                       ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
                     )
                     resp <- routes.routes.orNotFound.run(Request[IO](Method.GET, uri"/ready"))

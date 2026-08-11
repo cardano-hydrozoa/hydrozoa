@@ -34,6 +34,11 @@ object HydrozoaHttpEvent:
     /** The request body decoded to a domain object (debug). */
     final case class RequestDecoded(path: String, decoded: String) extends HydrozoaHttpEvent
 
+    /** A request was rejected by screening or backpressure — an expected 400, not a fault, so it
+      * carries only the client-facing reason (no exception or stack trace).
+      */
+    final case class RequestRejected(path: String, reason: String) extends HydrozoaHttpEvent
+
     /** An exception escaped the route handler. */
     final case class RequestFailed(path: String, cause: Throwable) extends HydrozoaHttpEvent
 
