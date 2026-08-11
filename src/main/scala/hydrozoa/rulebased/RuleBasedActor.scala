@@ -771,10 +771,10 @@ final case class RuleBasedActor(
             } yield ()
 
         /** Merge two ballot boxes via TallyTx. The continuing input must have a key strictly less
-          * than the removed input, so we sort. If any residual is still `AwaitingVote`, we defer
-          * until the voting deadline elapses — on-chain the tally would still succeed (maxVote
-          * treats AwaitingVote < Voted), but pre-deadline we don't want to submit txs whose
-          * validity range starts in the future and just park in the mempool.
+          * than the removed input, so we sort. We always defer until the voting deadline elapses: a
+          * public `Voted` box can be ratcheted by anyone until then, so no ballot is final
+          * pre-deadline, and the TallyTx's validity range starts at the deadline — submitting
+          * earlier just parks doomed txs in the mempool and spams the backend.
           */
         def tally(
             otherUtxos: NonEmptyList[BallotBox[VoteStatus]],
@@ -782,16 +782,10 @@ final case class RuleBasedActor(
             regimeUtxo: RuleBasedRegimeUtxo,
             collateralUtxo: CollateralUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] = {
-            val hasAwaitingVote = otherUtxos.exists(_.ballotBoxOutput.status match {
-                case _: AwaitingVote => true
-                case _               => false
-            })
             val keySorted = otherUtxos.sortBy(_.ballotBoxOutput.key)
             val continuing = keySorted.head
             for {
-                _ <-
-                    if hasAwaitingVote then gateOnVotingDeadline(treasuryUtxo)
-                    else pure(())
+                _ <- gateOnVotingDeadline(treasuryUtxo)
                 _ <- traceRight(RuleBasedActorEvent.Tx.Tallying)
                 removed <- keySorted.tail.find(ballotBox =>
                     ballotBox.ballotBoxOutput.key == continuing.ballotBoxOutput.link
@@ -843,9 +837,9 @@ final case class RuleBasedActor(
             hasDeadlineElapsed(treasuryUtxo).flatMap {
                 case true => pure(())
                 case false =>
-                    traceRight(RuleBasedActorEvent.Dispute.WaitingForVotesBeforeDeadline) >>
+                    traceRight(RuleBasedActorEvent.Dispute.WaitingForVotingDeadline) >>
                         EitherT.leftT[IO, Unit](
-                          Error.TallyBlockedByAwaitingVote: Error.RecoverableErrors
+                          Error.TallyBlockedBeforeDeadline: Error.RecoverableErrors
                         )
             }
 
@@ -941,6 +935,14 @@ final case class RuleBasedActor(
                 // `parsePastRedeemers` gates non-empty, parses each withdrawal's redeemer, and
                 // extracts the resolution-time kzg from the oldest datum in one pass.
                 treasuryTxs <- Backend.continuingTreasuryTxsAfter(inputs.fallbackTxHash)
+                // Trace the surfaced chain length: `currentTreasury`/`parsePastRedeemers` turn an
+                // empty list into a silent `NoTreasuryFound` recoverable, so without this an
+                // evacuation stalled waiting for the resolution tx to surface is invisible.
+                _ <- EitherT.right[Error.RecoverableErrors](
+                  tracer.traceWith(
+                    RuleBasedActorEvent.Evacuation.ContinuingTreasuryTxs(treasuryTxs.size)
+                  )
+                )
                 treasuryUtxo <- currentTreasury(treasuryTxs)
                 parsed <- parsePastRedeemers(treasuryTxs)
                 (pastEvacuateRedeemers, resolutionKzg) = parsed
@@ -1103,7 +1105,13 @@ final case class RuleBasedActor(
                     getRegime.flatMap(Evacuation.handle(_, resolved.version._1))
             }
         } yield ()
-        et.value
+        // The tick swallows recoverable errors and retries next tick; trace the Left (at debug) so
+        // that retry is never fully silent. Backend errors already self-trace via `Backend.run`;
+        // this catches the logical recoverables (e.g. `NoTreasuryFound`) that don't.
+        et.value.flatTap {
+            case Left(e)  => tracer.traceWith(RuleBasedActorEvent.Tick.RecoverableRetry(e.toString))
+            case Right(_) => IO.unit
+        }
     }
 
     // preStart runs in the actor's lifecycle callback, outside the receive loop; posting a
@@ -1315,11 +1323,10 @@ object RuleBasedActor {
             wrapped: CardanoBackend.Error
         ) extends Recoverable
 
-        // Tally deferred: residuals contain an AwaitingVote and the voting deadline hasn't
-        // elapsed. On-chain the tally would still succeed (maxVote treats AwaitingVote < Voted),
-        // but pre-deadline we prefer to wait so the tx-builder isn't submitting future-validity
-        // txs that just park in the mempool.
-        case object TallyBlockedByAwaitingVote extends Recoverable
+        // Tally deferred: the voting deadline hasn't elapsed. A public Voted box can still be
+        // ratcheted by anyone until the deadline, and the TallyTx's validity range starts there,
+        // so we wait rather than submit future-validity txs that just park in the mempool.
+        case object TallyBlockedBeforeDeadline extends Recoverable
 
         type UnrecoverableErrors = Unrecoverable | Membership.MembershipCheckError
         sealed trait Unrecoverable extends Exception
