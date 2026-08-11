@@ -21,6 +21,10 @@ object PeerLiaisonEventFormat:
         e match {
             case Started =>
                 info(s"starting, remote peer: $remoteLabel")
+            case BatchRequested(batchNum, detail) =>
+                debug(s"-> GetMsgBatch=$batchNum $detail")
+            case BatchReceived(batchNum, detail) =>
+                debug(s"<- NewMsgBatch=$batchNum $detail")
             case StaleBatchDropped(received, outstanding) =>
                 debug(s"dropping stale reply batch=$received (outstanding=$outstanding)")
             case BatchRejected(batchNum, reason) =>
