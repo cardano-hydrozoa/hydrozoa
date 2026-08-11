@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.remote
 
+import hydrozoa.multisig.ledger.l2.L2CommandNumber
 import org.http4s.Uri
 import scala.concurrent.duration.FiniteDuration
 
@@ -19,6 +20,18 @@ object RemoteL2LedgerEvent:
     /** A request errored; reconnecting after [[backoff]] on attempt [[attempt]] (zero-indexed). */
     final case class ConnectionError(attempt: Int, backoff: FiniteDuration, cause: Throwable)
         extends RemoteL2LedgerEvent
+
+    /** An exchange for [[commandNumber]] exceeded [[timeout]] before the remote answered, so the
+      * connection was dropped and will be retried (attempt [[attempt]], reconnecting after
+      * [[backoff]]). Distinct from [[ConnectionError]]: the transport did not fail, the response
+      * was simply not delivered in time — the guard against a receive stall.
+      */
+    final case class ExchangeTimedOut(
+        commandNumber: L2CommandNumber,
+        timeout: FiniteDuration,
+        attempt: Int,
+        backoff: FiniteDuration
+    ) extends RemoteL2LedgerEvent
 
     /** A reconnection attempt during error recovery itself failed; will retry. */
     final case class ReconnectionAttemptFailed(cause: Throwable) extends RemoteL2LedgerEvent
