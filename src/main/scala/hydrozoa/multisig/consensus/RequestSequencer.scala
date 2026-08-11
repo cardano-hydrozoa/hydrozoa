@@ -134,8 +134,8 @@ trait RequestSequencer(
                                       IO.pure(
                                         Left(
                                           UserRequest.Rejected(
-                                            "Request rejected: too many unconfirmed requests" +
-                                                " (backpressure); retry shortly."
+                                            "too many unconfirmed requests (backpressure);" +
+                                                " retry shortly."
                                           )
                                         )
                                       )
