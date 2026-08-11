@@ -12,6 +12,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import scala.concurrent.duration.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, EvaluatorMode, PlutusScriptEvaluator, Transaction, TransactionHash, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.node.BlockfrostProvider
@@ -19,7 +20,6 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
-import scala.concurrent.duration.*
 import test.{SeedPhrase, TestPeerName, TestPeers}
 
 /** Orchestrates a public testnet (Preview) into the inputs the multipeer harness config generator
