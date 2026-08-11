@@ -1,5 +1,4 @@
 package hydrozoa.multisig.server
-
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
@@ -15,6 +14,7 @@ import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.ConsensusStoreReader
 import io.circe.{Json, Printer}
 import org.http4s.circe.*
@@ -96,6 +96,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                       Some(ledger),
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
+                      PeerMetrics.create(0L, Vector.empty),
                       ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
                     )
                     _ <- check(routes.routes.orNotFound, ledger)
@@ -129,6 +130,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                       None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
+                      PeerMetrics.create(0L, Vector.empty),
                       ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
                     )
                     _ <- check(routes.routes.orNotFound)

@@ -7,6 +7,7 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.ConsensusStoreReader
 import hydrozoa.multisig.server.HydrozoaHttpEvent.ServerStarted
 import org.http4s.ember.server.EmberServerBuilder
@@ -59,6 +60,7 @@ object HydrozoaServer {
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         config: Config,
+        metrics: PeerMetrics,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): Resource[IO, Server] =
         for {
@@ -71,6 +73,7 @@ object HydrozoaServer {
                 l2QueryReader,
                 headConfig,
                 config,
+                metrics,
                 tracer
               )
             )
@@ -95,6 +98,7 @@ object HydrozoaServer {
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         config: Config,
+        metrics: PeerMetrics,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): IO[Nothing] = {
         create(
@@ -105,6 +109,7 @@ object HydrozoaServer {
           l2QueryReader,
           headConfig,
           config,
+          metrics,
           tracer
         )
             .use(_ => IO.never)

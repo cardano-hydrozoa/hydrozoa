@@ -11,6 +11,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWi
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
+import hydrozoa.multisig.metrics.{PeerMetrics, PrometheusFormat}
 import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry}
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
@@ -47,6 +48,7 @@ class HydrozoaRoutes(
     l2QueryReader: Option[EutxoL2LedgerReader[IO]],
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config,
+    metrics: PeerMetrics,
     tracer: ContraTracer[IO, HydrozoaHttpEvent]
 ) {
     import HydrozoaRoutes.{apiTitle, apiVersion, l2ApiTitle}
@@ -502,6 +504,35 @@ class HydrozoaRoutes(
                 }
             )
 
+    private val statsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "stats")
+            .name("getHeadStats")
+            .tag("Observability")
+            .out(jsonBody[PeerStatsView])
+            .description(
+              "Live operational metrics for this peer (in-memory, process-lifetime; reset on " +
+                  "restart). Cheap: served from a snapshot, no storage reads."
+            )
+            .serverLogicSuccess(_ =>
+                IO.realTime
+                    .flatMap(t => IO(metrics.snapshot(t.toMillis)))
+                    .map(ApiDto.mkPeerStatsView)
+            )
+
+    private val metricsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "metrics")
+            .name("getHeadMetrics")
+            .tag("Observability")
+            .out(stringBody)
+            .description("The same peer metrics in Prometheus text exposition format.")
+            .serverLogicSuccess(_ =>
+                IO.realTime
+                    .flatMap(t => IO(metrics.snapshot(t.toMillis)))
+                    .map(PrometheusFormat.render)
+            )
+
     private val finalizeEndpoint: ServerEndpoint[Any, IO] =
         endpoint.post
             // Optional credentials so the security logic runs (and logs) even when the header is
@@ -569,6 +600,8 @@ class HydrozoaRoutes(
           blockRolloutEndpoint,
           healthEndpoint,
           readyEndpoint,
+          statsEndpoint,
+          metricsEndpoint,
           versionEndpoint,
           finalizeEndpoint
         ) ++ blockEffectKindEndpoints
@@ -926,6 +959,7 @@ object HydrozoaRoutes {
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         serverConfig: HydrozoaServer.Config,
+        metrics: PeerMetrics,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): IO[HydrozoaRoutes] =
         IO.pure(
@@ -937,6 +971,7 @@ object HydrozoaRoutes {
             l2QueryReader,
             headConfig,
             serverConfig,
+            metrics,
             tracer
           )
         )
