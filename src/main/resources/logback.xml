@@ -1,11 +1,21 @@
 <configuration>
+    <!-- The console and human log file are wrapped in an AsyncAppender with neverBlock=true (below).
+         This config runs at `trace`, so a slow console/disk would otherwise block the writing thread
+         — and since consensus logs on the cats-effect compute pool, a blocked appender write can
+         stall block production (the failure mode confirmed in the remote ledger). neverBlock makes
+         the caller offer-and-move-on; under overload log events are dropped, never the work.
+         TRACE_FILE is deliberately left synchronous — see its note below. -->
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
             </pattern>
         </encoder>
     </appender>
-    <!-- Protocol trace: writes JSONL to file, no formatting overhead -->
+    <!-- Protocol trace: writes JSONL to file, no formatting overhead. Kept SYNCHRONOUS (not
+         async/neverBlock like the others): this is a dev-only, lossless protocol trace for replay
+         and analysis, and dropping events under load would leave gaps that make it useless. It is a
+         local-debugging artifact only — absent from the shipped container config (logback-docker.xml
+         has no file appenders) — so it is never on the production hot path. -->
     <appender name="TRACE_FILE" class="ch.qos.logback.core.FileAppender">
         <file>hydrozoa-trace.jsonl</file>
         <encoder><pattern>%msg%n</pattern></encoder>
@@ -16,12 +26,22 @@
              (those belong on the console, not in a file you grep/less). -->
         <encoder><pattern>%d{HH:mm:ss.SSS} %-5level %logger{64} %n%msg%n</pattern></encoder>
     </appender>
+    <appender name="ASYNC_STDOUT" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="STDOUT"/>
+        <neverBlock>true</neverBlock>
+        <queueSize>8192</queueSize>
+    </appender>
+    <appender name="ASYNC_LOG_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="LOG_FILE"/>
+        <neverBlock>true</neverBlock>
+        <queueSize>8192</queueSize>
+    </appender>
     <logger name="hydrozoa.trace" level="info" additivity="false">
         <appender-ref ref="TRACE_FILE"/>
     </logger>
     <root level="trace">
-        <appender-ref ref="STDOUT"/>
-        <appender-ref ref="LOG_FILE"/>
+        <appender-ref ref="ASYNC_STDOUT"/>
+        <appender-ref ref="ASYNC_LOG_FILE"/>
     </root>
     <logger name="CardanoBackend" level="warn"/>
     <!-- Bloxbean's backend logs every Blockfrost request at DEBUG; mute the flood (noise in both

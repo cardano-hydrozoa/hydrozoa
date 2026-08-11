@@ -22,6 +22,13 @@ object RemoteL2LedgerEventFormat:
                   cause = Some(cause),
                   routingKey = Some("RemoteL2Ledger")
                 )
+            case ExchangeTimedOut(commandNumber, timeout, attempt, backoff) =>
+                LogEvent(
+                  Level.Warn,
+                  s"Exchange for command $commandNumber timed out after $timeout " +
+                      s"(attempt ${attempt + 1}); dropping connection, retrying after $backoff",
+                  routingKey = Some("RemoteL2Ledger")
+                )
             case ReconnectionAttemptFailed(cause) =>
                 LogEvent(
                   Level.Debug,

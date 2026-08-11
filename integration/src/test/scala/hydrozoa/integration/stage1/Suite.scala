@@ -32,6 +32,7 @@ import hydrozoa.multisig.ledger.eutxol2.toUtxos
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.tx.RawTx
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
@@ -583,7 +584,13 @@ case class Suite(
                     stackComposer = stackComposerStub,
                   )
                   consensusActor <- system.actorOf(
-                    FastConsensusActor(nodeConfig, consensusConnections, fcaTracer, persistence)
+                    FastConsensusActor(
+                      nodeConfig,
+                      consensusConnections,
+                      fcaTracer,
+                      persistence,
+                      PeerMetrics.create(0L, Vector.empty)
+                    )
                   )
                   _ <- consensusActorD.complete(consensusActor)
               } yield Stage1Sut(
