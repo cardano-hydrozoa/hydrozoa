@@ -41,17 +41,27 @@ final class Puller[G, N](
     dispatch: N => IO[Unit],
     numberOfBatchRequest: G => BatchNumber,
     numberOfBatch: N => BatchNumber,
-    tracer: ContraTracer[IO, PeerLiaisonEvent]
+    tracer: ContraTracer[IO, PeerLiaisonEvent],
+    // Human summaries for the batch-traffic events; default to empty so links that don't care
+    // (e.g. the coil hard-ack lane) need not supply them.
+    describeGet: G => String = (_: G) => "",
+    describeBatch: N => String = (_: N) => ""
 )(send: G => IO[Unit]) {
     private val currentlyRequesting = Ref.unsafe[IO, G](initialGet)
 
+    /** Send a pull, tracing it as a `BatchRequested` (covers initial, retransmit, and next). */
+    private def sendTraced(g: G): IO[Unit] =
+        tracer.traceWith(
+          PeerLiaisonEvent.BatchRequested(numberOfBatchRequest(g), describeGet(g))
+        ) >> send(g)
+
     /** Send the initial request. */
-    def start: IO[Unit] = currentlyRequesting.set(initialGet) >> send(initialGet)
+    def start: IO[Unit] = currentlyRequesting.set(initialGet) >> sendTraced(initialGet)
 
     /** Re-send the outstanding request — the retransmit tick that self-heals the chain after a
       * wire-level loss.
       */
-    def resend: IO[Unit] = currentlyRequesting.get.flatMap(send)
+    def resend: IO[Unit] = currentlyRequesting.get.flatMap(sendTraced)
 
     /** Handle a reply: drop stale duplicates (wrong batch number), reject on verify failure (the
       * retransmit tick keeps the chain alive), or advance + dispatch + request the next batch.
@@ -73,10 +83,16 @@ final class Puller[G, N](
                         )
                     case Right(()) =>
                         for {
+                            _ <- tracer.traceWith(
+                              PeerLiaisonEvent.BatchReceived(
+                                numberOfBatch(received),
+                                describeBatch(received)
+                              )
+                            )
                             next <- buildGet(numberOfBatchRequest(outstanding).increment)
                             _ <- currentlyRequesting.set(next)
                             _ <- dispatch(received)
-                            _ <- send(next)
+                            _ <- sendTraced(next)
                         } yield ()
                 }
         }
