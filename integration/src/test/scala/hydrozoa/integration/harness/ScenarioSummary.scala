@@ -1,13 +1,16 @@
 package hydrozoa.integration.harness
 
 import cats.effect.{IO, Ref, Resource}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jTracer}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.backend.cardano.FirewalledCardanoBackendEvent
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.{CommonChildEvent, LifecycleEvent, RuleBasedOnlyChildEvent}
+import hydrozoa.multisig.{CommonChildEvent, LifecycleEvent, RegimeManagerEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
+import java.time.Instant
 import org.typelevel.paiges.Doc
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.TransactionHash
@@ -23,8 +26,10 @@ import scalus.cardano.ledger.TransactionHash
   * A [[ScenarioSummary]] is neither. It is self-contained and run-scoped: it owns its own
   * accumulator, quietly collects only the events that reflect *successful* actions across the whole
   * run, and prints ONE rendered summary at the end (on [[resource]] release). It gates no control
-  * flow and emits nothing inline. A scenario opts in by composing [[tracer]] via `|+|` into the
-  * harness tracer; everything else — collection, folding, the end-of-run print — belongs to the
+  * flow and emits nothing inline. A scenario opts in via two capture sinks: [[tracer]] (composed
+  * `|+|` into the harness tracer, for consensus/lifecycle milestones) and [[firewallTracer]]
+  * (composed `|+|` per peer into the `wrapBackend` firewall tracer, for the L1-submission evidence
+  * ledger). Everything else — collection, folding, the end-of-run print — belongs to the
   * summarizer, decoupled from how the test gates itself or what a developer toggles on.
   *
   * The design principle for "success": every rule-based tx moves Building → Submitting →
@@ -33,22 +38,38 @@ import scalus.cardano.ledger.TransactionHash
   * the attempts into a single "attempts → landed" contention line — turning the log's expected-race
   * noise into one number.
   */
-final class ScenarioSummary private (label: String, events: Ref[IO, Vector[ScenarioSummary.Entry]]):
+final class ScenarioSummary private (
+    label: String,
+    explorerTxUrl: TransactionHash => Option[String],
+    events: Ref[IO, Vector[ScenarioSummary.Entry]],
+):
     import ScenarioSummary.*
 
-    /** The capture sink: match only success/milestone variants, stamp with the (virtual or wall)
-      * clock, and append. Compose into the harness tracer with `|+|`. Events it does not recognise
-      * cost nothing beyond the pattern match — no clock read, no `Ref` update.
+    /** The harness-event capture sink: project each regime-manager child event to a
+      * success/milestone variant (or ignore it), stamp with the wall-clock time, and append.
+      * Compose into the harness tracer with `|+|`. Events it does not recognise cost nothing beyond
+      * the pattern match — no clock read, no `Ref` update.
       */
     val tracer: ContraTracer[IO, MultiPeerHeadHarness.Event] =
-        def capture(peer: PeerId, child: Any): IO[Unit] =
-            classify(child) match
-                case None => IO.unit
-                case Some(ev) =>
-                    IO.realTime.flatMap(now => events.update(_ :+ Entry(now, peer, ev)))
+        def capture(peer: PeerId, child: RegimeManagerEvent): IO[Unit] =
+            classify(child).fold(IO.unit)(record(peer, _))
         ContraTracer[IO, MultiPeerHeadHarness.Event] {
             case MultiPeerHeadHarness.Event.Head(peerNum, evt) => capture(PeerId.Head(peerNum), evt)
             case MultiPeerHeadHarness.Event.Coil(coilNum, evt) => capture(PeerId.Coil(coilNum), evt)
+        }
+
+    /** The per-peer L1-backend capture sink: record every tx this peer *successfully submitted* to
+      * L1 (an accepted `SubmittedTx`). Compose per peer into the `wrapBackend` firewall tracer with
+      * `|+|`. This feeds the stakeholder evidence ledger — who submitted which tx family, when,
+      * with a verifiable explorer link — sourced uniformly at the backend boundary, so it spans
+      * both regimes (multisig init/settlement/finalization and rule-based dispute/evacuation all
+      * pass through here).
+      */
+    def firewallTracer(peer: PeerId): ContraTracer[IO, FirewalledCardanoBackendEvent] =
+        ContraTracer[IO, FirewalledCardanoBackendEvent] {
+            case FirewalledCardanoBackendEvent.SubmittedTx(etx, Right(())) =>
+                record(peer, ScenarioEvent.L1Submitted(etx.transactionFamily, etx.tx.id))
+            case _ => IO.unit
         }
 
     /** Fold the accumulator and emit the summary once, via the `Scenario.Summary` slf4j route. */
@@ -56,20 +77,42 @@ final class ScenarioSummary private (label: String, events: Ref[IO, Vector[Scena
         events.get.flatMap { evs =>
             val text =
                 if evs.isEmpty then s"=== scenario summary: $label ===\n(no events captured)"
-                else renderDoc(label, evs).render(200)
+                else renderDoc(label, explorerTxUrl, evs).render(200)
             Slf4jTracer.sink.traceWith(LogEvent.From(Map.empty, "Scenario.Summary").info(text))
         }
+
+    /** Stamp an event with the current wall-clock time and append it to the accumulator. */
+    private def record(peer: PeerId, ev: ScenarioEvent): IO[Unit] =
+        IO.realTime.flatMap(now => events.update(_ :+ Entry(now, peer, ev)))
 
 object ScenarioSummary:
 
     /** Acquire a summarizer (fresh accumulator); its release renders the summary. Acquire it
       * *first* in the SUT resource so its finalizer runs *last* — the summary lands at the very end
-      * of the run, after harness teardown.
+      * of the run, after harness teardown. `explorerTxUrl` maps a landed tx to its explorer link
+      * for the L1-transaction ledger (or `None` → the bare tx hash); a caller builds it per
+      * backend, e.g. from [[cexplorerTxUrl]].
       */
-    def resource(label: String): Resource[IO, ScenarioSummary] =
+    def resource(
+        label: String,
+        explorerTxUrl: TransactionHash => Option[String],
+    ): Resource[IO, ScenarioSummary] =
         Resource.make(
-          Ref[IO].of(Vector.empty[Entry]).map(new ScenarioSummary(label, _))
+          Ref[IO].of(Vector.empty[Entry]).map(new ScenarioSummary(label, explorerTxUrl, _))
         )(_.render)
+
+    /** cexplorer.io tx URL for a public Cardano network, or `None` for a `Custom` network (a local
+      * devnet has no public explorer). The reporter's canonical link builder — a [[resource]]
+      * caller partially applies it per backend to make the `explorerTxUrl` it injects. Mirrors
+      * `SubmitDeposit.cexplorerTxUrl`.
+      */
+    def cexplorerTxUrl(network: CardanoNetwork, txHash: TransactionHash): Option[String] =
+        val subdomain = network match
+            case CardanoNetwork.Mainnet   => Some("")
+            case CardanoNetwork.Preprod   => Some("preprod.")
+            case CardanoNetwork.Preview   => Some("preview.")
+            case _: CardanoNetwork.Custom => None
+        subdomain.map(sub => s"https://${sub}cexplorer.io/tx/${txHash.toHex}")
 
     /** One captured success/milestone, tagged with the emitting peer and the clock time it was
       * observed (relative deltas are computed at render time against the earliest entry).
@@ -101,13 +144,17 @@ object ScenarioSummary:
         case TxLanded(family: String, txId: TransactionHash)
         case PayoutsLeft(n: Int)
         case Evacuated
+        // Backend-boundary evidence: a tx this peer successfully submitted to L1 (either regime).
+        case L1Submitted(family: String, txId: TransactionHash)
 
     import ScenarioEvent.*
 
-    /** Project a raw regime-manager child event to a summary event, or `None` to ignore it. Typed
-      * as `Any` to sidestep the Head/Coil union (mirrors `RbrMbtSuite.observerTracer`).
+    /** Project a raw regime-manager child event to a summary event, or `None` to ignore it. The
+      * Head and Coil event surfaces ([[hydrozoa.multisig.HeadRegimeManagerEvent]] /
+      * [[hydrozoa.multisig.CoilRegimeManagerEvent]]) are both union aliases whose every member
+      * extends [[RegimeManagerEvent]], so the two harness cases widen to that common root here.
       */
-    private def classify(child: Any): Option[ScenarioEvent] = child match
+    private def classify(child: RegimeManagerEvent): Option[ScenarioEvent] = child match
         case LifecycleEvent.StartingActors =>
             Some(RegimeStarted)
         case CommonChildEvent.StackComposer(StackComposerEvent.InitialStackBootstrapped) =>
@@ -152,20 +199,66 @@ object ScenarioSummary:
     // Rendering (paiges Doc)
     // ------------------------------------------------------------------
 
-    private def renderDoc(label: String, evs: Vector[Entry]): Doc =
+    private def renderDoc(
+        label: String,
+        explorerTxUrl: TransactionHash => Option[String],
+        evs: Vector[Entry],
+    ): Doc =
         val t0 = evs.map(_.at).min
+        val tN = evs.map(_.at).max
         def rel(at: FiniteDuration): String = f"${(at - t0).toMillis / 1000.0}%6.1fs"
+        def utc(at: FiniteDuration): String = Instant.ofEpochMilli(at.toMillis).toString
 
         val title = Doc.text(s"=== scenario summary: $label ===")
         val counts = Doc.text(
-          s"peers=${evs.map(_.peer).distinct.size}  events=${evs.size}  span=${rel(evs.map(_.at).max).trim}"
+          s"peers=${evs.map(_.peer).distinct.size}  events=${evs.size}  span=${rel(tN).trim}  " +
+              s"started=${utc(t0)}  ended=${utc(tN)}"
         )
 
         section(title, counts) +
             section(Doc.text("milestones"), milestones(evs, rel)) +
+            section(
+              Doc.text("L1 transactions (successful submissions)"),
+              l1Transactions(evs, explorerTxUrl, rel, utc)
+            ) +
             section(Doc.text("per peer"), peerTable(evs)) +
             section(Doc.text("tx contention (attempts → landed)"), contention(evs)) +
             section(Doc.text("committed evacuation maps"), committedMaps(evs))
+
+    /** The evidence ledger: every tx a peer successfully submitted to L1, chronologically — the
+      * wall-clock timestamp, relative offset, submitting peer, tx family, and a verifiable
+      * cexplorer link (or the bare tx hash when the network has no public explorer, e.g. a local
+      * devnet). Deduplicated by tx id — a multisigned effect that any peer may submit lands once —
+      * keyed to the peer that first had it accepted. This is the stakeholder-facing "these
+      * transactions really happened" table.
+      */
+    private def l1Transactions(
+        evs: Vector[Entry],
+        explorerTxUrl: TransactionHash => Option[String],
+        rel: FiniteDuration => String,
+        utc: FiniteDuration => String,
+    ): Doc =
+        val txs = evs
+            .collect { case Entry(at, peer, L1Submitted(fam, id)) => (at, peer, fam, id) }
+            .groupBy { case (_, _, _, id) => id }
+            .values
+            .map(_.minBy { case (at, _, _, _) => at.toMillis })
+            .toList
+            .sortBy { case (at, _, _, _) => at.toMillis }
+        if txs.isEmpty then Doc.text("(none)")
+        else
+            val header = List("#", "time (UTC)", "+rel", "peer", "family", "explorer / tx hash")
+            val rows = txs.zipWithIndex.map { case ((at, peer, fam, id), i) =>
+                List(
+                  (i + 1).toString,
+                  utc(at),
+                  rel(at).trim,
+                  peerLabel(peer),
+                  fam,
+                  explorerTxUrl(id).getOrElse(id.toHex),
+                )
+            }
+            grid(header :: rows)
 
     /** A chronological timeline spanning both regimes: the multisig phase (regime up → bootstrap →
       * init/finalization L1 effects), the multisig→rule-based handoff, and the rule-based phase

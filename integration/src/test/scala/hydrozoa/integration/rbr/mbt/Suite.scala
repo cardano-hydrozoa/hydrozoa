@@ -28,7 +28,7 @@ import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{TransactionInput, TransactionOutput, Utxos}
+import scalus.cardano.ledger.{TransactionHash, TransactionInput, TransactionOutput, Utxos}
 import scalus.testing.yaci.YaciConfig
 import test.{SeedPhrase, TestPeerName, TestPeers}
 
@@ -191,7 +191,10 @@ case class RbrMbtSuite(
         for
             // Acquired first so its finalizer runs last: the run-scoped scenario summary is
             // rendered at the very end, after harness teardown.
-            summary <- ScenarioSummary.resource(s"$label-ws")
+            summary <- ScenarioSummary.resource(
+              s"$label-ws",
+              explorerTxUrl(state.params.cardanoBackendMode),
+            )
             fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
             evacuationDone <- Resource.eval(Deferred[IO, Unit])
             firstPayoutsLeft <- Resource.eval(Ref[IO].of(Option.empty[Int]))
@@ -230,8 +233,10 @@ case class RbrMbtSuite(
                             .map(_ && etx.transactionFamily == "SettlementTx"),
                     // Record the inputs of every settlement that clears the firewall (for the
                     // committed-deposit set) and the L1 position of every withdrawal that lands
-                    // (for `W`) — both derived at fallback (see [[Sut]]).
+                    // (for `W`) — both derived at fallback (see [[Sut]]). `summary.firewallTracer`
+                    // captures every successful L1 submission for the run's evidence ledger.
                     firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId) |+|
+                        summary.firewallTracer(peerId) |+|
                         firewallLedgerObserver(
                           submittedSettlementInputs,
                           settledMajors,
@@ -256,6 +261,15 @@ case class RbrMbtSuite(
           settledMajors,
           withdrawnOutputRefs,
         )
+
+    /** The per-backend cexplorer link builder the scenario summary injects. `Mock` has no chain and
+      * `Yaci` is a `Custom` devnet with no public explorer, so both yield no link (the summary
+      * falls back to the bare tx hash); a public-testnet backend would surface real cexplorer URLs.
+      */
+    private def explorerTxUrl(mode: HarnessCardanoBackend.Mode): TransactionHash => Option[String] =
+        mode match
+            case HarnessCardanoBackend.Mode.Mock         => _ => None
+            case HarnessCardanoBackend.Mode.Yaci(net, _) => ScenarioSummary.cexplorerTxUrl(net, _)
 
     /** Firewall observer over every outbound tx that clears the firewall (a `SubmittedTx`):
       *   - For a settlement: record its L1 inputs (`submittedSettlementInputs`) and produced major
