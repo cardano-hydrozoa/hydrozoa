@@ -276,23 +276,17 @@ The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a fe
 
 ## E2E: Docker smoke-test on the shipped topology (CI-excluded)
 
-`integration/src/test/scala/hydrozoa/integration/e2e/DockerSmokeTest.scala` is a third, **black-box** level that sits outside the `ModelBasedSuite` framework. Instead of wiring actors in-process, it stands up the head the scaffolded `docker-compose.yml` describes — **2 head peers and 4 coil peers** — on a local **Yaci** devnet, forms a head through the shipped artifacts (the packaged image, the mesh, the user HTTP API), submits an L2 transaction to head-0 over HTTP, and asserts it reaches both head peers' L2 ledgers.
+`integration/src/test/scala/hydrozoa/integration/e2e/DockerSmokeTest.scala` is a black-box level outside the `ModelBasedSuite` framework. It stands up the `docker-compose.yml` that `hydrozoa scaffold` writes — **2 head + 4 coil peers** — on a local **Yaci** devnet, forms a head through the packaged image and the real WS mesh + Ember HTTP API, submits an L2 transaction to head-0 over HTTP, and asserts it reaches both head peers' L2 ledgers. It's the one test that covers the documented deployment path end to end (`docker compose`, the image, real sockets, the custom-network config flow); the stages only reach `HydrozoaRoutes` in-process.
 
-- **What it exercises that the stages can't.** The actual deployment path end to end: `docker compose`, six distinct node identities reaching consensus over the real WS mesh, the packaged image, and the custom-network config flow (`yaci-devnet.sh up`/`network` → `keygen-fleet` → `topup` → `deploy-scripts-and-g2-setup` → `build-head-config` → `serve`). Stage 4 already drives `HydrozoaRoutes`, the codecs and the write path in-memory through `Client.fromHttpApp`; what this adds is the real Ember server, real sockets, the packaged image and the container mesh.
-- **Why the shipped topology.** It runs `keygen-fleet 2 4 2` against the `docker-compose.yml` its own `hydrozoa scaffold` writes, plus the `docker-compose.yaci.yml` overlay — the same pair docs/user-guide/DEPLOYMENT.md hands an operator — so a failure is a failure of the documented path rather than of a test-only lookalike. The peer count is written down twice (the `keygen-fleet` arguments and the compose file's services) and nothing reconciles them, so changing one means changing the other.
-- **Why only two peers are asserted on.** Only head peers publish the HTTP API; `runCoilNode` starts no `HydrozoaServer`. The four coil peers are still load-bearing — the head cannot initialize without `coilQuorum` of them signing — so a broken coil shows up as a `/ready` timeout rather than passing unnoticed.
-- **How it drives bring-up.** Everything devnet-specific goes through `scripts/yaci-devnet.sh` (`up`, `network`, `topup`), the same script docs/user-guide/DEPLOYMENT.md documents, rather than a Scala reimplementation that could drift from it. The rest shells out to the staged `hydrozoa` launcher and `docker compose`, and uses `SubmissionClient` / `EutxoL2QueryClient` for submit and polling. On failure it dumps each container's logs.
-- **What the devnet has to be.** Protocol major version 11 or higher, and bootstrapped in `companion` node mode — the treasury and dispute validators are ill-formed below PV11, and the default node mode cannot install the PV11 cost models. `docker-compose.yaci.yml` pins both and says why; a devnet that misses either fails in `deploy-scripts-and-g2-setup`, not at bring-up.
-- **Why it's CI-excluded.** It is minutes-long and needs Docker + a Yaci container + the built image. Its FQN is in `Tests.Exclude(...)` in `build.sbt` (survives even `integration/testOnly *`), exactly like `Stage1PropertiesYaci`.
-- **How to run.**
+- **Shipped topology, not a lookalike.** It runs `keygen-fleet 2 4 2` against the scaffolded `docker-compose.yml` + `docker-compose.yaci.yml` overlay — the pair docs/user-guide/DEPLOYMENT.md hands an operator — so a failure is a failure of the documented path. The peer count lives in two places (the `keygen-fleet` args and the compose services); keep them in sync.
+- **Only head peers are asserted on.** Coil peers run no `HydrozoaServer`, but they are load-bearing — the head can't initialize without `coilQuorum` of them signing — so a broken coil surfaces as a `/ready` timeout, not a silent pass.
+- **Bring-up goes through `scripts/yaci-devnet.sh`** (`up`/`network`/`topup`, the script docs/user-guide/DEPLOYMENT.md documents); the rest shells out to the staged `hydrozoa` launcher and `docker compose`, with `SubmissionClient`/`EutxoL2QueryClient` for submit + polling. Container logs are dumped on failure.
+- **Devnet requirements** (pinned in `docker-compose.yaci.yml`): protocol major version ≥ 11 and `companion` node mode — the validators are ill-formed below PV11, and the default mode can't install the PV11 cost models. Missing either fails in `deploy-scripts-and-g2-setup`.
+- **CI-excluded** (minutes-long; needs Docker + Yaci + the built image): its FQN is in `Tests.Exclude(...)` in `build.sbt`, like `Stage1PropertiesYaci`. A stray `testOnly *` that reaches it without Docker or the launcher **cancels** (stays green), not fails.
 
 ```bash
-just integration-e2e-docker   # builds the image (Docker/publishLocal), stages the launcher, runs the suite
-# equivalently, after `just docker-image` + `just stage`:
-sbt "integration/testOnly hydrozoa.integration.e2e.DockerSmokeTest"
+just integration-e2e-docker   # builds the image, stages the launcher, runs the suite
 ```
-
-A stray `testOnly *` that reaches the suite without Docker or the staged launcher **cancels** (not fails) via `cancel(...)`, so it stays green.
 
 ---
 
