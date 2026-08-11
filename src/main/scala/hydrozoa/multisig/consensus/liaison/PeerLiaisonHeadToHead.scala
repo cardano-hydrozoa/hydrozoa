@@ -288,7 +288,16 @@ abstract class PeerLiaisonHeadToHead(
       dispatch = dispatch,
       numberOfBatchRequest = _.batchNum,
       numberOfBatch = _.batchNum,
-      tracer = tracer
+      tracer = tracer,
+      describeGet = g =>
+          s"req=${g.request} reqCeil=${g.requestCeiling} sAck=${g.softAck} " +
+              s"blk=${g.block} stk=${g.stack} hAck=${g.headHardAck}",
+      describeBatch = m =>
+          s"req=${m.requests.size} sAck=${if m.softAck.isDefined then 1 else 0} " +
+              s"blk=${if m.block.isDefined then 1 else 0} stk=${
+                      if m.stack.isDefined then 1 else 0
+                  } " +
+              s"hAck=${if m.headHardAck.isDefined then 1 else 0}"
     )(g => getConnections.flatMap(_.remote ! g))
 
     // ---- Serve half (our own production) --------------------------------------------------------

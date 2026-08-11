@@ -15,6 +15,18 @@ object PeerLiaisonEvent:
     /** Emitted once from a liaison's pre-start, after its connections resolve. */
     case object Started extends PeerLiaisonEvent
 
+    /** A `GetMsgBatch` pull sent to the remote (initial, retransmit, or the next after a reply).
+      * `detail` summarizes the requested cursors — including the backpressure `requestCeiling` — so
+      * the mesh's request-flow throttling is visible. High-frequency: DEBUG.
+      */
+    final case class BatchRequested(batchNum: BatchNumber, detail: String) extends PeerLiaisonEvent
+
+    /** A `NewMsgBatch` reply accepted from the remote. `detail` summarizes the per-lane payload
+      * (requests / soft-ack / block / …) so co-arriving lanes are visible — e.g. requests and acks
+      * delivered in the same batch. High-frequency: DEBUG.
+      */
+    final case class BatchReceived(batchNum: BatchNumber, detail: String) extends PeerLiaisonEvent
+
     /** A reply whose batch number does not match the outstanding request — a stale duplicate the
       * [[Puller]] drops.
       */

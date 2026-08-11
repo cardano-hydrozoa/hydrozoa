@@ -272,7 +272,7 @@ object BlockWeaver {
             nextBlockNumber: BlockNumber,
         ) extends Active,
               WithMempool {
-            override transparent inline def stateName: String = "DecidingRole"
+            override def stateName: String = s"DecidingRole(next=$nextBlockNumber)"
 
             export DecidingRole.NextReactiveState
 
@@ -319,7 +319,8 @@ object BlockWeaver {
                 nextBlockNumber: BlockNumber
             ) extends Reactive,
                   WithMempool {
-                override transparent inline def stateName: String = "Follower.AwaitingBlockBrief"
+                override def stateName: String =
+                    s"Follower.AwaitingBlockBrief(awaiting=$nextBlockNumber)"
 
                 export Follower.AwaitingBlockBrief.{NextReactiveState, Unexpected}
 
@@ -726,7 +727,8 @@ object BlockWeaver {
                 requestsInBlock: Int
             ) extends Reactive,
                   WithMempool {
-                override transparent inline def stateName: String = "Leader.AwaitingConfirmation"
+                override def stateName: String =
+                    s"Leader.AwaitingConfirmation(leading=$leadingBlockNumber $isBlockStarted)"
 
                 export Leader.AwaitingConfirmation.{NextReactiveState, Unexpected}
 
@@ -990,7 +992,8 @@ object BlockWeaver {
                 previousBlockConfirmed: Block.SoftConfirmed.NonFinal,
                 // wakeupFiber: Fiber[IO, Throwable, Unit]
             ) extends Reactive {
-                override transparent inline def stateName: String = "Leader.AwaitingRequest"
+                override def stateName: String =
+                    s"Leader.AwaitingRequest(current=$currentBlockNumber)"
 
                 export Leader.AwaitingRequest.{NextReactiveState, Unexpected}
 
