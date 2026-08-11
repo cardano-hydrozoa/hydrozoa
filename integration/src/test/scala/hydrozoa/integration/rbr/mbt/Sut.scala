@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import org.scalacheck.commands.SutCommand
-import scalus.cardano.ledger.TransactionInput
+import scalus.cardano.ledger.{TransactionHash, TransactionInput}
 
 /** The running system-under-test: the multi-peer head harness, the milestone `Deferred`s the
   * observer completes, and `settlementFirewallArmed` — the dynamic gate the firewall consults. It
@@ -35,6 +35,14 @@ import scalus.cardano.ledger.TransactionInput
   * `beforeFinalize` seeds into the model's inert `WithdrawalOutput` place; the L1 snapshot's
   * `"withdrawal"`-bucketed outputs must match it. Deduped by input so a resubmitted tx can't
   * inflate the count.
+  *
+  * `submittedTxIds` accumulates the id of every tx the SUT put on the wire (observed at the
+  * firewall, regardless of accept/reject). `beforeFinalize` uses it to scope `beta`'s payout
+  * buckets (`WithdrawalOutput`/`EvacuationOutput`) to outputs this run actually produced: those are
+  * the only two places keyed on a datum marker at the fixed, shared `RbrSeed.payoutAddress`, which
+  * on a non-resettable public testnet accrues script-locked residue from earlier runs. Every other
+  * observable place is already run-scoped (script refs by input, token boxes by this head's
+  * `policyId`), so only these two need scoping.
   */
 final case class Sut(
     harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
@@ -46,6 +54,7 @@ final case class Sut(
     committedMaps: Ref[IO, List[(BlockVersion.Full, Int)]],
     settledMajors: Ref[IO, Set[Int]],
     withdrawnOutputRefs: Ref[IO, Set[TransactionInput]],
+    submittedTxIds: Ref[IO, Set[TransactionHash]],
 )
 
 /** SUT-side command execution. */

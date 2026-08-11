@@ -54,8 +54,9 @@
     <!-- default: warn -->
     <!-- The RBR MBT arms the settlement firewall on purpose, so it drops a settlement every tick
          post-fallback (thousands of expected warnings). Observers capture what we need; silence the
-         per-drop warning. -->
-    <logger name="FirewalledCardanoBackend" level="error"/>
+         per-drop warning. NB: temporarily at `info` to surface each tx's submit result (incl. the
+         init-tx Preview rejection) while diagnosing the public-testnet run; restore to `error`. -->
+    <logger name="FirewalledCardanoBackend" level="info"/>
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
     <logger name="test.CardanoBackendMock" level="warn"/>
     <logger name="CardanoBackend" level="warn"/>
@@ -87,11 +88,11 @@
     <logger name="FastConsensusActor" level="debug"/>
     <logger name="SlowConsensusActor" level="debug"/>
     <logger name="EventSequencer" level="info"/>
-    <logger name="CardanoLiaison" level="warn"/>
+    <logger name="CardanoLiaison" level="debug"/>
     <logger name="JointLedger" level="info"/>
     <logger name="HeadMultisigRegimeManager" level="info"/>
     <logger name="CoilMultisigRegimeManager" level="info"/>
-    <logger name="RuleBasedActor" level="info"/>
+    <logger name="RuleBasedActor" level="debug"/>
     <logger name="Limiter" level="debug"/>
     <logger name="PeerLiaison" level="debug"/>
     <logger name="PeerLiaison.HeadToHead" level="debug"/>
