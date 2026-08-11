@@ -21,6 +21,7 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.DepositL1Screening
 import hydrozoa.multisig.ledger.l2.L2Screener
+import hydrozoa.multisig.metrics.{PeerMetrics, RejectionKind}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, WriteBatch}
 
 /** The first actor responsible for processing events from end-users, as received by the
@@ -35,7 +36,8 @@ trait RequestSequencer(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | RequestSequencer.Connections,
     l2Screener: L2Screener[IO],
     tracer: ContraTracer[IO, EventSequencerEvent],
-    persistence: Persistence[IO]
+    persistence: Persistence[IO],
+    metrics: PeerMetrics
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[RequestSequencer.Connections]](None)
     private val state = State()
@@ -119,21 +121,24 @@ trait RequestSequencer(
                           }
                   }
                   screened.flatMap {
-                      case Left(reason) => IO.pure(Left(UserRequest.Rejected(reason)))
-                      case Right(())    =>
+                      case Left(reason) =>
+                          IO(metrics.onLocalRejected(RejectionKind.Screening)) *>
+                              IO.pure(Left(UserRequest.Rejected(reason)))
+                      case Right(()) =>
                           // Backpressure: refuse to author more than one block's worth of requests
                           // beyond this peer's own confirmed high-water, so the mesh mempool cannot
                           // exceed maxRequestsPerBlock * nHeadPeers (docs/spec/fast-consensus.md).
                           state.tryNextRequestNum(config.maxRequestsPerBlock).flatMap {
                               case None =>
-                                  IO.pure(
-                                    Left(
-                                      UserRequest.Rejected(
-                                        "Request rejected: too many unconfirmed requests" +
-                                            " (backpressure); retry shortly."
+                                  IO(metrics.onLocalRejected(RejectionKind.Backpressure)) *>
+                                      IO.pure(
+                                        Left(
+                                          UserRequest.Rejected(
+                                            "too many unconfirmed requests (backpressure);" +
+                                                " retry shortly."
+                                          )
+                                        )
                                       )
-                                    )
-                                  )
                               case Some(newNum) =>
                                   val newId = RequestId(ownHeadPeerNum, newNum)
                                   val newRequestWithId = UserRequestWithId(
@@ -146,6 +151,7 @@ trait RequestSequencer(
                                         EventSequencerEvent
                                             .RequestIdAssigned(newId.peerNum, newId.requestNum)
                                       )
+                                      _ <- IO(metrics.onLocalAccepted())
                                       // CR1: persist the assigned request to the Request lane BEFORE
                                       // telling the user the id (durable before observable; CR1/CR4).
                                       stamp <- persistence.arrivalStamp
@@ -221,9 +227,19 @@ object RequestSequencer {
         pendingConnections: HeadMultisigRegimeManager.PendingConnections,
         l2Screener: L2Screener[IO],
         tracer: ContraTracer[IO, EventSequencerEvent],
-        persistence: Persistence[IO]
+        persistence: Persistence[IO],
+        metrics: PeerMetrics
     ): IO[RequestSequencer] =
-        IO(new RequestSequencer(config, pendingConnections, l2Screener, tracer, persistence) {})
+        IO(
+          new RequestSequencer(
+            config,
+            pendingConnections,
+            l2Screener,
+            tracer,
+            persistence,
+            metrics
+          ) {}
+        )
 
     // `& CardanoNetwork.Section`: the Request-lane codec (UserRequestWithId) is Section-dependent;
     // the full configs passed in satisfy it.

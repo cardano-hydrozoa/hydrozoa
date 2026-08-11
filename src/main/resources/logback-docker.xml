@@ -11,8 +11,20 @@
             <pattern>%d{HH:mm:ss.SSS} %-5level %logger{48} - %msg%n</pattern>
         </encoder>
     </appender>
-    <root level="warn">
+    <!-- Logging must never block a cats-effect compute worker. A synchronous ConsoleAppender does a
+         blocking write+flush on the calling thread; if the stdout sink (journald / docker json-file)
+         drains slower than the producer, that thread parks in the write and — since consensus logs on
+         the compute pool — a stalled worker can freeze block production (the failure mode confirmed in
+         the remote ledger). Wrap it in an AsyncAppender with neverBlock=true: the caller offers the
+         event to a bounded queue and moves on; on overflow events are dropped, never blocked. The
+         default discardingThreshold sheds TRACE/DEBUG/INFO first, so WARN/ERROR survive under load. -->
+    <appender name="ASYNC_STDOUT" class="ch.qos.logback.classic.AsyncAppender">
         <appender-ref ref="STDOUT"/>
+        <neverBlock>true</neverBlock>
+        <queueSize>8192</queueSize>
+    </appender>
+    <root level="warn">
+        <appender-ref ref="ASYNC_STDOUT"/>
     </root>
     <logger name="hydrozoa" level="info"/>
     <logger name="com.bloxbean" level="warn"/>
