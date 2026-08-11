@@ -681,9 +681,13 @@ trait CardanoLiaison(
                     // From the whole state we need to know only utxo ids
                     utxoIds <- IO.pure(l1State.keySet)
                     // This may not the ideal place to have it. Every time we get a new head state, we
-                    // forward it to the block weaver.
+                    // forward it to the block weaver — unless the rule-based handoff has been
+                    // dispatched: the liaison outlives the handoff (to process refunds and finish
+                    // rollouts) but the BlockWeaver is stopped with the other multisig children, so
+                    // forwarding would only produce dead letters.
                     conn <- getConnections
-                    _ <- conn.blockWeaver ! PollResults(utxoIds)
+                    handedOff <- lastHandoffDispatchedFor.get.map(_.nonEmpty)
+                    _ <- IO.unlessA(handedOff)(conn.blockWeaver ! PollResults(utxoIds))
 
                     // 2. Based on the local state, find all due actions
                     state <- stateRef.get
