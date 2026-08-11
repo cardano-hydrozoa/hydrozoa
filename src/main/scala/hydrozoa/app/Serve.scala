@@ -21,6 +21,7 @@ import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
@@ -107,6 +108,19 @@ object Serve {
             result <- Resource.eval(setupIO)
             (backend, nodeConfig) = result
 
+            // Peer stats registry (docs/spec/peer-stats-endpoint.md): created once, threaded into the
+            // instrumented actors and the HTTP server, with its 1 Hz sampler running for the node's
+            // lifetime. In-memory only — counters reset on restart.
+            metrics <- Resource.eval(
+              IO.realTime.map(t =>
+                  PeerMetrics.create(
+                    t.toMillis,
+                    nodeConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
+                  )
+              )
+            )
+            _ <- metrics.sampler().background
+
             // Select the L2 ledger the peers agreed on (HeadParameters.l2Ledger): the built-in
             // in-process EUTXO ledger, or a remote black box reached over this node's
             // `remoteLedgerUri`. Only the EUTXO ledger is also an EutxoL2LedgerReader, so only it
@@ -149,6 +163,7 @@ object Serve {
                       l2Screener,
                       l2QueryReader,
                       persistence,
+                      metrics,
                       headTracer,
                       wsClient,
                       ownHeadNum,
@@ -166,6 +181,7 @@ object Serve {
                       backend,
                       l2Ledger,
                       persistence,
+                      metrics,
                       coilTracer,
                       wsClient,
                       ownCoilNum,
@@ -175,9 +191,9 @@ object Serve {
             consensusReader = ConsensusStoreReader.fromPersistence(persistence)(using
               nodeConfig.headConfig
             )
-        } yield (nodeConfig, system, nodeRun, consensusReader)
+        } yield (nodeConfig, system, nodeRun, consensusReader, metrics)
 
-        resource.use { case (nodeConfig, system, nodeRun, consensusReader) =>
+        resource.use { case (nodeConfig, system, nodeRun, consensusReader, metrics) =>
             nodeRun match {
                 case NodeRun.HeadNode(mrm, l2QueryReader) =>
                     runHeadNode(
@@ -186,6 +202,7 @@ object Serve {
                       mrm,
                       consensusReader,
                       l2QueryReader,
+                      metrics,
                       httpExtraTracer
                     )
                 case NodeRun.CoilNode(mrm) =>
@@ -240,6 +257,7 @@ object Serve {
         l2Screener: L2Screener[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         persistence: Persistence[IO],
+        metrics: PeerMetrics,
         mrmTracer: ContraTracer[IO, HeadRegimeManagerEvent],
         wsClient: org.http4s.client.websocket.WSClient[IO],
         ownHeadNum: HeadPeerNumber,
@@ -331,6 +349,7 @@ object Serve {
               l2Ledger,
               l2Screener,
               persistence,
+              metrics,
               mrmTracer,
               peerFactory,
               hubFactory,
@@ -346,6 +365,7 @@ object Serve {
         backend: CardanoBackend[IO],
         l2Ledger: L2Ledger[IO],
         persistence: Persistence[IO],
+        metrics: PeerMetrics,
         mrmTracer: ContraTracer[IO, CoilRegimeManagerEvent],
         wsClient: org.http4s.client.websocket.WSClient[IO],
         ownCoilNum: CoilPeerNumber,
@@ -381,6 +401,7 @@ object Serve {
               backend,
               l2Ledger,
               persistence,
+              metrics,
               mrmTracer,
               coilFactory,
             )
@@ -393,6 +414,7 @@ object Serve {
         mrm: HeadMultisigRegimeManager,
         consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
+        metrics: PeerMetrics,
         httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
     ): IO[ExitCode] =
         for {
@@ -437,6 +459,7 @@ object Serve {
                           l2QueryReader,
                           nodeConfig.headConfig,
                           serverConfig,
+                          metrics,
                           httpTracer,
                         )
                         .use(_ => IO.never)

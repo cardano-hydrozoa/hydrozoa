@@ -14,6 +14,7 @@ import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
 import hydrozoa.multisig.consensus.transport.{CoilTransport, RemoteHubProxy}
 import hydrozoa.multisig.ledger.l2.L2Ledger
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
@@ -33,6 +34,7 @@ trait CoilMultisigRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
+    override protected val metrics: PeerMetrics,
     override protected val tracer: ContraTracer[IO, CoilRegimeManagerEvent],
     /** Coil-uplink transport toward this coil peer's single hub. */
     coilTransport: ActorContext[IO, Request, Any] => CoilTransport,
@@ -181,6 +183,7 @@ object CoilMultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
+        metrics: PeerMetrics,
         tracer: ContraTracer[IO, CoilRegimeManagerEvent],
         coilTransport: Resource[IO, ActorContext[IO, Request, Any] => CoilTransport],
     ): Resource[IO, CoilMultisigRegimeManager] =
@@ -192,6 +195,7 @@ object CoilMultisigRegimeManager {
                   cardanoBackend,
                   virtualLedger,
                   persistence,
+                  metrics,
                   tracer,
                   factory,
                 ) {}

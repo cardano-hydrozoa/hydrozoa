@@ -1,5 +1,4 @@
 package hydrozoa.multisig.server
-
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -15,6 +14,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, DepositDecision, RequestBlockEntry, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import io.circe.Json
@@ -177,6 +177,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                       None,
                       headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
+                      PeerMetrics.create(0L, Vector.empty),
                       ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
                     )
                     _ <- check(routes.routes.orNotFound)
