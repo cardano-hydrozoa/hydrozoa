@@ -50,7 +50,10 @@ object JointLedgerEventFormat:
                   "blockNum" -> s"${bn: Int}"
                 )
             case RequestInvalidated(rid, bn, reason) =>
-                warn(
+                // A request that fails ledger application (e.g. "order not found" for a tx that
+                // references a spent/absent order) is an expected per-request outcome, not an
+                // operational fault — DEBUG so it stays out of the INFO/WARN logs under load.
+                debug(
                   s"Request rejected ($rid): $reason",
                   "requestId" -> rid.toString,
                   "blockNum" -> s"${bn: Int}"

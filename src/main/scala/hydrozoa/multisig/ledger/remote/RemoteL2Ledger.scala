@@ -2,8 +2,8 @@ package hydrozoa.multisig.ledger.remote
 
 import cats.Monad
 import cats.data.EitherT
-import cats.effect.std.Mutex
-import cats.effect.{Async, IO, Ref, Resource}
+import cats.effect.std.{Mutex, Queue}
+import cats.effect.{Async, FiberIO, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
@@ -12,6 +12,7 @@ import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.parser.*
 import io.circe.syntax.*
+import java.util.concurrent.TimeoutException
 import org.http4s.Uri
 import org.http4s.client.websocket.{WSClient, WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
@@ -43,6 +44,13 @@ final case class RemoteL2LedgerError(message: String) extends RuntimeException(m
   * and exhausts the fd limit under load. The single connection is opened lazily, cached in
   * [[connRef]], reused across requests, and reopened after a drop. [[mutex]] serialises exchanges
   * so frames never interleave on the socket.
+  *
+  * Each open connection runs a background fiber that continuously drains its `receiveStream` into a
+  * per-connection queue; an exchange sends, then takes its response off that queue. Draining
+  * without pause keeps the JDK WebSocket's read-demand (`request(n)`) outstanding at all times —
+  * pulling `receiveStream.head` afresh per exchange instead can leave a delivered response unread
+  * in the socket, stalling the (serialised) mutation path until something else nudges the
+  * connection.
   *
   * @param wsUri
   *   The WebSocket URI of the remote ledger
@@ -174,20 +182,26 @@ class RemoteL2Ledger private (
                         val once = for {
                             _ <- tracer.traceWith(Sending(message))
                             _ <- conn.connection.send(WSFrame.Text(message))
-                            text <- conn.connection.receiveStream
-                                .collect { case WSFrame.Text(t, _) => t }
-                                .head
-                                .compile
-                                .lastOrError
+                            // The connection's background fiber keeps `receiveStream` drained into
+                            // `incoming`, so the JDK WebSocket always has read-demand outstanding and
+                            // the response is never left unread in the socket. The mutex serialises
+                            // exchanges, so the next text frame is this request's response.
+                            text <- conn.incoming.take
                             _ <- tracer.traceWith(Received(text))
                         } yield text
                         once.timeout(requestTimeout).onError { case _ => drop(conn) }
                     }
                     .handleErrorWith { err =>
                         val wait = backoff(n)
-                        tracer.traceWith(ConnectionError(n, wait, err)) >>
-                            IO.sleep(wait) >>
-                            attempt(n + 1)
+                        // A timeout is not a transport failure: the remote may be fine and the
+                        // response simply undelivered in time. Log it distinctly so a receive stall
+                        // is unambiguous in the logs, then drop-and-retry like any other error.
+                        val event = err match {
+                            case _: TimeoutException =>
+                                ExchangeTimedOut(request.commandNumber, requestTimeout, n, wait)
+                            case _ => ConnectionError(n, wait, err)
+                        }
+                        tracer.traceWith(event) >> IO.sleep(wait) >> attempt(n + 1)
                     }
             attempt(0)
         }
@@ -224,8 +238,23 @@ class RemoteL2Ledger private (
             IO.uncancelable { poll =>
                 poll(wsClient.connectHighLevel(WSRequest(wsUri)).allocated).flatMap {
                     case (connection, release) =>
-                        val conn = Conn(connection, release)
-                        connRef.set(Some(conn)) >> tracer.traceWith(Connected(wsUri)).as(conn)
+                        for {
+                            // A per-connection queue fed by a background fiber that pulls
+                            // `receiveStream` without pause. Draining it continuously keeps the JDK
+                            // WebSocket's read-demand (`request(n)`) open, so a response is never left
+                            // unread in the socket — the receive-stall failure mode of re-pulling
+                            // `receiveStream.head` afresh per exchange.
+                            incoming <- Queue.unbounded[IO, String]
+                            receiveFiber <- connection.receiveStream
+                                .collect { case WSFrame.Text(t, _) => t }
+                                .foreach(incoming.offer)
+                                .compile
+                                .drain
+                                .start
+                            conn = Conn(connection, incoming, receiveFiber, release)
+                            _ <- connRef.set(Some(conn))
+                            _ <- tracer.traceWith(Connected(wsUri))
+                        } yield conn
                 }
             }
 
@@ -236,15 +265,30 @@ class RemoteL2Ledger private (
         connRef.update {
             case Some(current) if current eq conn => None
             case other                            => other
-        } >> conn.release.attempt.void
+        } >> conn.receiveFiber.cancel >> conn.release.attempt.void
 
 }
 
 object RemoteL2Ledger {
     type Config = CardanoNetwork.Section
 
-    /** A live WebSocket connection paired with the finalizer that closes it. */
-    private final case class Conn(connection: WSConnectionHighLevel[IO], release: IO[Unit])
+    /** A live WebSocket connection with its background receive fiber, the queue that fiber feeds,
+      * and the finalizer that closes the connection.
+      *
+      * @param incoming
+      *   text frames drained off the connection by [[receiveFiber]]; an exchange takes its response
+      *   from here
+      * @param receiveFiber
+      *   continuously pulls [[connection]]'s `receiveStream` into [[incoming]] for the connection's
+      *   whole life, keeping the JDK WebSocket's read-demand open so no response frame is left
+      *   unread
+      */
+    private final case class Conn(
+        connection: WSConnectionHighLevel[IO],
+        incoming: Queue[IO, String],
+        receiveFiber: FiberIO[Unit],
+        release: IO[Unit]
+    )
 
     /** Request types sent to the remote L2 ledger. Every request carries the Hydrozoa-assigned
       * command number.
@@ -278,7 +322,9 @@ object RemoteL2Ledger {
       * @param wsUri
       *   The WebSocket URI (e.g., "ws://localhost:9000/l2-ledger")
       * @param requestTimeout
-      *   How long one exchange may take before the connection is dropped and retried (default 30s)
+      *   How long one exchange may take before the connection is dropped and retried (default 5s).
+      *   Kept well under a block cycle so a stuck receive is cut off and retried rather than
+      *   stalling the whole (serialised) mutation path.
       * @param initialBackoff
       *   Backoff before the first reconnect attempt (default 1s), doubled per attempt
       * @param maxBackoff
@@ -288,7 +334,7 @@ object RemoteL2Ledger {
         wsUri: String,
         config: Config,
         tracer: ContraTracer[IO, RemoteL2LedgerEvent],
-        requestTimeout: FiniteDuration = 30.seconds,
+        requestTimeout: FiniteDuration = 5.seconds,
         initialBackoff: FiniteDuration = 1.second,
         maxBackoff: FiniteDuration = 30.seconds,
     ): Resource[IO, RemoteL2Ledger] =
@@ -297,7 +343,7 @@ object RemoteL2Ledger {
             // One HttpClient for the whole lifetime — reused across every connection.
             wsClient <- Resource.eval(JdkWSClient.simple[IO])
             connRef <- Resource.make(Ref[IO].of(Option.empty[Conn]))(ref =>
-                ref.get.flatMap(_.traverse_(_.release.attempt.void))
+                ref.get.flatMap(_.traverse_(c => c.receiveFiber.cancel >> c.release.attempt.void))
             )
             mutex <- Resource.eval(Mutex[IO])
         } yield new RemoteL2Ledger(

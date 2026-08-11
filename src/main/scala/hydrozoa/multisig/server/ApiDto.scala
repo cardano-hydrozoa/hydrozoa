@@ -8,6 +8,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
+import hydrozoa.multisig.metrics.{PeerStats, RateView}
 import hydrozoa.multisig.persistence.DepositDecision
 import io.bullet.borer.Cbor
 import io.circe.derivation.{Configuration as CirceConfig, ConfiguredCodec}
@@ -170,6 +171,89 @@ object ApiDto {
         case NodeStatus.Active               => NodeStatusView.Active
         case NodeStatus.Finalized            => NodeStatusView.Finalized
         case NodeStatus.HandedOffToRuleBased => NodeStatusView.HandedOffToRuleBased
+
+    // ---- Peer statistics (GET /head/stats); see docs/spec/peer-stats-endpoint.md ----
+
+    /** A rate as an instantaneous value plus top-style 1m/5m/15m EWMA load averages (req/s). */
+    final case class RateStatsView(now: Double, load1m: Double, load5m: Double, load15m: Double)
+    given Codec[RateStatsView] = deriveCodec
+
+    /** Requests ingested from one remote head peer. */
+    final case class PeerRequestStatsView(peer: Int, total: Long, rate: RateStatsView)
+    given Codec[PeerRequestStatsView] = deriveCodec
+
+    /** Locally-submitted requests: accepted total + rate, and rejections split by cause. */
+    final case class LocalRequestStatsView(
+        total: Long,
+        rate: RateStatsView,
+        rejectedScreening: Long,
+        rejectedBackpressure: Long
+    )
+    given Codec[LocalRequestStatsView] = deriveCodec
+
+    /** Block production: minor/major totals, event-size average+max, and EWMA throughput rates. */
+    final case class BlockStatsView(
+        minor: Long,
+        major: Long,
+        avgEvents: Double,
+        maxEvents: Long,
+        blockRate: RateStatsView,
+        requestRate: RateStatsView
+    )
+    given Codec[BlockStatsView] = deriveCodec
+
+    /** Slow-cycle stacks: total hard-confirmed, cadence, and blocks-absorbed size. */
+    final case class StackStatsView(
+        total: Long,
+        lastStackNumber: Long,
+        secondsSinceLastHardConfirm: Long,
+        meanInterStackGapSeconds: Double,
+        avgBlocksAbsorbed: Double,
+        maxBlocksAbsorbed: Long
+    )
+    given Codec[StackStatsView] = deriveCodec
+
+    /** The full peer-stats body. */
+    final case class PeerStatsView(
+        uptimeSeconds: Long,
+        localRequests: LocalRequestStatsView,
+        peerRequests: List[PeerRequestStatsView],
+        blocks: BlockStatsView,
+        stacks: StackStatsView
+    )
+    given Codec[PeerStatsView] = deriveCodec
+
+    /** Map a [[hydrozoa.multisig.metrics.PeerStats]] snapshot to its JSON body. */
+    def mkPeerStatsView(s: PeerStats): PeerStatsView =
+        def rate(r: RateView): RateStatsView = RateStatsView(r.now, r.load1m, r.load5m, r.load15m)
+        PeerStatsView(
+          uptimeSeconds = s.uptimeSeconds,
+          localRequests = LocalRequestStatsView(
+            total = s.localAccepted,
+            rate = rate(s.localRate),
+            rejectedScreening = s.localRejScreening,
+            rejectedBackpressure = s.localRejBackpressure
+          ),
+          peerRequests = s.peerRequests.toList
+              .sortBy(_._1)
+              .map((peer, c) => PeerRequestStatsView(peer, c.total, rate(c.rate))),
+          blocks = BlockStatsView(
+            minor = s.blocks.minor,
+            major = s.blocks.major,
+            avgEvents = s.blocks.avgEvents,
+            maxEvents = s.blocks.maxEvents,
+            blockRate = rate(s.blocks.blockRate),
+            requestRate = rate(s.blocks.requestRate)
+          ),
+          stacks = StackStatsView(
+            total = s.stacks.total,
+            lastStackNumber = s.stacks.lastStackNumber,
+            secondsSinceLastHardConfirm = s.stacks.secondsSinceLastHardConfirm,
+            meanInterStackGapSeconds = s.stacks.meanInterStackGapSeconds,
+            avgBlocksAbsorbed = s.stacks.avgBlocksAbsorbed,
+            maxBlocksAbsorbed = s.stacks.maxBlocksAbsorbed
+          )
+        )
 
     /** `{ "status": "success", "message": ... }` — the finalize-trigger body. */
     final case class FinalizeResponse(status: String, message: String)

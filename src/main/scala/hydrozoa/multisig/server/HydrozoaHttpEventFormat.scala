@@ -35,6 +35,8 @@ object HydrozoaHttpEventFormat:
                 error(s"$path - Decode error history: $history")
             case RequestDecoded(path, decoded) =>
                 debug(s"$path - Decoded: $decoded")
+            case RequestRejected(path, reason) =>
+                warn(s"$path - Rejected: $reason")
             case RequestFailed(path, cause) =>
                 LogEvent(
                   hydrozoa.lib.logging.Level.Error,
