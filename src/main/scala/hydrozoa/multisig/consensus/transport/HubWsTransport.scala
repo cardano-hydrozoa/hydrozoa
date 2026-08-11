@@ -14,6 +14,7 @@ import org.http4s.HttpRoutes
 import org.http4s.dsl.io.*
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
+import scala.concurrent.duration.FiniteDuration
 
 /** The hub side of a hub↔coil link, in the abstract. Concrete impls: [[HubWsTransport]] (real WS)
   * and [[InProcessHubCoilTransport.Hub]] (test harness).
@@ -41,6 +42,7 @@ trait HubTransport {
 final class HubWsTransport private (
     private val outboxes: Map[CoilPeerNumber, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[CoilPeerNumber, PeerLiaisonHubToCoil.Handle]],
+    private val keepAlivePing: FiniteDuration,
     private val tracer: ContraTracer[IO, HubWsTransportEvent],
 )(using CardanoNetwork.Section)
     extends HubTransport {
@@ -80,14 +82,15 @@ final class HubWsTransport private (
     private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] =
         for {
             coilD <- Deferred[IO, CoilPeerNumber]
-            sendStream: Stream[IO, WebSocketFrame] =
-                Stream
-                    .eval(coilD.get)
-                    .flatMap { coil =>
-                        Stream
-                            .fromQueueUnterminated(outboxes(coil))
-                            .map(line => WebSocketFrame.Text(line))
-                    }
+            sendStream: Stream[IO, WebSocketFrame] = NodeWsServer.withKeepAlive(keepAlivePing)(
+              Stream
+                  .eval(coilD.get)
+                  .flatMap { coil =>
+                      Stream
+                          .fromQueueUnterminated(outboxes(coil))
+                          .map(line => WebSocketFrame.Text(line))
+                  }
+            )
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     CoilFrame.parse(s) match {
@@ -126,11 +129,12 @@ object HubWsTransport {
     def create(
         coils: List[CoilPeerNumber],
         tracer: ContraTracer[IO, HubWsTransportEvent],
+        keepAlivePing: FiniteDuration = NodeWsServer.defaultKeepAlivePing,
     )(using CardanoNetwork.Section): IO[HubWsTransport] =
         for {
             outboxes <- coils
                 .traverse(c => Queue.unbounded[IO, String].map(c -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[CoilPeerNumber, PeerLiaisonHubToCoil.Handle])
-        } yield new HubWsTransport(outboxes, inboundRef, tracer)
+        } yield new HubWsTransport(outboxes, inboundRef, keepAlivePing, tracer)
 }
