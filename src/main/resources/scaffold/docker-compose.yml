@@ -20,7 +20,7 @@ networks:
       com.docker.network.driver.mtu: 1400
 
 x-hydrozoa: &hydrozoa
-  image: ${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:${HYDROZOA_VERSION:-0.1.3}}
+  image: ${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:${HYDROZOA_VERSION:-0.1.4}}
   # root: the image's non-root user cannot write the RocksDB stores / logs under the /opt/docker
   # workdir. State is ephemeral here (no volumes) — restarting re-initializes a fresh head (§5b).
   user: root
