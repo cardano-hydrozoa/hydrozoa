@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.liaison
 
-import cats.effect.{IO, Ref}
+import cats.effect.{Fiber, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -153,6 +153,10 @@ abstract class PeerLiaisonHubToCoil(
 
     // ---- Connections ----------------------------------------------------------------------------
     private val connections = Ref.unsafe[IO, Option[PeerLiaisonHubToCoil.Connections]](None)
+
+    // Handle to the resend-timer fiber ([[startResendTimer]]); cancelled in [[postStop]] so it
+    // doesn't outlive the actor.
+    private val resendFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
 
     private def getConnections: IO[PeerLiaisonHubToCoil.Connections] =
         connections.get.flatMap(
@@ -378,7 +382,15 @@ abstract class PeerLiaisonHubToCoil(
     private def startResendTimer: IO[Unit] =
         (IO.sleep(
           config.peerLiaisonResendInterval
-        ) >> (context.self ! ResendCurrent)).foreverM.start.void
+        ) >> (context.self ! ResendCurrent)).foreverM.start
+            .flatMap(fib => resendFiber.set(Some(fib)))
+
+    /** Cancel the resend-timer fiber so it stops pinging `self` once the actor has stopped — e.g.
+      * when fallback tears down the multisig regime and this liaison — instead of leaking a fiber
+      * that keeps delivering `ResendCurrent` to a dead actor (dead letters).
+      */
+    override def postStop: IO[Unit] =
+        resendFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 }
 
 object PeerLiaisonHubToCoil {
