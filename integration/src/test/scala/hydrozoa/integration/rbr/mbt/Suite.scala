@@ -247,7 +247,7 @@ case class RbrMbtSuite(
             settlementFirewallArmed <- Resource.eval(Ref[IO].of(false))
             peersEvacuationDone <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
             submittedSettlementInputs <- Resource.eval(Ref[IO].of(Set.empty[TransactionInput]))
-            committedMaps <- Resource.eval(Ref[IO].of(List.empty[(BlockVersion.Full, Int)]))
+            committedMaps <- Resource.eval(Ref[IO].of(Set.empty[(BlockVersion.Full, Int)]))
             settledMajors <- Resource.eval(Ref[IO].of(Set.empty[Int]))
             withdrawnOutputRefs <- Resource.eval(Ref[IO].of(Set.empty[TransactionInput]))
             submittedTxIds <- Resource.eval(Ref[IO].of(Set.empty[TransactionHash]))
@@ -433,7 +433,8 @@ case class RbrMbtSuite(
                   s"(M=${settledMajors.maxOption} initialMapSize=$initialMapSize " +
                   s"${depositUtxos.size} deposit(s), " +
                   s"payoutResidueDropped=${utxos.size - scopedUtxos.size} " +
-                  s"committedMaps=${committedMaps.sortBy((v, _) => (v.major: Int, v.minor: Int))})\n" +
+                  s"committedMaps=${committedMaps.toList
+                          .sortBy((v, _) => (v.major: Int, v.minor: Int))})\n" +
                   s"  alpha (model): $alpha\n  beta  (L1):    $betaEither"
             )
         yield
@@ -477,7 +478,7 @@ case class RbrMbtSuite(
       * map for `M` was ever traced.
       */
     private def observedCommittedSize(
-        committedMaps: List[(BlockVersion.Full, Int)],
+        committedMaps: Set[(BlockVersion.Full, Int)],
         settledMajors: Set[Int],
     ): Option[Int] =
         val m = settledMajors.maxOption.getOrElse(0)
@@ -515,7 +516,7 @@ case class RbrMbtSuite(
         evacuationDone: Deferred[IO, Unit],
         peersEvacuationDone: Ref[IO, Set[PeerId]],
         firstPayoutsLeft: Ref[IO, Option[Int]],
-        committedMaps: Ref[IO, List[(BlockVersion.Full, Int)]],
+        committedMaps: Ref[IO, Set[(BlockVersion.Full, Int)]],
     ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
         val onEvent: PeerId => Any => IO[Unit] = peer => {
             case CommonChildEvent.CardanoLiaison(
@@ -526,7 +527,7 @@ case class RbrMbtSuite(
             case CommonChildEvent.StackComposer(
                   StackComposerEvent.CommittedMap(version, size)
                 ) =>
-                committedMaps.update((version -> size) :: _)
+                committedMaps.update(_ + (version -> size))
 
             case RuleBasedOnlyChildEvent.RuleBasedActor(
                   RuleBasedActorEvent.Evacuation.PayoutsLeft(n)

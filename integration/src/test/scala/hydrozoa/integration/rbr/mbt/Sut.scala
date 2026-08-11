@@ -22,12 +22,12 @@ import scalus.cardano.ledger.{TransactionHash, TransactionInput}
   * cardano-liaison refund path — so the model can agree with the SUT on each deposit's fate without
   * racing "peer submitted the tx" against "the tx appears on chain".
   *
-  * `committedMaps` accumulates every `StackComposer.CommittedMap` peer trace — the
-  * `(version, size)` of each committed evacuation map. `settledMajors` accumulates the majors of
-  * every settlement that cleared the firewall (i.e. settled on-chain). Together they let
-  * `beforeFinalize` read the committed map size the head resolves to under the last on-chain major
-  * `M` directly from the peer traces, instead of reconstructing it from the model's deposit
-  * accounting.
+  * `committedMaps` accumulates the distinct `StackComposer.CommittedMap` peer traces — the
+  * `(version, size)` of each committed evacuation map, deduped across peers (a `Set`, since every
+  * peer emits the same trace). `settledMajors` accumulates the majors of every settlement that
+  * cleared the firewall (i.e. settled on-chain). Together they let `beforeFinalize` read the
+  * committed map size the head resolves to under the last on-chain major `M` directly from the peer
+  * traces, instead of reconstructing it from the model's deposit accounting.
   *
   * `withdrawnOutputRefs` accumulates the L1 position (`TransactionInput`) of every withdrawal
   * output — an L2 output that exited to L1 pre-fallback, carrying the `"withdrawal"` datum sentinel
@@ -51,7 +51,7 @@ final case class Sut(
     firstPayoutsLeft: Ref[IO, Option[Int]],
     settlementFirewallArmed: Ref[IO, Boolean],
     submittedSettlementInputs: Ref[IO, Set[TransactionInput]],
-    committedMaps: Ref[IO, List[(BlockVersion.Full, Int)]],
+    committedMaps: Ref[IO, Set[(BlockVersion.Full, Int)]],
     settledMajors: Ref[IO, Set[Int]],
     withdrawnOutputRefs: Ref[IO, Set[TransactionInput]],
     submittedTxIds: Ref[IO, Set[TransactionHash]],
