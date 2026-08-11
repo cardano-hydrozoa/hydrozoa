@@ -111,10 +111,12 @@ object MultiPeerHeadHarness:
     val fastTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
         Gen.const(
           TxTiming(
-            minSettlementDuration = MinSettlementDuration(2.seconds.quantize(network.slotConfig)),
             // Init tx window: initEndTime = bcet + minSettlementDuration + inactivityMarginDuration
-            // = 32s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
-            // that or `InitWindowElapsed` fires. Also gates the Minor→Major deadman.
+            // = 60s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
+            // that or `InitWindowElapsed` fires — carried by minSettlement (30s) so the window is
+            // wide enough for slow/loaded CI runners without touching the Minor→Major deadman
+            // cadence, which is `bcet + inactivityMargin` (minSettlement cancels out).
+            minSettlementDuration = MinSettlementDuration(30.seconds.quantize(network.slotConfig)),
             inactivityMarginDuration =
                 InactivityMarginDuration(30.seconds.quantize(network.slotConfig)),
             silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
@@ -299,6 +301,33 @@ object MultiPeerHeadHarness:
     )(
         buildCtx: (Option[Instant], MultiNodeConfig) => Resource[IO, Ctx]
     ): PropertyM[IO, Resource[IO, Ctx]] =
+        genDisputeMnc(
+          transportMode,
+          testPeers,
+          testPeerToUtxos,
+          takeoffOffset,
+          fastTxTiming,
+          disputeResolutionConfig,
+          coilPeers,
+          coilQuorum,
+        ).map { case (takeoffTime, mnc) => buildCtx(takeoffTime, mnc) }
+
+    /** The config-generation half of [[mkResource]]: pick the takeoff time and a
+      * yaci-genesis-pinned [[MultiNodeConfig]] with the fast dispute timings/rate-limits both
+      * dispute callers need. Split out so a `ModelBasedSuite` can generate the config in
+      * `genInitialState` (the `PropertyM` phase) and build the harness separately in `sutResource`.
+      */
+    def genDisputeMnc(
+        transportMode: Transport.Mode,
+        testPeers: TestPeers,
+        testPeerToUtxos: Map[TestPeerName, Utxos],
+        takeoffOffset: FiniteDuration,
+        fastTxTiming: GenWithTestPeers[TxTiming] = fastTxTiming,
+        disputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
+            fastDisputeResolutionConfig,
+        coilPeers: CoilPeers = CoilPeers.empty,
+        coilQuorum: Int = 0,
+    ): PropertyM[IO, (Option[Instant], MultiNodeConfig)] =
         for {
             takeoffTime <- PropertyM.run(
               mkTakeoffTime(transportMode.useTestControl, takeoffOffset)
@@ -355,7 +384,7 @@ object MultiPeerHeadHarness:
                   )
                   .label("MultiNodeConfig")
             )
-        } yield buildCtx(takeoffTime, mnc)
+        } yield (takeoffTime, mnc)
 
     case class Config(
         label: String,

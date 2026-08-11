@@ -20,6 +20,7 @@ import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
 import hydrozoa.multisig.ledger.joint.given
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
+import hydrozoa.rulebased.ledger.l1.RbrDatumSentinels
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import java.time.Instant
 import org.scalacheck.{Gen, Prop, Properties}
@@ -27,10 +28,7 @@ import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.Data.toData
 import scalus.|>
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.*
@@ -280,8 +278,7 @@ object InitializationParametersGenTopDown {
                             acc_ = acc :+ Babbage(
                               address = address,
                               value = next,
-                              datumOption =
-                                  Some(Inline(toData(ByteString.fromString("evacuation")))),
+                              datumOption = RbrDatumSentinels.inline("evacuation"),
                             )
                         } yield
                             if next == rest
