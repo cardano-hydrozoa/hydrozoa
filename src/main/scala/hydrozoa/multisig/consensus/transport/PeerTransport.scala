@@ -51,6 +51,7 @@ final class WsPeerTransport private (
     val ownPeerId: HeadPeerId,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
+    private val keepAlivePing: FiniteDuration,
     private val tracer: ContraTracer[IO, PeerTransportEvent],
 )(using CardanoNetwork.Section)
     extends PeerTransport {
@@ -133,14 +134,15 @@ final class WsPeerTransport private (
     private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] =
         for {
             peerD <- cats.effect.Deferred[IO, HeadPeerId]
-            sendStream: Stream[IO, WebSocketFrame] =
-                Stream
-                    .eval(peerD.get)
-                    .flatMap { remote =>
-                        Stream
-                            .fromQueueUnterminated(outboxes(remote))
-                            .map(line => WebSocketFrame.Text(line))
-                    }
+            sendStream: Stream[IO, WebSocketFrame] = NodeWsServer.withKeepAlive(keepAlivePing)(
+              Stream
+                  .eval(peerD.get)
+                  .flatMap { remote =>
+                      Stream
+                          .fromQueueUnterminated(outboxes(remote))
+                          .map(line => WebSocketFrame.Text(line))
+                  }
+            )
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     HeadFrame.parse(s) match {
@@ -211,11 +213,12 @@ object WsPeerTransport {
         ownPeerId: HeadPeerId,
         remoteIds: List[HeadPeerId],
         tracer: ContraTracer[IO, PeerTransportEvent],
+        keepAlivePing: FiniteDuration = NodeWsServer.defaultKeepAlivePing,
     )(using CardanoNetwork.Section): IO[WsPeerTransport] =
         for {
             outboxes <- remoteIds
                 .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
-        } yield new WsPeerTransport(ownPeerId, outboxes, inboundRef, tracer)
+        } yield new WsPeerTransport(ownPeerId, outboxes, inboundRef, keepAlivePing, tracer)
 }

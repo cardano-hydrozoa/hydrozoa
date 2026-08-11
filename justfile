@@ -123,6 +123,15 @@ graphviz:
   } > target/rbr-net/index.html
   echo "wrote target/rbr-net/index.html"
   "${BROWSER:-xdg-open}" target/rbr-net/index.html
+# RBR MBT against the public Preview testnet (real Blockfrost). Requires a valid Blockfrost key
+# (hardcoded in the Runner) and a funded master wallet: generate one with `hydrozoa keygen`, fund its
+# printed address from the Preview faucet, then export RBR_MBT_PREVIEW_MASTER_SIGNING_KEY first.
+# Bypasses the build.sbt Tests.Exclude that keeps it out of `just integration`.
+integration-rbr-preview:
+  #!/usr/bin/env bash
+  set -eo pipefail
+  trap 'just notify "integration-rbr-preview"' EXIT
+  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
 
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"

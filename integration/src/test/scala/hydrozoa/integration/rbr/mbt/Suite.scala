@@ -8,6 +8,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness.CardanoBackend as HarnessCardanoBackend
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.integration.harness.{DiagnosticTracers, MultiPeerHeadHarness, ScenarioSummary}
+import hydrozoa.integration.preview.PublicSetup
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet
 import hydrozoa.integration.rbr.property.{ObservableMarking, RbrSeed}
 import hydrozoa.integration.stage4.Model
@@ -28,7 +29,8 @@ import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{TransactionHash, TransactionInput, TransactionOutput, Utxos}
+import scalus.cardano.ledger.{Coin, TransactionHash, TransactionInput, TransactionOutput, Utxos}
+import scalus.cardano.node.BlockfrostProvider
 import scalus.testing.yaci.YaciConfig
 import test.{SeedPhrase, TestPeerName, TestPeers}
 
@@ -52,21 +54,25 @@ case class RbrMbtSuite(
       * + redeploys per iteration, and runs the harness against real Blockfrost.
       */
     backendSpec: RbrMbtSuite.BackendSpec = RbrMbtSuite.BackendSpec.Mock,
+    /** Overall per-scenario wall-clock budget: fallback + dispute + evacuation must complete within
+      * it. 7min suits the fast Mock/Yaci backends; the public Preview backend needs far longer
+      * (~20-30min) for real ~20s block cadence — raise it at the call site.
+      */
+    scenarioTimeout: FiniteDuration = 7.minutes,
+    /** How long `beforeFinalize` waits, best-effort, for the generated deposits to commit before
+      * arming the firewall. Long enough to clear deposit maturity + one settlement so the common
+      * path exercises deposit evacuation; on expiry we arm anyway and the stragglers take the
+      * refund path (the committed-set computation keeps the model in agreement either way). Enlarge
+      * for a slow public testnet, where a deposit needs multiple blocks to commit.
+      */
+    depositCommitWindow: FiniteDuration = 90.seconds,
 ) extends ModelBasedSuite:
 
     override type Env = RbrMbtSuite.RbrMbtEnv
     override type State = Model.ModelState
     override type Sut = hydrozoa.integration.rbr.mbt.Sut
 
-    private val scenarioTimeout: FiniteDuration = 7.minutes
     private val quiescenceDelay: FiniteDuration = 2.seconds
-
-    /** How long `beforeFinalize` waits, best-effort, for the generated deposits to commit before
-      * arming the firewall. Long enough to clear deposit maturity + one settlement so the common
-      * path exercises deposit evacuation; on expiry we arm anyway and the stragglers take the
-      * refund path (the committed-set computation keeps the model in agreement either way).
-      */
-    private val depositCommitWindow: FiniteDuration = 90.seconds
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("RbrMbt.Suite"))
@@ -84,6 +90,10 @@ case class RbrMbtSuite(
         case RbrMbtSuite.BackendSpec.Yaci(cfg) =>
             // Singleton container: first call warms it, every subsequent iteration reuses.
             PropertyM.run(YaciDevnet.acquireShared(cfg).map(RbrMbtSuite.RbrMbtEnv.Yaci.apply))
+        case RbrMbtSuite.BackendSpec.Public(key, signingKey) =>
+            // Nothing to acquire ahead of time — `PublicSetup.prepare` does the funding + deploy in
+            // `genInitialState`. Just carry the credentials through.
+            PropertyM.run(IO.pure(RbrMbtSuite.RbrMbtEnv.Public(key, signingKey)))
     }
 
     override def canStartupNewSut(): Boolean = true
@@ -137,6 +147,48 @@ case class RbrMbtSuite(
                   testPeerToUtxos = ready.genesisByPeer,
                   cardanoBackendMode = HarnessCardanoBackend.Mode
                       .Yaci(ready.network, devKit.blockfrostApiBaseUri),
+                )
+
+            case RbrMbtSuite.RbrMbtEnv.Public(key, signingKey) =>
+                for {
+                    _ <- PropertyM.run(
+                      log.info("Preparing the Preview testnet (master funding + script deploy)")
+                    )
+                    ready <- PropertyM.run(
+                      PublicSetup.prepare(key, signingKey, nHeadPeers, nCoilPeers)
+                    )
+                    takeoffAndMnc <- MultiPeerHeadHarness.genDisputeMnc(
+                      transportMode = TransportMode.WebSocket,
+                      testPeers = ready.testPeers,
+                      testPeerToUtxos = ready.genesisByPeer,
+                      // Longer takeoff so every peer's actor stack is up and synced before the head
+                      // takes off on the real ~20s-block chain.
+                      takeoffOffset = 60.seconds,
+                      // Public-testnet timing + a ~20s CardanoLiaison poll (near one block) so
+                      // per-tick probes don't storm Blockfrost.
+                      fastTxTiming = MultiPeerHeadHarness.previewTxTiming,
+                      // Minutes-long voting deadline so peers actually cast + confirm votes before
+                      // the tally gates (the 5s default is always already elapsed on the live chain,
+                      // resolving to the base map with no votes).
+                      disputeResolutionConfig = MultiPeerHeadHarness.previewDisputeResolutionConfig,
+                      scriptReferenceUtxos = Some(ready.scriptReferenceUtxos),
+                      liveBackendPollingPeriod =
+                          MultiPeerHeadHarness.previewLiveBackendPollingPeriod,
+                      coilPeers = ready.testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
+                      coilQuorum = nCoilPeers,
+                      // Cap total L2 equity low so each head peer's genesis floor
+                      // (contingency + equity share + ~20 ADA) stays small — the peers are funded
+                      // modestly from one master wallet, not a faucet-per-peer.
+                      equityRange = Coin(5_000_000) -> Coin(15_000_000),
+                    )
+                    (takeoffTime, mnc) = takeoffAndMnc
+                } yield mkModelState(
+                  config = mnc,
+                  takeoffTime = takeoffTime,
+                  testPeers = ready.testPeers,
+                  testPeerToUtxos = ready.genesisByPeer,
+                  cardanoBackendMode = HarnessCardanoBackend.Mode
+                      .Public(ready.network, BlockfrostProvider.previewUrl, key),
                 )
         }
 
@@ -201,9 +253,10 @@ case class RbrMbtSuite(
             settlementFirewallArmed <- Resource.eval(Ref[IO].of(false))
             peersEvacuationDone <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
             submittedSettlementInputs <- Resource.eval(Ref[IO].of(Set.empty[TransactionInput]))
-            committedMaps <- Resource.eval(Ref[IO].of(List.empty[(BlockVersion.Full, Int)]))
+            committedMaps <- Resource.eval(Ref[IO].of(Set.empty[(BlockVersion.Full, Int)]))
             settledMajors <- Resource.eval(Ref[IO].of(Set.empty[Int]))
             withdrawnOutputRefs <- Resource.eval(Ref[IO].of(Set.empty[TransactionInput]))
+            submittedTxIds <- Resource.eval(Ref[IO].of(Set.empty[TransactionHash]))
             harness <- MultiPeerHeadHarness.disputeHarnessResource(
               label = s"$label-ws",
               transportMode = TransportMode.WebSocket,
@@ -241,6 +294,7 @@ case class RbrMbtSuite(
                           submittedSettlementInputs,
                           settledMajors,
                           withdrawnOutputRefs,
+                          submittedTxIds,
                         ),
                   ),
               cardanoBackendMode = state.params.cardanoBackendMode,
@@ -260,16 +314,20 @@ case class RbrMbtSuite(
           committedMaps,
           settledMajors,
           withdrawnOutputRefs,
+          submittedTxIds,
         )
 
     /** The per-backend cexplorer link builder the scenario summary injects. `Mock` has no chain and
       * `Yaci` is a `Custom` devnet with no public explorer, so both yield no link (the summary
-      * falls back to the bare tx hash); a public-testnet backend would surface real cexplorer URLs.
+      * falls back to the bare tx hash). `Public` runs on Preview — its network is modeled as
+      * `Custom` (for live params/slots), but it *is* Preview, so link to `preview.cexplorer.io`.
       */
     private def explorerTxUrl(mode: HarnessCardanoBackend.Mode): TransactionHash => Option[String] =
         mode match
             case HarnessCardanoBackend.Mode.Mock         => _ => None
             case HarnessCardanoBackend.Mode.Yaci(net, _) => ScenarioSummary.cexplorerTxUrl(net, _)
+            case HarnessCardanoBackend.Mode.Public(_, _, _) =>
+                ScenarioSummary.cexplorerTxUrl(CardanoNetwork.Preview, _)
 
     /** Firewall observer over every outbound tx that clears the firewall (a `SubmittedTx`):
       *   - For a settlement: record its L1 inputs (`submittedSettlementInputs`) and produced major
@@ -282,11 +340,18 @@ case class RbrMbtSuite(
       *     room, so this is not settlement-specific; keying on the accepted (`Right`) result and
       *     deduping by input means a dropped fallback settlement's withdrawals (which never land,
       *     staying in the committed map to evacuate) and any resubmission are both excluded.
+      *   - For every submitted tx (accepted or rejected): record its id (`submittedTxIds`).
+      *     `beforeFinalize` uses this set to scope `beta`'s payout buckets to outputs this run
+      *     produced, filtering the cross-run residue that accrues at the shared `payoutAddress` on
+      *     a non-resettable testnet. Ungated by result: a settlement byte-identical to an earlier
+      *     run's may report `already included` (a `Left`) yet its outputs are still legitimately
+      *     this run's, so scoping keys on submission, not acceptance.
       */
     private def firewallLedgerObserver(
         submittedSettlementInputs: Ref[IO, Set[TransactionInput]],
         settledMajors: Ref[IO, Set[Int]],
         withdrawnOutputRefs: Ref[IO, Set[TransactionInput]],
+        submittedTxIds: Ref[IO, Set[TransactionHash]],
     ): ContraTracer[IO, FirewalledCardanoBackendEvent] =
         val withdrawalMarker = RbrDatumSentinels.marker("withdrawal")
         def hasWithdrawalDatum(out: TransactionOutput): Boolean =
@@ -306,9 +371,18 @@ case class RbrMbtSuite(
                         }.toSet
                         IO.whenA(withdrawals.nonEmpty)(withdrawnOutputRefs.update(_ ++ withdrawals))
                     case Left(_) => IO.unit
-                settlementUpdate *> withdrawalUpdate
+                submittedTxIds.update(_ + etx.tx.id) *> settlementUpdate *> withdrawalUpdate
             case _ => IO.unit
         }
+
+    /** True if `out` carries the `"withdrawal"` or `"evacuation"` datum sentinel — the two payout
+      * buckets `beta` keys on a marker at the shared `RbrSeed.payoutAddress`, hence the two exposed
+      * to cross-run residue on a non-resettable testnet (see [[Sut.submittedTxIds]]).
+      */
+    private def isPayoutMarked(out: TransactionOutput): Boolean =
+        val markers =
+            Set(RbrDatumSentinels.marker("withdrawal"), RbrDatumSentinels.marker("evacuation"))
+        out.datumOption.exists { case Inline(d) => markers(d); case _ => false }
 
     // TODO (BLOCKED on fund14): assert the refund path, mirroring the WithdrawalOutput accounting.
     // A rejected/expired deposit (not absorbed into a committed major — absorb-XOR-refund is settled
@@ -358,19 +432,31 @@ case class RbrMbtSuite(
             committedMaps <- sut.committedMaps.get
             settledMajors <- sut.settledMajors.get
             withdrawnOutputRefs <- sut.withdrawnOutputRefs.get
+            submittedTxIds <- sut.submittedTxIds.get
             obligationCount =
                 observedCommittedSize(committedMaps, settledMajors).getOrElse(initialMapSize)
             // `W`: the withdrawals that landed on L1 pre-fallback, read from the firewall traces —
             // matched against the L1 snapshot's `"withdrawal"`-bucketed outputs by `beta`.
             withdrawalCount = withdrawnOutputRefs.size
             alpha = alphaTerminal(obligationCount, withdrawalCount)
-            betaEither = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
+            // Scope `beta`'s two payout buckets to this run. `WithdrawalOutput`/`EvacuationOutput`
+            // are the only observable places keyed on a datum marker at the fixed, shared
+            // `RbrSeed.payoutAddress`; on a non-resettable public testnet that address accrues
+            // script-locked residue from earlier runs, which would inflate `beta`. Drop any
+            // payout-marked UTxO whose producing tx this run didn't submit (every other place is
+            // already run-scoped, so the rest of the snapshot passes through untouched).
+            scopedUtxos = utxos.filterNot { (in, out) =>
+                isPayoutMarked(out) && !submittedTxIds.contains(in.transactionId)
+            }
+            betaEither = ObservableMarking.beta(scopedUtxos)(using sut.harness.multiNodeConfig)
             _ <- log.info(
               s"beforeFinalize: firstPayoutsLeft=$payouts obligationCount=$obligationCount " +
                   s"withdrawalCount=$withdrawalCount " +
                   s"(M=${settledMajors.maxOption} initialMapSize=$initialMapSize " +
                   s"${depositUtxos.size} deposit(s), " +
-                  s"committedMaps=${committedMaps.sortBy((v, _) => (v.major: Int, v.minor: Int))})\n" +
+                  s"payoutResidueDropped=${utxos.size - scopedUtxos.size} " +
+                  s"committedMaps=${committedMaps.toList
+                          .sortBy((v, _) => (v.major: Int, v.minor: Int))})\n" +
                   s"  alpha (model): $alpha\n  beta  (L1):    $betaEither"
             )
         yield
@@ -414,7 +500,7 @@ case class RbrMbtSuite(
       * map for `M` was ever traced.
       */
     private def observedCommittedSize(
-        committedMaps: List[(BlockVersion.Full, Int)],
+        committedMaps: Set[(BlockVersion.Full, Int)],
         settledMajors: Set[Int],
     ): Option[Int] =
         val m = settledMajors.maxOption.getOrElse(0)
@@ -452,7 +538,7 @@ case class RbrMbtSuite(
         evacuationDone: Deferred[IO, Unit],
         peersEvacuationDone: Ref[IO, Set[PeerId]],
         firstPayoutsLeft: Ref[IO, Option[Int]],
-        committedMaps: Ref[IO, List[(BlockVersion.Full, Int)]],
+        committedMaps: Ref[IO, Set[(BlockVersion.Full, Int)]],
     ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
         val onEvent: PeerId => Any => IO[Unit] = peer => {
             case CommonChildEvent.CardanoLiaison(
@@ -463,7 +549,7 @@ case class RbrMbtSuite(
             case CommonChildEvent.StackComposer(
                   StackComposerEvent.CommittedMap(version, size)
                 ) =>
-                committedMaps.update((version -> size) :: _)
+                committedMaps.update(_ + (version -> size))
 
             case RuleBasedOnlyChildEvent.RuleBasedActor(
                   RuleBasedActorEvent.Evacuation.PayoutsLeft(n)
@@ -499,6 +585,13 @@ object RbrMbtSuite:
         case Mock
         case Yaci(config: YaciConfig = YaciConfig())
 
+        /** Run against the public Preview testnet over real Blockfrost. `blockfrostKey` is the
+          * Blockfrost project id; `masterSigningKeyHex` is the Ed25519 signing key (from the
+          * `keygen` CLI) of a pre-funded Preview wallet the peers are funded from (see
+          * [[PublicSetup]]). No reset/faucet, so run a single iteration.
+          */
+        case Public(blockfrostKey: String, masterSigningKeyHex: String)
+
     /** Per-iteration environment threaded from [[RbrMbtSuite.initEnv]] to
       * [[RbrMbtSuite.genInitialState]]. `Mock` carries no state (the suite reconstructs `TestPeers`
       * from the fixed Preprod network). `Yaci` carries the shared devnet handle so the iteration
@@ -507,3 +600,4 @@ object RbrMbtSuite:
     enum RbrMbtEnv:
         case Mock
         case Yaci(devKit: DevKit)
+        case Public(blockfrostKey: String, masterSigningKeyHex: String)

@@ -15,6 +15,9 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend.{ContinuingTx, Error}
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import io.bullet.borer.Cbor
+import io.circe.parser.parse
+import java.net.URI
+import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
@@ -43,8 +46,15 @@ class CardanoBackendBlockfrost private (
     private val backendService: BackendService,
     private val pageSize: Int,
     private val blockfrostProviderFuture: Future[BlockfrostProvider],
-    protected val tracer: ContraTracer[IO, CardanoBackendEvent]
+    protected val tracer: ContraTracer[IO, CardanoBackendEvent],
+    // Base URL + project id for the raw tx-utxos read in [[continuingTx]] — BloxBean's
+    // `TxContentUtxoInputs` model drops the per-input tx_hash/output_index/collateral/reference we
+    // need there, so that one call goes straight to the JSON.
+    private val baseUrl: String,
+    private val apiKey: String
 ) extends CardanoBackend[IO] {
+
+    private val httpClient: HttpClient = HttpClient.newHttpClient()
 
     override def resolve(input: Input): IO[Either[Error, Option[ledger.Utxo]]] =
         (for {
@@ -409,11 +419,21 @@ class CardanoBackendBlockfrost private (
     ): IO[Either[CardanoBackend.Error, Option[ContinuingTx]]] = {
         (for {
             utxos <- EitherT(txUtxos(txHash))
+            // A redeemer's `tx_index` points into the tx's CANONICALLY-SORTED regular spend inputs
+            // (excluding reference + collateral), not Blockfrost's returned input order — so index
+            // the continuing (asset-bearing) input the same way, or `txRedeemer` looks it up at the
+            // wrong slot and returns `SpendingRedeemerNotFound`, silently dropping the tx. BloxBean's
+            // input model exposes neither the outref nor the reference/collateral flags, so we read
+            // them from the raw tx-utxos JSON. (Alternative: decode the tx CBOR — its inputs are
+            // already canonical and its redeemers carry input pointers — and pick the spend redeemer
+            // whose data parses as a treasury redeemer, dropping index-matching entirely.)
+            rawInputs <- EitherT(rawTxUtxoInputs(txHash))
             inputIx <- EitherT.fromOption[IO](
-              opt = utxos.getInputs.asScala.zipWithIndex
-                  .find { (input, _) =>
-                      input.getAmount.asScala.exists(_.getUnit == unit)
-                  }
+              opt = rawInputs
+                  .filterNot(i => i.collateral || i.reference)
+                  .sortBy(i => (i.txHash, i.outputIndex))
+                  .zipWithIndex
+                  .find { (input, _) => input.units.contains(unit) }
                   .map(_._2),
               ifNone = NoTxInputWithAsset(txHash, unit)
             )
@@ -505,6 +525,61 @@ class CardanoBackendBlockfrost private (
                   )
                 )
             )
+
+    /** One input of a Blockfrost `/txs/{hash}/utxos` response, carrying the fields BloxBean's
+      * `TxContentUtxoInputs` model omits: the outref (`txHash`#`outputIndex`, for canonical
+      * sorting) and the reference/collateral flags (to keep only regular spend inputs). See
+      * [[continuingTx]].
+      */
+    private final case class RawTxInput(
+        txHash: String,
+        outputIndex: Int,
+        collateral: Boolean,
+        reference: Boolean,
+        units: Set[String]
+    )
+
+    /** Read a tx's inputs straight from the Blockfrost `/txs/{hash}/utxos` JSON — see
+      * [[RawTxInput]] for why [[continuingTx]] bypasses BloxBean for this one call.
+      */
+    private def rawTxUtxoInputs(
+        txHash: TransactionHash
+    ): IO[Either[CardanoBackend.Error, List[RawTxInput]]] =
+        IO.blocking {
+            val request = HttpRequest
+                .newBuilder(URI.create(s"$baseUrl/txs/${txHash.toHex}/utxos"))
+                .header("project_id", apiKey)
+                .GET()
+                .build()
+            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+            if response.statusCode() == 200 then
+                parse(response.body()) match {
+                    case Left(e) =>
+                        Left(Unexpected(s"Malformed tx-utxos JSON: ${e.getMessage}"))
+                    case Right(json) =>
+                        val inputs = json.hcursor.downField("inputs").values.getOrElse(Nil)
+                        Right(inputs.toList.map { i =>
+                            val c = i.hcursor
+                            RawTxInput(
+                              txHash = c.get[String]("tx_hash").getOrElse(""),
+                              outputIndex = c.get[Int]("output_index").getOrElse(0),
+                              collateral = c.get[Boolean]("collateral").getOrElse(false),
+                              reference = c.get[Boolean]("reference").getOrElse(false),
+                              units = c
+                                  .downField("amount")
+                                  .values
+                                  .getOrElse(Nil)
+                                  .flatMap(_.hcursor.get[String]("unit").toOption)
+                                  .toSet
+                            )
+                        })
+                }
+            else Left(Unexpected(s"tx-utxos HTTP ${response.statusCode()}: ${response.body()}"))
+        }.handleError(e =>
+            Left(Unexpected(s"${e.getMessage}, caused by: ${
+                    if e.getCause != null then e.getCause.getMessage else "N/A"
+                }"))
+        )
 
     private def txRedeemer(
         txHash: TransactionHash,
@@ -635,7 +710,9 @@ object CardanoBackendBlockfrost:
           backendService,
           pageSize,
           blockfrostProviderFuture,
-          tracer
+          tracer,
+          baseUrl,
+          apiKey
         )
     }
 

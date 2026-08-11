@@ -54,8 +54,8 @@ object RuleBasedActorEventFormat:
             case Dispute.ParsingTally      => info("Dispute state: ready to tally")
             case Dispute.ParsingResolve    => info("Dispute state: ready to resolve")
             case Dispute.ParsingEmptyVotes => warn("Dispute state: no vote utxos (unexpected)")
-            case Dispute.WaitingForVotesBeforeDeadline =>
-                info("Dispute state: awaiting peer votes; deadline not yet elapsed")
+            case Dispute.WaitingForVotingDeadline =>
+                info("Dispute state: deferring tally until voting deadline elapses")
             case Dispute.VotingDeadlineElapsed =>
                 info(
                   "Dispute state: voting deadline elapsed; skipping our own vote/ratchet " +
@@ -69,6 +69,9 @@ object RuleBasedActorEventFormat:
             case Dispute.Coil.NoRatchetTarget =>
                 info("Coil dispute state: no ratchet target; falling through to tally/resolve")
 
+            case Tick.RecoverableRetry(reason) =>
+                debug(s"Tick did not complete (recoverable); will retry. Reason: $reason")
+
             case Tx.Building(family) => info(s"Building $family")
             case Tx.Submitting(tx) =>
                 info(s"Submitting ${tx.transactionFamily} with Id ${tx.tx.id}")
@@ -80,6 +83,13 @@ object RuleBasedActorEventFormat:
                 info("No more evacuations to be done. Staying alive in case of rollbacks")
             case Evacuation.PayoutsLeft(n) =>
                 info(s"$n payout obligations left")
+            case Evacuation.ContinuingTreasuryTxs(0) =>
+                info(
+                  "Evacuation: no continuing treasury txs surfaced after the fallback anchor yet; " +
+                      "retrying (NoTreasuryFound)"
+                )
+            case Evacuation.ContinuingTreasuryTxs(n) =>
+                info(s"Evacuation: $n continuing treasury tx(s) surfaced after the fallback anchor")
 
             // Diagnostic-only events carry no production rendering — a test-side diagnostic tracer
             // (composed with `|+|`) formats them. Kept at trace so production stays silent.

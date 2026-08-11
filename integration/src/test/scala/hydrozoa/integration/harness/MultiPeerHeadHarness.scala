@@ -35,6 +35,7 @@ import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, In
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
+import io.circe.{Json, parser}
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -48,7 +49,7 @@ import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.{DurationLong, FiniteDuration}
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CardanoInfo, CertState, ProtocolParams, SlotConfig, Utxos}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, ProtocolParams, SlotConfig, Utxos}
 import test.{GenWithTestPeers, TestPeerName, TestPeers, given}
 
 /** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared L1 —
@@ -147,6 +148,35 @@ object MultiPeerHeadHarness:
             )
     }
 
+    /** Public-testnet timing (Preview): every sub-block window is lifted above Preview's ~20s block
+      * cadence so the protocol doesn't race the chain. Deposit maturity is 2min so the
+      * CardanoLiaison poll — capped at `depositMaturityDuration / 5` — can sit around 20s (see
+      * `previewLiveBackendPollingPeriod`); the settlement/inactivity windows are minutes so the
+      * init window and the Minor→Major deadman don't fire before a block confirms.
+      */
+    val previewTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
+        Gen.const(
+          TxTiming(
+            minSettlementDuration = MinSettlementDuration(3.minutes.quantize(network.slotConfig)),
+            inactivityMarginDuration =
+                InactivityMarginDuration(3.minutes.quantize(network.slotConfig)),
+            silenceDuration = SilenceDuration(40.seconds.quantize(network.slotConfig)),
+            depositSubmissionDuration =
+                DepositSubmissionDuration(40.seconds.quantize(network.slotConfig)),
+            depositMaturityDuration =
+                DepositMaturityDuration(2.minutes.quantize(network.slotConfig)),
+            depositAbsorptionDuration =
+                DepositAbsorptionDuration(5.minutes.quantize(network.slotConfig)),
+          )
+        )
+    }
+
+    /** CardanoLiaison / evacuation-bot poll period for the public Preview backend — kept near one
+      * block (~20s) so per-tick Blockfrost probes don't storm the API, while staying under
+      * `previewTxTiming`'s `depositMaturityDuration / 5` (24s) invariant.
+      */
+    val previewLiveBackendPollingPeriod: FiniteDuration = 20.seconds
+
     /** Static fast voting deadline (5s `votingDuration`) so the deadline-gated tally path unblocks
       * within a wall-clock scenario budget — the default generator picks 1h..5d. Shared by the
       * dispute-flow tests via [[mkResource]]'s default.
@@ -158,6 +188,24 @@ object MultiPeerHeadHarness:
                 votingDuration = QuantizedFiniteDuration(
                   slotConfig = network.slotConfig,
                   finiteDuration = 5.seconds,
+                )
+              )
+            )
+        }
+
+    /** Public-testnet voting deadline. The 5s [[fastDisputeResolutionConfig]] is always already
+      * elapsed by the time the rule-based actor detects fallback and runs the dispute on a slow
+      * live chain, so every peer skips its vote and the dispute resolves to the default (base) map
+      * with no votes. Give the window minutes so peers can actually build + submit + confirm their
+      * vote/ratchet txs on ~20s blocks before the deadline gates the tally.
+      */
+    val previewDisputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
+        ReaderT { (network: TestPeers) =>
+            Gen.const(
+              DisputeResolutionConfig(
+                votingDuration = QuantizedFiniteDuration(
+                  slotConfig = network.slotConfig,
+                  finiteDuration = 5.minutes,
                 )
               )
             )
@@ -214,18 +262,77 @@ object MultiPeerHeadHarness:
         val peerLabel = peerId match
             case PeerId.Head(n) => s"head-$n"
             case PeerId.Coil(n) => s"coil-$n"
-        Slf4jTracer.sink.contramap {
+        val from = LogEvent.From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
+        def emit(e: LogEvent): IO[Unit] = Slf4jTracer.sink.traceWith(e)
+        ContraTracer[IO, FirewalledCardanoBackendEvent] {
             case FirewalledCardanoBackendEvent.DroppedOutboundTx(etx) =>
-                LogEvent
-                    .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                    .warn(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}")
-            case FirewalledCardanoBackendEvent.SubmittedTx(etx, result) =>
-                LogEvent
-                    .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                    .info(
-                      s"firewall passed tx ${etx.tx.id} family=${etx.transactionFamily} result=$result"
-                    )
+                emit(from.warn(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}"))
+            case FirewalledCardanoBackendEvent.SubmittedTx(etx, Right(())) =>
+                emit(
+                  from.info(
+                    s"firewall passed tx ${etx.tx.id} family=${etx.transactionFamily} → accepted"
+                  )
+                )
+            case FirewalledCardanoBackendEvent.SubmittedTx(etx, Left(err)) =>
+                val head =
+                    s"firewall passed tx ${etx.tx.id} family=${etx.transactionFamily} → REJECTED"
+                val (summary, full) = SubmitErrorFormat.summarize(err.getMessage)
+                // INFO: a one-line summary (status code + the actual ledger error); DEBUG: the full
+                // pretty-printed report.
+                emit(from.info(s"$head: $summary")) >>
+                    emit(from.debug(s"$head — full submit error:\n$full"))
         }
+
+    /** Renders a Blockfrost submit-error blob (`{error, message, status_code}`, whose `message` is
+      * usually a stringified ledger-error JSON) into a one-line summary (for INFO) and a
+      * pretty-printed full report (for DEBUG). Falls back to the raw string when it isn't JSON.
+      */
+    private object SubmitErrorFormat:
+        def summarize(raw: String): (String, String) =
+            parser.parse(raw) match
+                case Left(_) => (truncate(raw), raw)
+                case Right(json) =>
+                    val c = json.hcursor
+                    val status = c.get[Int]("status_code").toOption
+                    val topError = c.get[String]("error").toOption
+                    val messageStr = c.get[String]("message").toOption
+                    val messageJson = messageStr.flatMap(s => parser.parse(s).toOption)
+                    val ledgerErrors = messageJson.map(collectLedgerErrors).getOrElse(Nil)
+                    val body =
+                        if ledgerErrors.nonEmpty then ledgerErrors.mkString("; ")
+                        else
+                            messageStr
+                                .map(m => truncate(m))
+                                .orElse(topError)
+                                .getOrElse("(no message)")
+                    val summary =
+                        status.fold(body)(s => topError.fold(s"[$s] $body")(e => s"[$s $e] $body"))
+                    // Re-embed the parsed message so the DEBUG report is a readable tree, not a
+                    // string-of-JSON.
+                    val fullJson =
+                        messageJson.fold(json)(mj => json.mapObject(_.add("message", mj)))
+                    (summary, fullJson.spaces2)
+
+        /** Every `"error": [<strings>]` array anywhere in the ledger-error tree (the
+          * `Conway*Failure` messages).
+          */
+        private def collectLedgerErrors(json: Json): List[String] =
+            json.fold(
+              jsonNull = Nil,
+              jsonBoolean = _ => Nil,
+              jsonNumber = _ => Nil,
+              jsonString = _ => Nil,
+              jsonArray = _.toList.flatMap(collectLedgerErrors),
+              jsonObject = obj =>
+                  val here = obj("error")
+                      .flatMap(_.asArray)
+                      .map(_.toList.flatMap(_.asString))
+                      .getOrElse(Nil)
+                  here ++ obj.values.toList.flatMap(collectLedgerErrors)
+            )
+
+        private def truncate(s: String, n: Int = 300): String =
+            if s.length <= n then s else s.take(n) + "…"
 
     /** The standard head-peer handle for the dispute-flow tests: each head peer exposes its
       * `RequestSequencer.Handle`; coil peers expose `None`.
@@ -353,6 +460,16 @@ object MultiPeerHeadHarness:
         // Real on-chain script references (deployed on a Yaci devnet); `None` fabricates them,
         // which only works against the mock backend.
         scriptReferenceUtxos: Option[ScriptReferenceUtxos] = None,
+        // Poll period for a real (script-refs-present) backend's CardanoLiaison + evacuation bot.
+        // The mock path ignores it (it polls sub-second). Defaults to 1s for the Yaci devnet; raise
+        // it (see `previewLiveBackendPollingPeriod`) for a slower public testnet so per-tick
+        // Blockfrost probes stay near the block cadence.
+        liveBackendPollingPeriod: FiniteDuration = 1.second,
+        // Total L2 equity (split across head peers) the init generator draws from. Each peer's
+        // genesis UTxO must exceed `contingency + its equity share + ~20 ADA`, so a tight funding
+        // budget (a public testnet funded from one wallet) can cap this low to keep the per-peer
+        // floor small. Default matches `GenWithDeps`'s own range.
+        equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000),
     ): PropertyM[IO, (Option[Instant], MultiNodeConfig)] =
         for {
             takeoffTime <- PropertyM.run(
@@ -373,7 +490,8 @@ object MultiPeerHeadHarness:
                                 Gen.const(
                                   testPeerToUtxos.map { case (k, v) => k.headPeerNumber -> v }
                                 )
-                            )
+                            ),
+                            equityRange = equityRange,
                           )
                         ),
                         generateScriptReferenceUtxos = scriptReferenceUtxos
@@ -397,29 +515,32 @@ object MultiPeerHeadHarness:
                     generateNodeOperationEvacuationConfig = w =>
                         Gen.const(
                           NodeOperationEvacuationConfig(
-                            // Mock (no real script refs) polls fast; a real Yaci backend polls
-                            // every 1s so per-tick blockfrost probes don't overwhelm the yaci-store.
+                            // Mock (no real script refs) polls fast; a real Blockfrost-backed
+                            // backend polls at `liveBackendPollingPeriod` so per-tick probes don't
+                            // overwhelm the store (yaci) / API (public testnet).
                             evacuationBotPollingPeriod =
-                                if scriptReferenceUtxos.isDefined then 1.second else 100.millis,
+                                if scriptReferenceUtxos.isDefined then liveBackendPollingPeriod
+                                else 100.millis,
                             ruleBasedWallet = w,
                           )
                         ),
                     generateNodeOperationMultisigConfig = hc =>
                         val nomc = generateNodeOperationMultisigConfig(
                           maxPollingPeriod =
-                              if scriptReferenceUtxos.isDefined then 1.second
+                              if scriptReferenceUtxos.isDefined then liveBackendPollingPeriod
                               else hc.maxCardanoLiaisonPollingPeriod / 2,
                           rateLimits = RateLimits(
                             softBlockMinPeriod = 500.millis,
                             hardStackMinPeriod = 250.millis,
                           ),
                         )
-                        // Yaci: pin the CL poll to exactly 1s (not a uniform sample up to 1s) so it
-                        // doesn't storm the yaci-store with sub-second resubmits of an in-flight
-                        // effect. `yaciTxTiming`'s 6s deposit maturity keeps this within the
-                        // `CL <= depositMaturityDuration / 5` invariant.
+                        // Real backend: pin the CL poll to exactly `liveBackendPollingPeriod` (not a
+                        // uniform sample up to it) so it doesn't storm the store/API with
+                        // sub-period resubmits of an in-flight effect. The chosen timing's deposit
+                        // maturity keeps this within the `CL <= depositMaturityDuration / 5`
+                        // invariant (6s for yaci, 2min for preview).
                         if scriptReferenceUtxos.isDefined then
-                            nomc.map(_.copy(cardanoLiaisonPollingPeriod = 1.second))
+                            nomc.map(_.copy(cardanoLiaisonPollingPeriod = liveBackendPollingPeriod))
                         else nomc
                   )
                   .label("MultiNodeConfig")
@@ -702,15 +823,22 @@ object MultiPeerHeadHarness:
     // ===================================
 
     object CardanoBackend:
-        /** Which L1 every peer shares: an in-memory mock, or a real Yaci devnet reached over its
-          * Blockfrost-compatible API. `Yaci` carries the devnet's `Custom` network (built from
-          * `DevKit.devnetInfo`) so protocol evaluation and slot arithmetic line up with the chain.
+        /** Which L1 every peer shares: an in-memory mock, a real Yaci devnet, or a public testnet —
+          * the latter two both reached over a Blockfrost(-compatible) API. `Yaci` / `Public` carry
+          * a `Custom` network (Yaci's from `DevKit.devnetInfo`, Preview's from [[previewNetwork]])
+          * so protocol evaluation and slot arithmetic line up with the chain. `Public` also carries
+          * the Blockfrost project id (`apiKey`); the Yaci store needs none.
           */
         enum Mode:
             case Mock
             case Yaci(
                 network: CardanoNetwork.Custom,
                 url: String = DevKit.defaultBlockfrostApiBaseUri
+            )
+            case Public(
+                network: CardanoNetwork.Custom,
+                url: String,
+                apiKey: String,
             )
 
         /** The Yaci devnet's `Custom` network from a live `devKit.devnetInfo` query: its slot
@@ -740,6 +868,29 @@ object MultiPeerHeadHarness:
                 CardanoNetwork.Custom(cardanoInfo, info.protocolMagic.toLong)
             }
 
+        /** Preview's `Custom` network with LIVE protocol params fetched from Blockfrost. Mirrors
+          * [[yaciNetwork]] but takes Preview's fixed slot config + protocol magic straight from
+          * `CardanoInfo.preview` (no per-devnet block-time query). Fetching the live params —
+          * rather than the bundled `CardanoInfo.preview` cost models, which drift from the chain —
+          * is what keeps the Plutus deploy/dispute/evacuation txs from failing
+          * `PPViewHashesDontMatch`.
+          */
+        def previewNetwork(apiKey: String): IO[CardanoNetwork.Custom] =
+            val backend = CardanoBackendBlockfrost.apply_(
+              Left(CardanoNetwork.Preview),
+              apiKey,
+              tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat),
+            )
+            backend.fetchLatestParams.flatMap(IO.fromEither).map { params =>
+                val base = CardanoInfo.preview
+                val cardanoInfo = CardanoInfo(
+                  protocolParams = params,
+                  network = base.network,
+                  slotConfig = base.slotConfig,
+                )
+                CardanoNetwork.Custom(cardanoInfo, CardanoNetwork.Preview.protocolMagic)
+            }
+
         /** Build the shared L1 backend and its `l1Snapshot` for the chosen [[Mode]]. */
         def mk(
             mode: Mode,
@@ -750,53 +901,66 @@ object MultiPeerHeadHarness:
             tracer: ContraTracer[IO, CardanoBackendEvent],
             extraSnapshotAddresses: Set[ShelleyAddress],
         ): IO[(L1Backend[IO], IO[Utxos])] =
+            def snapshotAddresses =
+                blockfrostSnapshotAddresses(
+                  preinitPeerUtxosL1,
+                  cardanoInfo,
+                  headMultisigAddress,
+                  extraSnapshotAddresses,
+                )
             mode match
                 case Mode.Mock => mkMock(preinitPeerUtxosL1, scriptReferenceUtxos, cardanoInfo)
                 case Mode.Yaci(network, url) =>
-                    // Blockfrost has no "all UTxOs" query, so scope the snapshot to the addresses
-                    // that hold head-relevant UTxOs: the pre-init peer wallets (from
-                    // `preinitPeerUtxosL1`), the treasury + dispute script addresses (where head
-                    // funds and open disputes sit), the deploy-time burn address (where the
-                    // treasury + dispute reference scripts and the G2 setup ladder rungs live), and
-                    // the head multisig address (where the regime witness utxo lives, both before
-                    // and after fallback — the treasury moves to the rule-based address on fallback
-                    // but the regime witness stays), plus any `extraSnapshotAddresses` the test
-                    // supplies (e.g. the RBR evacuation payout address). That matches the mock
-                    // backend's whole-ledger view for the head's slice.
-                    val peerAddresses = preinitPeerUtxosL1.values
-                        .flatMap(_.values.map(_.address))
-                        .collect { case a: ShelleyAddress => a }
-                        .toSet
-                    val scriptAddresses = Set(
-                      HydrozoaBlueprint.mkTreasuryAddress(cardanoInfo.network),
-                      HydrozoaBlueprint.mkDisputeAddress(cardanoInfo.network),
-                      DeploymentTx.mkBurnAddress(cardanoInfo.network),
-                      headMultisigAddress,
-                    )
-                    mkYaci(
-                      network,
-                      url,
-                      peerAddresses ++ scriptAddresses ++ extraSnapshotAddresses,
-                      tracer
-                    )
+                    mkBlockfrost(network, url, snapshotAddresses, tracer)
+                case Mode.Public(network, url, apiKey) =>
+                    mkBlockfrost(network, url, snapshotAddresses, tracer, apiKey)
 
-        /** Real Yaci devnet backend over its Blockfrost-compatible API, shared by every peer (the
-          * devnet is the shared ledger). The `l1Snapshot` unions the UTxOs at each address the
-          * caller supplies (peer wallets + treasury/dispute script addresses + deploy burn address
-          * — see the `Mode.Yaci` branch of [[mk]] for the composition).
+        /** Addresses to scope a Blockfrost `l1Snapshot` to (Blockfrost has no "all UTxOs" query):
+          * the pre-init peer wallets (from `preinitPeerUtxosL1`), the treasury + dispute script
+          * addresses (where head funds and open disputes sit), the deploy-time burn address (where
+          * the treasury + dispute reference scripts and the G2 setup ladder rungs live), the head
+          * multisig address (where the regime witness utxo lives, before and after fallback — the
+          * treasury moves to the rule-based address on fallback but the regime witness stays), and
+          * any `extraSnapshotAddresses` the test supplies (e.g. the RBR evacuation payout address).
+          * That matches the mock backend's whole-ledger view for the head's slice.
           */
-        def mkYaci(
+        private def blockfrostSnapshotAddresses(
+            preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
+            cardanoInfo: CardanoInfo,
+            headMultisigAddress: ShelleyAddress,
+            extraSnapshotAddresses: Set[ShelleyAddress],
+        ): Set[ShelleyAddress] =
+            val peerAddresses = preinitPeerUtxosL1.values
+                .flatMap(_.values.map(_.address))
+                .collect { case a: ShelleyAddress => a }
+                .toSet
+            val scriptAddresses = Set(
+              HydrozoaBlueprint.mkTreasuryAddress(cardanoInfo.network),
+              HydrozoaBlueprint.mkDisputeAddress(cardanoInfo.network),
+              DeploymentTx.mkBurnAddress(cardanoInfo.network),
+              headMultisigAddress,
+            )
+            peerAddresses ++ scriptAddresses ++ extraSnapshotAddresses
+
+        /** Real Blockfrost-backed L1 shared by every peer (the chain is the shared ledger). Serves
+          * both the Yaci devnet (empty `apiKey`) and a public testnet (Blockfrost project id). The
+          * `l1Snapshot` unions the UTxOs at each address the caller supplies (see
+          * [[blockfrostSnapshotAddresses]]).
+          */
+        def mkBlockfrost(
             network: CardanoNetwork.Custom,
             url: String,
             snapshotAddresses: Set[ShelleyAddress],
             tracer: ContraTracer[IO, CardanoBackendEvent],
+            apiKey: String = "",
         ): IO[(L1Backend[IO], IO[Utxos])] =
-            CardanoBackendBlockfrost(Right((network, url)), tracer = tracer).map { backend =>
-                val snapshot: IO[Utxos] =
-                    snapshotAddresses.toList
-                        .traverse(a => backend.utxosAt(a).flatMap(IO.fromEither))
-                        .map(_.foldLeft(Map.empty: Utxos)(_ ++ _))
-                (backend, snapshot)
+            CardanoBackendBlockfrost(Right((network, url)), apiKey = apiKey, tracer = tracer).map {
+                backend =>
+                    val snapshot: IO[Utxos] =
+                        snapshotAddresses.toList
+                            .traverse(a => backend.utxosAt(a).flatMap(IO.fromEither))
+                            .map(_.foldLeft(Map.empty: Utxos)(_ ++ _))
+                    (backend, snapshot)
             }
 
         /** Single mock L1 shared by every peer, seeded with the merged pre-init UTxOs plus the
