@@ -43,6 +43,7 @@ class PrometheusFormatTest extends AnyFunSuite:
         )
       ),
       mempoolSize = 923,
+      leaderMempoolDrain = 900,
       sequencerHeadroom = 12
     )
 

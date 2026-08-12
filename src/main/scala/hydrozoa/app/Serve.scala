@@ -113,10 +113,17 @@ object Serve {
             // lifetime. In-memory only — counters reset on restart.
             metrics <- Resource.eval(
               IO.realTime.map(t =>
-                  PeerMetrics.create(
-                    t.toMillis,
-                    nodeConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
-                  )
+                  // Track only remote head peers: this peer never sends requests to itself, so
+                  // its own `peerRequests` entry would be a constant zero (see PeerMetrics.create).
+                  val ownHeadNum = nodeConfig.ownPeerId match {
+                      case PeerId.Head(n) => Some(n.convert)
+                      case PeerId.Coil(_) => None
+                  }
+                  val remotePeerNums = nodeConfig.headConfig.headPeerNums.toList
+                      .map(_.convert)
+                      .filterNot(ownHeadNum.contains)
+                      .toVector
+                  PeerMetrics.create(t.toMillis, remotePeerNums)
               )
             )
             _ <- metrics.sampler().background

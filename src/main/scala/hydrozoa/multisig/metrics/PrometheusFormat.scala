@@ -130,6 +130,11 @@ object PrometheusFormat:
 
         gauge("hydrozoa_mempool_size", "Requests held in the BlockWeaver mempool.", s.mempoolSize)
         gauge(
+          "hydrozoa_leader_mempool_drain",
+          "Requests the last lead pulled from the mempool into its block.",
+          s.leaderMempoolDrain
+        )
+        gauge(
           "hydrozoa_sequencer_headroom",
           "Requests the sequencer will admit now before backpressure trips.",
           s.sequencerHeadroom
