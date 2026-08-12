@@ -143,8 +143,10 @@ abstract class PeerLiaisonHeadToHead(
 
     // The remote head peer's confirmed request high-water, learned from the local FastConsensusActor
     // on each soft-confirmation and merged by max. Anchors the request pull ceiling
-    // (confirmed + maxRequestsPerBlock) so this peer never buffers more than one cap of the remote's
-    // unconfirmed requests. Seeded on boot from the restored inbound request cursor.
+    // (confirmed + backpressureCoefficient * maxRequestsPerBlock) so this peer buffers up to the same
+    // window the remote is allowed to sequence into, and can always reproduce a block whose (possibly
+    // prioritized own) requests sit anywhere in that window. Seeded on boot from the restored inbound
+    // request cursor.
     private val confirmedRemoteRequestHighWater =
         Ref.unsafe[IO, RequestNumber](RequestNumber.zero)
 
@@ -175,10 +177,14 @@ abstract class PeerLiaisonHeadToHead(
     private def stackInitialCursor: StackNumber =
         remoteHead.nextSlowLeaderStack(StackNumber.zero)
 
-    /** The request pull ceiling for a given confirmed high-water: one block's cap beyond it. */
+    /** The request pull ceiling for a given confirmed high-water: `backpressureCoefficient` blocks'
+      * cap beyond it — matched to the sequencer's admission window so a follower can always pull as
+      * far ahead as any leader is allowed to sequence, avoiding a reproduction stall when a leader
+      * packs prioritized own requests deep into that window.
+      */
     private def requestCeiling(confirmed: RequestNumber): RequestNumber =
         val confirmedLong: Long = confirmed
-        RequestNumber(confirmedLong + config.maxRequestsPerBlock)
+        RequestNumber(confirmedLong + config.backpressureCoefficient * config.maxRequestsPerBlock)
 
     private def buildGet(batchNum: BatchNumber): IO[Mesh.Get] =
         for {

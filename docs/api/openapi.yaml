@@ -909,6 +909,37 @@ components:
           - minor
           - major
           - final
+    BlockTiming:
+      title: BlockTiming
+      type: object
+      required:
+      - blockNumber
+      - millis
+      - requests
+      properties:
+        blockNumber:
+          type: integer
+          format: int64
+        millis:
+          type: integer
+          format: int64
+        requests:
+          type: integer
+          format: int64
+    BlockTimingSet:
+      title: BlockTimingSet
+      type: object
+      required:
+      - lead
+      - replay
+      - softConsensus
+      properties:
+        lead:
+          $ref: '#/components/schemas/TimingStats'
+        replay:
+          $ref: '#/components/schemas/TimingStats'
+        softConsensus:
+          $ref: '#/components/schemas/TimingStats'
     Deposit:
       title: Deposit
       type: object
@@ -1261,6 +1292,9 @@ components:
       - localRequests
       - blocks
       - stacks
+      - blockTimings
+      - mempoolSize
+      - sequencerHeadroom
       properties:
         uptimeSeconds:
           type: integer
@@ -1275,6 +1309,14 @@ components:
           $ref: '#/components/schemas/BlockStats'
         stacks:
           $ref: '#/components/schemas/StackStats'
+        blockTimings:
+          $ref: '#/components/schemas/BlockTimingSet'
+        mempoolSize:
+          type: integer
+          format: int64
+        sequencerHeadroom:
+          type: integer
+          format: int64
     RateStats:
       title: RateStats
       type: object
@@ -1600,6 +1642,27 @@ components:
         type:
           type: string
           const: transaction
+    TimingStats:
+      title: TimingStats
+      type: object
+      required:
+      - count
+      - avgMillis
+      - avgMillisPerRequest
+      properties:
+        count:
+          type: integer
+          format: int64
+        avgMillis:
+          type: number
+          format: double
+        avgMillisPerRequest:
+          type: number
+          format: double
+        top:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockTiming'
     Transaction:
       title: Transaction
       type: object
