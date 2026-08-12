@@ -268,16 +268,38 @@ lazy val integration: Project = (project in file("integration"))
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
-      // Yaci suite requires a running Yaci DevKit instance; exclude from default test run.
-      // Run explicitly with: integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci
+      // Yaci suites require Docker / a running Yaci DevKit instance; exclude from default test run.
+      // Run explicitly, e.g.: integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci
       // NB: using * with testOnly still respects the excluded tests
       Test / testOptions += Tests.Exclude(
-        Seq("hydrozoa.integration.stage1.Stage1PropertiesYaci")
+        Seq(
+          "hydrozoa.integration.stage1.Stage1PropertiesYaci",
+          "hydrozoa.integration.yaci.YaciDevnetSmokeTest",
+          "hydrozoa.integration.yaci.YaciSetupProbe",
+          "hydrozoa.integration.yaci.YaciMultiPeerProbe"
+        )
       ),
       // test dependencies
       libraryDependencies ++= Seq(
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
-        "org.typelevel" %% "cats-effect" % "3.6.3" % Test
+        "org.typelevel" %% "cats-effect" % "3.6.3" % Test,
+        // Bloxbean's `yaci-cardano-test:0.1.0` (transitively via scalus-testkit) pins
+        // testcontainers-java to 1.17.6 → docker-java 3.2.13 → Docker Engine API 1.32, which
+        // modern rootless dockerd (>=API 1.40) refuses. Declare a newer testcontainers directly
+        // so `YaciCardanoContainer.start` can talk to the daemon.
+        "org.testcontainers" % "testcontainers" % "1.21.3" % Test
+      ),
+      // testcontainers' `DockerClientProviderStrategy.getClientForConfig` unconditionally forces
+      // the shaded docker-java `apiVersion` to `VERSION_1_32` whenever the config resolves to
+      // `UNKNOWN_VERSION` (a compat fallback for pre-1.24 daemons). Modern rootless dockerd
+      // rejects `/v1.32/*` because its `MinAPIVersion` is 1.40. Setting the `api.version` system
+      // property makes the config non-UNKNOWN, so the strategy skips the fallback and negotiates
+      // properly. Must be forked so the property reaches the strategy static-init.
+      Test / fork := true,
+      Test / javaOptions ++= Seq(
+        "--enable-native-access=ALL-UNNAMED",
+        "--sun-misc-unsafe-memory-access=allow",
+        "-Dapi.version=1.44"
       )
     )
 

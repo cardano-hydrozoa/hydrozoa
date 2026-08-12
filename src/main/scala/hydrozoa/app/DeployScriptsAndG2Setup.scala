@@ -135,8 +135,6 @@ object DeployScriptsAndG2Setup:
             _ <- log.info(s"Target network (from the Blockfrost key): $cardanoNetwork")
 
             wallet <- readWallet(walletPath)
-            address = wallet.exportVerificationKey.shelleyAddress()(using cardanoNetwork)
-            _ <- log.info(s"Funding wallet address: ${address.toBech32.get}")
 
             reusedLadderInputs <- ladderRefsPath.traverse(readLadderInputs)
 
@@ -145,6 +143,41 @@ object DeployScriptsAndG2Setup:
               blockfrostKey,
               tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
+
+            unresolved <- deploy(backend, wallet, reusedLadderInputs)
+            _ <- IO.blocking {
+                Option(outPath.getParent).foreach(Files.createDirectories(_))
+                Files.writeString(outPath, unresolved.asJson.spaces2)
+            }
+            _ <- log.info(s"Wrote script reference inputs to $outPath")
+            // Print the deployed script hashes so the operator can diff them against the release's
+            // expected hashes (and the head config) without resolving the reference UTxOs by hand.
+            _ <- log.info(
+              s"Deployed treasury script hash: ${HydrozoaBlueprint.treasuryScriptHash.toHex}"
+            )
+            _ <- log.info(
+              s"Deployed dispute script hash:  ${HydrozoaBlueprint.disputeScriptHash.toHex}"
+            )
+            _ <- log.info(
+              s"Explorer: https://$explorerHost/tx/" +
+                  unresolved.rulebasedTreasuryScriptInput.transactionId.toHex
+            )
+        } yield ExitCode.Success
+    }
+
+    /** Build, sign, submit, and await the treasury + dispute deployment reference scripts (and,
+      * unless `reusedLadderInputs` is given, the G2 setup ladder) from `wallet`'s funding UTxOs on
+      * `backend`, returning the deployed reference inputs. Shared by the CLI and the integration
+      * harness (Yaci).
+      */
+    def deploy(
+        backend: CardanoBackend[IO],
+        wallet: PeerWallet,
+        reusedLadderInputs: Option[List[TransactionInput]] = None,
+    )(using CardanoNetwork.Section): IO[ScriptReferenceUtxos.Unresolved] =
+        for {
+            address <- IO.pure(wallet.exportVerificationKey.shelleyAddress())
+            _ <- log.info(s"Funding wallet address: ${address.toBech32.get}")
 
             utxosMap <- backend
                 .utxosAt(address)
@@ -230,30 +263,11 @@ object DeployScriptsAndG2Setup:
             _ <- awaitUtxo(backend, treasuryTx.deployedUtxos.head)
             _ <- awaitUtxo(backend, disputeTx.deployedUtxos.head)
             _ <- ladderInputs.traverse_(awaitUtxo(backend, _))
-
-            unresolved = ScriptReferenceUtxos.Unresolved(
-              rulebasedTreasuryScriptInput = treasuryTx.deployedUtxos.head,
-              disputeResolutionScriptInput = disputeTx.deployedUtxos.head,
-              setupLadderInputs = ladderInputs
-            )
-            _ <- IO.blocking {
-                Option(outPath.getParent).foreach(Files.createDirectories(_))
-                Files.writeString(outPath, unresolved.asJson.spaces2)
-            }
-            _ <- log.info(s"Wrote script reference inputs to $outPath")
-            // Print the deployed script hashes so the operator can diff them against the release's
-            // expected hashes (and the head config) without resolving the reference UTxOs by hand.
-            _ <- log.info(
-              s"Deployed treasury script hash: ${HydrozoaBlueprint.treasuryScriptHash.toHex}"
-            )
-            _ <- log.info(
-              s"Deployed dispute script hash:  ${HydrozoaBlueprint.disputeScriptHash.toHex}"
-            )
-            _ <- log.info(
-              s"Explorer: https://$explorerHost/tx/${treasuryTx.deployedUtxos.head.transactionId.toHex}"
-            )
-        } yield ExitCode.Success
-    }
+        } yield ScriptReferenceUtxos.Unresolved(
+          rulebasedTreasuryScriptInput = treasuryTx.deployedUtxos.head,
+          disputeResolutionScriptInput = disputeTx.deployedUtxos.head,
+          setupLadderInputs = ladderInputs
+        )
 
     /** Derive the target network from the Blockfrost key's network prefix. */
     private def networkOfBlockfrostKey(key: String): Either[Throwable, StandardCardanoNetwork] =

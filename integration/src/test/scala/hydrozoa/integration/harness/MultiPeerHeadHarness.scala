@@ -18,9 +18,11 @@ import hydrozoa.config.head.{HeadConfig, InitParamsType, generateHeadConfig, gen
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos, generateScriptReferenceUtxos as defaultScriptRefsGen}
+import hydrozoa.integration.yaci.DevKit
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
-import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendBlockfrost, CardanoBackendEvent, CardanoBackendEventFormat, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
@@ -33,6 +35,7 @@ import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
+import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -44,12 +47,13 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.{HttpRoutes, Uri}
 import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.{DurationLong, FiniteDuration}
+import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
+import scalus.cardano.ledger.{CardanoInfo, CertState, ProtocolParams, SlotConfig, Utxos}
 import test.{GenWithTestPeers, TestPeerName, TestPeers, given}
 
-/** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared mock
-  * L1.
+/** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared L1 —
+  * an in-memory mock (default) or a real Yaci devnet, selected via [[CardanoBackend.Mode]].
   *
   * Test-side concerns (capture observers, signal `Deferred`s, custom per-peer handle types like
   * stage4's `Stage4PeerHandle`) are injected via [[Hooks]] — the harness threads test-provided
@@ -128,6 +132,20 @@ object MultiPeerHeadHarness:
                 DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
           )
         )
+    }
+
+    /** Yaci-backend timing: [[fastTxTiming]] with a longer deposit-maturity window so the
+      * CardanoLiaison poll period can be slowed to ~1s without hammering the yaci-store. The CL
+      * period is capped at `depositMaturityDuration / 5`, so a 1s CL needs maturity >= 5s.
+      */
+    val yaciTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
+        fastTxTiming
+            .run(network)
+            .map(
+              _.copy(depositMaturityDuration =
+                  DepositMaturityDuration(6.seconds.quantize(network.slotConfig))
+              )
+            )
     }
 
     /** Static fast voting deadline (5s `votingDuration`) so the deadline-gated tally path unblocks
@@ -252,6 +270,7 @@ object MultiPeerHeadHarness:
         takeoffTime: Option[Instant],
         tracer: ContraTracer[IO, Event],
         wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO],
+        cardanoBackendMode: CardanoBackend.Mode = CardanoBackend.Mode.Mock,
     ): Resource[IO, Harness[Option[RequestSequencer.Handle]]] =
         val preinitPeerUtxosL1 =
             yaciTestSauceGenesis(testPeers.cardanoNetwork.network)(testPeers).map {
@@ -269,6 +288,7 @@ object MultiPeerHeadHarness:
               label = label,
               backendMode = StorageBackend.Mode.InMemory,
               transportMode = transportMode,
+              cardanoBackendMode = cardanoBackendMode,
             ),
             multiNodeConfig = multiNodeConfig,
             coilNodeConfigs = coilNodeConfigs,
@@ -327,6 +347,9 @@ object MultiPeerHeadHarness:
             fastDisputeResolutionConfig,
         coilPeers: CoilPeers = CoilPeers.empty,
         coilQuorum: Int = 0,
+        // Real on-chain script references (deployed on a Yaci devnet); `None` fabricates them,
+        // which only works against the mock backend.
+        scriptReferenceUtxos: Option[ScriptReferenceUtxos] = None,
     ): PropertyM[IO, (Option[Instant], MultiNodeConfig)] =
         for {
             takeoffTime <- PropertyM.run(
@@ -350,6 +373,8 @@ object MultiPeerHeadHarness:
                             )
                           )
                         ),
+                        generateScriptReferenceUtxos = scriptReferenceUtxos
+                            .fold(defaultScriptRefsGen)(refs => ReaderT.liftF(Gen.const(refs))),
                         coilPeers = coilPeers,
                       ),
                       generateInitialBlock = (bootstrap, funding) =>
@@ -390,6 +415,7 @@ object MultiPeerHeadHarness:
         label: String,
         backendMode: StorageBackend.Mode,
         transportMode: Transport.Mode,
+        cardanoBackendMode: CardanoBackend.Mode = CardanoBackend.Mode.Mock,
     )
 
     case class Inputs(
@@ -474,10 +500,12 @@ object MultiPeerHeadHarness:
 
             system <- ActorSystem[IO](label)
             backendAndSnapshot <- Resource.eval(
-              CardanoBackend.mkMock(
+              CardanoBackend.mk(
+                cardanoBackendMode,
                 preinitPeerUtxosL1,
                 multiNodeConfig.headConfig.scriptReferenceUtxos,
                 multiNodeConfig.headConfig.cardanoInfo,
+                Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat),
               )
             )
             (cardanoBackend, l1Snapshot) = backendAndSnapshot
@@ -650,10 +678,93 @@ object MultiPeerHeadHarness:
                 }
 
     // ===================================
-    // CardanoBackend — shared mock L1
+    // CardanoBackend — shared L1 (mock or Yaci devnet)
     // ===================================
 
     object CardanoBackend:
+        /** Which L1 every peer shares: an in-memory mock, or a real Yaci devnet reached over its
+          * Blockfrost-compatible API. `Yaci` carries the devnet's `Custom` network (built from
+          * `DevKit.devnetInfo`) so protocol evaluation and slot arithmetic line up with the chain.
+          */
+        enum Mode:
+            case Mock
+            case Yaci(
+                network: CardanoNetwork.Custom,
+                url: String = DevKit.defaultBlockfrostApiBaseUri
+            )
+
+        /** The Yaci devnet's `Custom` network from a live `devKit.devnetInfo` query: its slot
+          * config (zeroTime/slotLength) and protocol magic, with the devnet protocol params. Call
+          * after `devKit.reset()` so the slot anchor matches the fresh chain.
+          */
+        def yaciNetwork(
+            devKit: DevKit = DevKit.localhost,
+            protocolParams: Option[ProtocolParams] = None,
+        ): IO[CardanoNetwork.Custom] =
+            for {
+                info <- IO.blocking(devKit.devnetInfo())
+                params <- protocolParams.fold(IO.blocking(devKit.protocolParams()))(IO.pure)
+            } yield {
+                val cardanoInfo = CardanoInfo(
+                  protocolParams = params,
+                  network = Network.Testnet,
+                  slotConfig = SlotConfig(
+                    zeroTime = java.time.Instant.ofEpochSecond(info.startTime).toEpochMilli,
+                    zeroSlot = 0,
+                    slotLength = info.slotLength * 1_000L,
+                  ),
+                )
+                CardanoNetwork.Custom(cardanoInfo, info.protocolMagic.toLong)
+            }
+
+        /** Build the shared L1 backend and its `l1Snapshot` for the chosen [[Mode]]. */
+        def mk(
+            mode: Mode,
+            preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
+            scriptReferenceUtxos: hydrozoa.config.ScriptReferenceUtxos,
+            cardanoInfo: CardanoInfo,
+            tracer: ContraTracer[IO, CardanoBackendEvent],
+        ): IO[(L1Backend[IO], IO[Utxos])] =
+            mode match
+                case Mode.Mock => mkMock(preinitPeerUtxosL1, scriptReferenceUtxos, cardanoInfo)
+                case Mode.Yaci(network, url) =>
+                    // Blockfrost has no "all UTxOs" query, so scope the snapshot to the addresses
+                    // that hold head-relevant UTxOs: the pre-init peer wallets (from
+                    // `preinitPeerUtxosL1`), the treasury + dispute script addresses (where head
+                    // funds and open disputes sit), and the deploy-time burn address (where the
+                    // treasury + dispute reference scripts and the G2 setup ladder rungs live).
+                    // That matches the mock backend's whole-ledger view for the head's slice.
+                    val peerAddresses = preinitPeerUtxosL1.values
+                        .flatMap(_.values.map(_.address))
+                        .collect { case a: ShelleyAddress => a }
+                        .toList
+                        .distinct
+                    val scriptAddresses = List(
+                      HydrozoaBlueprint.mkTreasuryAddress(cardanoInfo.network),
+                      HydrozoaBlueprint.mkDisputeAddress(cardanoInfo.network),
+                      DeploymentTx.mkBurnAddress(cardanoInfo.network),
+                    )
+                    mkYaci(network, url, peerAddresses ++ scriptAddresses, tracer)
+
+        /** Real Yaci devnet backend over its Blockfrost-compatible API, shared by every peer (the
+          * devnet is the shared ledger). The `l1Snapshot` unions the UTxOs at each address the
+          * caller supplies (peer wallets + treasury/dispute script addresses + deploy burn address
+          * — see the `Mode.Yaci` branch of [[mk]] for the composition).
+          */
+        def mkYaci(
+            network: CardanoNetwork.Custom,
+            url: String,
+            snapshotAddresses: List[ShelleyAddress],
+            tracer: ContraTracer[IO, CardanoBackendEvent],
+        ): IO[(L1Backend[IO], IO[Utxos])] =
+            CardanoBackendBlockfrost(Right((network, url)), tracer = tracer).map { backend =>
+                val snapshot: IO[Utxos] =
+                    snapshotAddresses
+                        .traverse(a => backend.utxosAt(a).flatMap(IO.fromEither))
+                        .map(_.foldLeft(Map.empty: Utxos)(_ ++ _))
+                (backend, snapshot)
+            }
+
         /** Single mock L1 shared by every peer, seeded with the merged pre-init UTxOs plus the
           * globally-deployed script reference UTxOs (treasury + dispute validators). The head
           * initialization tx is submitted by the protocol through normal operation.
