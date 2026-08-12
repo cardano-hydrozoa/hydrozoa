@@ -532,10 +532,14 @@ final case class RuleBasedActor(
             for {
                 disputeUtxos <- getDisputeUtxos
                 _ <- disputeUtxos match {
-                    // Treasury was Unresolved but the dispute address holds no vote utxos. Per
-                    // the spec this state is unreachable, so escalate (no collateral needed).
+                    // Treasury is Unresolved but the dispute address holds no vote utxos.
+                    // This is a two-query race: the resolution tx (which spends both the Unresolved
+                    // treasury and the ballot boxes) can land between utxosAtTreasury and
+                    // utxosAtDispute. The next tick sees the post-resolution state consistently.
                     case DisputeUtxos.EmptyVotes =>
-                        raiseError(Error.TreasuryUnresolvedButNoVotes)
+                        EitherT.leftT[IO, Unit](
+                          Error.TreasuryUnresolvedButNoVotes: Error.RecoverableErrors
+                        )
                     case DisputeUtxos.CastVote(ownBallotBox) =>
                         getCollateral.flatMap { collateralUtxo =>
                             hasDeadlineElapsed(treasuryUtxo).flatMap {
@@ -682,7 +686,9 @@ final case class RuleBasedActor(
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             classifyResidual(parsed).flatMap {
                 case DisputeUtxos.EmptyVotes =>
-                    raiseError(Error.TreasuryUnresolvedButNoVotes)
+                    EitherT.leftT[IO, Unit](
+                      Error.TreasuryUnresolvedButNoVotes: Error.RecoverableErrors
+                    )
                 case DisputeUtxos.Resolve(finalVoteUtxo) =>
                     resolve(finalVoteUtxo, treasuryUtxo, regimeUtxo, collateralUtxo)
                 case DisputeUtxos.Tally(utxos) =>
@@ -1332,7 +1338,7 @@ object RuleBasedActor {
         sealed trait Unrecoverable extends Exception
 
         // Dispute side
-        case object TreasuryUnresolvedButNoVotes extends Unrecoverable
+        case object TreasuryUnresolvedButNoVotes extends Recoverable
         case class NoCompatibleVoteForTallyingFound(
             voteUtxos: NonEmptyList[BallotBox[VoteStatus]]
         ) extends Unrecoverable {
