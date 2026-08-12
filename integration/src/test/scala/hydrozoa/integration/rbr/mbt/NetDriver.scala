@@ -13,8 +13,7 @@ import scala.annotation.tailrec
   * tally's `continuing.key < removed.key` fold guard makes the contraction confluent — key 0 (the
   * public box) is never removed, so it always survives to the `(0, 0)` terminal — which means
   * firing each phase to saturation reaches the same marking regardless of `nHeadPeers`, the vote
-  * pattern, or the fold order the selector happens to pick. `ObservableMarking` projects the
-  * winning version away, so any resolved version yields the same observable terminal.
+  * pattern, or the fold order the selector happens to pick.
   */
 object NetDriver:
 

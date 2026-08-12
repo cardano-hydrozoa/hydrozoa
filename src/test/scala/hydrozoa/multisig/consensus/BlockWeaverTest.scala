@@ -24,6 +24,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.metrics.PeerMetrics
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Gen, Properties, PropertyM, Test}
@@ -106,9 +107,10 @@ object BlockWeaverTestHelpers {
         for {
             env <- ask
             config = env.multiNodeConfig.nodeConfigs(peerNumber)
-            connections = BlockWeaver.ConnectionsPartial(env.jointLedgerMockActor)
+            metrics = PeerMetrics.create(0L, Vector(peerNumber: Int))
+            connections = BlockWeaver.ConnectionsPartial(env.jointLedgerMockActor, metrics)
             tracer = Slf4jTracer.sink.contramap(BlockWeaverEventFormat.humanFormat(peerNumber))
-            actor <- lift(env.system.actorOf(BlockWeaver(config, connections, tracer)))
+            actor <- lift(env.system.actorOf(BlockWeaver(config, connections, tracer, metrics)))
         } yield actor
 
     /** Empty final block brief for block 1, so Carol reproduces the head's last block and then arms

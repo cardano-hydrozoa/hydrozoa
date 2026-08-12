@@ -8,7 +8,8 @@ import io.circe.generic.semiauto.*
   * datum), so every peer packs and reproduces blocks under the same ceiling.
   */
 final case class BlockConfig(
-    override val maxRequestsPerBlock: PositiveInt
+    override val maxRequestsPerBlock: PositiveInt,
+    override val backpressureCoefficient: PositiveInt = PositiveInt.unsafeApply(3)
 ) extends BlockConfig.Section {
     override transparent inline def blockConfig: BlockConfig = this
 }
@@ -22,9 +23,32 @@ object BlockConfig {
           * ceiling and the request-sequencer backpressure (see docs/spec/fast-consensus.md).
           */
         def maxRequestsPerBlock: PositiveInt = blockConfig.maxRequestsPerBlock
+
+        /** Multiplier on [[maxRequestsPerBlock]] for the **request backpressure window**: a peer
+          * admits at most `backpressureCoefficient * maxRequestsPerBlock` of its own requests
+          * beyond its confirmed high-water before rejecting new ones. A larger coefficient buffers
+          * more client requests through a transient block-production stall before shedding load, at
+          * the cost of a deeper mempool. The mesh request-pull ceiling scales by the **same**
+          * coefficient (`PeerLiaisonHeadToHead`), so a follower can always pull as far ahead as a
+          * leader may sequence — including a leader's prioritized own requests packed deep in the
+          * window — and the cross-peer mempool bound just grows to
+          * `backpressureCoefficient * maxRequestsPerBlock * nHeadPeers`. Head-agreed alongside
+          * `maxRequestsPerBlock`. Default 3.
+          */
+        def backpressureCoefficient: PositiveInt = blockConfig.backpressureCoefficient
     }
 
     given blockConfigEncoder: Encoder[BlockConfig] = deriveEncoder[BlockConfig]
 
-    given blockConfigDecoder: Decoder[BlockConfig] = deriveDecoder[BlockConfig]
+    /** Hand-written so a config produced before `backpressureCoefficient` existed still decodes
+      * (defaulting to 3) rather than failing on the missing field.
+      */
+    given blockConfigDecoder: Decoder[BlockConfig] = Decoder.instance { c =>
+        for {
+            maxRequests <- c.get[PositiveInt]("maxRequestsPerBlock")
+            coefficient <- c.getOrElse[PositiveInt]("backpressureCoefficient")(
+              PositiveInt.unsafeApply(3)
+            )
+        } yield BlockConfig(maxRequests, coefficient)
+    }
 }

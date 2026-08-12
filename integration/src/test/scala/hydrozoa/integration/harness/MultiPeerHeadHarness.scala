@@ -114,39 +114,48 @@ object MultiPeerHeadHarness:
       * tests via [[mkResource]]'s default.
       */
     val fastTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
-        Gen.const(
-          TxTiming(
-            // Init tx window: initEndTime = bcet + minSettlementDuration + inactivityMarginDuration
-            // = 60s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
-            // that or `InitWindowElapsed` fires — carried by minSettlement (30s) so the window is
-            // wide enough for slow/loaded CI runners without touching the Minor→Major deadman
-            // cadence, which is `bcet + inactivityMargin` (minSettlement cancels out).
-            minSettlementDuration = MinSettlementDuration(30.seconds.quantize(network.slotConfig)),
-            inactivityMarginDuration =
-                InactivityMarginDuration(30.seconds.quantize(network.slotConfig)),
-            silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
-            depositSubmissionDuration =
-                DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
-            depositMaturityDuration =
-                DepositMaturityDuration(1.second.quantize(network.slotConfig)),
-            depositAbsorptionDuration =
-                DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
-          )
-        )
+        // Init tx window: initEndTime = bcet + minSettlementDuration + inactivityMarginDuration
+        // = 60s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
+        // that or `InitWindowElapsed` fires — carried by minSettlement (30s) so the window is
+        // wide enough for slow/loaded CI runners without touching the Minor→Major deadman
+        // cadence, which is `bcet + inactivityMargin` (minSettlement cancels out).
+        TxTiming
+            .mk(
+              minSettlementDuration =
+                  MinSettlementDuration(30.seconds.quantize(network.slotConfig)),
+              inactivityMarginDuration =
+                  InactivityMarginDuration(30.seconds.quantize(network.slotConfig)),
+              silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
+              depositSubmissionDuration =
+                  DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
+              depositMaturityDuration =
+                  DepositMaturityDuration(1.second.quantize(network.slotConfig)),
+              depositAbsorptionDuration =
+                  DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
+            )
+            .fold(sys.error, Gen.const)
     }
 
-    /** Yaci-backend timing: [[fastTxTiming]] with a longer deposit-maturity window so the
+    /** Yaci-backend timing: [[fastTxTiming]] values with a longer deposit-maturity window so the
       * CardanoLiaison poll period can be slowed to ~1s without hammering the yaci-store. The CL
       * period is capped at `depositMaturityDuration / 5`, so a 1s CL needs maturity >= 5s.
       */
     val yaciTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
-        fastTxTiming
-            .run(network)
-            .map(
-              _.copy(depositMaturityDuration =
-                  DepositMaturityDuration(6.seconds.quantize(network.slotConfig))
-              )
+        TxTiming
+            .mk(
+              minSettlementDuration =
+                  MinSettlementDuration(30.seconds.quantize(network.slotConfig)),
+              inactivityMarginDuration =
+                  InactivityMarginDuration(30.seconds.quantize(network.slotConfig)),
+              silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
+              depositSubmissionDuration =
+                  DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
+              depositMaturityDuration =
+                  DepositMaturityDuration(6.seconds.quantize(network.slotConfig)),
+              depositAbsorptionDuration =
+                  DepositAbsorptionDuration(7.minutes.quantize(network.slotConfig)),
             )
+            .fold(sys.error, Gen.const)
     }
 
     /** Public-testnet timing (Preview): every sub-block window is lifted above Preview's ~20s block
@@ -156,20 +165,20 @@ object MultiPeerHeadHarness:
       * init window and the Minor→Major deadman don't fire before a block confirms.
       */
     val previewTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
-        Gen.const(
-          TxTiming(
-            minSettlementDuration = MinSettlementDuration(3.minutes.quantize(network.slotConfig)),
-            inactivityMarginDuration =
-                InactivityMarginDuration(3.minutes.quantize(network.slotConfig)),
-            silenceDuration = SilenceDuration(40.seconds.quantize(network.slotConfig)),
-            depositSubmissionDuration =
-                DepositSubmissionDuration(40.seconds.quantize(network.slotConfig)),
-            depositMaturityDuration =
-                DepositMaturityDuration(2.minutes.quantize(network.slotConfig)),
-            depositAbsorptionDuration =
-                DepositAbsorptionDuration(5.minutes.quantize(network.slotConfig)),
-          )
-        )
+        TxTiming
+            .mk(
+              minSettlementDuration = MinSettlementDuration(3.minutes.quantize(network.slotConfig)),
+              inactivityMarginDuration =
+                  InactivityMarginDuration(3.minutes.quantize(network.slotConfig)),
+              silenceDuration = SilenceDuration(40.seconds.quantize(network.slotConfig)),
+              depositSubmissionDuration =
+                  DepositSubmissionDuration(40.seconds.quantize(network.slotConfig)),
+              depositMaturityDuration =
+                  DepositMaturityDuration(2.minutes.quantize(network.slotConfig)),
+              depositAbsorptionDuration =
+                  DepositAbsorptionDuration(7.minutes.quantize(network.slotConfig)),
+            )
+            .fold(sys.error, Gen.const)
     }
 
     /** CardanoLiaison / evacuation-bot poll period for the public Preview backend — kept near one
