@@ -54,7 +54,7 @@ object YaciSetup {
                 _ <- log.info(s"Submitting topups for ${allNames.size} peer address(es)")
                 _ <- allNames.traverse_(n => IO.blocking(devKit.topup(addrOf(n), genesisFunding)))
                 _ <- log.info("Topups submitted; awaiting on-chain confirmation")
-                _ <- allNames.traverse_(n => awaitFunded(backend, addrOf(n)))
+                _ <- allNames.parTraverse_(n => awaitFunded(backend, addrOf(n)))
                 _ <- log.info("All peer topups confirmed; deploying reference scripts")
                 unresolved <- DeployScriptsAndG2Setup.deploy(
                   backend,
