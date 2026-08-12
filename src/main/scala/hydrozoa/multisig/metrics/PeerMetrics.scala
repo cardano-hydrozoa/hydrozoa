@@ -53,10 +53,10 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
     private val stackBlocksSum = new AtomicLong(0)
     private val stackBlocksMax = new AtomicLong(0)
 
-    // ---- block-lifecycle timings (start stamped by BlockWeaver, closed at FCA) ----
-    // Start clocks: blockNum -> startMillis. `leadStart`/`replayStart` are closed at the brief
-    // (FastConsensusActor.handleBrief); `cellStart` at soft-confirmation. Written by one actor each,
-    // removed by one actor each — TrieMap keeps the cross-actor hand-off (BlockWeaver -> FCA) safe.
+    // ---- block-lifecycle timings ----
+    // Start clocks: blockNum -> startMillis. `leadStart`/`replayStart` (opened in BlockWeaver) are
+    // closed when the JointLedger produces the brief; `cellStart` (opened in FCA) at soft-confirmation.
+    // Written by one actor each, removed by one actor each — TrieMap keeps the cross-actor hand-off safe.
     private val leadStart = TrieMap.empty[Long, Long]
     private val replayStart = TrieMap.empty[Long, Long]
     private val cellStart = TrieMap.empty[Long, Long]
@@ -64,9 +64,8 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
     private val replayTiming = new TimingAccumulator(perRequest = true)
     private val softConsensusTiming = new TimingAccumulator(perRequest = false)
 
-    // ---- gauges (last value; BlockWeaver mempool depth, RequestSequencer backpressure window) ----
+    // ---- gauges (last value; BlockWeaver mempool depth, RequestSequencer backpressure headroom) ----
     private val mempool = new AtomicLong(0)
-    private val seqLimit = new AtomicLong(0)
     private val seqHeadroom = new AtomicLong(0)
 
     // ---- derived rates (written only by the sampler fiber) ----
@@ -110,9 +109,9 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
       */
     def onReplayStart(blockNum: Long): Unit = startClock(replayStart, blockNum)
 
-    /** The block's brief was produced (FastConsensusActor received it): close whichever clock the
-      * local peer opened — `leadStart` if it led the block, else `replayStart` — recording the
-      * elapsed time and the block's request count.
+    /** The JointLedger produced `blockNum`'s brief (this peer's own when leading, or a reproduction
+      * when following): close whichever clock the local peer opened — `leadStart` if it led the
+      * block, else `replayStart` — recording the elapsed time and the block's request count.
       */
     def onBlockProduced(blockNum: Long, requests: Int): Unit =
         val end = now()
@@ -136,12 +135,11 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
     /** BlockWeaver's current mempool depth (requests received, not yet packed into a block). */
     def onMempoolSize(size: Int): Unit = mempool.set(size.toLong)
 
-    /** The RequestSequencer's backpressure window: `limit` = `backpressureCoefficient *
-      * maxRequestsPerBlock` (how far ahead of its confirmed high-water it will sequence), and
-      * `headroom` = how many more requests it will admit right now before shedding load.
+    /** How many more requests the RequestSequencer will admit right now before backpressure trips —
+      * the free space in its window. (The window itself, `backpressureCoefficient *
+      * maxRequestsPerBlock`, is derivable from config, so only the live headroom is reported.)
       */
-    def onSequencerLimit(limit: Long, headroom: Long): Unit =
-        seqLimit.set(limit)
+    def onSequencerHeadroom(headroom: Long): Unit =
         seqHeadroom.set(math.max(0L, headroom))
 
     private def startClock(m: TrieMap[Long, Long], blockNum: Long): Unit =
@@ -196,7 +194,6 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
             softConsensus = softConsensusTiming.snapshot
           ),
           mempoolSize = mempool.get(),
-          sequencerLimit = seqLimit.get(),
           sequencerHeadroom = seqHeadroom.get()
         )
 
@@ -387,6 +384,5 @@ final case class PeerStats(
     stacks: StackStats,
     blockTimings: BlockTimingSet,
     mempoolSize: Long,
-    sequencerLimit: Long,
     sequencerHeadroom: Long
 )

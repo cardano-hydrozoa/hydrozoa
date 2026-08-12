@@ -1294,7 +1294,6 @@ components:
       - stacks
       - blockTimings
       - mempoolSize
-      - sequencerLimit
       - sequencerHeadroom
       properties:
         uptimeSeconds:
@@ -1313,9 +1312,6 @@ components:
         blockTimings:
           $ref: '#/components/schemas/BlockTimingSet'
         mempoolSize:
-          type: integer
-          format: int64
-        sequencerLimit:
           type: integer
           format: int64
         sequencerHeadroom:

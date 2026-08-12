@@ -195,13 +195,12 @@ trait RequestSequencer(
             _ <- reportBackpressure(config.backpressureCoefficient * config.maxRequestsPerBlock)
         } yield ()
 
-    /** Publish the backpressure window (`backpressureCoefficient * maxRequestsPerBlock`) and the
-      * current headroom to [[metrics]] — see `docs/spec/peer-stats-endpoint.md`.
+    /** Publish the current backpressure headroom (space left in the
+      * `backpressureCoefficient * maxRequestsPerBlock` window) to [[metrics]] — see
+      * `docs/spec/peer-stats-endpoint.md`.
       */
     private def reportBackpressure(window: Int): IO[Unit] =
-        state
-            .backpressureHeadroom(window)
-            .flatMap(headroom => IO(metrics.onSequencerLimit(window.toLong, headroom)))
+        state.backpressureHeadroom(window).flatMap(h => IO(metrics.onSequencerHeadroom(h)))
 
     private final class State {
         private val nextRequestNumRef = Ref.unsafe[IO, RequestNumber](RequestNumber(0))

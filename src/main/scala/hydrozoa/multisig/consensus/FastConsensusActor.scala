@@ -214,9 +214,7 @@ class FastConsensusActor(
     private def preStartLocal: IO[Unit] = initializeConnections
 
     private def handleBrief(brief: BlockBrief.Next): IO[Unit] =
-        // The brief arriving here is the block's "produced" moment — close the lead/replay clock.
-        IO(metrics.onBlockProduced((brief.blockNum: Int).toLong, brief.requests.size)) >>
-            withCell(brief.blockNum)(_.acceptBrief(brief))
+        withCell(brief.blockNum)(_.acceptBrief(brief))
 
     private def handleAck(ack: SoftAck): IO[Unit] = {
         val isOwn = config.ownPeerId == PeerId.Head(ack.peerNum)

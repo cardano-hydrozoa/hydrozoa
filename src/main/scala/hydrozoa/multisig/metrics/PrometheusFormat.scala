@@ -130,11 +130,6 @@ object PrometheusFormat:
 
         gauge("hydrozoa_mempool_size", "Requests held in the BlockWeaver mempool.", s.mempoolSize)
         gauge(
-          "hydrozoa_sequencer_limit",
-          "Request-sequencer backpressure window (backpressureCoefficient * maxRequestsPerBlock).",
-          s.sequencerLimit
-        )
-        gauge(
           "hydrozoa_sequencer_headroom",
           "Requests the sequencer will admit now before backpressure trips.",
           s.sequencerHeadroom

@@ -246,7 +246,6 @@ object ApiDto {
         stacks: StackStatsView,
         blockTimings: BlockTimingSetView,
         mempoolSize: Long,
-        sequencerLimit: Long,
         sequencerHeadroom: Long
     )
     given Codec[PeerStatsView] = deriveCodec
@@ -294,7 +293,6 @@ object ApiDto {
             softConsensus = timing(s.blockTimings.softConsensus)
           ),
           mempoolSize = s.mempoolSize,
-          sequencerLimit = s.sequencerLimit,
           sequencerHeadroom = s.sequencerHeadroom
         )
 

@@ -79,7 +79,7 @@ class PeerMetricsTest extends AnyFunSuite:
         m.onCellSpawned(5)
         m.onCellConfirmed(5)
         m.onMempoolSize(42)
-        m.onSequencerLimit(limit = 3000, headroom = 12)
+        m.onSequencerHeadroom(12)
         val s = m.snapshot(0L)
         val bt = s.blockTimings
         assert(
@@ -87,8 +87,8 @@ class PeerMetricsTest extends AnyFunSuite:
               bt.lead.top.map(_.blockNumber).toSet == Set(5L, 7L) &&
               bt.replay.top.map(_.blockNumber) == List(6L) &&
               bt.softConsensus.avgMillisPerRequest == 0.0 &&
-              s.mempoolSize == 42 && s.sequencerLimit == 3000 && s.sequencerHeadroom == 12,
-          s"blockTimings=$bt mempool=${s.mempoolSize} seq=${s.sequencerLimit}/${s.sequencerHeadroom}"
+              s.mempoolSize == 42 && s.sequencerHeadroom == 12,
+          s"blockTimings=$bt mempool=${s.mempoolSize} headroom=${s.sequencerHeadroom}"
         )
 
     test("sampler moves the EWMA load averages for local, block, and request rates after activity"):

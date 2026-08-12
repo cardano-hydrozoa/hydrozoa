@@ -142,7 +142,14 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
               )
             )
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracers.jointLedger, persistence)
+              JointLedger(
+                config,
+                pendingConnections,
+                l2Ledger,
+                tracers.jointLedger,
+                persistence,
+                metrics
+              )
             )
             stackComposer <- context.actorOf(
               StackComposer(config, pendingConnections, tracers.stackComposer, persistence)

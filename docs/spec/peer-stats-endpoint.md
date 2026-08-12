@@ -125,7 +125,7 @@ reference / `AtomicReference` publishes it to readers.
 | uptime | derived | `now - startedAtMillis` |
 | block-lifecycle timings (lead / replay / soft-consensus) | count + avg + top-N | per category: `count`, `avgMillis`, `avgMillisPerRequest` (lead/replay only), and the 10 **slowest blocks with their numbers**. **Lead** = became-leader → brief produced; **replay** = brief received → reproduced; **soft-consensus** = FCA cell spawned → soft-confirmed. Wall-clock (`System.currentTimeMillis`), so cheap and non-deterministic — a debug aid, not a control input. |
 | mempool size | gauge | requests held in the `BlockWeaver` mempool, not yet packed into a block |
-| sequencer limit / headroom | gauge | backpressure window (`backpressureCoefficient * maxRequestsPerBlock`) and how many more requests the sequencer admits before shedding load |
+| sequencer headroom | gauge | how many more requests the sequencer will admit before shedding load — the free space in its `backpressureCoefficient * maxRequestsPerBlock` window (the window itself is derivable from config, so only the live headroom is reported) |
 
 ## Instrumentation points
 
@@ -137,9 +137,9 @@ Three call sites, all on paths that already exist — no new plumbing:
 | peer-to-peer requests per peer | the request lane where a remote peer's requests enter the local mempool (the peer liaison / puller receive path); `onPeerRequests(from, batch.size)`. |
 | blocks minor/major + event count | `FastConsensusActor.completeCell` — the single funnel every soft-confirmed block passes through. It already computes `brief`, already switches `Minor`/`Major`, and `brief.requests.size` is the event count. One `metrics.onBlockConfirmed(isMajor, brief.requests.size)` next to the existing `BlockSoftConfirmed` emission. |
 | stacks + size | `SlowConsensusActor.completeStack` — the single funnel where a `Stack.HardConfirmed` is produced. `stackBrief.stackNum` and `lastBlockNum - firstBlockNum + 1` (blocks absorbed) give the size. One `metrics.onStackConfirmed(stackNum, blocksAbsorbed)`. |
-| block-lifecycle timings | **starts** in `BlockWeaver` (via `Connections.metrics`): `onLeadStart` on entering `Leader.ProcessingReadyRequests`, `onReplayStart` on entering `Follower.ProcessingReadyRequests`. **Close** in `FastConsensusActor`: `onBlockProduced(blockNum, requests)` at `handleBrief` (the brief-produced moment — the same funnel every block's brief passes through), plus `onCellSpawned`/`onCellConfirmed` around a consensus cell's life. `PeerMetrics` matches a produced block to whichever start (lead vs replay) the local peer opened, so the close site needs no lead/replay flag. |
+| block-lifecycle timings | **starts** in `BlockWeaver` (via `Connections.metrics`): `onLeadStart` on entering `Leader.ProcessingReadyRequests`, `onReplayStart` on entering `Follower.ProcessingReadyRequests`. **Close**: lead/replay in `JointLedger.handleBlock` — `onBlockProduced(blockNum, requests)` where the brief is produced (own when leading, a reproduction when following); soft-consensus in `FastConsensusActor` (`onCellSpawned` in `withCell`, `onCellConfirmed` at soft-confirmation). `PeerMetrics` matches a produced block to whichever start (lead vs replay) the local peer opened, so the close site needs no lead/replay flag. |
 | mempool size | `BlockWeaver` — `onMempoolSize` where the mempool grows (`storeRequest`) and shrinks (leader `extractRequestsForBlock`). |
-| sequencer limit / headroom | `RequestSequencer` — `onSequencerLimit(window, headroom)` at PreStart, after each admit/reject, and on `SoftConfirmedHighWater` (which frees headroom). |
+| sequencer headroom | `RequestSequencer` — `onSequencerHeadroom(headroom)` at PreStart, after each admit/reject, and on `SoftConfirmedHighWater` (which frees headroom). |
 
 Because `completeCell` / `completeStack` are the *only* places a soft-confirmed block / hard-confirmed
 stack is produced, those stats need exactly one line each and can never drift from reality.
