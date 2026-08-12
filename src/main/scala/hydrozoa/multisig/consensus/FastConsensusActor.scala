@@ -214,7 +214,9 @@ class FastConsensusActor(
     private def preStartLocal: IO[Unit] = initializeConnections
 
     private def handleBrief(brief: BlockBrief.Next): IO[Unit] =
-        withCell(brief.blockNum)(_.acceptBrief(brief))
+        // The brief arriving here is the block's "produced" moment — close the lead/replay clock.
+        IO(metrics.onBlockProduced((brief.blockNum: Int).toLong, brief.requests.size)) >>
+            withCell(brief.blockNum)(_.acceptBrief(brief))
 
     private def handleAck(ack: SoftAck): IO[Unit] = {
         val isOwn = config.ownPeerId == PeerId.Head(ack.peerNum)
@@ -268,6 +270,10 @@ class FastConsensusActor(
         f: ConsensusCell => Either[CollectingError, ConsensusCell]
     ): IO[Unit] = for {
         state <- stateRef.get
+        // First message for this block number spawns its cell — start the soft-consensus clock.
+        _ <- IO.unlessA(state.cells.contains(blockNum))(
+          IO(metrics.onCellSpawned((blockNum: Int).toLong))
+        )
         cell = state.cells.getOrElse(blockNum, ConsensusCell.fresh(blockNum))
         updated <- IO.fromEither(f(cell))
         _ <- stateRef.update(s => s.copy(cells = s.cells.updated(blockNum, updated)))
@@ -307,6 +313,7 @@ class FastConsensusActor(
             case _: BlockBrief.Minor => false
             case _                   => true
         _ <- IO(metrics.onBlockConfirmed(isMajorBlock, brief.requests.size))
+        _ <- IO(metrics.onCellConfirmed((confirmed.blockNum: Int).toLong))
 
         // Persist the SoftConfirmation record (header + aggregated multisig) before fanning out
         // (CR4 write-before-send). `softConfirmed` derives as max(SoftConfirmation.key); we keep

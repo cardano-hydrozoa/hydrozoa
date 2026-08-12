@@ -9,8 +9,11 @@ import hydrozoa.multisig.ledger.event.RequestNumber
   *
   * Recipients merge it into their own confirmed-high-water view by max (a block carries only the
   * authors that appear in it). It anchors request backpressure — the sequencer refuses to author
-  * more than `maxRequestsPerBlock` beyond its own confirmed high-water, and each mesh puller caps
-  * its request pull at `confirmedHighWater(remote) + maxRequestsPerBlock` — so the mempool cannot
-  * exceed `maxRequestsPerBlock * nHeadPeers`. See docs/spec/fast-consensus.md.
+  * more than `backpressureCoefficient * maxRequestsPerBlock` beyond its own confirmed high-water,
+  * and each mesh puller caps its request pull at
+  * `confirmedHighWater(remote) + maxRequestsPerBlock`. The mesh (cross-peer) mempool of a remote's
+  * requests therefore still cannot exceed `maxRequestsPerBlock * nHeadPeers`; the coefficient only
+  * deepens each peer's *local* admission buffer of its own requests. See
+  * docs/spec/fast-consensus.md.
   */
 final case class SoftConfirmedHighWater(highWater: Map[HeadPeerNumber, RequestNumber])

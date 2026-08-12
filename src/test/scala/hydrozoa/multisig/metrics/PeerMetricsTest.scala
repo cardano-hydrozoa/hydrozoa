@@ -62,6 +62,35 @@ class PeerMetricsTest extends AnyFunSuite:
           s"stacks: $s"
         )
 
+    test(
+      "block-lifecycle timings route lead vs replay, keep top blocks by number, and gauges publish"
+    ):
+        val m = fresh()
+        // Two led blocks and one replayed one; each closed at onBlockProduced.
+        m.onLeadStart(5)
+        m.onBlockProduced(5, requests = 10)
+        m.onLeadStart(7)
+        m.onBlockProduced(7, requests = 20)
+        m.onReplayStart(6)
+        m.onBlockProduced(6, requests = 3)
+        // A produced block with no start opened is ignored, not crashed.
+        m.onBlockProduced(999, requests = 5)
+        // Soft-consensus is its own clock (cell spawned -> confirmed).
+        m.onCellSpawned(5)
+        m.onCellConfirmed(5)
+        m.onMempoolSize(42)
+        m.onSequencerLimit(limit = 3000, headroom = 12)
+        val s = m.snapshot(0L)
+        val bt = s.blockTimings
+        assert(
+          bt.lead.count == 2 && bt.replay.count == 1 && bt.softConsensus.count == 1 &&
+              bt.lead.top.map(_.blockNumber).toSet == Set(5L, 7L) &&
+              bt.replay.top.map(_.blockNumber) == List(6L) &&
+              bt.softConsensus.avgMillisPerRequest == 0.0 &&
+              s.mempoolSize == 42 && s.sequencerLimit == 3000 && s.sequencerHeadroom == 12,
+          s"blockTimings=$bt mempool=${s.mempoolSize} seq=${s.sequencerLimit}/${s.sequencerHeadroom}"
+        )
+
     test("sampler moves the EWMA load averages for local, block, and request rates after activity"):
         val program = TestControl.executeEmbed {
             for {

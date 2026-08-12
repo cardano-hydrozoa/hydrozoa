@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
-import hydrozoa.multisig.metrics.{PeerStats, RateView}
+import hydrozoa.multisig.metrics.{PeerStats, RateView, TimingStats}
 import hydrozoa.multisig.persistence.DepositDecision
 import io.bullet.borer.Cbor
 import io.circe.derivation.{Configuration as CirceConfig, ConfiguredCodec}
@@ -213,19 +213,54 @@ object ApiDto {
     )
     given Codec[StackStatsView] = deriveCodec
 
+    /** One slow block in a timing top-list: its number, duration, and request count. */
+    final case class BlockTimingView(blockNumber: Long, millis: Long, requests: Long)
+    given Codec[BlockTimingView] = deriveCodec
+    given Schema[BlockTimingView] = Schema.derived
+
+    /** One block-lifecycle timing category: count, average(s), and the slowest blocks. */
+    final case class TimingStatsView(
+        count: Long,
+        avgMillis: Double,
+        avgMillisPerRequest: Double,
+        top: List[BlockTimingView]
+    )
+    given Codec[TimingStatsView] = deriveCodec
+    given Schema[TimingStatsView] = Schema.derived
+
+    /** The three block-lifecycle timings: leading, replaying, and soft-consensus. */
+    final case class BlockTimingSetView(
+        lead: TimingStatsView,
+        replay: TimingStatsView,
+        softConsensus: TimingStatsView
+    )
+    given Codec[BlockTimingSetView] = deriveCodec
+    given Schema[BlockTimingSetView] = Schema.derived
+
     /** The full peer-stats body. */
     final case class PeerStatsView(
         uptimeSeconds: Long,
         localRequests: LocalRequestStatsView,
         peerRequests: List[PeerRequestStatsView],
         blocks: BlockStatsView,
-        stacks: StackStatsView
+        stacks: StackStatsView,
+        blockTimings: BlockTimingSetView,
+        mempoolSize: Long,
+        sequencerLimit: Long,
+        sequencerHeadroom: Long
     )
     given Codec[PeerStatsView] = deriveCodec
 
     /** Map a [[hydrozoa.multisig.metrics.PeerStats]] snapshot to its JSON body. */
     def mkPeerStatsView(s: PeerStats): PeerStatsView =
         def rate(r: RateView): RateStatsView = RateStatsView(r.now, r.load1m, r.load5m, r.load15m)
+        def timing(ts: TimingStats): TimingStatsView =
+            TimingStatsView(
+              count = ts.count,
+              avgMillis = ts.avgMillis,
+              avgMillisPerRequest = ts.avgMillisPerRequest,
+              top = ts.top.map(t => BlockTimingView(t.blockNumber, t.millis, t.requests))
+            )
         PeerStatsView(
           uptimeSeconds = s.uptimeSeconds,
           localRequests = LocalRequestStatsView(
@@ -252,7 +287,15 @@ object ApiDto {
             meanInterStackGapSeconds = s.stacks.meanInterStackGapSeconds,
             avgBlocksAbsorbed = s.stacks.avgBlocksAbsorbed,
             maxBlocksAbsorbed = s.stacks.maxBlocksAbsorbed
-          )
+          ),
+          blockTimings = BlockTimingSetView(
+            lead = timing(s.blockTimings.lead),
+            replay = timing(s.blockTimings.replay),
+            softConsensus = timing(s.blockTimings.softConsensus)
+          ),
+          mempoolSize = s.mempoolSize,
+          sequencerLimit = s.sequencerLimit,
+          sequencerHeadroom = s.sequencerHeadroom
         )
 
     /** `{ "status": "success", "message": ... }` — the finalize-trigger body. */

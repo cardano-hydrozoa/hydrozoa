@@ -91,8 +91,10 @@ trait RequestSequencer(
         case RequestSequencer.PreStart  => preStartLocal
         case hw: SoftConfirmedHighWater =>
             // Advance this peer's own confirmed request high-water (merge by max); backpressure
-            // reads it. A block that carries none of this peer's requests leaves it unchanged.
-            hw.highWater.get(ownHeadPeerNum).traverse_(state.advanceConfirmedHighWater)
+            // reads it. A block that carries none of this peer's requests leaves it unchanged. The
+            // advance frees headroom, so refresh the reported window.
+            hw.highWater.get(ownHeadPeerNum).traverse_(state.advanceConfirmedHighWater) >>
+                reportBackpressure(config.backpressureCoefficient * config.maxRequestsPerBlock)
         case req: UserRequest.Sync =>
             req.request.handleSync(
               req,
@@ -125,12 +127,17 @@ trait RequestSequencer(
                           IO(metrics.onLocalRejected(RejectionKind.Screening)) *>
                               IO.pure(Left(UserRequest.Rejected(reason)))
                       case Right(()) =>
-                          // Backpressure: refuse to author more than one block's worth of requests
-                          // beyond this peer's own confirmed high-water, so the mesh mempool cannot
-                          // exceed maxRequestsPerBlock * nHeadPeers (docs/spec/fast-consensus.md).
-                          state.tryNextRequestNum(config.maxRequestsPerBlock).flatMap {
+                          // Backpressure: refuse to author more than `backpressureCoefficient`
+                          // blocks' worth of requests beyond this peer's own confirmed high-water
+                          // before shedding load. The mesh pull ceiling stays at one cap per remote
+                          // (PeerLiaisonHeadToHead), so this only deepens the local admission buffer,
+                          // not the cross-peer mempool bound (docs/spec/fast-consensus.md).
+                          val window =
+                              config.backpressureCoefficient * config.maxRequestsPerBlock
+                          state.tryNextRequestNum(window).flatMap {
                               case None =>
                                   IO(metrics.onLocalRejected(RejectionKind.Backpressure)) *>
+                                      reportBackpressure(window) *>
                                       IO.pure(
                                         Left(
                                           UserRequest.Rejected(
@@ -152,6 +159,7 @@ trait RequestSequencer(
                                             .RequestIdAssigned(newId.peerNum, newId.requestNum)
                                       )
                                       _ <- IO(metrics.onLocalAccepted())
+                                      _ <- reportBackpressure(window)
                                       // CR1: persist the assigned request to the Request lane BEFORE
                                       // telling the user the id (durable before observable; CR1/CR4).
                                       stamp <- persistence.arrivalStamp
@@ -184,7 +192,16 @@ trait RequestSequencer(
             // Treating assigned-as-confirmed opens the backpressure window optimistically after a
             // restart; the next real soft-confirmation re-tightens it.
             _ <- state.seedConfirmedHighWater(next.previousOrZero)
+            _ <- reportBackpressure(config.backpressureCoefficient * config.maxRequestsPerBlock)
         } yield ()
+
+    /** Publish the backpressure window (`backpressureCoefficient * maxRequestsPerBlock`) and the
+      * current headroom to [[metrics]] — see `docs/spec/peer-stats-endpoint.md`.
+      */
+    private def reportBackpressure(window: Int): IO[Unit] =
+        state
+            .backpressureHeadroom(window)
+            .flatMap(headroom => IO(metrics.onSequencerLimit(window.toLong, headroom)))
 
     private final class State {
         private val nextRequestNumRef = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
@@ -203,6 +220,15 @@ trait RequestSequencer(
                     else (cur, None)
                 }
             }
+
+        /** Requests admittable right now before backpressure trips, for window `maxAhead` (`ceiling -
+          * next + 1`, floored at 0).
+          */
+        def backpressureHeadroom(maxAhead: Int): IO[Long] =
+            for {
+                confirmed <- ownConfirmedHighWaterRef.get
+                next <- nextRequestNumRef.get
+            } yield math.max(0L, ((confirmed: Long) + maxAhead) - (next: Long) + 1L)
 
         /** Merge a confirmed high-water for this peer (by max). */
         def advanceConfirmedHighWater(confirmed: RequestNumber): IO[Unit] =

@@ -2,6 +2,7 @@ package hydrozoa.multisig.metrics
 
 import cats.effect.IO
 import java.util.concurrent.atomic.{AtomicLong, AtomicReference, LongAdder}
+import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.*
 
 /** Why a request was refused, split so the stats endpoints can answer "is backpressure firing?"
@@ -52,8 +53,26 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
     private val stackBlocksSum = new AtomicLong(0)
     private val stackBlocksMax = new AtomicLong(0)
 
+    // ---- block-lifecycle timings (start stamped by BlockWeaver, closed at FCA) ----
+    // Start clocks: blockNum -> startMillis. `leadStart`/`replayStart` are closed at the brief
+    // (FastConsensusActor.handleBrief); `cellStart` at soft-confirmation. Written by one actor each,
+    // removed by one actor each — TrieMap keeps the cross-actor hand-off (BlockWeaver -> FCA) safe.
+    private val leadStart = TrieMap.empty[Long, Long]
+    private val replayStart = TrieMap.empty[Long, Long]
+    private val cellStart = TrieMap.empty[Long, Long]
+    private val leadTiming = new TimingAccumulator(perRequest = true)
+    private val replayTiming = new TimingAccumulator(perRequest = true)
+    private val softConsensusTiming = new TimingAccumulator(perRequest = false)
+
+    // ---- gauges (last value; BlockWeaver mempool depth, RequestSequencer backpressure window) ----
+    private val mempool = new AtomicLong(0)
+    private val seqLimit = new AtomicLong(0)
+    private val seqHeadroom = new AtomicLong(0)
+
     // ---- derived rates (written only by the sampler fiber) ----
     private val rolling = new AtomicReference[Rolling](Rolling.empty(headPeerNums))
+
+    private def now(): Long = System.currentTimeMillis()
 
     /** Record a locally-sequenced request. */
     def onLocalAccepted(): Unit = { val _ = localAccepted.incrementAndGet() }
@@ -83,6 +102,53 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
         lastStackNum.set(stackNum.toLong)
         stackBlocksSum.addAndGet(blocksAbsorbed.toLong)
         updateMax(stackBlocksMax, blocksAbsorbed.toLong)
+
+    /** BlockWeaver became leader of `blockNum`: start its "lead" clock. */
+    def onLeadStart(blockNum: Long): Unit = startClock(leadStart, blockNum)
+
+    /** BlockWeaver received a brief to reproduce `blockNum` (follower): start its "replay" clock.
+      */
+    def onReplayStart(blockNum: Long): Unit = startClock(replayStart, blockNum)
+
+    /** The block's brief was produced (FastConsensusActor received it): close whichever clock the
+      * local peer opened — `leadStart` if it led the block, else `replayStart` — recording the
+      * elapsed time and the block's request count.
+      */
+    def onBlockProduced(blockNum: Long, requests: Int): Unit =
+        val end = now()
+        leadStart.remove(blockNum) match
+            case Some(start) => leadTiming.record(blockNum, end - start, requests.toLong)
+            case None =>
+                replayStart
+                    .remove(blockNum)
+                    .foreach(start => replayTiming.record(blockNum, end - start, requests.toLong))
+
+    /** FastConsensusActor spawned a consensus cell for `blockNum`: start its soft-consensus clock.
+      */
+    def onCellSpawned(blockNum: Long): Unit = startClock(cellStart, blockNum)
+
+    /** FastConsensusActor soft-confirmed `blockNum`: close its soft-consensus clock. */
+    def onCellConfirmed(blockNum: Long): Unit =
+        cellStart
+            .remove(blockNum)
+            .foreach(start => softConsensusTiming.record(blockNum, now() - start, 0L))
+
+    /** BlockWeaver's current mempool depth (requests received, not yet packed into a block). */
+    def onMempoolSize(size: Int): Unit = mempool.set(size.toLong)
+
+    /** The RequestSequencer's backpressure window: `limit` = `backpressureCoefficient *
+      * maxRequestsPerBlock` (how far ahead of its confirmed high-water it will sequence), and
+      * `headroom` = how many more requests it will admit right now before shedding load.
+      */
+    def onSequencerLimit(limit: Long, headroom: Long): Unit =
+        seqLimit.set(limit)
+        seqHeadroom.set(math.max(0L, headroom))
+
+    private def startClock(m: TrieMap[Long, Long], blockNum: Long): Unit =
+        m.update(blockNum, now())
+        // Defensive: a block that never closes (crash) would leak a start entry; cap the in-flight
+        // set so it cannot grow without bound.
+        if m.size > PeerMetrics.InFlightCap then m.clear()
 
     /** A consistent, cheap read for the endpoints. `nowMillis` is the caller's wall-clock. */
     def snapshot(nowMillis: Long): PeerStats =
@@ -123,7 +189,15 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
                 else 0.0,
             avgBlocksAbsorbed = if stacks > 0 then stackBlocksSum.get().toDouble / stacks else 0.0,
             maxBlocksAbsorbed = stackBlocksMax.get()
-          )
+          ),
+          blockTimings = BlockTimingSet(
+            lead = leadTiming.snapshot,
+            replay = replayTiming.snapshot,
+            softConsensus = softConsensusTiming.snapshot
+          ),
+          mempoolSize = mempool.get(),
+          sequencerLimit = seqLimit.get(),
+          sequencerHeadroom = seqHeadroom.get()
         )
 
     /** The 1 Hz sampler: feeds every rate's EWMAs from the cumulative counters, then publishes one
@@ -183,8 +257,44 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
 object PeerMetrics:
     private val Taus: Vector[Double] = Vector(60.0, 300.0, 900.0) // 1m / 5m / 15m
 
+    /** Upper bound on in-flight (unclosed) block clocks before we assume a leak and reset. */
+    private val InFlightCap = 8192
+
+    /** How many slowest blocks each timing category keeps (with their block numbers). */
+    private val TopN = 10
+
     def create(nowMillis: Long, headPeerNums: Vector[Int]): PeerMetrics =
         new PeerMetrics(nowMillis, headPeerNums)
+
+    /** One timing category (lead / replay / soft-consensus). Written by exactly one actor and read
+      * by the HTTP snapshot, so the running sum/count use plain atomics and the top-N list is
+      * published through a single [[AtomicReference]] (single writer → the get-then-set is
+      * race-free against itself; the reader only ever sees a fully-built list).
+      */
+    private final class TimingAccumulator(perRequest: Boolean):
+        private val count = new AtomicLong(0)
+        private val sumMillis = new AtomicLong(0)
+        private val sumRequests = new AtomicLong(0)
+        private val top = new AtomicReference[Vector[BlockTiming]](Vector.empty)
+
+        def record(blockNumber: Long, millis: Long, requests: Long): Unit =
+            count.incrementAndGet()
+            sumMillis.addAndGet(millis)
+            sumRequests.addAndGet(requests)
+            top.set(
+              (top.get() :+ BlockTiming(blockNumber, millis, requests)).sortBy(-_.millis).take(TopN)
+            )
+
+        def snapshot: TimingStats =
+            val c = count.get()
+            val reqs = sumRequests.get()
+            TimingStats(
+              count = c,
+              avgMillis = if c > 0 then sumMillis.get().toDouble / c else 0.0,
+              avgMillisPerRequest =
+                  if perRequest && reqs > 0 then sumMillis.get().toDouble / reqs else 0.0,
+              top = top.get().toList
+            )
 
     /** One EWMA horizon; fiber-local, so a plain `var` is fine. */
     private final class Ewma(tauSeconds: Double):
@@ -246,6 +356,26 @@ final case class StackStats(
     maxBlocksAbsorbed: Long
 )
 
+/** One slow block in a timing category's top-N: its number, how long it took, and (for lead/replay)
+  * how many requests it carried.
+  */
+final case class BlockTiming(blockNumber: Long, millis: Long, requests: Long)
+
+/** Stats for one block-lifecycle timing category. `avgMillisPerRequest` is 0 for soft-consensus
+  * (not request-normalized). `top` is the slowest blocks, most-severe first, with their numbers.
+  */
+final case class TimingStats(
+    count: Long,
+    avgMillis: Double,
+    avgMillisPerRequest: Double,
+    top: List[BlockTiming]
+)
+
+/** The three block-lifecycle timings: leading (become-leader → brief), replaying (brief received →
+  * brief reproduced), and soft-consensus (cell spawned in FCA → soft-confirmed).
+  */
+final case class BlockTimingSet(lead: TimingStats, replay: TimingStats, softConsensus: TimingStats)
+
 final case class PeerStats(
     uptimeSeconds: Long,
     localAccepted: Long,
@@ -254,5 +384,9 @@ final case class PeerStats(
     localRejBackpressure: Long,
     peerRequests: Map[Int, CounterWithRate],
     blocks: BlockStats,
-    stacks: StackStats
+    stacks: StackStats,
+    blockTimings: BlockTimingSet,
+    mempoolSize: Long,
+    sequencerLimit: Long,
+    sequencerHeadroom: Long
 )

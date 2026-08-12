@@ -26,7 +26,25 @@ class PrometheusFormatTest extends AnyFunSuite:
         meanInterStackGapSeconds = 180.0,
         avgBlocksAbsorbed = 386.0,
         maxBlocksAbsorbed = 900
-      )
+      ),
+      blockTimings = BlockTimingSet(
+        lead = TimingStats(
+          count = 100,
+          avgMillis = 12.5,
+          avgMillisPerRequest = 0.4,
+          top = List(BlockTiming(blockNumber = 228, millis = 23470, requests = 923))
+        ),
+        replay = TimingStats(count = 98, avgMillis = 8.0, avgMillisPerRequest = 0.3, top = Nil),
+        softConsensus = TimingStats(
+          count = 100,
+          avgMillis = 3.0,
+          avgMillisPerRequest = 0.0,
+          top = List(BlockTiming(blockNumber = 228, millis = 150, requests = 0))
+        )
+      ),
+      mempoolSize = 923,
+      sequencerLimit = 3000,
+      sequencerHeadroom = 12
     )
 
     test("counters carry the _total suffix and a TYPE line"):
