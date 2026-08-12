@@ -10,14 +10,13 @@ import cats.~>
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jTracer}
-import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
+import hydrozoa.multisig.backend.cardano.CardanoBackend.{ContinuingTx, Error}
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import monocle.Focus.focus
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.STS.Mutator
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerState}
 import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, RedeemerTag, Slot, Transaction, TransactionHash, TransactionInput, Utxo, Utxos, Value}
-import scalus.uplc.builtin.Data
 
 final case class MockState(
     ledgerState: LedgerState,
@@ -102,17 +101,17 @@ class CardanoBackendMock private (
     override def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash
-    ): MockStateF[Either[Error, List[(TransactionHash, Data, Data)]]] = {
+    ): MockStateF[Either[Error, List[ContinuingTx]]] = {
 
         extension (v: Value)
             def contains(asset: (PolicyId, AssetName)): Boolean =
                 v.assets.assets.get(asset._1).flatMap(_.get(asset._2)).isDefined
 
-        def continuingInputRedeemerAndOutputDatum(
+        def continuingTx(
             tx: Transaction,
             asset: (PolicyId, AssetName),
             utxos: Utxos
-        ): Option[(Data, Data)] = {
+        ): Option[ContinuingTx] = {
             // Find the input index that contains the asset
             val inputWithAssetIdx = tx.body.value.inputs.toSeq.zipWithIndex
                 .find { (input, _) =>
@@ -122,17 +121,21 @@ class CardanoBackendMock private (
 
             // Extract the redeemer for the spending input
             for {
-                // Check if there's an output with the asset (continuing pattern)
-                outputDatum <- for {
-                    outputWithAsset <- tx.body.value.outputs.find(_.value.value.contains(asset))
-                    datum <- outputWithAsset.value.inlineDatum
-                } yield datum
+                // The continuing output (with the asset), and its index (its outref is tx.id#idx)
+                outputWithAsset <- tx.body.value.outputs.zipWithIndex
+                    .find { (output, _) => output.value.value.contains(asset) }
+                (output, outputIx) = outputWithAsset
+                // Require an inline datum to treat it as a continuing treasury output.
+                _ <- output.value.inlineDatum
                 inputIx <- inputWithAssetIdx
                 redeemers <- tx.witnessSet.redeemers.map(_.value)
                 redeemer <- redeemers.toSeq.find { r =>
                     r.tag == RedeemerTag.Spend && r.index.toInt == inputIx
                 }
-            } yield (redeemer.data, outputDatum)
+            } yield ContinuingTx(
+              continuingOutput = Utxo(TransactionInput(tx.id, outputIx), output.value),
+              spendingRedeemer = redeemer.data
+            )
         }
 
         for {
@@ -145,9 +148,7 @@ class CardanoBackendMock private (
             // Use the pre-application UTxO snapshot so historical inputs (already consumed)
             // can still be found — mirrors the Blockfrost implementation's historical query.
             result = txsAfter.flatMap { (preUtxos, tx) =>
-                continuingInputRedeemerAndOutputDatum(tx, asset, preUtxos).map((r, d) =>
-                    (tx.id, r, d)
-                )
+                continuingTx(tx, asset, preUtxos)
             }
         } yield Right(result)
     }
@@ -287,7 +288,7 @@ object CardanoBackendMock {
                 override def lastContinuingTxs(
                     asset: (PolicyId, AssetName),
                     after: TransactionHash
-                ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data, Data)]]] =
+                ): IO[Either[CardanoBackend.Error, List[ContinuingTx]]] =
                     transformer(mock.lastContinuingTxs(asset, after))
 
                 override def submitTx(etx: EnrichedTx[?]): IO[Either[CardanoBackend.Error, Unit]] =

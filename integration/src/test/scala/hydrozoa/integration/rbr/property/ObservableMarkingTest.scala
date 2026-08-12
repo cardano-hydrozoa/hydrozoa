@@ -25,7 +25,8 @@ object ObservableMarkingTest extends Properties("ObservableMarking"):
             DisputeScriptRef -> 1,
             TreasuryScriptRef -> 1,
             SetupLadder -> 7,
-            EvacuationOutput -> 0
+            EvacuationOutput -> 0,
+            WithdrawalOutput -> 0
           )
         )
     }

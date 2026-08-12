@@ -225,10 +225,10 @@ lazy val core: Project = (project in file("."))
         BuildInfoKey.action("gitCommit") {
             scala.util
                 .Try(
-                    scala.sys.process
-                        .Process("git describe --tags --always --dirty --abbrev=8")
-                        .!!
-                        .trim
+                  scala.sys.process
+                      .Process("git describe --tags --always --dirty --abbrev=8")
+                      .!!
+                      .trim
                 )
                 .getOrElse("unknown")
         }
@@ -268,7 +268,8 @@ lazy val integration: Project = (project in file("integration"))
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
-      // Yaci suites require Docker / a running Yaci DevKit instance; exclude from default test run.
+      // Yaci suites require Docker / a running Yaci DevKit instance, and the Preview suite requires
+      // a live public testnet + a funded master wallet; exclude both from the default test run.
       // Run explicitly, e.g.: integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci
       // NB: using * with testOnly still respects the excluded tests
       Test / testOptions += Tests.Exclude(
@@ -276,7 +277,9 @@ lazy val integration: Project = (project in file("integration"))
           "hydrozoa.integration.stage1.Stage1PropertiesYaci",
           "hydrozoa.integration.yaci.YaciDevnetSmokeTest",
           "hydrozoa.integration.yaci.YaciSetupProbe",
-          "hydrozoa.integration.yaci.YaciMultiPeerProbe"
+          "hydrozoa.integration.yaci.YaciMultiPeerProbe",
+          "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci",
+          "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
         )
       ),
       // test dependencies

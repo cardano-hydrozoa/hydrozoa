@@ -456,6 +456,13 @@ trait CardanoLiaison(
 
     private val stateRef = Ref.unsafe[IO, CardanoLiaison.State](State.empty)
 
+    /** The rule-based treasury utxo we last dispatched the handoff for, to debounce the per-tick
+      * re-firing in [[handoffOrResubmit]]: `reconcileTargetState` keeps probing (for rollback
+      * resilience), but we only re-announce the handoff when the observed treasury actually
+      * changes.
+      */
+    private val lastHandoffDispatchedFor = Ref.unsafe[IO, Option[TransactionInput]](None)
+
     private def getConnections: IO[Connections] = this.connections.get.flatMap(
       _.fold(
         IO.raiseError(
@@ -829,12 +836,22 @@ trait CardanoLiaison(
             // off, not just the fallback's submitter; the MRM handler is idempotent so re-fires are
             // safe. The rule-based side reads its version/status from this treasury utxo, so the
             // trigger carries no tx. `txId` is the tx that produced the observed treasury utxo.
+            //
+            // Debounced: `reconcileTargetState` reaches here every tick (kept for rollback
+            // resilience), but re-announcing the handoff each time is pure spam — the MRM already
+            // handled it. Re-fire only when the observed treasury utxo changes (e.g. a rollback
+            // produced a new one), tracked in `lastHandoffDispatchedFor`.
             case Right(Some(treasuryUtxoId)) =>
-                tracer.traceWith(
-                  CardanoLiaisonEvent.FallbackToRuleBasedDispatched(treasuryUtxoId.transactionId)
-                ) >>
-                    (mrmSelf ! HeadMultisigRegimeManager.HandoffToRuleBased) >>
-                    IO.pure(Seq.empty)
+                lastHandoffDispatchedFor.get.flatMap { last =>
+                    IO.unlessA(last.contains(treasuryUtxoId)) {
+                        tracer.traceWith(
+                          CardanoLiaisonEvent
+                              .FallbackToRuleBasedDispatched(treasuryUtxoId.transactionId)
+                        ) >>
+                            (mrmSelf ! HeadMultisigRegimeManager.HandoffToRuleBased) >>
+                            lastHandoffDispatchedFor.set(Some(treasuryUtxoId))
+                    }
+                } >> IO.pure(Seq.empty)
             // (4) No rule-based treasury — a real rollback.
             case Right(None) =>
                 resubmitSkeleton(state, currentTime)

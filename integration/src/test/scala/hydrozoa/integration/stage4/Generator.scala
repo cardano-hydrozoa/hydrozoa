@@ -17,14 +17,15 @@ import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, Transact
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Metadata}
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
+import org.scalacheck.commands.{AnyCommand, ScenarioGen, SutCommand, noOp}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AuxiliaryData, Coin, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{AuxiliaryData, Coin, DatumOption, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.uplc.builtin.ByteString
@@ -112,29 +113,45 @@ object CommandGenerators:
         }
     } yield values
 
-    private def genAuxiliaryData(
-        outputs: List[TransactionOutput],
-        txStrategy: TxStrategy,
-        headId: HeadId
-    ): Gen[AuxiliaryData] = for {
-        flags <- txStrategy match {
-            case TxStrategy.RandomWithdrawals => Gen.listOfN(outputs.size, Gen.choose(1, 2))
-            case _                            => Gen.const(outputs.map(_ => 2))
+    /** Per-output l1/l2 designation flags — one per output, in output order: `1` = l1-bound (a
+      * withdrawal, exits L2 to L1), `2` = l2-bound (stays on L2). `RandomWithdrawals` mixes them;
+      * every other strategy keeps all outputs on L2. [[headFlagsMetadata]] turns the flag-1 indices
+      * into the `L2Metadata` `l1BoundOutputs` the L2 ledger consumes.
+      */
+    private def genOutputFlags(numOutputs: Int, txStrategy: TxStrategy): Gen[List[Int]] =
+        txStrategy match {
+            case TxStrategy.RandomWithdrawals => Gen.listOfN(numOutputs, Gen.choose(1, 2))
+            case _                            => Gen.const(List.fill(numOutputs)(2))
         }
-    } yield {
-        // Flag 1 marks an L1-bound (withdrawal) output; every other output stays on L2.
+
+    /** The L2 head-tag metadata declaring which outputs are l1-bound (withdrawals), derived from
+      * the per-output l1/l2 [[genOutputFlags]] (flag 1 = l1-bound).
+      */
+    private def headFlagsMetadata(flags: List[Int], headId: HeadId): AuxiliaryData =
         val l1BoundOutputs = flags.zipWithIndex.collect { case (1, index) => index }
         L2Metadata.asAuxData(
           headId,
           L2Metadata(l1BoundOutputs = l1BoundOutputs, l2TransientTokens = Map.empty)
         )
-    }
 
     def genL2TxCommand(
         peerNum: HeadPeerNumber,
         interArrivalDelay: FiniteDuration,
         txStrategy: TxStrategy,
-        txMutator: TxMutator
+        txMutator: TxMutator,
+        // Optional inline datum stamped on l2-bound (flag-2) outputs — e.g. the RBR MBT passes the
+        // "evacuation" sentinel so its RBRClassifier buckets L2-tx-derived evacuation outputs on L1,
+        // mirroring `genRegisterDepositCommand`'s `l2OutputDatum`.
+        l2OutputDatum: Option[scalus.cardano.ledger.DatumOption] = None,
+        // Optional inline datum stamped on withdrawal (flag-1, l1-bound) outputs specifically — the
+        // RBR MBT passes a distinct "withdrawal" sentinel so its RBRClassifier buckets withdrawals
+        // separately from evacuation outputs on L1. Defaults to None (a plain stage4 run stamps
+        // nothing, matching its l2-bound outputs).
+        withdrawalDatum: Option[scalus.cardano.ledger.DatumOption] = None,
+        // Optional address for withdrawal outputs; defaults to the normal in-use L2 address
+        // selection. The RBR MBT pins this to a script address so a withdrawn output on L1 can't be
+        // re-selected as a peer's fee/collateral (which would drop it from the L1 withdrawal count).
+        withdrawalAddress: Option[ShelleyAddress] = None,
     )(state: ModelState): Gen[Option[L2TxCommand]] = {
         val config = state.params.multiNodeConfig
         val cardanoNetwork = config.headConfig.cardanoNetwork
@@ -153,15 +170,30 @@ object CommandGenerators:
                 totalValue = Value.combine(inputs.map(ownedUtxos(_).value))
 
                 outputValues <- genOutputValues(totalValue, txStrategy, generateCappedValueC)
+                // Per-output l1/l2 flags first, so each output's datum + address reflect its fate: a
+                // flag-1 (withdrawal) output carries `withdrawalDatum` at `withdrawalAddress`, a
+                // flag-2 (stay-on-L2) output carries `l2OutputDatum` at an in-use L2 address. The
+                // same flags drive the CIP67 metadata, keeping designation and datum consistent.
+                flags <- genOutputFlags(outputValues.size, txStrategy)
                 outputs <- Gen.sequence[List[TransactionOutput], TransactionOutput](
-                  outputValues.map(v => Gen.oneOf(l2AddressesInUse.toSeq).map(a => Babbage(a, v)))
+                  outputValues.zip(flags).map { (v, flag) =>
+                      if flag == 1 then
+                          withdrawalAddress match {
+                              case Some(a) =>
+                                  Gen.const(Babbage(a, v, datumOption = withdrawalDatum))
+                              case None =>
+                                  Gen.oneOf(l2AddressesInUse.toSeq)
+                                      .map(a => Babbage(a, v, datumOption = withdrawalDatum))
+                          }
+                      else
+                          Gen.oneOf(l2AddressesInUse.toSeq)
+                              .map(a => Babbage(a, v, datumOption = l2OutputDatum))
+                  }
                 )
 
-                auxiliaryData <- genAuxiliaryData(
-                  outputs,
-                  txStrategy,
-                  config.nodeConfigs(HeadPeerNumber.zero).headId
-                ).map(Some.apply)
+                auxiliaryData = Some(
+                  headFlagsMetadata(flags, config.nodeConfigs(HeadPeerNumber.zero).headId)
+                )
 
                 txUnsigned = TransactionBuilder
                     .build(
@@ -212,9 +244,19 @@ object CommandGenerators:
         // Optional inline datum stamped on each L2 output — e.g. the RBR MBT passes the "evacuation"
         // sentinel so its RBRClassifier can bucket deposit-derived evacuation outputs on L1.
         l2OutputDatum: Option[scalus.cardano.ledger.DatumOption] = None,
+        // Optional override for the L2 output address; defaults to the depositing peer's address.
+        // The RBR MBT pins this to a dedicated script address so evacuation outputs can never be
+        // reselected as a peer's fee/collateral (which would consume them and drop the L1 count).
+        l2OutputAddress: Option[ShelleyAddress] = None,
+        // Deposit validity window: the deposit becomes absorbable only at
+        // `validityEnd + depositSubmission + depositMaturity`, i.e. ~this duration after submission.
+        // The RBR MBT shortens it so deposits absorb within its commit window instead of taking the
+        // refund path.
+        depositValidityDuration: FiniteDuration = 2.minutes,
     )(state: ModelState): Gen[Option[RegisterAndSubmitDepositCommand]] = {
         val config = state.params.multiNodeConfig
         val peerAddress = config.addressOf(peerNum)
+        val outputAddress = l2OutputAddress.getOrElse(peerAddress)
         val cardanoNetwork = config.headConfig.cardanoNetwork
         val generateCappedValueC = generateCappedValue(cardanoNetwork)
         val ensureMinAdaLenientC = ensureMinAdaLenient(cardanoNetwork)
@@ -260,7 +302,7 @@ object CommandGenerators:
                                         outputs <- Gen
                                             .sequence[List[TransactionOutput], TransactionOutput](
                                               outputValues.map(v =>
-                                                  Gen.const(peerAddress)
+                                                  Gen.const(outputAddress)
                                                       .map(a =>
                                                           Babbage(a, v, datumOption = l2OutputDatum)
                                                       )
@@ -286,7 +328,7 @@ object CommandGenerators:
                                         requestValidityEndTime = RequestValidityEndTime(
                                           QuantizedInstant.ofEpochSeconds(
                                             config.slotConfig,
-                                            (submissionTime + 2.minutes).getEpochSecond
+                                            (submissionTime + depositValidityDuration).getEpochSecond
                                           )
                                         )
 
@@ -390,33 +432,80 @@ end CommandGenerators
 // Suite scenario generators
 // ===================================
 
-object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
+/** The reusable pre-fallback "setup phase" generator. This *is* stage4's scenario generator,
+  * factored to be generic over the SUT type `S` so downstream suites (the RBR MBT) drive the
+  * identical multisig regime — same Poisson superposition, same command mix, same absorption
+  * handling — and inherit any new path stage4 grows here for free. Only the [[Config]] knobs
+  * differ.
+  *
+  * Generic over `S`: the picker assembles `AnyCommand`s from the shared model-side givens
+  * (`ModelCommand`/`CommandProp`/`CommandLabel`, all keyed on `ModelState`) plus the per-SUT
+  * `SutCommand` instances the caller supplies for each command type.
+  */
+object SetupScenarioGen:
 
-    private def pick[A](gen: Gen[A])(using pp: A => Pretty): PropertyM[IO, A] =
-        PropertyM.pick[IO, A](gen)
+    /** Downstream-specific output stamping / deposit timing. The defaults reproduce stage4 exactly.
+      */
+    final case class Config(
+        // Inline datum stamped on l2-bound (flag-2) L2 outputs and on deposit outputs. The RBR MBT
+        // passes its "evacuation" sentinel so `beta` can bucket the eventual L1 evacuation outputs;
+        // stage4 leaves it unset.
+        l2OutputDatum: Option[DatumOption] = None,
+        // Optional pin for deposit L2 output addresses; defaults to the depositing peer's address.
+        l2OutputAddress: Option[ShelleyAddress] = None,
+        // Inline datum stamped on withdrawal (flag-1) L2 outputs. The RBR MBT passes a distinct
+        // "withdrawal" sentinel so `beta` buckets withdrawals separately from evacuation outputs
+        // (the committed `EvacuationMap`, and hence `N`, is flag-2 only — withdrawals are separate
+        // payout obligations). stage4 leaves it unset.
+        withdrawalDatum: Option[DatumOption] = None,
+        // Optional pin for withdrawal (flag-1) output addresses; defaults to the in-use L2 address
+        // selection. The RBR MBT pins this to a script address so a withdrawn output on L1 can't be
+        // re-selected as a peer's fee/collateral (which would drop it from the L1 withdrawal count).
+        withdrawalAddress: Option[ShelleyAddress] = None,
+        // Deposit validity window. The RBR MBT shortens it so deposits absorb within its commit
+        // window instead of taking the refund path; stage4 keeps the 2-minute default.
+        depositValidityDuration: FiniteDuration = 2.minutes,
+        // L2-tx strategy mix; the default exercises stage4's full spread, including
+        // `RandomWithdrawals`. A downstream suite inherits it as-is provided it can account for
+        // withdrawals (the RBR MBT does, via `withdrawalDatum` + its `WithdrawalOutput` place).
+        l2TxStrategies: Gen[TxStrategy] = Gen.frequency(
+          5 -> Gen.const(TxStrategy.Regular),
+          2 -> Gen.const(TxStrategy.RandomWithdrawals),
+          // TODO: Too slow on my machine dure to KZG-commitments
+          // 2 -> Gen.const(TxStrategy.Dust(50)),
+          1 -> Gen.const(TxStrategy.Arbitrary),
+        ),
+    )
 
-    override def genNextCommand(
-        state: ModelState
-    ): PropertyM[IO, AnyCommand[ModelState, Stage4Sut]] =
-        // Single global Poisson superposition: sample (peer, gap-since-last-event). Each peer's
-        // marginal stream is exactly Poisson at its configured rate, so peers with smaller mean
-        // inter-arrival are picked proportionally more often and the global rate is Σλ_p.
-        pick(
-          for {
-              (peerNum, interArrivalDelay) <- CommandGenerators.genSuperposedNextEvent(
-                state.params.meanInterArrivalTimes
-              )
-              cmd <- genCommandForPeer(peerNum, interArrivalDelay, state)
-          } yield cmd
-        )
+    /** Single global Poisson superposition: sample `(peer, gap-since-last-event)` — each peer's
+      * marginal stream is exactly Poisson at its configured rate, so peers with smaller mean
+      * inter-arrival are picked proportionally more often and the global rate is Σλ_p — then a
+      * command for that peer.
+      */
+    def genNextCommand[S](state: ModelState, config: Config)(using
+        SutCommand[DelayCommand, Unit, S],
+        SutCommand[L2TxCommand, ValidityFlag, S],
+        SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, S],
+    ): Gen[AnyCommand[ModelState, S]] =
+        for {
+            (peerNum, interArrivalDelay) <- CommandGenerators.genSuperposedNextEvent(
+              state.params.meanInterArrivalTimes
+            )
+            cmd <- genCommandForPeer(peerNum, interArrivalDelay, state, config)
+        } yield cmd
 
-    private def genCommandForPeer(
+    private def genCommandForPeer[S](
         peerNum: HeadPeerNumber,
         interArrivalDelay: FiniteDuration,
         state: ModelState,
-    ): Gen[AnyCommand[ModelState, Stage4Sut]] = {
-        val config = state.params.multiNodeConfig
-        val peerAddress = config.addressOf(peerNum)
+        config: Config,
+    )(using
+        SutCommand[DelayCommand, Unit, S],
+        SutCommand[L2TxCommand, ValidityFlag, S],
+        SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, S],
+    ): Gen[AnyCommand[ModelState, S]] = {
+        val mnc = state.params.multiNodeConfig
+        val peerAddress = mnc.addressOf(peerNum)
         val ownedL2Utxos = state.utxosL2Active.filter((_, o) =>
             o.address.asInstanceOf[ShelleyAddress] == peerAddress
         )
@@ -432,39 +521,70 @@ object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
         //    inter-arrival delay that advances the global clock naturally. No explicit delay
         //    command needed while the peer has UTxOs to spend.
         if ownedL2Utxos.isEmpty && hasPendingAbsorption then
-            CommandGenerators.genDelayForAbsorption(peerNum, state).map(AnyCommand.apply)
-        else if ownedL2Utxos.isEmpty && availableL1.isEmpty then Gen.const(noOp)
+            CommandGenerators
+                .genDelayForAbsorption(peerNum, state)
+                .map(AnyCommand.apply[DelayCommand, Unit, ModelState, S](_))
+        else if ownedL2Utxos.isEmpty && availableL1.isEmpty then Gen.const(noOp[ModelState, S])
         else {
-            val genL2TxOpt: Gen[Option[AnyCommand[ModelState, Stage4Sut]]] =
+            val genL2TxOpt: Gen[Option[AnyCommand[ModelState, S]]] =
                 if ownedL2Utxos.isEmpty then Gen.const(None)
                 else
-                    Gen.frequency(
-                      5 -> Gen.const(TxStrategy.Regular),
-                      2 -> Gen.const(TxStrategy.RandomWithdrawals),
-                      // TODO: Too slow on my machine dure to KZG-commitments
-                      // 2 -> Gen.const(TxStrategy.Dust(50)),
-                      1 -> Gen.const(TxStrategy.Arbitrary)
-                    ).flatMap(strategy =>
+                    config.l2TxStrategies.flatMap(strategy =>
                         CommandGenerators
                             .genL2TxCommand(
                               peerNum,
                               interArrivalDelay,
                               strategy,
-                              TxMutator.Identity
+                              TxMutator.Identity,
+                              l2OutputDatum = config.l2OutputDatum,
+                              withdrawalDatum = config.withdrawalDatum,
+                              withdrawalAddress = config.withdrawalAddress,
                             )(state)
-                            .map(_.map(AnyCommand.apply(_)))
+                            .map(
+                              _.map(AnyCommand.apply[L2TxCommand, ValidityFlag, ModelState, S](_))
+                            )
                     )
 
-            val genDepositOpt: Gen[Option[AnyCommand[ModelState, Stage4Sut]]] =
+            val genDepositOpt: Gen[Option[AnyCommand[ModelState, S]]] =
                 if availableL1.isEmpty then Gen.const(None)
                 else
                     CommandGenerators
-                        .genRegisterDepositCommand(peerNum, interArrivalDelay)(state)
-                        .map(_.map(AnyCommand.apply(_)))
+                        .genRegisterDepositCommand(
+                          peerNum,
+                          interArrivalDelay,
+                          l2OutputDatum = config.l2OutputDatum,
+                          l2OutputAddress = config.l2OutputAddress,
+                          depositValidityDuration = config.depositValidityDuration,
+                        )(state)
+                        .map(
+                          _.map(
+                            AnyCommand
+                                .apply[
+                                  RegisterAndSubmitDepositCommand,
+                                  ValidityFlag,
+                                  ModelState,
+                                  S
+                                ](
+                                  _
+                                )
+                          )
+                        )
 
             Gen.frequency(
               10 -> genL2TxOpt,
               3 -> genDepositOpt,
-            ).map(_.getOrElse(noOp))
+            ).map(_.getOrElse(noOp[ModelState, S]))
         }
     }
+
+end SetupScenarioGen
+
+object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
+
+    private def pick[A](gen: Gen[A])(using pp: A => Pretty): PropertyM[IO, A] =
+        PropertyM.pick[IO, A](gen)
+
+    override def genNextCommand(
+        state: ModelState
+    ): PropertyM[IO, AnyCommand[ModelState, Stage4Sut]] =
+        pick(SetupScenarioGen.genNextCommand(state, SetupScenarioGen.Config()))

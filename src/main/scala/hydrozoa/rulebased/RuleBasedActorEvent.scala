@@ -46,10 +46,11 @@ object RuleBasedActorEvent:
         case object ParsingResolve extends RuleBasedActorEvent
         case object ParsingEmptyVotes extends RuleBasedActorEvent
 
-        /** Residual set still contains an AwaitingVote ballot and the voting deadline has not
-          * elapsed; tally is deferred until on-chain time crosses the deadline.
+        /** The voting deadline has not elapsed; tally is deferred until on-chain time crosses it. A
+          * public Voted box can be ratcheted by anyone until the deadline, so no ballot is final
+          * and the TallyTx's validity range starts at the deadline.
           */
-        case object WaitingForVotesBeforeDeadline extends RuleBasedActorEvent
+        case object WaitingForVotingDeadline extends RuleBasedActorEvent
 
         /** Voting deadline has elapsed while the peer's own path (cast a vote for a head peer;
           * ratchet an open box for a coil peer) is still applicable. On-chain the corresponding tx
@@ -66,6 +67,14 @@ object RuleBasedActorEvent:
             case object AlreadyAtTarget extends RuleBasedActorEvent
             case object NoRatchetTarget extends RuleBasedActorEvent
 
+    object Tick:
+        /** The tick's `EitherT` ended in a recoverable error that the actor swallows and retries on
+          * the next tick. Emitted so that "recoverably fails and retries" is never fully silent —
+          * kept at `debug` since a healthy backend hits these only transiently; the specific
+          * evacuation stall has its own `info` event ([[Evacuation.ContinuingTreasuryTxs]]).
+          */
+        final case class RecoverableRetry(reason: String) extends RuleBasedActorEvent
+
     object Tx:
         final case class Building(family: String) extends RuleBasedActorEvent
         final case class Submitting(tx: EnrichedTx[?]) extends RuleBasedActorEvent
@@ -75,3 +84,37 @@ object RuleBasedActorEvent:
     object Evacuation:
         case object NoMore extends RuleBasedActorEvent
         final case class PayoutsLeft(n: Int) extends RuleBasedActorEvent
+
+        /** How many continuing treasury txs the backend surfaced after the fallback anchor
+          * (fallback → resolution → withdrawals). Zero means the resolution tx hasn't surfaced on
+          * the backend yet (eventual-consistency lag or a rollback), so `loadEvacuationState`
+          * recoverably retries from `NoTreasuryFound` — traced (unlike that empty-list path itself)
+          * so an evacuation stalled waiting for the chain is visible, and so a growing count shows
+          * the chain converging.
+          */
+        final case class ContinuingTreasuryTxs(count: Int) extends RuleBasedActorEvent
+
+        /** DIAGNOSTIC: the candidate evacuation-map commitments loaded at evacuation time, and the
+          * latest hard-confirmed stack they were derived from — logged to compare against the
+          * commitment the treasury actually resolved to (see [[ResolvedKzg]]).
+          */
+        final case class CandidateMaps(latestHardConfirmed: String, candidateKzgs: List[String])
+            extends RuleBasedActorEvent
+
+        /** DIAGNOSTIC: the commitment the resolution wrote into the treasury, looked up against the
+          * candidate set. A miss is the `UnknownResolvedKzg` crash.
+          */
+        final case class ResolvedKzg(kzg: String) extends RuleBasedActorEvent
+
+        /** DIAGNOSTIC: where the evacuation candidate walk anchored — the Major stack it landed on
+          * (vs. the latest hard-confirmed stack), the default-vote map's source block + commitment,
+          * and every SEC commitment it collected (as `block=<n> kzg=<hex>`). Shows whether a
+          * resolved commitment was excluded because a later minor-only stack was skipped or because
+          * the default map is mis-keyed.
+          */
+        final case class EvacuationAnchor(
+            anchorStack: String,
+            defaultMapBlock: String,
+            defaultKzg: String,
+            secs: List[String]
+        ) extends RuleBasedActorEvent

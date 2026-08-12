@@ -1,16 +1,16 @@
 package hydrozoa.integration.yaci
 
 import cats.effect.{IO, Resource}
-import scala.concurrent.Await
-import scala.concurrent.duration.*
 import scalus.testing.yaci.{YaciConfig, YaciContainer}
-import sttp.client4.*
-import sttp.model.{StatusCode, Uri}
+import sttp.model.Uri
 
 /** A Testcontainers-managed Yaci DevKit devnet, acquired via scalus-testkit's
   * [[scalus.testing.yaci.YaciContainer]] (a thin wrapper over Bloxbean's `YaciCardanoContainer`).
   * Yields a [[DevKit]] handle bound to the container's mapped Blockfrost + admin URLs; the
   * container is released on close.
+  *
+  * `YaciContainer.acquire` internally runs `awaitStoreSync` (up to `config.startupTimeoutSeconds`)
+  * before returning, so the handle is ready for use immediately.
   *
   * Requires Docker on the host, so the suites using it are excluded from the default test run (see
   * build.sbt).
@@ -19,46 +19,30 @@ object YaciDevnet {
 
     /** Acquire a running devnet as a [[DevKit]] handle. */
     def resource(
-        config: YaciConfig = YaciConfig(),
-        startupTimeout: FiniteDuration = 3.minutes,
+        config: YaciConfig = YaciConfig(startupTimeoutSeconds = 600L),
     ): Resource[IO, DevKit] =
         Resource
             .make(IO.blocking(YaciContainer.acquire(config))) { _ =>
                 IO.blocking(YaciContainer.release())
             }
-            .evalMap { c =>
-                // Bloxbean's URL helpers hardcode `localhost` and include a trailing `/`; strip
-                // the slash so `DevKit`'s string-interp URL builders don't produce `//`.
-                val devKit = DevKit(
-                  blockfrostApiBaseUri = c.getYaciStoreApiUrl.stripSuffix("/"),
-                  yaciApiBaseUri = Uri.unsafeParse(c.getLocalClusterApiUrl.stripSuffix("/")),
-                )
-                awaitBlockfrost(devKit, startupTimeout).as(devKit)
-            }
+            .map(mkDevKit)
 
-    /** Bloxbean's `start()` gates on the admin API; the Yaci Store (Blockfrost) comes up a few
-      * seconds later, so poll it before yielding the handle.
+    /** Acquire a shared JVM-wide devnet [[DevKit]] without a release hook. Intended for callers
+      * whose driver can't compose a `Resource` across iterations — the ScalaCheck-driven MBT
+      * suites, whose `initEnv: PropertyM[IO, Env]` returns a bare `Env` (no bracket). `scalus`'
+      * [[YaciContainer]] is a JVM-wide singleton, so every call returns the same container; the
+      * testcontainers Ryuk sidecar reaps it at JVM exit.
       */
-    private def awaitBlockfrost(devKit: DevKit, timeout: FiniteDuration): IO[Unit] =
-        def loop(remaining: FiniteDuration): IO[Unit] =
-            blockfrostReady(devKit).flatMap {
-                case true => IO.unit
-                case false if remaining <= Duration.Zero =>
-                    IO.raiseError(
-                      new RuntimeException(s"Yaci Blockfrost API not ready within $timeout")
-                    )
-                case false => IO.sleep(2.seconds) *> loop(remaining - 2.seconds)
-            }
-        loop(timeout)
+    def acquireShared(
+        config: YaciConfig = YaciConfig(startupTimeoutSeconds = 600L),
+    ): IO[DevKit] =
+        IO.blocking(YaciContainer.acquire(config)).map(mkDevKit)
 
-    private def blockfrostReady(devKit: DevKit): IO[Boolean] =
-        IO.blocking {
-            val resp = Await.result(
-              basicRequest
-                  .get(Uri.unsafeParse(s"${devKit.blockfrostApiBaseUri}/blocks/latest"))
-                  .send(backend),
-              6.seconds
-            )
-            resp.code == StatusCode.Ok
-        }.handleError(_ => false)
+    private def mkDevKit(c: com.bloxbean.cardano.yaci.test.YaciCardanoContainer): DevKit =
+        // Bloxbean's URL helpers hardcode `localhost` and include a trailing `/`; strip the slash
+        // so `DevKit`'s string-interp URL builders don't produce `//`.
+        DevKit(
+          blockfrostApiBaseUri = c.getYaciStoreApiUrl.stripSuffix("/"),
+          yaciApiBaseUri = Uri.unsafeParse(c.getLocalClusterApiUrl.stripSuffix("/")),
+        )
 }

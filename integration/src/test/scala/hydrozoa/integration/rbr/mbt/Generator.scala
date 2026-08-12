@@ -2,41 +2,44 @@ package hydrozoa.integration.rbr.mbt
 
 import cats.effect.IO
 import hydrozoa.integration.rbr.mbt.SutCommands.given
-import hydrozoa.integration.stage4.CommandGenerators
-import hydrozoa.integration.stage4.Commands.given
-import hydrozoa.integration.stage4.Model.{ModelState, given}
+import hydrozoa.integration.rbr.property.RbrSeed
+import hydrozoa.integration.stage4.Model.ModelState
+import hydrozoa.integration.stage4.SetupScenarioGen
 import hydrozoa.rulebased.ledger.l1.RbrDatumSentinels
-import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
+import org.scalacheck.PropertyM
+import org.scalacheck.commands.{AnyCommand, ScenarioGen}
 import org.scalacheck.util.Pretty
-import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.*
 
-/** Pre-fallback generator: submit L1 deposits (reusing stage4's `genRegisterDepositCommand`, which
-  * builds a real signed deposit tx from the peer's L1 funding). Each deposit's L2 outputs carry the
-  * "evacuation" datum sentinel so the RBRClassifier buckets the eventual L1 evacuation outputs, and
-  * the terminal `alpha == beta` then sees the full accumulated obligation count. A peer with no L1
-  * funding left contributes a no-op.
+/** Pre-fallback generator for the RBR MBT: stage4's setup-phase scenario generator
+  * ([[SetupScenarioGen]]) driven verbatim — same Poisson superposition, same L2-tx/deposit command
+  * mix (including `RandomWithdrawals`), same absorption handling — with only RBR-specific stamping.
+  *
+  * Two distinct datum sentinels let `beta` bucket the two L1 fates apart: l2-bound (flag-2) outputs
+  * carry "evacuation" (they end up in the committed `EvacuationMap` `N` and evacuate under
+  * fallback), while withdrawal (flag-1) outputs carry "withdrawal" and are pinned to the script
+  * `payoutAddress` so they can't be re-spent as peer fee/collateral. Deposit validity is shortened
+  * so deposits absorb within the suite's commit window. Reusing stage4's picker means any new
+  * setup-phase path it grows (new strategies, new command types) flows into the RBR setup phase
+  * automatically.
   */
 object RbrMbtScenarioGen extends ScenarioGen[ModelState, Sut]:
 
     private given (AnyCommand[ModelState, Sut] => Pretty) = c => Pretty(_ => c.toString)
 
-    private val evacuationDatum = RbrDatumSentinels.inline("evacuation")
-
-    // TODO: L2 tx coverage. This generator only submits L1 deposits; stage4's `genL2TxCommand`
-    // (stage4/Generator.scala) is not wired in. Mix it into the picker via `Gen.frequency`
-    // alongside `genRegisterDepositCommand` (mirroring stage4/Generator.scala's ~10:1 weighting)
-    // so pre-fallback runs also exercise the submissionClient + L2 ledger path.
+    private val setupConfig: SetupScenarioGen.Config = SetupScenarioGen.Config(
+      l2OutputDatum = RbrDatumSentinels.inline("evacuation"),
+      withdrawalDatum = RbrDatumSentinels.inline("withdrawal"),
+      withdrawalAddress = Some(RbrSeed.payoutAddress),
+      // Short deposit validity so a deposit is absorbable ~this + maturity after submission — well
+      // inside the suite's commit window — instead of the stage4 default 2min, which always
+      // outlasts the window and forces deposits down the refund path.
+      depositValidityDuration = 20.seconds,
+      // l2TxStrategies inherits the default (full stage4 mix, including RandomWithdrawals): the
+      // "withdrawal" sentinel + the model's WithdrawalOutput place account for the withdrawn value.
+    )
 
     override def genNextCommand(state: ModelState): PropertyM[IO, AnyCommand[ModelState, Sut]] =
-        PropertyM.pick(
-          for
-              peer <- Gen.oneOf(state.params.multiNodeConfig.nodeConfigs.keys.toList)
-              cmd <-
-                  if state.peerUtxosL1(peer).isEmpty then Gen.const(noOp[ModelState, Sut])
-                  else
-                      CommandGenerators
-                          .genRegisterDepositCommand(peer, 1.second, evacuationDatum)(state)
-                          .map(_.map(AnyCommand.apply(_)).getOrElse(noOp[ModelState, Sut]))
-          yield cmd
+        PropertyM.pick[IO, AnyCommand[ModelState, Sut]](
+          SetupScenarioGen.genNextCommand(state, setupConfig)
         )

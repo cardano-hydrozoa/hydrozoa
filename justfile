@@ -81,10 +81,18 @@ integration-yaci:
 
 # Yaci suites that spin up their own devnet via Testcontainers (require Docker).
 # Bypasses the build.sbt Tests.Exclude that keeps these out of `just integration`.
+#
+# The probes and the RBR MBT run in SEPARATE sbt/JVM invocations on purpose: they share a JVM-wide
+# singleton devnet container (the probes via `YaciDevnet.resource`, the MBT via `acquireShared`
+# without a reset). In one JVM the probes' script deploy spends head-peer-0's genesis inputs before
+# the MBT's own deploy, which then fails "all inputs are spent". A fresh JVM per group gives each a
+# pristine container.
 integration-yaci-docker:
   #!/usr/bin/env bash
+  set -eo pipefail
   trap 'just notify "integration-yaci-docker"' EXIT
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
+  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
 
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
 export:
@@ -115,6 +123,15 @@ graphviz:
   } > target/rbr-net/index.html
   echo "wrote target/rbr-net/index.html"
   "${BROWSER:-xdg-open}" target/rbr-net/index.html
+# RBR MBT against the public Preview testnet (real Blockfrost). Requires a valid Blockfrost key
+# (hardcoded in the Runner) and a funded master wallet: generate one with `hydrozoa keygen`, fund its
+# printed address from the Preview faucet, then export RBR_MBT_PREVIEW_MASTER_SIGNING_KEY first.
+# Bypasses the build.sbt Tests.Exclude that keeps it out of `just integration`.
+integration-rbr-preview:
+  #!/usr/bin/env bash
+  set -eo pipefail
+  trap 'just notify "integration-rbr-preview"' EXIT
+  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
 
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"

@@ -888,6 +888,7 @@ object Stage4Suite:
             config,
             absorptionSlack,
             peers.map(pn => pn -> meanInterArrivalTime(pn)).toMap,
+            testPeers = testPeers,
             coilNodeConfigs = coilNodeConfigs
           ),
           preinitPeerUtxosL1 = preinitPeerUtxosL1,

@@ -2,16 +2,47 @@ package hydrozoa.integration.rbr.mbt
 
 import cats.effect.{Deferred, IO, Ref}
 import hydrozoa.integration.harness.MultiPeerHeadHarness
-import hydrozoa.integration.stage4.Commands.{DelayCommand, RegisterAndSubmitDepositCommand}
+import hydrozoa.integration.stage4.Commands.{DelayCommand, L2TxCommand, RegisterAndSubmitDepositCommand}
 import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import org.scalacheck.commands.SutCommand
+import scalus.cardano.ledger.{TransactionHash, TransactionInput}
 
 /** The running system-under-test: the multi-peer head harness, the milestone `Deferred`s the
   * observer completes, and `settlementFirewallArmed` — the dynamic gate the firewall consults. It
   * stays disarmed while the generated deposits settle (so their majors commit on-chain), then
   * `beforeFinalize` arms it to trip fallback.
+  *
+  * `submittedSettlementInputs` accumulates the L1 inputs of every settlement the SUT actually put
+  * on the wire (observed at the firewall — a submitted settlement, not a mere ledger decision to
+  * absorb). Crossed against the L1 snapshot at fallback it tells `beforeFinalize` which deposits
+  * were genuinely committed (spent by a landed settlement) versus left pending for the
+  * cardano-liaison refund path — so the model can agree with the SUT on each deposit's fate without
+  * racing "peer submitted the tx" against "the tx appears on chain".
+  *
+  * `committedMaps` accumulates the distinct `StackComposer.CommittedMap` peer traces — the
+  * `(version, size)` of each committed evacuation map, deduped across peers (a `Set`, since every
+  * peer emits the same trace). `settledMajors` accumulates the majors of every settlement that
+  * cleared the firewall (i.e. settled on-chain). Together they let `beforeFinalize` read the
+  * committed map size the head resolves to under the last on-chain major `M` directly from the peer
+  * traces, instead of reconstructing it from the model's deposit accounting.
+  *
+  * `withdrawnOutputRefs` accumulates the L1 position (`TransactionInput`) of every withdrawal
+  * output — an L2 output that exited to L1 pre-fallback, carrying the `"withdrawal"` datum sentinel
+  * — that cleared the firewall on a settlement or rollout tx. Its size is `W`, the withdrawal count
+  * `beforeFinalize` seeds into the model's inert `WithdrawalOutput` place; the L1 snapshot's
+  * `"withdrawal"`-bucketed outputs must match it. Deduped by input so a resubmitted tx can't
+  * inflate the count.
+  *
+  * `submittedTxIds` accumulates the id of every tx the SUT put on the wire (observed at the
+  * firewall, regardless of accept/reject). `beforeFinalize` uses it to scope `beta`'s payout
+  * buckets (`WithdrawalOutput`/`EvacuationOutput`) to outputs this run actually produced: those are
+  * the only two places keyed on a datum marker at the fixed, shared `RbrSeed.payoutAddress`, which
+  * on a non-resettable public testnet accrues script-locked residue from earlier runs. Every other
+  * observable place is already run-scoped (script refs by input, token boxes by this head's
+  * `policyId`), so only these two need scoping.
   */
 final case class Sut(
     harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
@@ -19,6 +50,11 @@ final case class Sut(
     evacuationDone: Deferred[IO, Unit],
     firstPayoutsLeft: Ref[IO, Option[Int]],
     settlementFirewallArmed: Ref[IO, Boolean],
+    submittedSettlementInputs: Ref[IO, Set[TransactionInput]],
+    committedMaps: Ref[IO, Set[(BlockVersion.Full, Int)]],
+    settledMajors: Ref[IO, Set[Int]],
+    withdrawnOutputRefs: Ref[IO, Set[TransactionInput]],
+    submittedTxIds: Ref[IO, Set[TransactionHash]],
 )
 
 /** SUT-side command execution. */
@@ -34,6 +70,16 @@ object SutCommands:
     given SutCommand[DelayCommand, Unit, Sut] with
         // The framework sleeps `ModelCommand.delay` before running; the SUT step itself is a no-op.
         override def run(cmd: DelayCommand, sut: Sut): IO[Unit] = IO.unit
+
+    given SutCommand[L2TxCommand, ValidityFlag, Sut] with
+        // Submit the L2 tx to the peer's SubmissionClient; the head applies it to the joint L2
+        // ledger and commits its outputs at the next minor block (no L1 side effect).
+        override def run(cmd: L2TxCommand, sut: Sut): IO[ValidityFlag] =
+            sut.harness
+                .peers(cmd.peerNum)
+                .submissionClient
+                .submit(cmd.request.asUserRequest)
+                .as(ValidityFlag.Valid)
 
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Sut] with
         // Submit the deposit request to the peer and put its signed deposit tx on the shared L1 —

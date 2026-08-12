@@ -37,7 +37,8 @@ object ObservableMarking:
           DisputeScriptRef,
           TreasuryScriptRef,
           SetupLadder,
-          EvacuationOutput
+          EvacuationOutput,
+          WithdrawalOutput
         )
 
     /** `alpha`: the Petri model's marking, projected. */

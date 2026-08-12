@@ -78,6 +78,7 @@ object RBRHlNet {
         case VotableVersions
         case PayoutObligations
         case EvacuationOutput
+        case WithdrawalOutput
 
     object RBRPlaceId {
         given Ordering[RBRPlaceId] = Ordering.by(_.ordinal)
@@ -142,6 +143,11 @@ object RBRHlNet {
         payoutObligations: PlaceRef[RBRPlaceId, (BigInt, TransactionOutput)],
         resolvedVersion: PlaceRef[RBRPlaceId, BigInt],
         evacuationOutput: PlaceRef[RBRPlaceId, (BigInt, TransactionOutput)],
+        // A static, inert tally of L2 outputs that withdrew to L1 *before* fallback (via
+        // `RolloutTx`). They sit outside the dispute entirely — seeded once and never touched by a
+        // transition — so the terminal marking reports exactly the withdrawal count. Distinct from
+        // `evacuationOutput` (the resolved SEC's committed obligations, drained by `Evacuation`).
+        withdrawalOutput: PlaceRef[RBRPlaceId, TransactionOutput],
     )
 
     /** The listing of structurally-valid ballot colors: version is meaningful only for `Voted`
@@ -189,14 +195,19 @@ object RBRHlNet {
         // TODO: a strictly-positive count — retype to a positive Int type.
         nHeadPeers: Int,
         committedObligations: Map[BigInt, List[TransactionOutput]],
+        // L2 outputs that withdrew to L1 before fallback — seeds the inert `WithdrawalOutput` place.
+        // Defaults to empty: a run with no withdrawals (and every non-MBT caller) leaves it 0.
+        withdrawnOutputs: List[TransactionOutput] = List.empty,
     ): ValidatedNel[NetBuilder.Error, HlNet[RBRPlaceId, RBRTransitionId, Any]] = {
         import RBRPlaceId.*
 
         // Peer/Key/Version are intensional domains: `nHeadPeers` and the committed versions size only
-        // the initial marking, never a carrier. Peer/Key are unordered (bound from tokens, never
-        // `<`); Version is `linear` for the ratchet/tally `<` guards. Status is a fixed enum.
+        // the initial marking, never a carrier. Peer is unordered (bound from tokens, never `<`);
+        // Key and Version are `linear` for the tally `<` guards (Key: the on-chain
+        // `removed.key > continuing.key` fold direction; Version: the ratchet/tally maxVote). Status
+        // is a fixed enum.
         val peerClass = Sort.Data[HeadPeerNumber]("Peer")
-        val keyClass = Sort.Data[BigInt]("Key")
+        val keyClass = Sort.Data[BigInt]("Key", linear = true)
         val versionClass = Sort.Data[BigInt]("Version", linear = true)
         val statusClass = Sort.Class(
           "Status",
@@ -315,6 +326,9 @@ object RBRHlNet {
             }*)
         val noVersions: MultiSet[BigInt] = bagOf[BigInt]()
         val noOutputs: MultiSet[(BigInt, TransactionOutput)] = bagOf[(BigInt, TransactionOutput)]()
+        // The pre-fallback withdrawals, one inert token per L2 output that reached L1 (multiplicity
+        // preserved so identical outputs still count separately).
+        val withdrawnBag: MultiSet[TransactionOutput] = bagOf(withdrawnOutputs.map(_ -> 1)*)
 
         val b = NetBuilder[RBRPlaceId, RBRTransitionId]()
 
@@ -382,6 +396,7 @@ object RBRHlNet {
                 )
                 resolvedVersion <- b.place(ResolvedVersion, RBRPlace(noVersions, versionClass))
                 evacuationOutput <- b.place(EvacuationOutput, RBRPlace(noOutputs, payoutSort))
+                withdrawalOutput <- b.place(WithdrawalOutput, RBRPlace(withdrawnBag, outputClass))
             } yield RBRPlaces(
               ballots,
               owner,
@@ -397,7 +412,8 @@ object RBRHlNet {
               votableVersionsPlace,
               payoutObligations,
               resolvedVersion,
-              evacuationOutput
+              evacuationOutput,
+              withdrawalOutput
             )
 
         // ---- Vote (mirrors VoteTx.Build.buildVoteTx) ----
@@ -469,8 +485,11 @@ object RBRHlNet {
 
         // ---- Tally (mirrors TallyTx.Build; split by the maxVote winner) ----
         // The continuing box (1) absorbs its successor (2): adjacency is the Eq(link1, key2) guard,
-        // and the result keeps key1 and inherits link2. maxVote's ordering is the Status/Version
-        // linear orders; ties go to the removed box (`else b` in maxVote).
+        // the fold direction is the Lt(key1, key2) guard (the on-chain
+        // `removed.key > continuing.key` check — so key 0, the public box, is never removed and the
+        // linked list always contracts down to the (0, 0) terminal box), and the result keeps key1
+        // and inherits link2. maxVote's ordering is the Status/Version linear orders; ties go to the
+        // removed box (`else b` in maxVote).
         def tallyContinuingWins: TxB[Unit] =
             for {
                 t <- transition(
@@ -487,7 +506,10 @@ object RBRHlNet {
                     version2
                   ),
                   Guard.And(
-                    Guard.Eq(Ref(link1), Ref(key2)),
+                    Guard.And(
+                      Guard.Lt(Ref(key1), Ref(key2)),
+                      Guard.Eq(Ref(link1), Ref(key2))
+                    ),
                     Guard.Or(
                       Guard.Lt(Ref(status2), Ref(status1)),
                       Guard.And(
@@ -534,7 +556,10 @@ object RBRHlNet {
                     version2
                   ),
                   Guard.And(
-                    Guard.Eq(Ref(link1), Ref(key2)),
+                    Guard.And(
+                      Guard.Lt(Ref(key1), Ref(key2)),
+                      Guard.Eq(Ref(link1), Ref(key2))
+                    ),
                     Guard.Or(
                       Guard.Lt(Ref(status1), Ref(status2)),
                       Guard.And(
