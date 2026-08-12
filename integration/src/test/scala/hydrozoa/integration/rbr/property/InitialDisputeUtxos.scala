@@ -8,6 +8,7 @@ import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.rulebased.ledger.l1.RbrDatumSentinels
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
@@ -15,12 +16,9 @@ import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedRegimeOutput, RuleBasedRegimeUtxo, RuleBasedTreasuryUtxo}
 import org.scalacheck.Gen
 import scala.concurrent.duration.FiniteDuration
-import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{Coin, DatumOption, TransactionHash, TransactionInput, Utxos}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
 import scalus.uplc.builtin.Builtins.blake2b_224
-import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.Data.toData
 import test.Generators.Hydrozoa.genEvacuationMap
 
 /** All UTxOs that exist in the shared mock backend at the start of the dispute scenario. This
@@ -87,7 +85,7 @@ object InitialDisputeUtxos:
         // per-output data. The DisputeClassifier abstraction function keys on this sentinel
         // to identify evacuation outputs without needing to decode production-format datums.
         val genEvacuationSentinelDatum: Gen[Option[DatumOption]] =
-            Gen.const(Some(Inline(ByteString.fromString("evacuation").toData)))
+            Gen.const(RbrDatumSentinels.inline("evacuation"))
 
         for
 

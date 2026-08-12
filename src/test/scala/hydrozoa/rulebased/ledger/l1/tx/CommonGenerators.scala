@@ -10,6 +10,7 @@ import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
+import hydrozoa.rulebased.ledger.l1.RbrDatumSentinels
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
@@ -23,7 +24,6 @@ import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.Data.toData
 import test.*
 
 /** Common test generators for rule-based transaction tests */
@@ -117,7 +117,7 @@ object CommonGenerators {
             addrKeyHash,
             ShelleyDelegationPart.Null,
             coin,
-            Some(DatumOption.Inline(toData(ByteString.fromString("collateral")))),
+            RbrDatumSentinels.inline("collateral"),
             None
           )
         )
