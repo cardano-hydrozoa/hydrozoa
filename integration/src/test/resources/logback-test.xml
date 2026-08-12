@@ -58,6 +58,8 @@
          init-tx Preview rejection) while diagnosing the public-testnet run; restore to `error`. -->
     <logger name="FirewalledCardanoBackend" level="info"/>
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
+    <!-- Run-scoped scenario summary, printed once at the end of a dispute-flow run. -->
+    <logger name="Scenario.Summary" level="info"/>
     <logger name="test.CardanoBackendMock" level="warn"/>
     <logger name="CardanoBackend" level="warn"/>
 
