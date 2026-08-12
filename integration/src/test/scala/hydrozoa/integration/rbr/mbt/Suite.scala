@@ -8,9 +8,9 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness.CardanoBackend as HarnessCardanoBackend
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.integration.harness.{DiagnosticTracers, MultiPeerHeadHarness}
+import hydrozoa.integration.preview.PublicSetup
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet
 import hydrozoa.integration.rbr.property.{ObservableMarking, RbrSeed}
-import hydrozoa.integration.preview.PublicSetup
 import hydrozoa.integration.stage4.Model
 import hydrozoa.integration.yaci.{DevKit, YaciDevnet, YaciSetup}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
