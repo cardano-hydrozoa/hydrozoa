@@ -24,14 +24,16 @@ object BlockConfig {
           */
         def maxRequestsPerBlock: PositiveInt = blockConfig.maxRequestsPerBlock
 
-        /** Multiplier on [[maxRequestsPerBlock]] for the **request-sequencer backpressure window**:
-          * a peer admits at most `backpressureCoefficient * maxRequestsPerBlock` of its own
-          * requests beyond its confirmed high-water before rejecting new ones. A larger coefficient
-          * buffers more client requests through a transient block-production stall before shedding
-          * load, at the cost of a deeper local mempool. It is purely a *local* admission depth —
-          * the mesh pull ceiling and block reproduction still key off `maxRequestsPerBlock` alone
-          * (depth-1 pipelining means a follower never needs more than one cap ahead to reproduce a
-          * block), so raising it cannot break the cross-peer mempool bound. Default 3.
+        /** Multiplier on [[maxRequestsPerBlock]] for the **request backpressure window**: a peer
+          * admits at most `backpressureCoefficient * maxRequestsPerBlock` of its own requests
+          * beyond its confirmed high-water before rejecting new ones. A larger coefficient buffers
+          * more client requests through a transient block-production stall before shedding load, at
+          * the cost of a deeper mempool. The mesh request-pull ceiling scales by the **same**
+          * coefficient (`PeerLiaisonHeadToHead`), so a follower can always pull as far ahead as a
+          * leader may sequence — including a leader's prioritized own requests packed deep in the
+          * window — and the cross-peer mempool bound just grows to
+          * `backpressureCoefficient * maxRequestsPerBlock * nHeadPeers`. Head-agreed alongside
+          * `maxRequestsPerBlock`. Default 3.
           */
         def backpressureCoefficient: PositiveInt = blockConfig.backpressureCoefficient
     }

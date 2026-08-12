@@ -129,9 +129,9 @@ trait RequestSequencer(
                       case Right(()) =>
                           // Backpressure: refuse to author more than `backpressureCoefficient`
                           // blocks' worth of requests beyond this peer's own confirmed high-water
-                          // before shedding load. The mesh pull ceiling stays at one cap per remote
-                          // (PeerLiaisonHeadToHead), so this only deepens the local admission buffer,
-                          // not the cross-peer mempool bound (docs/spec/fast-consensus.md).
+                          // before shedding load. The mesh pull ceiling scales by the same coefficient
+                          // (PeerLiaisonHeadToHead), so followers can always pull what a leader packs —
+                          // including its prioritized own requests (docs/spec/fast-consensus.md).
                           val window =
                               config.backpressureCoefficient * config.maxRequestsPerBlock
                           state.tryNextRequestNum(window).flatMap {
