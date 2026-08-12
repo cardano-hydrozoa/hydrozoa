@@ -84,6 +84,57 @@ object PrometheusFormat:
           s.stacks.maxBlocksAbsorbed
         )
 
+        // ---- block-lifecycle timings (lead / replay / soft-consensus) ----
+        val timings = Vector(
+          "lead" -> s.blockTimings.lead,
+          "replay" -> s.blockTimings.replay,
+          "soft_consensus" -> s.blockTimings.softConsensus
+        )
+        b.append(
+          "# HELP hydrozoa_block_timing_count Blocks measured, per lifecycle category.\n" +
+              "# TYPE hydrozoa_block_timing_count gauge\n"
+        )
+        timings.foreach((c, ts) =>
+            b.append(s"""hydrozoa_block_timing_count{category="$c"} ${ts.count}\n""")
+        )
+        b.append(
+          "# HELP hydrozoa_block_timing_avg_millis Average lifecycle duration (ms), per category.\n" +
+              "# TYPE hydrozoa_block_timing_avg_millis gauge\n"
+        )
+        timings.foreach((c, ts) =>
+            b.append(s"""hydrozoa_block_timing_avg_millis{category="$c"} ${fmt(ts.avgMillis)}\n""")
+        )
+        b.append(
+          "# HELP hydrozoa_block_timing_avg_millis_per_request Average duration per request " +
+              "(ms/req); 0 for soft-consensus.\n" +
+              "# TYPE hydrozoa_block_timing_avg_millis_per_request gauge\n"
+        )
+        timings.foreach((c, ts) =>
+            b.append(
+              s"""hydrozoa_block_timing_avg_millis_per_request{category="$c"} ${fmt(
+                    ts.avgMillisPerRequest
+                  )}\n"""
+            )
+        )
+        b.append(
+          "# HELP hydrozoa_block_timing_top_millis Slowest measured blocks (ms), by category and " +
+              "block number.\n# TYPE hydrozoa_block_timing_top_millis gauge\n"
+        )
+        timings.foreach((c, ts) =>
+            ts.top.foreach(t =>
+                b.append(
+                  s"""hydrozoa_block_timing_top_millis{category="$c",block="${t.blockNumber}"} ${t.millis}\n"""
+                )
+            )
+        )
+
+        gauge("hydrozoa_mempool_size", "Requests held in the BlockWeaver mempool.", s.mempoolSize)
+        gauge(
+          "hydrozoa_sequencer_headroom",
+          "Requests the sequencer will admit now before backpressure trips.",
+          s.sequencerHeadroom
+        )
+
         b.toString
 
     private def rate(name: String, help: String, r: RateView, b: StringBuilder): Unit =
