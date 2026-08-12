@@ -6,7 +6,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize, given}
 import hydrozoa.lib.logging.ContraTracer
 import io.circe.syntax.*
-import io.circe.{Codec, Decoder, Encoder, HCursor, Json}
+import io.circe.{Codec, Decoder, DecodingFailure, Encoder, HCursor, Json}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.math.Ordered.orderingToOrdered
 import scala.util.Try
@@ -48,7 +48,7 @@ import RequestTimes.*
   *   After a deposit utxo is mature, the head has until this duration elapses to attempt to absorb
   *   it. Defines _depositAbsorptionEnd_ point.
   */
-final case class TxTiming(
+final case class TxTiming private (
     override val minSettlementDuration: MinSettlementDuration,
     override val inactivityMarginDuration: InactivityMarginDuration,
     override val silenceDuration: SilenceDuration,
@@ -209,14 +209,15 @@ object TxTiming {
                 dsd <- helper("depositSubmissionDuration")
                 dmd <- helper("depositMaturityDuration")
                 dad <- helper("depositAbsorptionDuration")
-            } yield TxTiming(
-              MinSettlementDuration(msd),
-              InactivityMarginDuration(imd),
-              SilenceDuration(sd),
-              DepositSubmissionDuration(dsd),
-              DepositMaturityDuration(dmd),
-              DepositAbsorptionDuration(dad)
-            )
+                timing <- mk(
+                  MinSettlementDuration(msd),
+                  InactivityMarginDuration(imd),
+                  SilenceDuration(sd),
+                  DepositSubmissionDuration(dsd),
+                  DepositMaturityDuration(dmd),
+                  DepositAbsorptionDuration(dad)
+                ).left.map(msg => DecodingFailure(msg, c.history))
+            } yield timing
 
         }
 
@@ -248,6 +249,37 @@ object TxTiming {
     ): Boolean =
         depositAbsorptionEndTime.convert < settlementTxEndTime.convert
 
+    /** Returns [[Right]] with a valid [[TxTiming]] or [[Left]] with a description of the violated
+      * invariant. The only current rule: [[DepositAbsorptionDuration]] must exceed
+      * [[MinSettlementDuration]] + [[InactivityMarginDuration]] so that at least one full consensus
+      * cycle fits inside the absorption window.
+      */
+    def mk(
+        minSettlementDuration: MinSettlementDuration,
+        inactivityMarginDuration: InactivityMarginDuration,
+        silenceDuration: SilenceDuration,
+        depositSubmissionDuration: DepositSubmissionDuration,
+        depositMaturityDuration: DepositMaturityDuration,
+        depositAbsorptionDuration: DepositAbsorptionDuration,
+    ): Either[String, TxTiming] =
+        if (depositAbsorptionDuration: QuantizedFiniteDuration) >
+                minSettlementDuration + inactivityMarginDuration
+        then
+            Right(
+              new TxTiming(
+                minSettlementDuration,
+                inactivityMarginDuration,
+                silenceDuration,
+                depositSubmissionDuration,
+                depositMaturityDuration,
+                depositAbsorptionDuration,
+              )
+            )
+        else
+            Left(
+              "depositAbsorptionDuration must exceed minSettlementDuration + inactivityMarginDuration"
+            )
+
     def default(slotConfig: SlotConfig): TxTiming = TxTiming(
       MinSettlementDuration(12.hours.quantize(slotConfig)),
       InactivityMarginDuration(24.hours.quantize(slotConfig)),
@@ -264,7 +296,7 @@ object TxTiming {
       SilenceDuration(10.minutes.quantize(slotConfig)),
       DepositSubmissionDuration(1.second.quantize(slotConfig)),
       DepositMaturityDuration(1.second.quantize(slotConfig)),
-      DepositAbsorptionDuration(2.minutes.quantize(slotConfig)),
+      DepositAbsorptionDuration(12.minutes.quantize(slotConfig)),
     )
 
     def demo(slotConfig: SlotConfig): TxTiming = TxTiming(
