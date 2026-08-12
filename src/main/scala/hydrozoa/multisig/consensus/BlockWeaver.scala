@@ -21,6 +21,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.metrics.PeerMetrics
 import scala.collection.immutable.Queue
 
 final case class BlockWeaver(
@@ -28,6 +29,7 @@ final case class BlockWeaver(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections |
         BlockWeaver.ConnectionsPartial,
     tracer: ContraTracer[IO, BlockWeaverEvent],
+    metrics: PeerMetrics,
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
@@ -66,7 +68,8 @@ final case class BlockWeaver(
                 c <- pc.get
             } yield BlockWeaver.Connections(
               blockWeaver = context.self,
-              jointLedger = c.jointLedger
+              jointLedger = c.jointLedger,
+              metrics = metrics
             )
         case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
     }
@@ -88,13 +91,15 @@ object BlockWeaver {
 
     final case class Connections private[BlockWeaver] (
         blockWeaver: BlockWeaver.Handle,
-        jointLedger: JointLedger.Handle
+        jointLedger: JointLedger.Handle,
+        metrics: PeerMetrics
     )
 
-    final case class ConnectionsPartial(jointLedger: JointLedger.Handle) {
+    final case class ConnectionsPartial(jointLedger: JointLedger.Handle, metrics: PeerMetrics) {
         def apply(blockWeaver: BlockWeaver.Handle): Connections = Connections(
           blockWeaver = blockWeaver,
-          jointLedger = jointLedger
+          jointLedger = jointLedger,
+          metrics = metrics
         )
     }
 
@@ -214,7 +219,9 @@ object BlockWeaver {
 
             def storeRequest(request: UserRequestWithId): IO[Mempool] =
                 mempool.addRequest(request) match {
-                    case Some(newMempool) => IO.pure(newMempool)
+                    case Some(newMempool) =>
+                        IO(connections.metrics.onMempoolSize(newMempool.requests.size))
+                            .as(newMempool)
                     case None =>
                         IO.raiseError(
                           RuntimeException(
@@ -400,6 +407,13 @@ object BlockWeaver {
 
                 def act(config: Config): IO[Option[NextReactiveState]] = for {
                     _ <- logStateTransition
+                    // Received a brief to reproduce: start this block's "replay" clock (closed at the
+                    // reproduced brief, in FCA).
+                    _ <- IO(
+                      connections.metrics.onReplayStart(
+                        (reproducingBlockBrief.blockNum: Int).toLong
+                      )
+                    )
                     _ <- connections.jointLedger ! StartBlock(
                       reproducingBlockBrief.blockNum,
                       reproducingBlockBrief.startTime
@@ -651,9 +665,12 @@ object BlockWeaver {
 
                 override def act(config: Config): IO[Some[NextReactiveState]] = for {
                     _ <- logStateTransition
+                    // Became leader of this block: start its "lead" clock (closed at the brief, in FCA).
+                    _ <- IO(connections.metrics.onLeadStart((leadingBlockNum: Int).toLong))
                     _ <- realTimeQuantizedInstant(config.slotConfig)
                     extracted <- extractRequestsForBlock(config)
                     (requests, survivingMempool) = extracted
+                    _ <- IO(connections.metrics.onMempoolSize(survivingMempool.requests.size))
                     isBlockStarted <-
                         if requests.isEmpty
                         then IO.pure(NotStarted)

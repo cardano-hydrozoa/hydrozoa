@@ -34,6 +34,7 @@ import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
@@ -165,7 +166,8 @@ object JointLedgerTestHelpers {
                           Slf4jTracer.sink.contramap(
                             JointLedgerEventFormat.humanFormat(HeadPeerNumber.zero)
                           ),
-                          persistence
+                          persistence,
+                          PeerMetrics.create(0L, Vector(HeadPeerNumber.zero: Int))
                         )
                       )
                     )

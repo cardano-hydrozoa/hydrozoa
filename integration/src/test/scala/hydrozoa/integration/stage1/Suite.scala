@@ -571,7 +571,8 @@ case class Suite(
                       jointLedgerConnections,
                       l2Ledger,
                       Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(headPeerNum)),
-                      persistence
+                      persistence,
+                      PeerMetrics.create(0L, Vector.empty)
                     )
                   )
                   _ <- jointLedgerD.complete(jointLedger)

@@ -33,6 +33,7 @@ import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerInteractionState, L2LedgerResponse}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
 import monocle.Focus.focus
@@ -47,7 +48,8 @@ final case class JointLedger(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | JointLedger.Connections,
     l2Ledger: L2Ledger[IO],
     tracer: ContraTracer[IO, JointLedgerEvent],
-    persistence: Persistence[IO]
+    persistence: Persistence[IO],
+    metrics: PeerMetrics
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
@@ -669,6 +671,9 @@ final case class JointLedger(
     ): IO[Unit] =
         for {
             conn <- getConnections
+            // The block's brief is produced here (this peer's own when leading, or a reproduction
+            // when following) — close the lead/replay lifecycle clock.
+            _ <- IO(metrics.onBlockProduced((brief.blockNum: Int).toLong, brief.requests.size))
             _ <- brief match {
                 case b: BlockBrief.Intermediate =>
                     tracer.traceWith(JointLedgerEvent.BriefProduced(b))
