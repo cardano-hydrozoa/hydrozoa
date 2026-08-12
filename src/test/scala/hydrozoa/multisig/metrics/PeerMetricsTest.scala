@@ -39,9 +39,9 @@ class PeerMetricsTest extends AnyFunSuite:
 
     test("block stats: minor/major counts, average and max events; empty is zero"):
         val m = fresh()
-        m.onBlockConfirmed(isMajor = false, events = 10)
-        m.onBlockConfirmed(isMajor = false, events = 20)
-        m.onBlockConfirmed(isMajor = true, events = 30)
+        m.onBlockConfirmed(blockNum = 1, isMajor = false, events = 10)
+        m.onBlockConfirmed(blockNum = 2, isMajor = false, events = 20)
+        m.onBlockConfirmed(blockNum = 3, isMajor = true, events = 30)
         val b = m.snapshot(0L).blocks
         assert(
           b.minor == 2 && b.major == 1 && b.maxEvents == 30 && b.avgEvents == 20.0 &&
@@ -73,11 +73,11 @@ class PeerMetricsTest extends AnyFunSuite:
         m.onBlockProduced(7, requests = 20)
         m.onReplayStart(6)
         m.onBlockProduced(6, requests = 3)
-        // A produced block with no start opened is ignored, not crashed.
+        // A produced block with no lead/replay start opened is ignored for those, not crashed.
         m.onBlockProduced(999, requests = 5)
-        // Soft-consensus is its own clock (cell spawned -> confirmed).
-        m.onCellSpawned(5)
-        m.onCellConfirmed(5)
+        // Soft-consensus opens at onBlockProduced (above) and closes at onBlockConfirmed.
+        m.onBlockConfirmed(blockNum = 5, isMajor = false, events = 10)
+        m.onLeaderMempoolDrain(64)
         m.onMempoolSize(42)
         m.onSequencerHeadroom(12)
         val s = m.snapshot(0L)
@@ -86,9 +86,10 @@ class PeerMetricsTest extends AnyFunSuite:
           bt.lead.count == 2 && bt.replay.count == 1 && bt.softConsensus.count == 1 &&
               bt.lead.top.map(_.blockNumber).toSet == Set(5L, 7L) &&
               bt.replay.top.map(_.blockNumber) == List(6L) &&
+              bt.softConsensus.top.map(_.blockNumber) == List(5L) &&
               bt.softConsensus.avgMillisPerRequest == 0.0 &&
-              s.mempoolSize == 42 && s.sequencerHeadroom == 12,
-          s"blockTimings=$bt mempool=${s.mempoolSize} headroom=${s.sequencerHeadroom}"
+              s.mempoolSize == 42 && s.leaderMempoolDrain == 64 && s.sequencerHeadroom == 12,
+          s"blockTimings=$bt mempool=${s.mempoolSize} taken=${s.leaderMempoolDrain} headroom=${s.sequencerHeadroom}"
         )
 
     test("sampler moves the EWMA load averages for local, block, and request rates after activity"):
@@ -97,10 +98,10 @@ class PeerMetricsTest extends AnyFunSuite:
                 m <- IO.realTime.map(t => PeerMetrics.create(t.toMillis, Vector(0, 1)))
                 fiber <- m.sampler(1.second).start
                 // one local request + one 2-event block per second for 5 seconds
-                _ <- (1 to 5).toList.traverse_ { _ =>
+                _ <- (1 to 5).toList.traverse_ { i =>
                     IO {
                         m.onLocalAccepted()
-                        m.onBlockConfirmed(isMajor = false, events = 2)
+                        m.onBlockConfirmed(blockNum = i.toLong, isMajor = false, events = 2)
                     } >> IO.sleep(1.second)
                 }
                 _ <- IO.sleep(1.second) // let the sampler observe the last tick

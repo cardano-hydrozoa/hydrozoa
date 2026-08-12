@@ -670,6 +670,8 @@ object BlockWeaver {
                     _ <- realTimeQuantizedInstant(config.slotConfig)
                     extracted <- extractRequestsForBlock(config)
                     (requests, survivingMempool) = extracted
+                    // How many requests this lead pulled out of the mempool, and what's left behind.
+                    _ <- IO(connections.metrics.onLeaderMempoolDrain(requests.size))
                     _ <- IO(connections.metrics.onMempoolSize(survivingMempool.requests.size))
                     isBlockStarted <-
                         if requests.isEmpty

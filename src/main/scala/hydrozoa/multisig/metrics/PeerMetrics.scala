@@ -27,7 +27,7 @@ enum RejectionKind:
   *
   * Counters are not persisted: they reset on restart.
   */
-final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int]):
+final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[Int]):
     import PeerMetrics.*
 
     // ---- local requests (written by RequestSequencer) ----
@@ -37,7 +37,7 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
 
     // ---- peer requests, per remote head peer (written by the peer liaisons, multi-writer) ----
     private val peerRequests: Map[Int, LongAdder] =
-        headPeerNums.map(_ -> new LongAdder).toMap
+        remotePeerNums.map(_ -> new LongAdder).toMap
 
     // ---- blocks (written by FastConsensusActor) ----
     private val blocksMinor = new AtomicLong(0)
@@ -54,9 +54,10 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
     private val stackBlocksMax = new AtomicLong(0)
 
     // ---- block-lifecycle timings ----
-    // Start clocks: blockNum -> startMillis. `leadStart`/`replayStart` (opened in BlockWeaver) are
-    // closed when the JointLedger produces the brief; `cellStart` (opened in FCA) at soft-confirmation.
-    // Written by one actor each, removed by one actor each — TrieMap keeps the cross-actor hand-off safe.
+    // Start clocks: blockNum -> startMillis. `leadStart`/`replayStart` (opened in BlockWeaver) close
+    // when the JointLedger produces the brief; `cellStart` opens at that same brief-produced moment
+    // and closes at soft-confirmation, so soft-consensus = brief produced -> soft-confirmed. Written
+    // by one actor each, removed by one actor each — TrieMap keeps the cross-actor hand-off safe.
     private val leadStart = TrieMap.empty[Long, Long]
     private val replayStart = TrieMap.empty[Long, Long]
     private val cellStart = TrieMap.empty[Long, Long]
@@ -64,12 +65,13 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
     private val replayTiming = new TimingAccumulator(perRequest = true)
     private val softConsensusTiming = new TimingAccumulator(perRequest = false)
 
-    // ---- gauges (last value; BlockWeaver mempool depth, RequestSequencer backpressure headroom) ----
+    // ---- gauges (last value) ----
     private val mempool = new AtomicLong(0)
+    private val leaderMempoolDrain = new AtomicLong(0)
     private val seqHeadroom = new AtomicLong(0)
 
     // ---- derived rates (written only by the sampler fiber) ----
-    private val rolling = new AtomicReference[Rolling](Rolling.empty(headPeerNums))
+    private val rolling = new AtomicReference[Rolling](Rolling.empty(remotePeerNums))
 
     private def now(): Long = System.currentTimeMillis()
 
@@ -86,11 +88,16 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
     def onPeerRequests(fromPeerNum: Int, n: Int): Unit =
         peerRequests.get(fromPeerNum).foreach(_.add(n.toLong))
 
-    /** Record a soft-confirmed block of the given type carrying `events` requests. */
-    def onBlockConfirmed(isMajor: Boolean, events: Int): Unit =
+    /** `blockNum` soft-confirmed as the given type carrying `events` requests: bump the block
+      * counters and close its soft-consensus clock (opened at [[onBlockProduced]]).
+      */
+    def onBlockConfirmed(blockNum: Long, isMajor: Boolean, events: Int): Unit =
         val _ = if isMajor then blocksMajor.incrementAndGet() else blocksMinor.incrementAndGet()
         blockEventsSum.addAndGet(events.toLong)
         updateMax(blockEventsMax, events.toLong)
+        cellStart
+            .remove(blockNum)
+            .foreach(start => softConsensusTiming.record(blockNum, now() - start, 0L))
 
     /** Record a hard-confirmed stack absorbing `blocksAbsorbed` blocks, at wall-clock `nowMillis`.
       */
@@ -111,7 +118,8 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
 
     /** The JointLedger produced `blockNum`'s brief (this peer's own when leading, or a reproduction
       * when following): close whichever clock the local peer opened — `leadStart` if it led the
-      * block, else `replayStart` — recording the elapsed time and the block's request count.
+      * block, else `replayStart` — recording the elapsed time and the block's request count, and
+      * open the soft-consensus clock (closed at [[onBlockConfirmed]]).
       */
     def onBlockProduced(blockNum: Long, requests: Int): Unit =
         val end = now()
@@ -121,19 +129,14 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
                 replayStart
                     .remove(blockNum)
                     .foreach(start => replayTiming.record(blockNum, end - start, requests.toLong))
-
-    /** FastConsensusActor spawned a consensus cell for `blockNum`: start its soft-consensus clock.
-      */
-    def onCellSpawned(blockNum: Long): Unit = startClock(cellStart, blockNum)
-
-    /** FastConsensusActor soft-confirmed `blockNum`: close its soft-consensus clock. */
-    def onCellConfirmed(blockNum: Long): Unit =
-        cellStart
-            .remove(blockNum)
-            .foreach(start => softConsensusTiming.record(blockNum, now() - start, 0L))
+        startClock(cellStart, blockNum)
 
     /** BlockWeaver's current mempool depth (requests received, not yet packed into a block). */
     def onMempoolSize(size: Int): Unit = mempool.set(size.toLong)
+
+    /** How many requests the leader just extracted from its mempool into the block it is starting.
+      */
+    def onLeaderMempoolDrain(n: Int): Unit = leaderMempoolDrain.set(n.toLong)
 
     /** How many more requests the RequestSequencer will admit right now before backpressure trips —
       * the free space in its window. (The window itself, `backpressureCoefficient *
@@ -162,7 +165,7 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
           localRate = roll.localRate,
           localRejScreening = localRejScreening.get(),
           localRejBackpressure = localRejBackpressure.get(),
-          peerRequests = headPeerNums.map { p =>
+          peerRequests = remotePeerNums.map { p =>
               p -> CounterWithRate(
                 peerRequests(p).sum(),
                 roll.peerRates.getOrElse(p, RateView.zero)
@@ -194,6 +197,7 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
             softConsensus = softConsensusTiming.snapshot
           ),
           mempoolSize = mempool.get(),
+          leaderMempoolDrain = leaderMempoolDrain.get(),
           sequencerHeadroom = seqHeadroom.get()
         )
 
@@ -203,7 +207,7 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
       */
     def sampler(period: FiniteDuration = 1.second): IO[Unit] =
         val ewmaLocal = mkEwmas()
-        val ewmaPeer = headPeerNums.map(_ -> mkEwmas()).toMap
+        val ewmaPeer = remotePeerNums.map(_ -> mkEwmas()).toMap
         val ewmaBlocks = mkEwmas()
         val ewmaBlockReqs = mkEwmas()
 
@@ -222,11 +226,11 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
                 val localInst = (curLocal - lastLocal) / dt
                 observe(ewmaLocal, localInst, dt)
 
-                val curPeer = headPeerNums.map(p => p -> peerRequests(p).sum()).toMap
-                val peerInst = headPeerNums.map { p =>
+                val curPeer = remotePeerNums.map(p => p -> peerRequests(p).sum()).toMap
+                val peerInst = remotePeerNums.map { p =>
                     p -> (curPeer(p) - lastPeer.getOrElse(p, 0L)) / dt
                 }.toMap
-                headPeerNums.foreach(p => observe(ewmaPeer(p), peerInst(p), dt))
+                remotePeerNums.foreach(p => observe(ewmaPeer(p), peerInst(p), dt))
 
                 val curBlocks = blocksMinor.get() + blocksMajor.get()
                 val blockInst = (curBlocks - lastBlocks) / dt
@@ -239,7 +243,8 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
                 rolling.set(
                   Rolling(
                     localRate = rateOf(ewmaLocal, localInst),
-                    peerRates = headPeerNums.map(p => p -> rateOf(ewmaPeer(p), peerInst(p))).toMap,
+                    peerRates =
+                        remotePeerNums.map(p => p -> rateOf(ewmaPeer(p), peerInst(p))).toMap,
                     blockRate = rateOf(ewmaBlocks, blockInst),
                     blockRequestRate = rateOf(ewmaBlockReqs, blockReqInst)
                   )
@@ -248,7 +253,7 @@ final class PeerMetrics private (startedAtMillis: Long, headPeerNums: Vector[Int
             }
 
         IO.realTime.flatMap(t0 =>
-            loop(t0.toMillis, localAccepted.get(), headPeerNums.map(_ -> 0L).toMap, 0L, 0L)
+            loop(t0.toMillis, localAccepted.get(), remotePeerNums.map(_ -> 0L).toMap, 0L, 0L)
         )
 
 object PeerMetrics:
@@ -260,8 +265,12 @@ object PeerMetrics:
     /** How many slowest blocks each timing category keeps (with their block numbers). */
     private val TopN = 10
 
-    def create(nowMillis: Long, headPeerNums: Vector[Int]): PeerMetrics =
-        new PeerMetrics(nowMillis, headPeerNums)
+    /** Build a registry that tracks inbound requests from `remotePeerNums` — the head peers other
+      * than this one. Exclude the own peer number: a peer never sends requests to itself over the
+      * network, so its `peerRequests` entry would be a constant zero.
+      */
+    def create(nowMillis: Long, remotePeerNums: Vector[Int]): PeerMetrics =
+        new PeerMetrics(nowMillis, remotePeerNums)
 
     /** One timing category (lead / replay / soft-consensus). Written by exactly one actor and read
       * by the HTTP snapshot, so the running sum/count use plain atomics and the top-N list is
@@ -319,10 +328,10 @@ object PeerMetrics:
         blockRequestRate: RateView
     )
     private object Rolling:
-        def empty(headPeerNums: Vector[Int]): Rolling =
+        def empty(remotePeerNums: Vector[Int]): Rolling =
             Rolling(
               RateView.zero,
-              headPeerNums.map(_ -> RateView.zero).toMap,
+              remotePeerNums.map(_ -> RateView.zero).toMap,
               RateView.zero,
               RateView.zero
             )
@@ -384,5 +393,6 @@ final case class PeerStats(
     stacks: StackStats,
     blockTimings: BlockTimingSet,
     mempoolSize: Long,
+    leaderMempoolDrain: Long,
     sequencerHeadroom: Long
 )
