@@ -4,41 +4,49 @@ import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId
 import scala.annotation.tailrec
+import scala.collection.immutable.TreeMap
 
-/** Simple immutable mempool implementation. Duplicate ledger request IDs are NOT allowed and a
-  * runtime exception is thrown since this should never happen. Other components, particularly the
-  * peer liaison is in charge or maintaining the integrity of the stream of messages.
+/** Simple immutable mempool. Duplicate ledger request IDs are NOT allowed; a duplicate add returns
+  * `None`. Other components — particularly the peer liaison — keep the incoming stream of messages
+  * consistent.
   *
-  * @param requests
-  *   map to store requests
-  * @param arrivalOrder
-  *   vector to store order of request ids
+  * Arrival order is indexed by a monotonic sequence number rather than a `Vector`, so removing an
+  * arbitrary request (the follower replay path, one id at a time) is `O(log n)` instead of the
+  * `O(n)` a `Vector.filterNot` would cost. `bySeq` iterates in arrival order; `seqOf` maps a
+  * request id to its arrival slot for dedup and removal.
+  *
+  * @param bySeq
+  *   requests keyed by arrival sequence number, so iteration is in arrival order
+  * @param seqOf
+  *   the arrival sequence number of each live request id
+  * @param nextSeq
+  *   the sequence number the next arrival will take (monotonic, never reused)
   */
-final case class Mempool(
-    requests: Map[RequestId, UserRequestWithId] = Map.empty,
-    arrivalOrder: Vector[RequestId] = Vector.empty
+final case class Mempool private (
+    bySeq: TreeMap[Long, UserRequestWithId],
+    seqOf: Map[RequestId, Long],
+    nextSeq: Long
 ) {
 
-    def isEmpty: Boolean = requests.isEmpty
+    def isEmpty: Boolean = seqOf.isEmpty
 
-    /** Add a request to the mempool
+    /** The number of live requests. */
+    def size: Int = seqOf.size
+
+    /** Add a request to the mempool.
       *
       * @param request
       *   a request to add
       * @return
-      *   an updated mempool
-      * @throws IllegalArgumentException
-      *   if a duplicate is detected
+      *   the updated mempool, or `None` if a request with the same id is already present
       */
-    def addRequest(
-        request: UserRequestWithId
-    ): Option[Mempool] = {
+    def addRequest(request: UserRequestWithId): Option[Mempool] = {
         val requestId = request.requestId
-
-        Option.when(!requests.contains(requestId))(
+        Option.when(!seqOf.contains(requestId))(
           copy(
-            requests = requests + (requestId -> request),
-            arrivalOrder = arrivalOrder :+ requestId
+            bySeq = bySeq.updated(nextSeq, request),
+            seqOf = seqOf.updated(requestId, nextSeq),
+            nextSeq = nextSeq + 1
           )
         )
     }
@@ -47,7 +55,8 @@ final case class Mempool(
       * @param requestId
       *   the request's ID
       */
-    def getRequest(requestId: RequestId): Option[UserRequestWithId] = requests.get(requestId)
+    def getRequest(requestId: RequestId): Option[UserRequestWithId] =
+        seqOf.get(requestId).map(bySeq)
 
     /** Given a list of request IDs, extract the corresponding requests from the mempool until a
       * request ID is encountered that is missing from the mempool.
@@ -94,35 +103,11 @@ final case class Mempool(
             }
     }
 
-    private def extractRequest(requestId: RequestId): Option[(Mempool, UserRequestWithId)] = {
-        val mRequestWithId = requests.get(requestId)
-        mRequestWithId.map(request => {
-            val newMempool = copy(
-              requests = requests - requestId,
-              arrivalOrder = arrivalOrder.filterNot(_ == requestId)
-            )
-            (newMempool, request)
-        })
-    }
-
-    /** Retrieve all mempool requests by order of arrival.
-      * @throws RuntimeException
-      *   If the mempool's [[arrivalOrder]] vector contains a request ID that is missing from its
-      *   [[requests]] map, violating the mempool's invariant property.
-      */
-    def extractRequestsInOrder: List[UserRequestWithId] =
-        arrivalOrder.iterator
-            .map(requestId => {
-                requests.getOrElse(
-                  requestId, {
-                      throw RuntimeException(
-                        s"Panic: the mempool's `arrivalOrder` vector has a request ID (${requestId.asI64}) that" +
-                            " is missing from the mempool's `requests` map."
-                      )
-                  }
-                )
-            })
-            .toList
+    private def extractRequest(requestId: RequestId): Option[(Mempool, UserRequestWithId)] =
+        seqOf.get(requestId).map { seq =>
+            val request = bySeq(seq)
+            (copy(bySeq = bySeq - seq, seqOf = seqOf - requestId), request)
+        }
 
     /** Extract up to `limit` requests for block production, preferring those authored by
       * `preferredPeer` so a leader's own users are not starved when the mempool is full (fairness).
@@ -137,29 +122,20 @@ final case class Mempool(
         preferredPeer: HeadPeerNumber,
         limit: Int
     ): (List[UserRequestWithId], Mempool) = {
-        val ordered: Vector[UserRequestWithId] = arrivalOrder.map(id =>
-            requests.getOrElse(
-              id,
-              throw RuntimeException(
-                s"Panic: the mempool's `arrivalOrder` vector has a request ID (${id.asI64}) that" +
-                    " is missing from the mempool's `requests` map."
-              )
-            )
-        )
-        // `partition` is stable, so each side keeps its arrival order; own requests lead.
-        val (own, others) = ordered.partition(_.requestId.peerNum == preferredPeer)
-        val chosen = (own ++ others).take(limit).toList
-        val chosenIds = chosen.iterator.map(_.requestId).toSet
+        // `bySeq.toVector` is (seq, request) in arrival order; `partition` is stable, so each side
+        // keeps that order and own requests lead.
+        val (own, others) = bySeq.toVector.partition(_._2.requestId.peerNum == preferredPeer)
+        val chosen = (own ++ others).take(limit)
         val survivingMempool = copy(
-          requests = requests -- chosenIds,
-          arrivalOrder = arrivalOrder.filterNot(chosenIds.contains)
+          bySeq = bySeq -- chosen.iterator.map(_._1),
+          seqOf = seqOf -- chosen.iterator.map(_._2.requestId)
         )
-        (chosen, survivingMempool)
+        (chosen.map(_._2).toList, survivingMempool)
     }
 }
 
 object Mempool {
-    val empty: Mempool = Mempool()
+    val empty: Mempool = Mempool(TreeMap.empty, Map.empty, 0L)
 
     enum Extraction:
         def extractedRequests: List[UserRequestWithId]
