@@ -280,7 +280,7 @@ object TxTiming {
               "depositAbsorptionDuration must exceed minSettlementDuration + inactivityMarginDuration"
             )
 
-    def default(slotConfig: SlotConfig): TxTiming = TxTiming(
+    def default(slotConfig: SlotConfig): TxTiming = preset(
       MinSettlementDuration(12.hours.quantize(slotConfig)),
       InactivityMarginDuration(24.hours.quantize(slotConfig)),
       SilenceDuration(5.minutes.quantize(slotConfig)),
@@ -290,7 +290,7 @@ object TxTiming {
     )
 
     // TODO: move to integration
-    def yaci(slotConfig: SlotConfig): TxTiming = TxTiming(
+    def yaci(slotConfig: SlotConfig): TxTiming = preset(
       MinSettlementDuration(10.minutes.quantize(slotConfig)),
       InactivityMarginDuration(60.seconds.quantize(slotConfig)),
       SilenceDuration(10.minutes.quantize(slotConfig)),
@@ -299,7 +299,7 @@ object TxTiming {
       DepositAbsorptionDuration(12.minutes.quantize(slotConfig)),
     )
 
-    def demo(slotConfig: SlotConfig): TxTiming = TxTiming(
+    def demo(slotConfig: SlotConfig): TxTiming = preset(
       MinSettlementDuration(1.hour.quantize(slotConfig)),
       InactivityMarginDuration(2.hours.quantize(slotConfig)),
       SilenceDuration(2.minutes.quantize(slotConfig)),
@@ -309,7 +309,7 @@ object TxTiming {
     )
 
     // TODO: move to integration
-    def testnet(slotConfig: SlotConfig): TxTiming = TxTiming(
+    def testnet(slotConfig: SlotConfig): TxTiming = preset(
       MinSettlementDuration(1.hour.quantize(slotConfig)),
       InactivityMarginDuration(2.hours.quantize(slotConfig)),
       SilenceDuration(2.minutes.quantize(slotConfig)),
@@ -317,6 +317,30 @@ object TxTiming {
       DepositMaturityDuration(30.seconds.quantize(slotConfig)),
       DepositAbsorptionDuration(4.hours.quantize(slotConfig)),
     )
+
+    /** Build a built-in preset through the validating [[mk]] so it obeys the same invariant as a
+      * loaded config. A preset that violates it is a programming error, not recoverable input, so a
+      * `Left` is raised rather than threaded back to a caller.
+      */
+    private def preset(
+        minSettlementDuration: MinSettlementDuration,
+        inactivityMarginDuration: InactivityMarginDuration,
+        silenceDuration: SilenceDuration,
+        depositSubmissionDuration: DepositSubmissionDuration,
+        depositMaturityDuration: DepositMaturityDuration,
+        depositAbsorptionDuration: DepositAbsorptionDuration,
+    ): TxTiming =
+        mk(
+          minSettlementDuration,
+          inactivityMarginDuration,
+          silenceDuration,
+          depositSubmissionDuration,
+          depositMaturityDuration,
+          depositAbsorptionDuration
+        ).fold(
+          msg => throw IllegalArgumentException(s"invalid built-in TxTiming preset: $msg"),
+          identity
+        )
 
     /** The cardano liaison polling period must be at least this many times shorter than
       * [[depositMaturityDuration]]. Rationale: by the time a deposit reaches its absorption start
