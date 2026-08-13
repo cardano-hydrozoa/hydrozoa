@@ -220,7 +220,7 @@ object BlockWeaver {
             def storeRequest(request: UserRequestWithId): IO[Mempool] =
                 mempool.addRequest(request) match {
                     case Some(newMempool) =>
-                        IO(connections.metrics.onMempoolSize(newMempool.requests.size))
+                        IO(connections.metrics.onMempoolSize(newMempool.size))
                             .as(newMempool)
                     case None =>
                         IO.raiseError(
@@ -672,7 +672,7 @@ object BlockWeaver {
                     (requests, survivingMempool) = extracted
                     // How many requests this lead pulled out of the mempool, and what's left behind.
                     _ <- IO(connections.metrics.onLeaderMempoolDrain(requests.size))
-                    _ <- IO(connections.metrics.onMempoolSize(survivingMempool.requests.size))
+                    _ <- IO(connections.metrics.onMempoolSize(survivingMempool.size))
                     isBlockStarted <-
                         if requests.isEmpty
                         then IO.pure(NotStarted)
