@@ -19,9 +19,10 @@
 > - **Plaintext secrets, default credentials, no TLS.** Private configs carry signing keys and the
 >   Blockfrost key in clear JSON; the template ships `admin`/`welcome` admin credentials; the HTTP
 >   API and the WS mesh are unencrypted.
-> - **Ephemeral state, single-use head config.** No data volumes are mounted (config comes in via
->   read-only bind mounts), so any restart means re-initializing a fresh head on L1 (§5) — and
->   `head-config.json` embeds real utxos + wall-clock anchors, so it cannot be reused.
+> - **Durable state, single-use head config.** Each peer's RocksDB store lives on a named volume, so
+>   it survives a restart (crash recovery and evacuation read it); `docker compose down -v` wipes it
+>   for a fresh head. `head-config.json` still embeds real utxos + wall-clock anchors, so it cannot be
+>   reused — a fresh head needs a rebuilt config.
 > - **Public testnet (Preview / Preprod) via Blockfrost only** — a trusted third party between
 >   every node and L1.
 
@@ -110,9 +111,9 @@ workspace from it:
 
 ```bash
 mkdir myhead && cd myhead
-docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.6
+docker pull ghcr.io/cardano-hydrozoa/hydrozoa:latest
 docker run --rm -v "$PWD:/work" -w /work --user root \
-  ghcr.io/cardano-hydrozoa/hydrozoa:0.1.6 scaffold .
+  ghcr.io/cardano-hydrozoa/hydrozoa:latest scaffold .
 # writes docker-compose.yml, hydrozoa.sh, template/peer-private.template.json.local
 ```
 
@@ -152,13 +153,16 @@ just integration-fast  # multi-peer integration subset
 Two ways to use your build:
 
 **A local Docker image** — the same image as the published one, from your sources. It is tagged
-both `cardano-hydrozoa/hydrozoa:0.1.6` and `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.6`, so it matches
-`docker compose`'s default image name — the scaffolded head (§5) picks it up with no `HYDROZOA_IMAGE`
-override:
+`cardano-hydrozoa/hydrozoa:<version>`, `ghcr.io/cardano-hydrozoa/hydrozoa:<version>`, and
+`ghcr.io/cardano-hydrozoa/hydrozoa:latest` — the last matches `docker compose`'s default image, so
+the scaffolded head (§5) picks up your local build with no `HYDROZOA_IMAGE` override:
 
 ```bash
-just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.6 + ghcr.io/… (base eclipse-temurin:25-jre)
+just docker-image      # -> cardano-hydrozoa/hydrozoa:<version> + ghcr.io/…:<version> + ghcr.io/…:latest
 ```
+
+(That local `…:latest` tag shadows the published one on this machine; `docker compose pull` restores
+the released image.)
 
 **Locally-compiled code (development)** — `just stage` builds the `hydrozoa` launcher from the
 current sources, and the `just` recipes invoke it directly, with no Docker and no sbt startup per
@@ -192,8 +196,8 @@ when it reads the config.
 
 **(b) Per-node `peer-private.json`** — `ownPeerPrivate` (identity +
 Ed25519 signing wallet — `ownHeadWallet` for a head peer / `ownCoilWallet` for a coil peer, matched
-against the head config's vkeys), `nodeOperationEvacuationConfig` (incl. a separate
-`ruleBasedWallet` keypair), `nodeOperationMultisigConfig` (rate limits, Cardano polling period),
+against the head config's vkeys), `nodeOperationEvacuationConfig` (the evacuation-bot polling
+period), `nodeOperationMultisigConfig` (rate limits, Cardano polling period),
 `blockfrostApiKey`, `adminUsername`, `adminPassword`, `httpHost`, `httpPort`. `remoteLedgerUri` is
 **optional and unused for the EUTXO ledger** — it is read only on the `any-remote` path, so an
 EUTXO node may omit it.
@@ -361,14 +365,13 @@ At this point every node has its two files, and the composition (§5) mounts
 - Config mounts resolve against `.` — the head directory the compose file was scaffolded into — so
   running compose from there mounts that dir's shared `head-config.json` plus each node's
   `head-N/private.json` or `coil-N/private.json`. The image defaults to the published
-  `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.6` (pulled on first run); set `${HYDROZOA_IMAGE}` to use
-  another, e.g. a locally built `cardano-hydrozoa/hydrozoa:0.1.6`.
+  `ghcr.io/cardano-hydrozoa/hydrozoa:latest` (pulled on first run); pin a release with
+  `${HYDROZOA_VERSION}`, or override the whole ref with `${HYDROZOA_IMAGE}` (e.g. a locally built one).
 
 Caveats:
-- **State is ephemeral.** No data volumes are mounted (only read-only config bind mounts), so both
-  RocksDB stores are lost on `docker compose down` — consistent with the re-init-per-restart model
-  (Restarting, below). A durable deployment mounts a per-node volume at
-  `/opt/docker/.hydrozoa-data`.
+- **State is durable.** Each node's consensus + L2 RocksDB stores live on a named volume mounted at
+  `/opt/docker/.hydrozoa-data`, so they survive `docker compose down` / restart (crash recovery and
+  evacuation read them). Reset to a fresh head with `docker compose down -v`, which wipes the volumes.
 - **The head initializes only when all head peers + at least `coilQuorum` coil peers are up.** Start
   order doesn't matter (dialers retry); stack 0 hard-confirms with all head signatures +
   `coilQuorum` coil signatures (`docs/spec/coil-network.md` §5.7).
@@ -386,7 +389,7 @@ Default — pull the published image and run the scaffolded head:
 
 ```bash
 cd "$HYDROZOA_HOME"            # the scaffolded head dir (default head/demo)
-docker compose up -d          # pulls ghcr.io/cardano-hydrozoa/hydrozoa:0.1.6 on first run
+docker compose up -d          # pulls ghcr.io/cardano-hydrozoa/hydrozoa:latest on first run
 ```
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
@@ -411,11 +414,13 @@ The `(0,0)` entry under `happyPathEffects` is the initialization tx — open its
 network's explorer to check it out. Every following happy-path effect (settlements, the
 finalization) appears in the same section as the head progresses.
 
-**Another image** — `HYDROZOA_IMAGE` (default `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.6`), e.g. a
-locally built one (§3):
+**Another image** — pin a published release with `HYDROZOA_VERSION`, or override the whole ref with
+`HYDROZOA_IMAGE` (default `ghcr.io/cardano-hydrozoa/hydrozoa:latest`). A local `just docker-image`
+build (§3) is already tagged `…:latest`, so it is picked up without either:
 
 ```bash
-HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.6 docker compose up -d
+HYDROZOA_VERSION=0.1.6 docker compose up -d                          # a specific published release
+HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.6 docker compose up -d  # a specific/other image name
 ```
 
 **Another head** — each head directory carries its own `docker-compose.yml`, so switch heads by
@@ -427,9 +432,9 @@ HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.6 docker compose up -d
 anything else (Teardown / recovery of funds, §6) — otherwise the funds stay locked until the
 fallback/evacuation path matures.
 
-The demo nodes keep no durable state across `docker compose down` (no volumes), so restarting means
-**re-initializing a fresh head on L1** — and `head-config.json` is a one-off artifact that must be
-rebuilt each time. It embeds:
+Nodes keep durable state on named volumes, so a plain restart recovers the **same** head from its
+store. To start a **fresh** head instead, wipe the volumes with `docker compose down -v` — and
+rebuild `head-config.json`, a one-off artifact that must be rebuilt each time. It embeds:
 
 - **head-0's actual funding UTxOs**, spent by the initialization tx — consumed the moment a head
   initializes; and
@@ -573,3 +578,38 @@ The finalization tx pays the L2 state and equity back out on L1 (watch the netwo
 e.g. `preview.cexplorer.io` / `preprod.cexplorer.io`).
 Then `docker compose down`. Leftover change at head peer 0's own L1 address (not head-locked) can
 be swept with its single key at any time.
+
+### Evacuation (forced recovery)
+
+When the happy-path finalize is not available — peers gone, the head wedged — funds come back via
+the **rule-based regime**: a peer submits the pre-signed fallback tx, the on-chain scripts resolve a
+dispute, and every L2 utxo is paid back out on L1. The `hydrozoa evacuate` command runs that regime
+standalone from a peer's leftover database plus its head + private config
+([`docs/spec/evacuate-command.md`](../spec/evacuate-command.md)):
+
+```
+hydrozoa evacuate <head-config.json> <peer-private.json>
+```
+
+It reads the store read-only and keeps polling L1 until stopped, so it is safe to run and re-run.
+
+The composition already persists each peer's store (named volumes) and carries an `evacuate`
+profile, so the state `evacuate` reads is always there:
+
+```bash
+# Drive the head's evacuation from one peer ad-hoc (uses that peer's store):
+docker compose run --rm head-0 evacuate /configs/head-config.json /configs/private.json
+
+# Drive the head's evacuation from every peer: stop the serve peers, then bring up the profile:
+docker compose stop
+docker compose --profile evacuate up
+```
+
+Evacuation acts on the whole head — resolving the on-chain dispute and paying every L2 utxo back out
+on L1; one or more peers can drive it (they converge on-chain). Stop a peer's serve container before
+starting its evac service — the read-only store open takes no lock, but you do not want `serve`
+pushing the happy path while `evacuate` submits the fallback. Wipe the persisted stores with
+`docker compose ... down -v` once recovery is complete.
+
+> The composition defaults to the `:latest` image; `evacuate` works once a release that includes it
+> is `:latest`. Pin a specific build any time with `HYDROZOA_VERSION` (or a full `HYDROZOA_IMAGE`).
