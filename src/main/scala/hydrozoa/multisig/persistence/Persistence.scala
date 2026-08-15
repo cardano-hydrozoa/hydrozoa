@@ -93,6 +93,13 @@ object Persistence:
             _ <- backend.put(Cf.Meta, generationKey, ByteBuffer.allocate(4).putInt(next).array())
         yield next
 
+    /** Read the current generation counter **without** bumping it — for a read-only open, where no
+      * new arrival stamps are produced (nothing is written), so the counter must not (and cannot)
+      * be advanced. Returns the last process's generation (0 on a store that never wrote one).
+      */
+    private def readGeneration(backend: BackendStore[IO]): IO[Int] =
+        backend.get(Cf.Meta, generationKey).map(_.map(b => ByteBuffer.wrap(b).getInt).getOrElse(0))
+
     /** Nanoseconds in a second — the scale bridging `Instant` (seconds + nanos) and the epoch-nanos
       * zero-time anchor.
       */
@@ -152,7 +159,35 @@ object Persistence:
         for
             generation <- bumpGeneration(store)
             anchors <- recordZeroTime(store, generation)
-        yield new Persistence[IO]:
+        yield mkPersistence(store, tracer, generation, anchors)
+
+    /** Read-only [[Persistence]] over a store opened read-only (e.g. `hydrozoa evacuate`, design
+      * `docs/spec/evacuate-command.md`). Reads the current generation + zero-time anchors
+      * **without** writing either (no generation bump, no zero-time record), since a read-only
+      * store rejects writes and the rule-based regime only reads. It produces no new arrival
+      * stamps, so the un-bumped generation is never used to stamp anything; `wallClockOf` still
+      * resolves existing stamps from the anchors already on disk.
+      */
+    def fromBackendReadOnly(
+        store: BackendStore[IO],
+        tracer: ContraTracer[IO, PersistenceEvent]
+    )(using CardanoNetwork.Section): IO[Persistence[IO]] =
+        for
+            generation <- readGeneration(store)
+            anchors <- readZeroTimes(store)
+        yield mkPersistence(store, tracer, generation, anchors)
+
+    /** Build the `Persistence` instance from a resolved generation + zero-time anchor map. Shared
+      * by [[fromBackend]] (which bumps + records first) and [[fromBackendReadOnly]] (which only
+      * reads).
+      */
+    private def mkPersistence(
+        store: BackendStore[IO],
+        tracer: ContraTracer[IO, PersistenceEvent],
+        generation: Int,
+        anchors: Map[Int, Long]
+    )(using CardanoNetwork.Section): Persistence[IO] =
+        new Persistence[IO]:
             val backend: BackendStore[IO] = store
 
             def arrivalStamp: IO[ArrivalStamp] =
