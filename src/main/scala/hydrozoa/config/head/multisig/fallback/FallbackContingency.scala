@@ -176,9 +176,12 @@ object FallbackContingency {
         // exactly this minAda, so undersizing it makes a ratcheted output unable to preserve value.
         val maxBallotBoxBytes: PositiveInt = PositiveInt.unsafeApply(200)
 
-        // Max serialized size of a rule-based treasury utxo when there are no L2 liabilities
-        // (see TreasuryOutputSizeTest)
-        val maxNoLiabilitiesTreasuryUtxoBytes: PositiveInt = PositiveInt.unsafeApply(6960)
+        // Max serialized size of a rule-based treasury utxo when there are no L2 liabilities. The
+        // datum is slim and constant-size (headMp, versions, a deadline, and a 48-byte KZG
+        // commitment when Resolved) — the G2 setup / head-identity fields live in the setup ladder /
+        // regime utxos, not here. Measured at 154 B (Unresolved) / 204 B (Resolved) by
+        // TreasuryOutputSizeTest; 400 gives ~2x headroom (→ minAdaForTreasury ~2.4 ADA).
+        val maxNoLiabilitiesTreasuryUtxoBytes: PositiveInt = PositiveInt.unsafeApply(400)
 
         // Max serialized size of the rule-based regime utxo (HRWT beacon + head-identity datum,
         // ~one compressed vkey per head/coil peer); measured ~880 bytes at the largest supported head.
