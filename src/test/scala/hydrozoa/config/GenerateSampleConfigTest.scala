@@ -32,8 +32,6 @@ object GenerateSampleConfigTest extends Properties("GenerateSampleConfig") {
         }
         npc.focus(_.ownPeerPrivate)
             .replace(OwnHeadPeerPrivate(headWallet, headPeers).get)
-            .focus(_.nodeOperationEvacuationConfig.ruleBasedWallet)
-            .modify(mkDummyWallet)
     }
 
     val writeAllRoundTrip: MultiNodeConfigTestM[Boolean] = for {

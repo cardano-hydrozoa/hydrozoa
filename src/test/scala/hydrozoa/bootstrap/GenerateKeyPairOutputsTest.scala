@@ -95,7 +95,7 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
         given CoilPeers = coilPeers
 
         val filled = GenerateKeyPair
-            .fillPrivateConfig(template, Role.Head, hex('1'), hex('a'), hex('b'), hex('c'))
+            .fillPrivateConfig(template, Role.Head, hex('1'), hex('a'))
             .fold(e => fail(s"fill failed: $e"), identity)
 
         val decoded = parser
@@ -106,8 +106,7 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
             case p: OwnHeadPeerPrivate =>
                 assert(
                   p.ownPeerIndex == 1 &&
-                      p.ownWallet.exportVerificationKey == vkey('1') &&
-                      decoded.ruleBasedWallet.exportVerificationKey == vkey('b')
+                      p.ownWallet.exportVerificationKey == vkey('1')
                 )
             case other => fail(s"expected OwnHeadPeerPrivate, got $other")
         }
@@ -118,7 +117,7 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
         given CoilPeers = coilPeers
 
         val filled = GenerateKeyPair
-            .fillPrivateConfig(template, Role.Coil, hex('3'), hex('a'), hex('b'), hex('c'))
+            .fillPrivateConfig(template, Role.Coil, hex('3'), hex('a'))
             .fold(e => fail(s"fill failed: $e"), identity)
 
         val decoded = parser

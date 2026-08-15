@@ -137,8 +137,7 @@ object MultiNodeConfig {
                     .mkCoilConfig(
                       headConfig = mnc.headConfig,
                       ownCoilWallet = w,
-                      nodeOperationEvacuationConfig = templatePrivate.nodeOperationEvacuationConfig
-                          .copy(ruleBasedWallet = w),
+                      nodeOperationEvacuationConfig = templatePrivate.nodeOperationEvacuationConfig,
                       nodeOperationMultisigConfig = templatePrivate.nodeOperationMultisigConfig,
                       blockfrostApiKey = "not-a-real-key",
                       remoteLedgerUri = Some("ws://localhost:3001/ws"),
@@ -262,7 +261,7 @@ object MultiNodeConfig {
                               testPeers.walletFor(peerId._1),
                               headConfig.headPeers
                             ).get
-                            noec <- generateNodeOperationEvacuationConfig(ohpp.ownHeadWallet)
+                            noec <- generateNodeOperationEvacuationConfig
 
                         } yield peerId._1 -> NodePrivateConfig(
                           ownPeerPrivate = ohpp,

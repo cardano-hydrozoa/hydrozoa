@@ -236,16 +236,13 @@ object DisputeActorTestHelpers {
                   )
                 )
         })
-        // The rule-based actor signs its own txs with `config.ruleBasedWallet`; the coil
-        // ratchet path also declares `ownWallet`'s addr key hash as a required signer for
-        // collateral. Point ruleBasedWallet at the coil wallet so signer and required-signer
-        // match.
-        coilEvacConfig = template.nodeOperationEvacuationConfig.copy(ruleBasedWallet = coilWallet)
+        // The rule-based actor signs every tx with `config.ownWallet` (= `coilWallet` here), which
+        // the ballot boxes and collateral require.
         coilNodeConfig <- lift(
           NodeConfig.mkCoilConfig(
             headConfig = env.headConfig,
             ownCoilWallet = coilWallet,
-            nodeOperationEvacuationConfig = coilEvacConfig,
+            nodeOperationEvacuationConfig = template.nodeOperationEvacuationConfig,
             nodeOperationMultisigConfig = template.nodeOperationMultisigConfig,
             blockfrostApiKey = template.blockfrostApiKey,
             remoteLedgerUri = template.remoteLedgerUri,

@@ -40,24 +40,9 @@ import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{DatumOption, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos}
+import scalus.cardano.ledger.{DatumOption, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
-
-// TODO: relocate
-extension (tx: Transaction) {
-
-    /** Sign with the rule-based actor's own wallet (distinct from the MRM peer wallet). */
-    def selfSigned(using config: Config): Transaction = config.ruleBasedWallet.signTx(tx)
-}
-
-extension [T <: EnrichedTx[T]](etx: T) {
-
-    /** Sign the enriched tx with the rule-based actor's own wallet, preserving family info so
-      * downstream wrappers (e.g. the firewall) can dispatch statically on it.
-      */
-    def selfSigned(using config: Config): T = config.ruleBasedWallet.signTx(etx)
-}
 
 /** Single actor that drives the rule-based regime end to end: while the treasury is Unresolved it
   * runs the dispute branch (vote/abstain → tally → resolve); once Resolved it runs the evacuation
@@ -188,7 +173,11 @@ final case class RuleBasedActor(
     private def raiseError[A](t: Throwable): EitherT[IO, Error.RecoverableErrors, A] =
         EitherT.liftF(IO.raiseError(t))
 
-    /** Build, sign, and submit one dispute-flow tx.
+    /** Build, sign, and submit one rule-based tx.
+      *
+      * All rule-based txs are signed by `ownWallet` — the peer's consensus key. The dispute ballot
+      * boxes are locked to it by the fallback tx, and both the dispute and evacuation collateral
+      * sit at its address; signing with any other key yields `MissingVKeyWitness` at submission.
       */
     private def buildAndSubmit[T <: EnrichedTx[T]: TxFamily, E <: Throwable](
         result: => Either[E, T],
@@ -208,7 +197,7 @@ final case class RuleBasedActor(
     ): EitherT[IO, Error.RecoverableErrors, Unit] = {
         for {
             _ <- traceRight(RuleBasedActorEvent.Tx.Submitting(tx))
-            res <- Backend.submit(tx.selfSigned)
+            res <- Backend.submit(config.ownWallet.signTx(tx))
             _ <- traceRight(RuleBasedActorEvent.Tx.SubmitSuccess(tx))
         } yield res
     }
@@ -1059,9 +1048,11 @@ final case class RuleBasedActor(
                 case Some(eMap) => pure(eMap)
             }
 
-        /** Find an ada-only collateral utxo at the evacuation wallet's address. */
+        /** Find an ada-only collateral utxo at the own wallet's address (the rule-based bot funds
+          * and signs every tx with the peer's consensus key).
+          */
         def getEvacuationCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
-            val walletAddress = config.ruleBasedWallet.exportVerificationKey.shelleyAddress()
+            val walletAddress = config.ownWallet.exportVerificationKey.shelleyAddress()
             collateralAt(Backend.utxosAtFee(walletAddress), walletAddress)
         }
     }

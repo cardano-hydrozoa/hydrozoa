@@ -385,11 +385,7 @@ case class Suite(
                 config.headConfig.maxCardanoLiaisonPollingPeriod
               )
             )
-            _ <- pick(
-              generateNodeOperationEvacuationConfig(
-                testPeers.walletFor(Alice)
-              )
-            )
+            _ <- pick(generateNodeOperationEvacuationConfig)
         } yield Model
             .State(
               multiNodeConfig = config,
