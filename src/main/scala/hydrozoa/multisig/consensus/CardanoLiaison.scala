@@ -92,7 +92,7 @@ object CardanoLiaison:
             CardanoLiaison.Connections,
         tracer: ContraTracer[IO, CardanoLiaisonEvent],
         persistence: Persistence[IO],
-        mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased.type],
+        onRuleBasedRegimeObserved: TransactionInput => IO[Unit],
         advanceNodeStatus: NodeStatus => IO[Unit],
     ): IO[CardanoLiaison] =
         IO(
@@ -102,7 +102,7 @@ object CardanoLiaison:
             pendingConnections,
             tracer,
             persistence,
-            mrmSelf,
+            onRuleBasedRegimeObserved,
             advanceNodeStatus
           ) {}
         )
@@ -447,7 +447,11 @@ trait CardanoLiaison(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
     tracer: ContraTracer[IO, CardanoLiaisonEvent],
     persistence: Persistence[IO],
-    mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased.type],
+    // Called once per distinct rule-based treasury utxo observed on L1 (see `handoffOrResubmit`).
+    // Under `HeadMultisigRegimeManager` this fires `HandoffToRuleBased`; under
+    // `RuleBasedRegimeManager` (the `evacuate` path) it is a no-op — there is no regime manager to
+    // hand off to, and re-announcing would just be spam.
+    onRuleBasedRegimeObserved: TransactionInput => IO[Unit],
     advanceNodeStatus: NodeStatus => IO[Unit],
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
@@ -852,7 +856,7 @@ trait CardanoLiaison(
                           CardanoLiaisonEvent
                               .FallbackToRuleBasedDispatched(treasuryUtxoId.transactionId)
                         ) >>
-                            (mrmSelf ! HeadMultisigRegimeManager.HandoffToRuleBased) >>
+                            onRuleBasedRegimeObserved(treasuryUtxoId) >>
                             lastHandoffDispatchedFor.set(Some(treasuryUtxoId))
                     }
                 } >> IO.pure(Seq.empty)
