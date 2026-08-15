@@ -286,6 +286,9 @@ trait HeadMultisigRegimeManager(
                             cardanoBackend = cardanoBackend,
                             persistence = persistence,
                             tracer = tracers.ruleBasedActor,
+                            // HMRM keeps its own CardanoLiaison alive across the handoff (rollback
+                            // resilience), so the rule-based manager must not spawn a second one.
+                            ownLiaison = None,
                           )(using config)
                         )
                         .void
