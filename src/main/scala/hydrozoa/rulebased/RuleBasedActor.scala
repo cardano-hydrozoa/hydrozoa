@@ -322,78 +322,48 @@ final case class RuleBasedActor(
         } yield secs
 
     /** Re-read the evacuation-side rule-based inputs from persistence. Called on each tick that
-      * runs the evacuation branch. Walks backward through hard-confirmed stacks (like
-      * [[loadAction]]) until it finds one with a Major partition — its fallback tx is the anchor,
-      * and all its SECs / the default map come from the same stack. Minor-only stacks accumulated
-      * after the last Major are skipped; the initial stack terminates the walk with
-      * `config.initialEvacuationMap` + the initial fallback.
+      * runs the evacuation branch.
+      *
+      * The candidate map set ([[loadCandidateEvacMaps]]) and the fallback anchor
+      * ([[loadFallbackAnchor]]) are derived independently. The maps cover exactly what the dispute
+      * can resolve to — the base `(versionMajor, 0)` map plus every votable minor SEC map, the same
+      * set voting ([[votableSecs]]/[[loadAction]]) draws from — so a fallback that fires before any
+      * major settles (all Regular stacks minor-only back to the Initial stack) still holds a
+      * preimage for a resolved minor SEC. The anchor walk only locates the fallback tx.
       */
-    private def loadEvacuationInputs(versionMajor: BigInt): IO[EvacuationInputs] =
+    private[rulebased] def loadEvacuationInputs(versionMajor: BigInt): IO[EvacuationInputs] =
         for {
             markers <- Markers.derive(persistence.backend, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
-            res <- Monad[IO].tailRecM[StackNumber, EvacuationInputs](latest) { stack =>
-                persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
-                    case None =>
-                        IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
-                    case Some(i: StackEffects.HardConfirmed.Initial) =>
-                        IO.pure(
-                          Right(
-                            EvacuationInputs(
-                              candidateEvacMaps = Map(
-                                config.initialEvacuationMap.kzgCommitment ->
-                                    config.initialEvacuationMap
-                              ),
-                              fallbackTxHash = i.fallbackTx.tx.id
-                            )
-                          )
-                        )
-                    case Some(r: StackEffects.HardConfirmed.Regular) =>
-                        RuleBasedActor.lastFallback(r.partitions) match {
-                            case None =>
-                                // Minor-only stack: no fallback to anchor from. Walk back;
-                                // stack 0 (Initial) terminates the walk with the initial
-                                // fallback. A Regular stack is always >= 1, so `decrement`
-                                // never underflows.
-                                IO.pure(Left(stack.decrement))
-                            case Some(fallbackTx) =>
-                                loadRegularEvacuationInputs(stack, fallbackTx, versionMajor)
-                                    .map(Right(_))
-                        }
-                }
-            }
+            candidateEvacMaps <- loadCandidateEvacMaps(versionMajor)
+            fallbackTxHash <- loadFallbackAnchor(latest)
             _ <- tracer.traceWith(
               RuleBasedActorEvent.Evacuation.CandidateMaps(
                 s"$latest",
-                res.candidateEvacMaps.keySet.map(k => s"$k").toList
+                candidateEvacMaps.keySet.map(k => s"$k").toList
               )
             )
-        } yield res
+        } yield EvacuationInputs(candidateEvacMaps, fallbackTxHash)
 
-    /** Collect the evacuation inputs anchored on a `Regular` stack that carries the fallback: its
-      * fallback tx (the continuing-chain anchor) plus the full candidate map set — the base
-      * `(versionMajor, 0)` map the dispute resolves to on an all-abstain ([[defaultVoteMap]]), and
-      * one entry per **votable** minor SEC peers could ratchet onto ([[votableSecs]]). Together
-      * they cover everything resolvable, so no resolved commitment is ever missing a preimage.
+    /** The full candidate evacuation-map set for `versionMajor` — the base `(versionMajor, 0)` map
+      * the dispute resolves to on an all-abstain ([[defaultVoteMap]]), plus one entry per
+      * **votable** minor SEC peers could ratchet onto ([[votableSecs]]), keyed by kzg. The
+      * resolution writes whichever wins into the treasury's `Resolved.evacuationActive`, so this
+      * set must cover the base plus the full votable set for no resolved commitment to be missing a
+      * preimage.
+      *
+      * Derived the same way regardless of which stack carries the fallback anchor: [[votableSecs]]
+      * walks back through the hard-confirmed stacks itself, so minor SECs are covered even when the
+      * fallback fired from the Initial stack (before any major settled).
       */
-    private def loadRegularEvacuationInputs(
-        stackNum: StackNumber,
-        fallbackTx: FallbackTx,
-        versionMajor: BigInt,
-    ): IO[EvacuationInputs] =
+    private def loadCandidateEvacMaps(
+        versionMajor: BigInt
+    ): IO[Map[KzgCommitment, EvacuationMap]] =
         for {
-            // Base map — the `(versionMajor, 0)` commitment the treasury resolves to when every peer
-            // abstains (deposits with no minor to ratchet onto). Sourced from the last SETTLED
-            // major, NOT this fallback stack (whose own settlement was dropped — that is why its
-            // fallback executed).
             base <- defaultVoteMap(versionMajor)
             (defaultKzg, defaultMap) = base
-            // SEC maps — every VOTABLE minor SEC the dispute could ratchet onto for this major
-            // (across stacks, up to the previous major block; [[votableSecs]]), keyed by kzg. The
-            // resolution writes whichever wins into the treasury's Resolved.evacuationActive, so the
-            // candidate set must cover the base plus the full votable set.
             votable <- votableSecs(versionMajor)
             secMaps <- votable.traverse { multiSec =>
                 persistence
@@ -410,7 +380,7 @@ final case class RuleBasedActor(
             }
             _ <- tracer.traceWith(
               RuleBasedActorEvent.Evacuation.EvacuationAnchor(
-                anchorStack = s"$stackNum",
+                anchorStack = "n/a",
                 defaultMapBlock = s"base of settled major $versionMajor",
                 defaultKzg = s"$defaultKzg",
                 secs = votable.map(ms =>
@@ -418,10 +388,28 @@ final case class RuleBasedActor(
                 )
               )
             )
-        } yield EvacuationInputs(
-          candidateEvacMaps = ((defaultKzg -> defaultMap) +: secMaps).toMap,
-          fallbackTxHash = fallbackTx.tx.id
-        )
+        } yield ((defaultKzg -> defaultMap) +: secMaps).toMap
+
+    /** The fallback tx that anchors the `continuingTreasuryTxsAfter` query. Walk backward through
+      * hard-confirmed stacks until one carries a fallback (a Major partition); minor-only Regular
+      * stacks accumulated after the last Major are skipped, and the Initial stack terminates the
+      * walk with the initial fallback. A Regular stack is always >= 1, so `decrement` never
+      * underflows.
+      */
+    private def loadFallbackAnchor(latest: StackNumber): IO[TransactionHash] =
+        Monad[IO].tailRecM[StackNumber, TransactionHash](latest) { stack =>
+            persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
+                case None =>
+                    IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
+                case Some(i: StackEffects.HardConfirmed.Initial) =>
+                    IO.pure(Right(i.fallbackTx.tx.id))
+                case Some(r: StackEffects.HardConfirmed.Regular) =>
+                    RuleBasedActor.lastFallback(r.partitions) match {
+                        case None             => IO.pure(Left(stack.decrement))
+                        case Some(fallbackTx) => IO.pure(Right(fallbackTx.tx.id))
+                    }
+            }
+        }
 
     /** The default-vote map for `versionMajor`: the base `(versionMajor, 0)` commitment the dispute
       * resolves to when every peer abstains (deposits, with no minor to ratchet onto). It is the
