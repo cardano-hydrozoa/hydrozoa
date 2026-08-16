@@ -269,6 +269,13 @@ head-down:
   cd {{HYDROZOA_HOME}}
   docker compose down
 
+# Fresh head: remove ALL containers (serve + evacuate profile) and orphans AND wipe the volume stores.
+head-reset:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{HYDROZOA_HOME}}
+  docker compose --profile evacuate down -v --remove-orphans
+
 # Evacuate the whole head: stop the serve peers, then bring up the evacuate profile (all peers).
 evacuate:
   #!/usr/bin/env bash
