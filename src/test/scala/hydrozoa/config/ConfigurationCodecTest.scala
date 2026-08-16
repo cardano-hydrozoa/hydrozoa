@@ -9,9 +9,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnPeerPrivate}
 import hydrozoa.config.node.{MultiNodeConfig, NodePrivateConfig}
-import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.syntax.*
 import monocle.syntax.all.{as as _, *}
 import org.scalacheck.Properties
@@ -56,9 +54,6 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
     // We don't allow direct inspection of the signing key of wallets, and therefore we cannot serialize them directly.
     // This tests replaces the signing keys with "dummy" all-zeros keys.
     val dummyPrivateConfigRoundTrip: MultiNodeConfigTestM[Unit] = {
-        def mkDummyWallet(w: PeerWallet): PeerWallet =
-            PeerWallet.scalusWallet(w.exportVerificationKey, dummySigningKey)
-
         def mkDummy(ncp: NodePrivateConfig, headPeers: HeadPeers): NodePrivateConfig = {
             val headWallet = ncp.ownPeerPrivate match {
                 case h: OwnHeadPeerPrivate => h.ownHeadWallet

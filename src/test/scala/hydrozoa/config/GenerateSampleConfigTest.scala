@@ -11,18 +11,13 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnPeerPrivate}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig, NodePrivateConfig}
-import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.parser
 import monocle.syntax.all.{as as _, *}
 import org.scalacheck.Properties
 
 object GenerateSampleConfigTest extends Properties("GenerateSampleConfig") {
     import MultiNodeConfig.*
-
-    private def mkDummyWallet(w: PeerWallet): PeerWallet =
-        PeerWallet.scalusWallet(w.exportVerificationKey, dummySigningKey)
 
     private def mkDummy(npc: NodePrivateConfig, headPeers: HeadPeers): NodePrivateConfig = {
         val headWallet = npc.ownPeerPrivate match {
