@@ -4,6 +4,7 @@ import cats.effect.{IO, Resource}
 import cats.syntax.semigroupk.*
 import com.comcast.ip4s.{Host, Port}
 import fs2.Stream
+import fs2.io.net.SocketOption
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.transport.NodeWsServerEvent.Bound
 import org.http4s.HttpRoutes
@@ -49,6 +50,12 @@ object NodeWsServer {
             // Don't wait for open connections to drain on shutdown — by the time the Resource is
             // released the protocol is complete and there is nothing left to deliver.
             .withShutdownTimeout(Duration.Zero)
+            // TCP_NODELAY: Ember writes a WS frame's header and payload as separate socket writes,
+            // and the mesh traffic is request/reply-shaped (brief out, acks back). With Nagle on,
+            // that write-write-read pattern can stall each reply up to a delayed-ACK timeout
+            // (~40ms measured on loopback) whenever the link is otherwise quiet. The frames are
+            // small and latency-sensitive, so disable coalescing.
+            .withAdditionalSocketOptions(List(SocketOption.noDelay(true)))
             .withHttpWebSocketApp(wsb =>
                 routes
                     .map(_(wsb))
