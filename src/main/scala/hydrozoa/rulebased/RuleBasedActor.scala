@@ -272,15 +272,16 @@ final case class RuleBasedActor(
             case Nil =>
                 DisputeAction.Abstain
             case multiSec :: _ =>
-                // `HardAckAggregator.collectSecSignatures` stores sigs in `secSigners` order =
-                // `allHeadPeers.sorted ++ coilPeers.sorted.take(coilQuorum)`. Head sigs occupy the
-                // first `nHeadPeers` positions; the tail is the coil quorum, dense (only signers
-                // appear — no `None` slots).
+                // `headerMultiSigned` is peer-position-aligned over
+                // `allHeadPeers.sorted ++ allCoilPeers.sorted` (Some/None per peer). The first
+                // `nHeadPeers` slots are the head peers (AllOf, always Some); the rest are the coil
+                // peers in sorted order — exactly the sparse `coilMultisig` the dispute-resolution
+                // script verifies position for position, so pass the coil tail through unchanged.
                 val (head, coil) = multiSec.headerMultiSigned.splitAt(config.nHeadPeers.convert)
                 DisputeAction.Vote(
                   sec = RuleBasedActor.toOnchain(multiSec.commitment),
-                  signatures = head,
-                  coilSignatures = coil.map(Some(_))
+                  signatures = head.flatten,
+                  coilSignatures = coil
                 )
         }
 
