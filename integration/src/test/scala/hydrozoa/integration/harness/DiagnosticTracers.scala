@@ -37,13 +37,15 @@ object DiagnosticTracers:
                 ) =>
                 Some(
                   info(
-                    s"DIAGNOSTIC candidate map sources: default map block " +
+                    "DIAGNOSTIC candidate map sources: default map block " +
                         s"$defaultMapBlock -> $defaultKzg, SECs: ${secs.mkString("[", ", ", "]")}"
                   )
                 )
             case RuleBasedActorEvent.Evacuation.EvacuationAnchor(anchorStack, fallbackTxId) =>
                 Some(
-                  info(s"DIAGNOSTIC evacuation anchor: stack $anchorStack, fallback tx $fallbackTxId")
+                  info(
+                    s"DIAGNOSTIC evacuation anchor: stack $anchorStack, fallback tx $fallbackTxId"
+                  )
                 )
             case _ => None
 
