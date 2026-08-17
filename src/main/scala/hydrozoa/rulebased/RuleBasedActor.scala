@@ -379,8 +379,7 @@ final case class RuleBasedActor(
                     .map(map => multiSec.commitment.kzgCommitment -> map)
             }
             _ <- tracer.traceWith(
-              RuleBasedActorEvent.Evacuation.EvacuationAnchor(
-                anchorStack = "n/a",
+              RuleBasedActorEvent.Evacuation.CandidateMapSources(
                 defaultMapBlock = s"base of settled major $versionMajor",
                 defaultKzg = s"$defaultKzg",
                 secs = votable.map(ms =>
@@ -394,19 +393,29 @@ final case class RuleBasedActor(
       * hard-confirmed stacks until one carries a fallback (a Major partition); minor-only Regular
       * stacks accumulated after the last Major are skipped, and the Initial stack terminates the
       * walk with the initial fallback. A Regular stack is always >= 1, so `decrement` never
-      * underflows.
+      * underflows. Traces [[RuleBasedActorEvent.Evacuation.EvacuationAnchor]] with the stack that
+      * actually supplied the anchor.
       */
     private def loadFallbackAnchor(latest: StackNumber): IO[TransactionHash] =
         Monad[IO].tailRecM[StackNumber, TransactionHash](latest) { stack =>
+            def anchoredAt(
+                txId: TransactionHash,
+                label: String
+            ): IO[Either[StackNumber, TransactionHash]] =
+                tracer
+                    .traceWith(
+                      RuleBasedActorEvent.Evacuation.EvacuationAnchor(label, s"$txId")
+                    )
+                    .as(Right(txId))
             persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
                 case None =>
                     IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
                 case Some(i: StackEffects.HardConfirmed.Initial) =>
-                    IO.pure(Right(i.fallbackTx.tx.id))
+                    anchoredAt(i.fallbackTx.tx.id, s"$stack (initial)")
                 case Some(r: StackEffects.HardConfirmed.Regular) =>
                     RuleBasedActor.lastFallback(r.partitions) match {
                         case None             => IO.pure(Left(stack.decrement))
-                        case Some(fallbackTx) => IO.pure(Right(fallbackTx.tx.id))
+                        case Some(fallbackTx) => anchoredAt(fallbackTx.tx.id, s"$stack")
                     }
             }
         }

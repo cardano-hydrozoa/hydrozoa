@@ -106,15 +106,22 @@ object RuleBasedActorEvent:
           */
         final case class ResolvedKzg(kzg: String) extends RuleBasedActorEvent
 
-        /** DIAGNOSTIC: where the evacuation candidate walk anchored — the Major stack it landed on
-          * (vs. the latest hard-confirmed stack), the default-vote map's source block + commitment,
-          * and every SEC commitment it collected (as `block=<n> kzg=<hex>`). Shows whether a
-          * resolved commitment was excluded because a later minor-only stack was skipped or because
-          * the default map is mis-keyed.
+        /** DIAGNOSTIC: the provenance of the candidate evacuation-map set — the default-vote map's
+          * source block + commitment, and every votable SEC commitment collected (as
+          * `block=<n> kzg=<hex>`). Shows whether a resolved commitment was excluded because the
+          * default map is mis-keyed or a votable SEC was missed. The final deduped kzg set is
+          * [[CandidateMaps]]; where the fallback chain anchors is [[EvacuationAnchor]].
           */
-        final case class EvacuationAnchor(
-            anchorStack: String,
+        final case class CandidateMapSources(
             defaultMapBlock: String,
             defaultKzg: String,
             secs: List[String]
         ) extends RuleBasedActorEvent
+
+        /** DIAGNOSTIC: where the fallback-anchor walk landed — the hard-confirmed stack carrying
+          * the fallback tx that anchors the continuing-treasury-tx query, and that tx's id. A
+          * minor-only stack is walked past; the stack shown is the one that actually supplied the
+          * anchor.
+          */
+        final case class EvacuationAnchor(anchorStack: String, fallbackTxId: String)
+            extends RuleBasedActorEvent
