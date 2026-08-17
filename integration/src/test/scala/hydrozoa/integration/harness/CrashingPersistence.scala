@@ -25,10 +25,15 @@ enum CrashVariant:
   * point) and every consensus-actor write — with no changes to the actors or the backend. Under the
   * stage4 `TestControl` clock the op order is deterministic, so "the N-th write" is reproducible.
   *
-  * The crash is modelled as: at the N-th durable op, complete a [[Plan.signal]] and then block the
-  * op forever ([[IO.never]]). The fixture races the signal and tears the peer's actor subtree down,
-  * so the handler never advances, sends, or dispatches past the crash point. On
-  * [[CrashVariant.After]] the op's write lands first; on [[CrashVariant.Before]] it does not.
+  * The crash is modelled as: at the N-th durable op, complete a [[Plan.signal]] and return normally
+  * WITHOUT blocking — the fixture races the signal and tears the peer's actor subtree down.
+  * Blocking the op (e.g. `IO.never`) would stall the actor's mailbox loop so `stop`'s `Terminate`
+  * could never be processed, hanging system shutdown; so the peer keeps running for a deterministic
+  * few ops after the signal until the fixture stops it. That is sound because everything past the
+  * crash point is IN-MEMORY state that a restart discards anyway — the durable store reflects
+  * exactly what landed: on [[CrashVariant.After]] the op's write is included, on
+  * [[CrashVariant.Before]] it is skipped (the handler continues with un-persisted state that the
+  * restart throws away).
   */
 object CrashingPersistence:
 
@@ -47,7 +52,10 @@ object CrashingPersistence:
         plan: Option[Plan],
     ): Persistence[IO] =
         new Persistence[IO]:
-            // Count only durable mutations; reads never advance the counter.
+            // Count only durable mutations; reads never advance the counter. At the crash point,
+            // signal WITHOUT blocking — on Before the op is skipped, on After it runs first; the
+            // fixture then tears the peer down (blocking here would stall the mailbox so `stop`
+            // could never be processed).
             private def guarded(op: IO[Unit]): IO[Unit] =
                 plan match
                     case None => op
@@ -56,14 +64,9 @@ object CrashingPersistence:
                             if n != at then op
                             else
                                 variant match
-                                    case CrashVariant.Before => crash(signal)
-                                    case CrashVariant.After  => op >> crash(signal)
+                                    case CrashVariant.Before => signal.complete(()).void
+                                    case CrashVariant.After  => op >> signal.complete(()).void
                         }
-
-            // Signal the crash point, then block forever — the fixture stops this peer's actors,
-            // cancelling the blocked op, so nothing past the crash point runs.
-            private def crash(signal: Deferred[IO, Unit]): IO[Unit] =
-                signal.complete(()).attempt >> IO.never
 
             def put(key: StoreKey)(value: key.Value): IO[Unit] = guarded(inner.put(key)(value))
 

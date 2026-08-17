@@ -4,6 +4,7 @@ import cats.data.ReaderT
 import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import com.comcast.ip4s.{Port, host}
+import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.{ActorContext, ActorSystem}
 import hydrozoa.config.head.coil.CoilPeers
@@ -29,6 +30,7 @@ import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Screener
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
+import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
@@ -630,6 +632,11 @@ object MultiPeerHeadHarness:
         peers: Map[HeadPeerNumber, Peer[H]],
         coils: Map[CoilPeerNumber, Coil[H]],
         sutErrors: Ref[IO, List[String]],
+        // Crash-restart one head peer: stop its actor subtree, then re-spawn it against the SAME
+        // durable store + L2 ledger (recovery runs on boot) and re-attach it to the running head.
+        // Returns the peer's fresh handle (new connections + SubmissionClient). Direct transport
+        // only. The initial `peers` map entry goes stale after a restart — use the returned handle.
+        restartHeadPeer: HeadPeerNumber => IO[Peer[H]],
     )
 
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns everything;
@@ -722,14 +729,24 @@ object MultiPeerHeadHarness:
             )
             sutErrors <- Resource.eval(Ref[IO].of(List.empty[String]))
             _ <- ErrorDrainer.start(system, sutErrors)
-            _ <- Ticks.startForHeads(
-              peerConnections,
-              peerNum =>
-                  multiNodeConfig
-                      .nodeConfigs(peerNum)
-                      .nodeOperationMultisigConfig
-                      .cardanoLiaisonPollingPeriod,
-            )
+            headPollingPeriodOf = (peerNum: HeadPeerNumber) =>
+                multiNodeConfig
+                    .nodeConfigs(peerNum)
+                    .nodeOperationMultisigConfig
+                    .cardanoLiaisonPollingPeriod
+            // Per-peer CL tick fibers, tracked (as cancel actions) so a crash-restart can cancel the
+            // victim's old tick — which would otherwise keep poking its stopped CardanoLiaison, a
+            // dead-letter flood — and start a fresh one. All are cancelled on release.
+            headTicks <- Resource.make(
+              Ref[IO].of(Map.empty[HeadPeerNumber, IO[Unit]]).flatTap { ref =>
+                  peerConnections.toList.traverse_ { case (peerNum, conns) =>
+                      Ticks
+                          .tickLoop(headPollingPeriodOf(peerNum), conns)
+                          .start
+                          .flatMap(fib => ref.update(_.updated(peerNum, fib.cancel)))
+                  }
+              }
+            )(_.get.flatMap(_.values.toList.traverse_(identity)))
             _ <- Ticks.startForCoils(
               coilConnections,
               coilNum =>
@@ -763,6 +780,53 @@ object MultiPeerHeadHarness:
                   }
               }
             )
+            // Crash-restart bookkeeping: the current per-peer runtime (updated on each restart),
+            // an actor-name generation counter, and the restart-started tick fibers (cancelled on
+            // release; the initial bulk ticks are owned by Ticks.startForHeads above).
+            peerRuntime <- Resource.eval(Ref[IO].of(peerMrms))
+            restartGen <- Resource.eval(Ref[IO].of(0))
+            restartHeadPeer = { (peerNum: HeadPeerNumber) =>
+                for
+                    old <- peerRuntime.get.map(_(peerNum))
+                    // Stop the old subtree, then re-spawn against the SAME store + L2 ledger; the
+                    // rebuilt network re-registers in the shared registry so the mesh re-attaches.
+                    _ <- old.ref.stop
+                    gen <- restartGen.updateAndGet(_ + 1)
+                    network <- transports.rebuildHeadNetwork(peerNum)
+                    spawned <- Mrm
+                        .spawnPeer(
+                          s"hmrm-$peerNum-r$gen",
+                          peerNum,
+                          system,
+                          cardanoBackend,
+                          multiNodeConfig,
+                          network,
+                          hooks.tracer.contramap(Event.Head(peerNum, _)),
+                          old.backendStore,
+                          old.l2Ledger,
+                          identity,
+                        )
+                        .allocated
+                        .map(_._1)
+                    (mrm, ref) = spawned
+                    conns <- mrm.connectionsDeferred.get
+                    // Cancel the victim's previous tick (its CardanoLiaison is now stopped), then
+                    // start a fresh tick against the new connections.
+                    _ <- headTicks.get.flatMap(_.getOrElse(peerNum, IO.unit))
+                    tickFib <- Ticks.tickLoop(headPollingPeriodOf(peerNum), conns).start
+                    _ <- headTicks.update(_.updated(peerNum, tickFib.cancel))
+                    submissionClient <- Http.mkPeerSubmissionClient(peerNum, conns, multiNodeConfig)
+                    h <- hooks.handle(PeerId.Head(peerNum), conns)
+                    _ <- peerRuntime.update(
+                      _.updated(peerNum, Mrm.Peer(mrm, ref, old.backendStore, old.l2Ledger))
+                    )
+                yield Peer(
+                  connections = conns,
+                  backendStore = old.backendStore,
+                  submissionClient = submissionClient,
+                  handle = h,
+                )
+            }
         yield Harness(
           transportMode = transportMode,
           multiNodeConfig = multiNodeConfig,
@@ -772,6 +836,7 @@ object MultiPeerHeadHarness:
           peers = peerEntries.toMap,
           coils = coilEntries.toMap,
           sutErrors = sutErrors,
+          restartHeadPeer = restartHeadPeer,
         )
 
     // ===================================
@@ -1060,6 +1125,10 @@ object MultiPeerHeadHarness:
             headNetworks: Map[HeadPeerNumber, HeadNetwork],
             coilUplinks: Map[CoilPeerNumber, ContextFn[CoilTransport]],
             bringUpNetwork: Resource[IO, Unit],
+            // Rebuild ONE head peer's transport bundle for a crash-restart, re-registering it in the
+            // shared registry so the other peers' next sends resolve to the new transport (Direct
+            // only; unsupported under WS, which disables the TestControl clock anyway).
+            rebuildHeadNetwork: HeadPeerNumber => IO[HeadNetwork],
         )
 
         /** Per-peer transport bundle: the head-mesh transport and an optional hub-side hub-coil
@@ -1140,7 +1209,19 @@ object MultiPeerHeadHarness:
                             .map(t => coilNum -> ((_: ContextArg) => t: CoilTransport))
                     }
                     .map(_.toMap)
-            yield Setup(headNetworks, coilUplinks, Resource.unit)
+            yield Setup(
+              headNetworks,
+              coilUplinks,
+              Resource.unit,
+              rebuildHeadNetwork = peerNum =>
+                  directHeadNetwork(
+                    peerNum,
+                    multiNodeConfig,
+                    inProcessRegistry,
+                    hubCoilRegistry
+                  ).allocated
+                      .map(_._1),
+            )
 
         /** WebSocket (real-clock) bring-up: split into a creation phase (this method) and a
           * deferred [[Setup.bringUpNetwork]] phase. The creation phase allocates the shared
@@ -1190,7 +1271,17 @@ object MultiPeerHeadHarness:
                   headParts,
                   coilTransports,
                 )
-            yield Setup(headNetworks, coilUplinks, bringUp)
+            yield Setup(
+              headNetworks,
+              coilUplinks,
+              bringUp,
+              rebuildHeadNetwork = _ =>
+                  IO.raiseError(
+                    new UnsupportedOperationException(
+                      "peer crash-restart is unsupported under WebSocket transport"
+                    )
+                  ),
+            )
 
         /** Per-peer parts produced in WS Phase 1: the transport bundle exposed to the MRM, the
           * concrete mesh transport needed by Phase 2's dialer starter, and the route builders Phase
@@ -1333,7 +1424,13 @@ object MultiPeerHeadHarness:
     object Mrm:
         case class Peer(
             mrm: HeadMultisigRegimeManager,
+            // The regime-manager actor root; `.stop` cascade-stops the whole child subtree (the
+            // crash primitive). Held so a crash-restart can tear this instance down.
+            ref: NoSendActorRef[IO],
             backendStore: BackendStore[IO],
+            // Reused across a crash-restart (holds the L2 log/snapshots the recovering JointLedger
+            // co-anchors to via restoreTo), so it must survive the actor teardown.
+            l2Ledger: L2Ledger[IO],
         )
 
         case class Coil(
@@ -1355,10 +1452,6 @@ object MultiPeerHeadHarness:
         ): Resource[IO, Peer] =
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-            val peerFactory: Resource[IO, Transport.ContextFn[PeerTransport]] =
-                Resource.pure((_: Transport.ContextArg) => network.peerTransport)
-            val hubFactory: Option[Resource[IO, Transport.ContextFn[HubTransport]]] =
-                network.hubTransport.map(h => Resource.pure((_: Transport.ContextArg) => h))
             StorageBackend
                 .openPerPeer(
                   peerNum,
@@ -1372,30 +1465,74 @@ object MultiPeerHeadHarness:
                 )
                 .flatMap { backendStore =>
                     for
-                        rawPersistence <- Resource.eval {
-                            given CardanoNetwork.Section = nodeConfig
-                            Persistence.fromBackend(backendStore, persistenceTracer)
-                        }
-                        persistence = wrapPersistence(rawPersistence)
                         l2Ledger <- Resource.eval(InMemoryL2Store.ledger(nodeConfig))
-                        metrics = PeerMetrics.create(
-                          0L,
-                          nodeConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
-                        )
-                        mrm <- HeadMultisigRegimeManager.resource(
-                          nodeConfig,
+                        spawned <- spawnPeer(
+                          s"hmrm-$peerNum",
+                          peerNum,
+                          system,
                           cardanoBackend,
-                          l2Ledger,
-                          EutxoL2Screener(nodeConfig),
-                          persistence,
-                          metrics,
+                          multiNodeConfig,
+                          network,
                           callerTracer,
-                          peerFactory,
-                          hubFactory,
+                          backendStore,
+                          l2Ledger,
+                          wrapPersistence,
                         )
-                        _ <- Resource.eval(system.actorOf(mrm, s"hmrm-$peerNum"))
-                    yield Peer(mrm, backendStore)
+                        (mrm, ref) = spawned
+                    yield Peer(mrm, ref, backendStore, l2Ledger)
                 }
+
+        /** Spawn (or, on a crash-restart, re-spawn) a head peer's regime-manager actor over an
+          * ALREADY-OPEN store + L2 ledger. Re-invokable: a restart reuses the same `backendStore`
+          * and `l2Ledger` (so the durable consensus journal and the L2 log survive the "crash"),
+          * builds a fresh `Persistence` (bumping the arrival-stamp generation), and boots the HMRM
+          * — whose `preStartLocal` runs `ReplayActor.replay` inline. `actorName` must be unique per
+          * spawn (a restart uses a fresh suffix). The returned `NoSendActorRef` `.stop`s the whole
+          * child subtree — the crash primitive. The Resource finalizer is trivial (the actor is
+          * stopped via `.stop` / system shutdown, not the Resource), so a restart may `.allocated`
+          * it and discard the finalizer.
+          */
+        def spawnPeer(
+            actorName: String,
+            peerNum: HeadPeerNumber,
+            system: ActorSystem[IO],
+            cardanoBackend: L1Backend[IO],
+            multiNodeConfig: MultiNodeConfig,
+            network: Transport.HeadNetwork,
+            callerTracer: ContraTracer[IO, HeadRegimeManagerEvent],
+            backendStore: BackendStore[IO],
+            l2Ledger: L2Ledger[IO],
+            wrapPersistence: Persistence[IO] => Persistence[IO],
+        ): Resource[IO, (HeadMultisigRegimeManager, NoSendActorRef[IO])] =
+            val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
+            val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+            val peerFactory: Resource[IO, Transport.ContextFn[PeerTransport]] =
+                Resource.pure((_: Transport.ContextArg) => network.peerTransport)
+            val hubFactory: Option[Resource[IO, Transport.ContextFn[HubTransport]]] =
+                network.hubTransport.map(h => Resource.pure((_: Transport.ContextArg) => h))
+            for
+                rawPersistence <- Resource.eval {
+                    given CardanoNetwork.Section = nodeConfig
+                    Persistence.fromBackend(backendStore, persistenceTracer)
+                }
+                persistence = wrapPersistence(rawPersistence)
+                metrics = PeerMetrics.create(
+                  0L,
+                  nodeConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
+                )
+                mrm <- HeadMultisigRegimeManager.resource(
+                  nodeConfig,
+                  cardanoBackend,
+                  l2Ledger,
+                  EutxoL2Screener(nodeConfig),
+                  persistence,
+                  metrics,
+                  callerTracer,
+                  peerFactory,
+                  hubFactory,
+                )
+                ref <- Resource.eval(system.actorOf(mrm, actorName))
+            yield (mrm, ref: NoSendActorRef[IO])
 
         def buildCoil(
             coilConfig: NodeConfig,
@@ -1533,7 +1670,10 @@ object MultiPeerHeadHarness:
                 startedFiber(tickLoop(pollingPeriodOf(coilNum), conns))
             }
 
-        private def tickLoop(
+        // Non-private so a crash-restart can start a fresh tick for the rebuilt peer's new
+        // connections (the restarted peer's old tick keeps poking its now-stopped CardanoLiaison —
+        // harmless dead letters).
+        def tickLoop(
             pollingPeriod: FiniteDuration,
             conns: HeadMultisigRegimeManager.Connections,
         ): IO[Nothing] =
