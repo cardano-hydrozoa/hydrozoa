@@ -595,6 +595,10 @@ object MultiPeerHeadHarness:
         handle: (PeerId, HeadMultisigRegimeManager.Connections) => IO[H],
         // Wrap the shared mock backend per peer (e.g. FirewalledCardanoBackend). Identity default.
         wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO] = (_, b) => b,
+        // Wrap a peer's typed persistence before it reaches the regime manager — the injection
+        // seam for crash-recovery testing (e.g. CrashingPersistence, which fails at the N-th durable
+        // write). Identity default. See docs/spec/persistence-and-crash-recovery.md.
+        wrapPersistence: (PeerId, Persistence[IO]) => Persistence[IO] = (_, p) => p,
     )
 
     /** Per-head-peer artifacts exposed to callers: resolved connections, persistence backend, the
@@ -676,6 +680,7 @@ object MultiPeerHeadHarness:
                           backendMode,
                           transports.headNetworks(peerNum),
                           hooks.tracer.contramap(Event.Head(peerNum, _)),
+                          hooks.wrapPersistence(PeerId.Head(peerNum), _),
                         )
                         .map(peerNum -> _)
                 )
@@ -1345,6 +1350,8 @@ object MultiPeerHeadHarness:
             backendMode: StorageBackend.Mode,
             network: Transport.HeadNetwork,
             callerTracer: ContraTracer[IO, HeadRegimeManagerEvent],
+            // Wrap this peer's persistence before it reaches the regime manager (crash injection).
+            wrapPersistence: Persistence[IO] => Persistence[IO] = identity,
         ): Resource[IO, Peer] =
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
@@ -1365,10 +1372,11 @@ object MultiPeerHeadHarness:
                 )
                 .flatMap { backendStore =>
                     for
-                        persistence <- Resource.eval {
+                        rawPersistence <- Resource.eval {
                             given CardanoNetwork.Section = nodeConfig
                             Persistence.fromBackend(backendStore, persistenceTracer)
                         }
+                        persistence = wrapPersistence(rawPersistence)
                         l2Ledger <- Resource.eval(InMemoryL2Store.ledger(nodeConfig))
                         metrics = PeerMetrics.create(
                           0L,
