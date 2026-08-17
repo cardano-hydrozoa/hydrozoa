@@ -6,11 +6,7 @@
     }
   },
   "nodeOperationEvacuationConfig": {
-    "evacuationBotPollingPeriod": 10000,
-    "ruleBasedWallet": {
-      "verificationKey": "0000000000000000000000000000000000000000000000000000000000000000",
-      "signingKey": "0000000000000000000000000000000000000000000000000000000000000000"
-    }
+    "evacuationBotPollingPeriod": 10000
   },
   "nodeOperationMultisigConfig": {
     "cardanoLiaisonPollingPeriod": 20000,

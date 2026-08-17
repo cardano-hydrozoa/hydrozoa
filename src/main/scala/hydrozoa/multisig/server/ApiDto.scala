@@ -1009,14 +1009,18 @@ object ApiDto {
         val headerBytes: Array[Byte] = sec.commitment.commitment.header
         ByteString.fromArray(headerBytes).toHex
 
-    /** An SEC's hard-ack signatures (hex), split into head (first `nHeadPeers`) then coil. */
+    /** An SEC's hard-ack signatures (hex), split into head (first `nHeadPeers`) then coil. The list
+      * is peer-position-aligned, so a coil peer that didn't sign shows as an empty string.
+      */
     private def secSignatures(
         sec: ResolvedEffect.Sec,
         nHeadPeers: Int
     ): (List[String], List[String]) =
-        val sigsHex = sec.commitment.headerMultiSigned.map { sig =>
-            val bytes: Array[Byte] = sig
-            ByteString.fromArray(bytes).toHex
+        val sigsHex = sec.commitment.headerMultiSigned.map {
+            case Some(sig) =>
+                val bytes: Array[Byte] = sig
+                ByteString.fromArray(bytes).toHex
+            case None => ""
         }
         (sigsHex.take(nHeadPeers), sigsHex.drop(nHeadPeers))
 

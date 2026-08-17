@@ -128,7 +128,11 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 pendingConnections,
                 tracers.cardanoLiaison,
                 persistence,
-                mrmSelf = context.self,
+                // In the multisig regime, observing the rule-based treasury on L1 fires the handoff
+                // to this manager, which stops the multisig actors and spawns the rule-based regime
+                // (`onHandoffToRuleBased`). The rule-based regime's own `CardanoLiaison` supplies a
+                // no-op here instead (design `docs/spec/evacuate-command.md`).
+                onRuleBasedRegimeObserved = _ => context.self ! HandoffToRuleBased,
                 advanceNodeStatus = next => nodeStatus.update(_.advanceTo(next)),
               )
             )

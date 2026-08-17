@@ -108,11 +108,15 @@ lazy val core: Project = (project in file("."))
       // Docker settings
       Docker / packageName := "cardano-hydrozoa/hydrozoa",
       Docker / version := version.value,
-      // Also tag local `just docker-image` builds as ghcr.io/… so docker-compose's default image
-      // (ghcr.io/cardano-hydrozoa/hydrozoa:<version>) resolves to the local build without a
-      // HYDROZOA_IMAGE override. Only affects publishLocal — the release workflow tags/pushes via
-      // docker/metadata-action off `Docker/stage`, so this leaves the published tags untouched.
-      dockerAliases ++= Seq(dockerAlias.value.withRegistryHost(Some("ghcr.io"))),
+      // Also tag local `just docker-image` builds under ghcr.io/… — at both :<version> and :latest —
+      // so docker-compose's default image (ghcr.io/cardano-hydrozoa/hydrozoa:latest) resolves to the
+      // local build without a HYDROZOA_IMAGE override. Only affects publishLocal — the release
+      // workflow tags/pushes via docker/metadata-action off `Docker/stage`, so this leaves the
+      // published tags untouched.
+      dockerAliases ++= Seq(
+        dockerAlias.value.withRegistryHost(Some("ghcr.io")),
+        dockerAlias.value.withRegistryHost(Some("ghcr.io")).withTag(Some("latest"))
+      ),
       Docker / daemonUser := "hydrozoa",
       Docker / daemonGroup := "hydrozoa",
       // JDK 25 to match the project's language/runtime flags (--sun-misc-unsafe-memory-access is 23+).

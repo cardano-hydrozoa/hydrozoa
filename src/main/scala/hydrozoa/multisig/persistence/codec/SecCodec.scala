@@ -78,7 +78,7 @@ object SecCodec:
                 commitment <- c.downField("commitment").as[StandaloneEvacuationCommitment]
                 sigs <- c
                     .downField("headerMultiSigned")
-                    .as[List[BlockHeader.Minor.HeaderSignature]]
+                    .as[List[Option[BlockHeader.Minor.HeaderSignature]]]
             yield StandaloneEvacuationCommitment.MultiSigned(
               commitment = commitment,
               headerMultiSigned = sigs

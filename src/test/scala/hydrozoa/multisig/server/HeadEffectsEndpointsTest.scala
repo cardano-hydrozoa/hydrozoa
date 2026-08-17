@@ -89,7 +89,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
             )
           ),
           headerMultiSigned = List.tabulate(nHeadPeers + 1)(i =>
-              BlockHeader.Minor.HeaderSignature(IArray(i.toByte, (i + 1).toByte))
+              Some(BlockHeader.Minor.HeaderSignature(IArray(i.toByte, (i + 1).toByte)))
           )
         )
 

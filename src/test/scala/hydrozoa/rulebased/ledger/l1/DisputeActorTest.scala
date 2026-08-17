@@ -236,16 +236,13 @@ object DisputeActorTestHelpers {
                   )
                 )
         })
-        // The rule-based actor signs its own txs with `config.ruleBasedWallet`; the coil
-        // ratchet path also declares `ownWallet`'s addr key hash as a required signer for
-        // collateral. Point ruleBasedWallet at the coil wallet so signer and required-signer
-        // match.
-        coilEvacConfig = template.nodeOperationEvacuationConfig.copy(ruleBasedWallet = coilWallet)
+        // The rule-based actor signs every tx with `config.ownWallet` (= `coilWallet` here), which
+        // the ballot boxes and collateral require.
         coilNodeConfig <- lift(
           NodeConfig.mkCoilConfig(
             headConfig = env.headConfig,
             ownCoilWallet = coilWallet,
-            nodeOperationEvacuationConfig = coilEvacConfig,
+            nodeOperationEvacuationConfig = template.nodeOperationEvacuationConfig,
             nodeOperationMultisigConfig = template.nodeOperationMultisigConfig,
             blockfrostApiKey = template.blockfrostApiKey,
             remoteLedgerUri = template.remoteLedgerUri,
@@ -271,9 +268,10 @@ object DisputeActorTestHelpers {
       * find the SEC there, returning
       * `Vote(sec = blockHeader, signatures = ..., coilSignatures = ...)`.
       *
-      * `headerMultiSigned` is the dense head-then-coil-quorum signature list (see
-      * [[MultiNodeConfig.multisignHeaderDense]]); `loadAction` splits it at `nHeadPeers`, so both
-      * the head `signatures` and the coil-quorum `coilSignatures` are recovered.
+      * `headerMultiSigned` is the sparse, peer-position-aligned signature list (see
+      * [[MultiNodeConfig.multisignHeaderSparse]]) — the signing coils are a non-prefix subset, so
+      * this exercises the alignment the on-chain coil-signature check requires; `loadAction` splits
+      * it at `nHeadPeers` into the head `signatures` and the sparse coil `coilSignatures`.
       */
     def mkPersistenceWithDisputeVote(
         env: MultiNodeConfig,
@@ -294,7 +292,7 @@ object DisputeActorTestHelpers {
         val multiSigned: StandaloneEvacuationCommitment.MultiSigned =
             StandaloneEvacuationCommitment.MultiSigned(
               commitment = offchainSec,
-              headerMultiSigned = env.multisignHeaderDense(blockHeader),
+              headerMultiSigned = env.multisignHeaderSparse(blockHeader),
             )
         val partition: PartitionEffects[StandaloneEvacuationCommitment.MultiSigned] =
             PartitionEffects.Minor(sec = multiSigned, refunds = List.empty)
@@ -633,10 +631,11 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     } yield true
 
-    // Randomized head count, 3 coil peers, coilQuorum 2. The persistence fixture seeds a dense
-    // head-then-coil-quorum signature list, so `loadAction` recovers 2 coil signatures and the
-    // VoteTx satisfies the Plutus `coilMultisig must contain at least coilQuorum valid
-    // signatures` check.
+    // Randomized head count, 3 coil peers, coilQuorum 2. The persistence fixture seeds a sparse,
+    // peer-position-aligned signature list where the two signing coils are the LAST two (indices
+    // 1,2 → [None, Some, Some]), so `loadAction` recovers a sparse `coilSignatures` and the VoteTx
+    // satisfies the Plutus positional `coilMultisig` check — which a dense/prefix encoding would
+    // fail (it would verify those sigs against coils 0,1).
     val _ = property("dispute actor (no actor system)") = runWithCoil(nCoil = 3, quorum = 2)(
       for {
           _ <- missingVoteDatumThrows

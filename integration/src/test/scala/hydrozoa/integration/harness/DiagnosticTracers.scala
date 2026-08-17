@@ -30,16 +30,21 @@ object DiagnosticTracers:
                 )
             case RuleBasedActorEvent.Evacuation.ResolvedKzg(kzg) =>
                 Some(info(s"DIAGNOSTIC resolution committed to kzg $kzg"))
-            case RuleBasedActorEvent.Evacuation.EvacuationAnchor(
-                  anchorStack,
+            case RuleBasedActorEvent.Evacuation.CandidateMapSources(
                   defaultMapBlock,
                   defaultKzg,
                   secs
                 ) =>
                 Some(
                   info(
-                    s"DIAGNOSTIC evacuation anchor: stack $anchorStack, default map block " +
+                    "DIAGNOSTIC candidate map sources: default map block " +
                         s"$defaultMapBlock -> $defaultKzg, SECs: ${secs.mkString("[", ", ", "]")}"
+                  )
+                )
+            case RuleBasedActorEvent.Evacuation.EvacuationAnchor(anchorStack, fallbackTxId) =>
+                Some(
+                  info(
+                    s"DIAGNOSTIC evacuation anchor: stack $anchorStack, fallback tx $fallbackTxId"
                   )
                 )
             case _ => None

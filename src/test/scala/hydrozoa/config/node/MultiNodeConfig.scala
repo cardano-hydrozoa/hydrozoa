@@ -82,18 +82,27 @@ case class MultiNodeConfig private (
             if i < quorum then Some(w.mkHeaderSignature(serialized)) else None
         }
 
-    /** The dense header-signature list persisted for a hard-confirmed SEC: every head peer's
-      * signature followed by the first `coilQuorum` coil signatures. Matches the order
-      * `HardAckAggregator.collectSecSignatures` produces and `RuleBasedActor.loadAction` splits at
-      * `nHeadPeers` to recover head vs coil signatures.
+    /** The sparse, peer-position-aligned header-signature list persisted for a hard-confirmed SEC:
+      * every head peer's signature (all `Some`, AllOf), then one slot per coil peer — `Some` where
+      * that coil signed, `None` otherwise. Matches what `HardAckAggregator.collectSecSignatures`
+      * produces and what `RuleBasedActor.loadAction` splits at `nHeadPeers`.
+      *
+      * The signing coils are deliberately the **last** `coilQuorum` coils (a non-prefix subset), so
+      * the alignment actually matters: a dense/prefix encoding would put those signatures at coil
+      * indices 0..q-1 and the on-chain `coilMultisig` check would verify them against the wrong
+      * coil vkeys. This fixture is the regression guard for that bug.
       */
-    def multisignHeaderDense(
+    def multisignHeaderSparse(
         blockHeader: StandaloneEvacuationCommitment.Onchain
-    ): List[BlockHeader.Minor.HeaderSignature] =
+    ): List[Option[BlockHeader.Minor.HeaderSignature]] =
         val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
-        val headSigs = nodePrivateConfigs.map(_._2.ownWallet.mkHeaderSignature(serialized)).toList
-        val coilSigs = coilWallets.take(headConfig.coilQuorum).map(_.mkHeaderSignature(serialized))
-        headSigs ++ coilSigs
+        val headSigs =
+            nodePrivateConfigs.map(_._2.ownWallet.mkHeaderSignature(serialized)).toList.map(Some(_))
+        val firstSigner = coilWallets.size - headConfig.coilQuorum
+        val coilSlots = coilWallets.zipWithIndex.map { (w, i) =>
+            if i >= firstSigner then Some(w.mkHeaderSignature(serialized)) else None
+        }
+        headSigs ++ coilSlots
 
     def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress = nodeConfigs(
       peerNumber
@@ -137,8 +146,7 @@ object MultiNodeConfig {
                     .mkCoilConfig(
                       headConfig = mnc.headConfig,
                       ownCoilWallet = w,
-                      nodeOperationEvacuationConfig = templatePrivate.nodeOperationEvacuationConfig
-                          .copy(ruleBasedWallet = w),
+                      nodeOperationEvacuationConfig = templatePrivate.nodeOperationEvacuationConfig,
                       nodeOperationMultisigConfig = templatePrivate.nodeOperationMultisigConfig,
                       blockfrostApiKey = "not-a-real-key",
                       remoteLedgerUri = Some("ws://localhost:3001/ws"),
@@ -262,7 +270,7 @@ object MultiNodeConfig {
                               testPeers.walletFor(peerId._1),
                               headConfig.headPeers
                             ).get
-                            noec <- generateNodeOperationEvacuationConfig(ohpp.ownHeadWallet)
+                            noec <- generateNodeOperationEvacuationConfig
 
                         } yield peerId._1 -> NodePrivateConfig(
                           ownPeerPrivate = ohpp,
