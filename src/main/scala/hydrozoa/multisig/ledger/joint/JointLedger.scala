@@ -503,7 +503,7 @@ final case class JointLedger(
         p: JointLedger.Producing,
         blockCreationEndTime: BlockCreationEndTime,
         decisions: DepositsMap.Decisions
-    ): IO[(JointLedger.Producing, BlockBrief.Intermediate, Seq[EvacuationDiff])] = {
+    ): IO[(JointLedger.Producing, BlockBrief.Intermediate, Seq[EvacuationDiffGroup])] = {
         val blockCreationStartTime = p.BlockCreationStartTime
         val previousHeader = p.previousBlockHeader
         val blockWithdrawnUtxos = p.l2LedgerState.payouts
@@ -533,7 +533,11 @@ final case class JointLedger(
             assigned = p.commandNumber.increment
 
             // Block header
-            headerRes: (JointLedger.Producing, BlockHeader.Intermediate, Seq[EvacuationDiff]) <-
+            headerRes: (
+                JointLedger.Producing,
+                BlockHeader.Intermediate,
+                Seq[EvacuationDiffGroup]
+            ) <-
                 if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
                     val evacDiffs = p.l2LedgerState.diffs

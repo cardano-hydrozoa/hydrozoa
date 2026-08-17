@@ -299,7 +299,7 @@ final case class StackComposer(
                     List.empty[(BlockVersion.Full, Int)]
                   )
                 ) { case ((runMap, batch, maps), result) =>
-                    val nextMap = EvacuationMap.applyDiffs(runMap, result.evacuationMapDiff)
+                    val nextMap = EvacuationMap.applyDiffs(runMap, result.flatEvacuationDiffs)
                     if committed.contains(result.brief.blockNum) then
                         (
                           nextMap,
