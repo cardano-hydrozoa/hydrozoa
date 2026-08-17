@@ -20,7 +20,7 @@
 >   Blockfrost key in clear JSON; the template ships `admin`/`welcome` admin credentials; the HTTP
 >   API and the WS mesh are unencrypted.
 > - **Durable state, single-use head config.** Each peer's RocksDB store lives on a named volume, so
->   it survives a restart (crash recovery and evacuation read it); `docker compose down -v` wipes it
+>   it survives a restart (crash recovery and evacuation read it); `just head-reset` wipes it
 >   for a fresh head. `head-config.json` still embeds real utxos + wall-clock anchors, so it cannot be
 >   reused — a fresh head needs a rebuilt config.
 > - **Public testnet (Preview / Preprod) via Blockfrost only** — a trusted third party between
@@ -370,8 +370,8 @@ At this point every node has its two files, and the composition (§5) mounts
 
 Caveats:
 - **State is durable.** Each node's consensus + L2 RocksDB stores live on a named volume mounted at
-  `/opt/docker/.hydrozoa-data`, so they survive `docker compose down` / restart (crash recovery and
-  evacuation read them). Reset to a fresh head with `docker compose down -v`, which wipes the volumes.
+  `/opt/docker/.hydrozoa-data`, so they survive `just head-down` / restart (crash recovery and
+  evacuation read them). Reset to a fresh head with `just head-reset`, which wipes the volumes.
 - **The head initializes only when all head peers + at least `coilQuorum` coil peers are up.** Start
   order doesn't matter (dialers retry); stack 0 hard-confirms with all head signatures +
   `coilQuorum` coil signatures (`docs/spec/coil-network.md` §5.7).
@@ -382,19 +382,18 @@ Caveats:
 
 ### Bringing up the head
 
-The `docker-compose.yml` is scaffolded into the head directory, so `cd` there first — its config
-paths resolve against `.` (that directory).
+The `just` recipes below run compose in the scaffolded head directory for you (`$HYDROZOA_HOME`, set
+when you source `hydrozoa.sh`), so config mounts resolve against it.
 
 Default — pull the published image and run the scaffolded head:
 
 ```bash
-cd "$HYDROZOA_HOME"            # the scaffolded head dir (default head/demo)
-docker compose up -d          # pulls ghcr.io/cardano-hydrozoa/hydrozoa:latest on first run
+just head-up          # pulls ghcr.io/cardano-hydrozoa/hydrozoa:latest on first run
 ```
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
 
-To watch the head land on L1, run `docker compose logs <any service>` (e.g. `head-0`) and find
+To watch the head land on L1, run `docker logs <any service>` (e.g. `docker logs head-0`) and find
 this section:
 
 ```
@@ -419,12 +418,13 @@ finalization) appears in the same section as the head progresses.
 build (§3) is already tagged `…:latest`, so it is picked up without either:
 
 ```bash
-HYDROZOA_VERSION=0.1.6 docker compose up -d                          # a specific published release
-HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.6 docker compose up -d  # a specific/other image name
+HYDROZOA_VERSION=0.1.6 just head-up                          # a specific published release
+HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.6 just head-up  # a specific/other image name
 ```
 
 **Another head** — each head directory carries its own `docker-compose.yml`, so switch heads by
-`cd`-ing into a different one (e.g. a per-network `head/release/preview`) before `docker compose up`.
+pointing `HYDROZOA_HOME` at a different one (e.g. a per-network `head/release/preview`) before
+`just head-up`.
 
 ### Restarting the head
 
@@ -433,7 +433,7 @@ anything else (Teardown / recovery of funds, §6) — otherwise the funds stay l
 fallback/evacuation path matures.
 
 Nodes keep durable state on named volumes, so a plain restart recovers the **same** head from its
-store. To start a **fresh** head instead, wipe the volumes with `docker compose down -v` — and
+store. To start a **fresh** head instead, wipe the volumes with `just head-reset` — and
 rebuild `head-config.json`, a one-off artifact that must be rebuilt each time. It embeds:
 
 - **head-0's actual funding UTxOs**, spent by the initialization tx — consumed the moment a head
@@ -447,11 +447,11 @@ So the restart cycle is:
 
 ```bash
 # 0. head still holds funds? finalize first (see above)
-docker compose down
+just head-down
 # re-fund head peer 0 if the previous head consumed the funding — `just head-zero-address`
 # prints the address; check it in the network's explorer
 just build-head-config
-docker compose up -d           # right after the build — the config is freshest now
+just head-up           # right after the build — the config is freshest now
 ```
 
 **Reusable across restarts:** the whole `$HYDROZOA_HOME/bootstrap/` directory and every
@@ -576,10 +576,10 @@ curl -u admin:welcome -X POST http://localhost:8080/api/admin/finalize
 
 The finalization tx pays the L2 state and equity back out on L1 (watch the network's explorer,
 e.g. `preview.cexplorer.io` / `preprod.cexplorer.io`).
-Then `docker compose down`. Leftover change at head peer 0's own L1 address (not head-locked) can
+Then `just head-down`. Leftover change at head peer 0's own L1 address (not head-locked) can
 be swept with its single key at any time.
 
-### Evacuation (forced recovery)
+### Evacuation
 
 When the happy-path finalize is not available — peers gone, the head wedged — funds come back via
 the **rule-based regime**: a peer submits the pre-signed fallback tx, the on-chain scripts resolve a
@@ -598,18 +598,17 @@ profile, so the state `evacuate` reads is always there:
 
 ```bash
 # Drive the head's evacuation from one peer ad-hoc (uses that peer's store):
-docker compose run --rm head-0 evacuate /configs/head-config.json /configs/private.json
+just evacuate-peer head-0
 
 # Drive the head's evacuation from every peer: stop the serve peers, then bring up the profile:
-docker compose stop
-docker compose --profile evacuate up
+just evacuate
 ```
 
 Evacuation acts on the whole head — resolving the on-chain dispute and paying every L2 utxo back out
 on L1; one or more peers can drive it (they converge on-chain). Stop a peer's serve container before
 starting its evac service — the read-only store open takes no lock, but you do not want `serve`
 pushing the happy path while `evacuate` submits the fallback. Wipe the persisted stores with
-`docker compose ... down -v` once recovery is complete.
+`just head-reset` once recovery is complete.
 
 > The composition defaults to the `:latest` image; `evacuate` works once a release that includes it
 > is `:latest`. Pin a specific build any time with `HYDROZOA_VERSION` (or a full `HYDROZOA_IMAGE`).
