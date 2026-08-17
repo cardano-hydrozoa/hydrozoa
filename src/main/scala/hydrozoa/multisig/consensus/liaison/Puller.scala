@@ -17,7 +17,8 @@ import hydrozoa.lib.logging.ContraTracer
   * @tparam N
   *   the type of batch (a `NewMsgBatch` of payload slices).
   * @param initialGet
-  *   the first request (batch 0, initial cursors).
+  *   supplies the starting batch number and seeds the outstanding-request `Ref` before the first
+  *   pull; [[start]] rebuilds its cursors from the (possibly recovery-restored) live lanes.
   * @param buildGet
   *   assemble a request with the given batch number from the current inbound cursors.
   * @param accept
@@ -55,8 +56,17 @@ final class Puller[G, N](
           PeerLiaisonEvent.BatchRequested(numberOfBatchRequest(g), describeGet(g))
         ) >> send(g)
 
-    /** Send the initial request. */
-    def start: IO[Unit] = currentlyRequesting.set(initialGet) >> sendTraced(initialGet)
+    /** Send the initial request, rebuilt from the current inbound cursors. After a crash the lanes
+      * have been restored to `next(max received)`, so the first pull must carry those restored
+      * cursors — not the cold [[initialGet]], which would re-pull the whole history and be rejected
+      * by our own `verify` as a stale re-serve (a lane already past that number), looping forever
+      * on the retransmit tick. On a cold boot the lanes still sit at their initial cursors, so this
+      * reproduces [[initialGet]] exactly. The batch number stays [[initialGet]]'s.
+      */
+    def start: IO[Unit] =
+        buildGet(numberOfBatchRequest(initialGet)).flatMap(g =>
+            currentlyRequesting.set(g) >> sendTraced(g)
+        )
 
     /** Re-send the outstanding request — the retransmit tick that self-heals the chain after a
       * wire-level loss.
