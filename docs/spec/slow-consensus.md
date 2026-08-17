@@ -119,7 +119,21 @@ Gated on `previousStackHardConfirmed` (single-flight) and `isSlowLeader(nextStac
      "Partition model" below);
    - `StackEffectsBuilder.mkEffectsRegular(config, treasury, partitions, evacuationMap)` →
      `(StackEffects.Unsigned.Regular, treasury, evacuationMap)` — threads and rotates the
-     slow-side treasury and the cumulative evacuation map.
+     slow-side treasury and the cumulative evacuation map, with two trust gates over the
+     L2 ledger's reports (a remote L2 controls them) instead of trusting them:
+     - **conservation, per L2 command**: as each block's diffs fold, every
+       `EvacuationDiffGroup` must change the map's total value by exactly what that
+       command moved across the L1 boundary — a transaction by minus its payouts, the
+       deposit-decisions command by the absorbed deposits' `l2Value` — in the coin and in
+       every asset (`Error.EvacuationMapNotConserved`). Per command, not per block: a
+       block's aggregate delta can be zero while individual transactions over- and
+       under-credit accounts in compensating directions;
+     - **balance (double-entry identity), at commitment points**: at every point whose
+       map is committed on-chain (a settlement's datum KZG, a SEC's KZG) the treasury
+       must satisfy `value == map total + equity + beacon` exactly — a deficit is head
+       insolvency, a surplus is unaccounted value the finalization's equity distribution
+       would silently pocket. The backstop for imbalances arriving through recovered
+       state or a doctored init tx (`Error.TreasuryNotBalanced`).
 4. `buildHandoff(unsigned)` signs all own hard-acks upfront via `EffectSigner`: for 2-phase,
    both round-1 and round-2; for 1-phase (all-Minor sole), just the sole ack.
    `nextOwnHardAckNum` is the per-peer counter; the unlock partition is chosen by

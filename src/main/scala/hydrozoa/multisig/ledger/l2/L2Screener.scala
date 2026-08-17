@@ -30,8 +30,8 @@ trait L2Screener[F[_]] {
     /** Stateless pre-RequestId screening of a deposit request — the ledger's stage, after
       * Hydrozoa's deposit L1 screening (the l2Payload pin check + the accept-by check) has passed.
       * The ledger checks that the `l2Payload` is well-formed for it and consistent with the
-      * deposit's reference data — for the EUTXO ledger, that `depositL2Value` covers the
-      * `l2Payload` outputs.
+      * deposit's reference data — for the EUTXO ledger, that `depositL2Value` equals the
+      * `l2Payload` outputs exactly.
       */
     def screenDeposit(req: L2Screener.ScreenDeposit): EitherT[F, L2ScreenError, Unit]
 }
