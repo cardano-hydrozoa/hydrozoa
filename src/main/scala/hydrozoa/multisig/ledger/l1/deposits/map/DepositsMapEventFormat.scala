@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.l1.deposits.map
 
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.LogEvent
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Existence
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Partition.Compartment
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMapEvent.*
 import io.circe.syntax.*
@@ -13,12 +14,16 @@ object DepositsMapEventFormat:
         val ev = LogEvent.From(Map.empty, "DepositsMap")
         import ev.*
         e match
-            case PartitionStarted(bce, ste, pr) =>
+            case PartitionStarted(bce, ste, existence) =>
+                val existenceDesc = existence match
+                    case Existence.FromPoll(pr) => s"poll: ${pr.utxos.asJson}"
+                    case Existence.FromLeaderView(rejected) =>
+                        s"leader view, rejected requests: ${rejected.map(_.asI64).toList.sorted}"
                 debug(
                   "[partition]" +
                       s"\n\t blockCreationEndTime: $bce" +
                       s"\n\t settlementTxEndTime: $ste" +
-                      s"\n\t pollResults: ${pr.utxos.asJson}"
+                      s"\n\t existence: $existenceDesc"
                 )
             case EntryClassified(entry, compartment) =>
                 val desc = compartment match

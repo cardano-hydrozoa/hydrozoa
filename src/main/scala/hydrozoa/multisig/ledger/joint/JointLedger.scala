@@ -443,12 +443,23 @@ final case class JointLedger(
     ): IO[Unit] = {
         import args.*
         unsafeGetProducing.flatMap { p =>
+            // Coil peers classify deposit existence from the head peers' soft-confirmed view
+            // (the reference brief) rather than a fresh L1 poll. A coil below the settlement
+            // quorum can lag behind an already-submitted settlement that has spent the absorbed
+            // deposits; a fresh poll would then report them gone and diverge from the leader.
+            // Head peers (and any leader-mode producer) always poll — see DepositsMap.Existence.
+            val existence = referenceBlockBrief match {
+                case Some(ref) if config.ownPeerId.isCoil =>
+                    DepositsMap.Existence.FromLeaderView(ref.depositsRejected.toSet)
+                case _ =>
+                    DepositsMap.Existence.FromPoll(pollResults)
+            }
             for {
                 partition <- p.deposits.partition(dmTracer)(
                   blockCreationEndTime = blockCreationEndTime,
                   settlementTxEndTime =
                       config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
-                  pollResults = pollResults
+                  existence = existence
                 )
                 split = partition.split(maxDepositsAbsorbedPerBlock)
                 _ <- tracer.traceWith(

@@ -79,14 +79,14 @@ final case class DepositsMap private[map] (
     def partition[F[_]: Monad](tracer: ContraTracer[F, DepositsMapEvent])(
         blockCreationEndTime: BlockCreationEndTime,
         settlementTxEndTime: SettlementTxEndTime,
-        pollResults: PollResults
+        existence: DepositsMap.Existence
     ): F[DepositsMap.Partition] =
         for {
             _ <- tracer.traceWith(
               DepositsMapEvent.PartitionStarted(
                 blockCreationEndTime,
                 settlementTxEndTime,
-                pollResults
+                existence
               )
             )
             result <- treeMap.toList.foldM(Partition.empty) { case (outerAcc, (_, depositQueue)) =>
@@ -102,7 +102,7 @@ final case class DepositsMap private[map] (
                           settlementTxEndTime,
                           entry.depositUtxo.absorptionEndTime
                         )
-                    val isExistent = pollResults.utxos.contains(entry.depositUtxo.toUtxo.input)
+                    val isExistent = existence.isExistent(entry)
                     // A deposit whose absorption window closes before the settlement tx's
                     // validity ends can never be safely absorbed, so it must be rejected even
                     // if it has not matured yet — `isExpired` takes precedence over `isImmature`.
@@ -128,6 +128,35 @@ object DepositsMap {
         requestId: RequestId,
         depositUtxo: DepositUtxo
     )
+
+    /** How [[DepositsMap.partition]] decides whether a mature, unexpired deposit still exists on L1
+      * — the only classification input that differs between peer roles. All other checks (immature
+      * / expired / the absorption cap) are role-independent.
+      *
+      *   - [[FromPoll]] — the peer's own fresh L1 poll. The head-peer path: head peers hold
+      *     settlement keys, so a settlement can never spend an absorbed deposit without their
+      *     signature; their fresh poll therefore always reflects the pre-settlement L1 and they
+      *     verify existence independently.
+      *   - [[FromLeaderView]] — replay the soft-confirmed leader's verdict carried by the block
+      *     brief. The coil-peer path: a coil below the settlement quorum can lag behind an
+      *     already-submitted settlement that has spent the absorbed deposits, so a fresh poll would
+      *     spuriously report them gone. Instead the coil trusts the head peers' unanimous view — a
+      *     deposit is existent iff the leader did **not** reject it (`depositsRejected`). This
+      *     handles every compartment: absorbed and eligible-but-cap-unabsorbed deposits are both
+      *     absent from `depositsRejected` (existent), while leader-rejected ones are present
+      *     (non-existent); immature/expired deposits never reach this check.
+      */
+    enum Existence {
+        case FromPoll(pollResults: PollResults)
+        case FromLeaderView(rejectedRequestIds: Set[RequestId])
+
+        def isExistent(entry: Entry): Boolean = this match {
+            case FromPoll(pollResults) =>
+                pollResults.utxos.contains(entry.depositUtxo.toUtxo.input)
+            case FromLeaderView(rejectedRequestIds) =>
+                !rejectedRequestIds.contains(entry.requestId)
+        }
+    }
 
     final case class Partition private[map] (
         expired: DepositsMap,
