@@ -72,6 +72,31 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                             props.append(
                               s"SettlementTxSeq observation should be successful: ${eRes}" |: eRes.isRight
                             )
+
+                            // The value-conservation postcondition: the produced treasury's
+                            // liability pool (value minus equity) moves by exactly the L1
+                            // boundary crossings — fees are paid from equity (replenished by
+                            // deposit fees) and never touch the pool — in the coin and in every
+                            // asset. This is the treasury-side half of the head's double-entry
+                            // balance identity (treasury.value == map.totalValue + equity +
+                            // beacon); the map-side half is StackEffectsBuilder's per-command
+                            // conservation gate. Together they form the identity's inductive
+                            // step, so a balanced anchor stays balanced — the identity is
+                            // established here, not re-checked at runtime.
+                            props.append {
+                                val treasuryIn = builder.treasuryToSpend
+                                val treasuryOut = txSeq.settlementTx.treasuryProduced
+                                val absorbed =
+                                    Value.combine(builder.depositsToSpend.map(_.l2Value))
+                                val paidOut = Value.combine(
+                                  builder.payoutObligationsRemaining.map(_.utxo.value.value)
+                                )
+                                val drift = (treasuryOut.value - Value(treasuryOut.equity.coin)) -
+                                    (treasuryIn.value - Value(treasuryIn.equity.coin)) -
+                                    absorbed + paidOut
+                                "the produced treasury's liability pool must move by exactly" +
+                                    s" absorbed minus payouts (drifted by $drift)" |: drift.isZero
+                            }
                             // TODO: rewrite this in Either/PropertyM[Either,_]
                             val Right(res) = eRes: @unchecked
 

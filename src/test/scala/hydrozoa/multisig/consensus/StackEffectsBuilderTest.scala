@@ -19,14 +19,15 @@ import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_TransactionInput
-import scalus.cardano.ledger.{AssetName, Coin, TransactionInput, Value}
+import scalus.cardano.ledger.{Coin, TransactionInput, Value}
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genKnownValuePayoutObligationWithMinAdaEnsured
 
-/** [[StackEffectsBuilder.mkEffectsRegular]] — the Final partition (finalization), the
-  * evacuation-map coverage (solvency) check, and the per-block conservation check (no account over-
-  * or under-credited by deposits, L2 transactions, or withdrawals; the randomized L2-transaction
-  * properties live in [[EvacuationMapConservationTest]]).
+/** [[StackEffectsBuilder.mkEffectsRegular]] — the Final partition (finalization) and the
+  * per-command conservation check (no account over- or under-credited by deposits, L2 transactions,
+  * or withdrawals; the randomized L2-transaction properties live in
+  * [[EvacuationMapConservationTest]], and the settlement builder's value-exactness property in
+  * [[hydrozoa.multisig.ledger.l1.txseq.SettlementTxSeqBuilderTest]]).
   */
 class StackEffectsBuilderTest extends AnyFunSuite {
 
@@ -103,7 +104,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
 
         val result = StackEffectsBuilder.mkEffectsRegular(
           config = headConfig,
-          treasury = treasury,
+          initialTreasury = treasury,
           partitions = partitions,
           initialEvacuationMap = initialMap
         )
@@ -184,7 +185,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
         )
         StackEffectsBuilder.mkEffectsRegular(
           config = headConfig,
-          treasury = treasury,
+          initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(minorBlock)),
           initialEvacuationMap = initialMap
         )
@@ -195,74 +196,6 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           EvacuationMap.empty,
           Seq(EvacuationDiff.Update(EvacuationKey(ByteString.fromHex(keyHexByte * 32)).get, entry))
         )
-
-    // The balance identity (value == map + equity + beacon) is the backstop behind conservation:
-    // with per-command conservation enforced, an imbalance can only arrive through the recovered
-    // starting map (or a doctored init tx), so these fixtures start from an unbalanced
-    // `initialEvacuationMap` with conserving (empty) diffs. A deficit means the minor's SEC would
-    // commit (via KZG) to evacuation liabilities the treasury cannot pay; a surplus is value the
-    // books attribute to nobody. The builder must reject the stack either way.
-    test("rejects a minor partition whose evacuation map the treasury cannot cover") {
-        // A 1000 ADA liability against a 20 ADA treasury.
-        val result = mkMinorStackResult(
-          diffs = Nil,
-          treasuryValue = Value(Coin(20_000_000L)),
-          initialMap = singletonMap("ee", obligation(1_000_000_000L, seed = 30))
-        )
-        result match {
-            case Left(_: StackEffectsBuilder.Error.TreasuryNotBalanced) => ()
-            case other =>
-                fail(
-                  "insolvent evacuation map was accepted: the builder produced a SEC committing " +
-                      s"to liabilities the treasury cannot pay ($other)"
-                )
-        }
-    }
-
-    test("rejects a minor partition whose evacuation map claims an asset the treasury lacks") {
-        // The map entry's ADA is covered, but it carries 100 units of a token the treasury holds
-        // none of.
-        val tokenValue = Value.asset(
-          headConfig.headMultisigScript.script.scriptHash,
-          AssetName.fromHex("deadbeef"),
-          100L,
-          Coin(5_000_000L)
-        )
-        val tokenObligation = fixed(
-          genKnownValuePayoutObligationWithMinAdaEnsured(tokenValue)(using config),
-          seed = 40
-        )
-        val result = mkMinorStackResult(
-          diffs = Nil,
-          treasuryValue = Value(Coin(20_000_000L)),
-          initialMap = singletonMap("ff", tokenObligation)
-        )
-        result match {
-            case Left(_: StackEffectsBuilder.Error.TreasuryNotBalanced) => ()
-            case other =>
-                fail(
-                  "an evacuation map claiming an asset the treasury does not hold was accepted " +
-                      s"($other)"
-                )
-        }
-    }
-
-    // The treasury's value is liabilities + equity, and the equity is the fee reserve for
-    // settlement and rollout — not available to back liabilities. A map that fits inside the raw
-    // treasury value but eats into the equity reserve is still uncovered.
-    test("rejects a minor partition whose evacuation map eats into the equity reserve") {
-        // An 18 ADA liability against a 20 ADA treasury with a 5 ADA equity reserve.
-        val result = mkMinorStackResult(
-          diffs = Nil,
-          treasuryValue = Value(Coin(20_000_000L)),
-          initialMap = singletonMap("bb", obligation(18_000_000L, seed = 60))
-        )
-        result match {
-            case Left(_: StackEffectsBuilder.Error.TreasuryNotBalanced) => ()
-            case other =>
-                fail(s"an evacuation map overlapping the equity reserve was accepted ($other)")
-        }
-    }
 
     /** A major block absorbing one 10-ADA deposit whose diffs spawn `spawnedLovelace` of L2
       * outputs. Conservation requires the spawn to equal the absorbed `l2Value` exactly — an
@@ -324,7 +257,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
         )
         StackEffectsBuilder.mkEffectsRegular(
           config = headConfig,
-          treasury = treasury,
+          initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(majorBlock)),
           initialEvacuationMap = EvacuationMap.empty
         )
@@ -370,7 +303,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
         )
         StackEffectsBuilder.mkEffectsRegular(
           config = headConfig,
-          treasury = treasury,
+          initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(finalBlock)),
           initialEvacuationMap = initialMap
         )
@@ -415,25 +348,11 @@ class StackEffectsBuilderTest extends AnyFunSuite {
         )
     }
 
-    test("rejects a minor partition whose treasury holds unaccounted surplus") {
-        // One extra lovelace above map + equity (+ beacon): value the books attribute to nobody —
-        // at finalization it would be silently pocketed through the equity distribution, and at
-        // init it can mask a doctored init tx (the parse takes the treasury output's value as-is).
-        val result = mkMinorStackResult(
-          diffs = Nil,
-          treasuryValue = Value(Coin(10_000_001L)),
-          initialMap = singletonMap("ac", obligation(5_000_000L, seed = 100))
-        )
-        result match {
-            case Left(_: StackEffectsBuilder.Error.TreasuryNotBalanced) => ()
-            case other => fail(s"a treasury with unaccounted surplus was accepted ($other)")
-        }
-    }
-
     // The double-entry identity across a REAL settlement: the settlement builder's value/equity
-    // arithmetic must be exact to the lovelace (the balance check would otherwise fail-stop on
-    // honest blocks). Exercises both boundary directions in one build — absorb a 10 ADA deposit
-    // and withdraw the 20 ADA pot — through SettlementTxSeq.Build.
+    // arithmetic must be exact to the lovelace. One hand-built end-to-end scenario through
+    // `mkEffectsRegular`; the randomized per-builder property lives in
+    // `SettlementTxSeqBuilderTest`. Exercises both boundary directions in one build — absorb
+    // a 10 ADA deposit and withdraw the 20 ADA pot — through SettlementTxSeq.Build.
     test("a real settlement preserves treasury.value == map + equity + beacon") {
         val prevEnd = BlockCreationEndTime(now)
         val end = BlockCreationEndTime(now + 10.seconds)
@@ -497,7 +416,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
         )
         val result = StackEffectsBuilder.mkEffectsRegular(
           config = headConfig,
-          treasury = treasury,
+          initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(majorBlock)),
           initialEvacuationMap = initialMap
         )
@@ -515,8 +434,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
         }
     }
 
-    test("accepts a minor partition whose treasury exactly balances the map") {
-        // Double-entry balanced: value (10 ADA + beacon) == map (5 ADA) + equity (5 ADA) + beacon.
+    test("accepts a minor partition and returns the folded map") {
         val result = mkMinorStackResult(
           diffs = Nil,
           treasuryValue = Value(Coin(10_000_000L)),
@@ -525,7 +443,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
         result match {
             case Right((_, _, newMap, _)) =>
                 assert(newMap.size == 1, s"expected the folded map to hold the entry, got $newMap")
-            case Left(err) => fail(s"covered evacuation map was rejected: $err")
+            case Left(err) => fail(s"minor partition was rejected: $err")
         }
     }
 }

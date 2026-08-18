@@ -26,11 +26,10 @@ import test.Generators.Hydrozoa.genKnownValuePayoutObligationWithMinAdaEnsured
   * exactly conserved, in the coin and in every asset (the EUTXO L2 is zero-fee, transient tokens
   * never reach the diff stream, and minors carry no deposits or withdrawals).
   *
-  * The treasury fixture is double-entry balanced (value == map + equity + beacon), and the
-  * conservation gate runs before the balance gate — so every perturbed scenario asserts the
-  * specific `EvacuationMapNotConserved` rejection, pinning the per-command attribution. This pins
-  * the sugar-rush-ledger failure mode: a per-transaction rounding error (one extra token unit
-  * credited to a maker) mis-credits accounts long before any treasury-level bound would notice.
+  * Every perturbed scenario asserts the specific `EvacuationMapNotConserved` rejection, pinning the
+  * per-command attribution. This pins the sugar-rush-ledger failure mode: a per-transaction
+  * rounding error (one extra token unit credited to a maker) mis-credits accounts long before any
+  * treasury-level bound would notice.
   */
 object EvacuationMapConservationTest extends Properties("EvacuationMap conservation") {
     import Prop.{forAll, propBoolean}
@@ -113,7 +112,7 @@ object EvacuationMapConservationTest extends Properties("EvacuationMap conservat
         )
         StackEffectsBuilder.mkEffectsRegular(
           config = headConfig,
-          treasury = treasury,
+          initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(minorBlock)),
           initialEvacuationMap = initialMap
         )
