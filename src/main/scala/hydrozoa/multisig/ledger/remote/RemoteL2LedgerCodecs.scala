@@ -201,10 +201,11 @@ object RemoteL2LedgerCodecs {
                 }
         }
 
-    // Restore-response codec. The remote answers a Restore request with the command number it
-    // rewound to (`Restored`) or a failure carrying a reason (`RestoreFailed`) — single-key tagged
-    // objects, mirroring the request and verdict wire shapes. Kept separate from L2LedgerResponse: a
-    // restore is a boot-time reconstruction, not a numbered command verdict.
+    // Restore-response codec. The remote answers a RestoreTo request with the tip it rewound to
+    // (`Restored`) or a failure carrying the requested number, its current durable tip, and a
+    // reason (`RestoreFailed`) — single-key tagged objects, mirroring the request and verdict wire
+    // shapes. Kept separate from L2LedgerResponse: a restore is a boot-time reconstruction, not a
+    // numbered command verdict. The wire shape is SugarRush's (SugarRush #140).
     import RemoteL2Ledger.RestoreResponse
     given restoreResponseCodec: Codec[RestoreResponse] = Codec.from(
       decodeA = c =>
@@ -216,15 +217,16 @@ object RemoteL2LedgerCodecs {
               .flatMap {
                   case "Restored" =>
                       c.downField("Restored")
-                          .downField("commandNumber")
+                          .downField("tip")
                           .as[L2CommandNumber]
                           .map(RestoreResponse.Restored.apply)
                   case "RestoreFailed" =>
                       val body = c.downField("RestoreFailed")
                       for {
-                          cn <- body.downField("commandNumber").as[L2CommandNumber]
+                          requested <- body.downField("requested").as[L2CommandNumber]
+                          tip <- body.downField("tip").as[L2CommandNumber]
                           reason <- body.downField("reason").as[String]
-                      } yield RestoreResponse.RestoreFailed(cn, reason)
+                      } yield RestoreResponse.RestoreFailed(requested, tip, reason)
                   case other =>
                       Left(
                         io.circe.DecodingFailure(
@@ -234,12 +236,13 @@ object RemoteL2LedgerCodecs {
                       )
               },
       encodeA = {
-          case RestoreResponse.Restored(cn) =>
-              io.circe.Json.obj("Restored" -> io.circe.Json.obj("commandNumber" -> cn.asJson))
-          case RestoreResponse.RestoreFailed(cn, reason) =>
+          case RestoreResponse.Restored(tip) =>
+              io.circe.Json.obj("Restored" -> io.circe.Json.obj("tip" -> tip.asJson))
+          case RestoreResponse.RestoreFailed(requested, tip, reason) =>
               io.circe.Json.obj(
                 "RestoreFailed" -> io.circe.Json.obj(
-                  "commandNumber" -> cn.asJson,
+                  "requested" -> requested.asJson,
+                  "tip" -> tip.asJson,
                   "reason" -> reason.asJson
                 )
               )
@@ -271,9 +274,10 @@ object RemoteL2LedgerCodecs {
               case Request.ApplyTransaction(cn, command) =>
                   tagged("ApplyTransaction", cn, command.asJson)
               // Restore carries no command payload — the command number is the whole instruction.
+              // The wire tag is SugarRush's `RestoreTo` (SugarRush #140).
               case Request.Restore(cn) =>
                   io.circe.Json.obj(
-                    "Restore" -> io.circe.Json.obj("commandNumber" -> cn.asJson)
+                    "RestoreTo" -> io.circe.Json.obj("commandNumber" -> cn.asJson)
                   )
           },
           decodeA = c =>
@@ -302,7 +306,7 @@ object RemoteL2LedgerCodecs {
                                   n <- cn
                                   cmd <- command.as[L2LedgerCommand.ApplyTransaction]
                               } yield Request.ApplyTransaction(n, cmd)
-                          case "Restore" =>
+                          case "RestoreTo" =>
                               cn.map(Request.Restore.apply)
                           case other =>
                               Left(

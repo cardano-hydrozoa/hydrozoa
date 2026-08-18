@@ -130,14 +130,19 @@ class RemoteL2Ledger private (
       * re-issues an already-applied command and the remote rejects it as
       * [[L2LedgerResponse.UnrecoverableError.OutOfOrder]] — the crash loop on recovery.
       *
-      * Success maps to `Right(())`; a restore failure maps to [[RestoreError.OtherError]] (a typed
-      * `Left`, never thrown — `JointLedger.State.recover` treats it as fatal). A broken *transport*
-      * or a protocol violation still fail-stops (a raise) like the other requests.
+      * Success maps to `Right(())`. A restore failure asking for a command number past the remote's
+      * durable tip (`requested > tip`) maps to [[RestoreError.CommandNumberTooHigh]]; any other
+      * failure to [[RestoreError.OtherError]]. Both are typed `Left`s, never thrown —
+      * `JointLedger.State.recover` treats them as fatal. A broken *transport* or a protocol
+      * violation still fail-stops (a raise) like the other requests.
       */
     override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
         EitherT(sendRestoreRequest(Request.Restore(commandNumber)).map {
-            case _: RestoreResponse.Restored              => Right(())
-            case RestoreResponse.RestoreFailed(_, reason) => Left(RestoreError.OtherError(reason))
+            case _: RestoreResponse.Restored => Right(())
+            case RestoreResponse.RestoreFailed(requested, tip, reason) =>
+                if requested.value > tip.value then
+                    Left(RestoreError.CommandNumberTooHigh(requested, tip))
+                else Left(RestoreError.OtherError(reason))
         })
 
     /** Send a [[Request.Restore]] and return the remote's [[RestoreResponse]]. Like
@@ -352,19 +357,28 @@ object RemoteL2Ledger {
         final case class Restore(commandNumber: L2CommandNumber) extends Request
     }
 
-    /** The remote's answer to a [[Request.Restore]]: it rewound to `commandNumber` ([[Restored]]),
-      * or the rewind failed ([[RestoreFailed]] with a reason). Kept out of [[L2LedgerResponse]] — a
-      * restore is a boot-time reconstruction, not a numbered command verdict — but still echoes the
-      * command number so [[RemoteL2Ledger.sendRestoreRequest]] can correlate it with the request.
+    /** The remote's answer to a [[Request.Restore]]: it rewound to the requested command number
+      * ([[Restored]] carrying its resulting `tip`, which equals the request on success), or the
+      * rewind failed ([[RestoreFailed]] carrying the `requested` number, the remote's current
+      * durable `tip`, and a reason). Kept out of [[L2LedgerResponse]] — a restore is a boot-time
+      * reconstruction, not a numbered command verdict — but [[commandNumber]] still echoes the
+      * requested number so [[RemoteL2Ledger.sendRestoreRequest]] can correlate it with the request.
       */
     sealed trait RestoreResponse {
         def commandNumber: L2CommandNumber
     }
 
     object RestoreResponse {
-        final case class Restored(commandNumber: L2CommandNumber) extends RestoreResponse
-        final case class RestoreFailed(commandNumber: L2CommandNumber, reason: String)
-            extends RestoreResponse
+        final case class Restored(tip: L2CommandNumber) extends RestoreResponse {
+            def commandNumber: L2CommandNumber = tip
+        }
+        final case class RestoreFailed(
+            requested: L2CommandNumber,
+            tip: L2CommandNumber,
+            reason: String
+        ) extends RestoreResponse {
+            def commandNumber: L2CommandNumber = requested
+        }
     }
 
     /** Create a RemoteL2Ledger as a [[Resource]] owning one shared WebSocket client for its whole
