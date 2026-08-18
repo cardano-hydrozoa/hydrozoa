@@ -699,14 +699,21 @@ final case class JointLedger(
                     for {
                         _ <- persistOwnAckBundle(brief, softAck, blockResult)
 
-                        // Broadcast our OWN-led brief to the head mesh and (on a hub) to CoilRelay,
-                        // so coil peers get the blocks WE lead. Blocks led by OTHER heads reach
-                        // CoilRelay through the mesh liaisons instead, so each block is relayed
-                        // exactly once and arrives in spine order (see CoilRelay for the proof).
+                        // Broadcast our OWN-led brief to the head mesh — only blocks WE lead go
+                        // to the mesh.
                         _ <- IO.whenA(config.canLeadFast(brief.blockNum))(
-                          (conn.headPeerLiaisons ! brief).parallel >>
-                              conn.coilRelay.traverse_(_ ! brief)
+                          (conn.headPeerLiaisons ! brief).parallel
                         )
+
+                        // Feed the hub's CoilRelay block lane from JointLedger for EVERY block —
+                        // own-led and remote-led (reproduced) alike. JointLedger applies blocks
+                        // serially in spine order, so it is the single ordered feeder into the
+                        // relay's contiguous block lane, and a hub relays each block exactly once.
+                        // (No-op off a hub, where coilRelay is None.) Splitting this by leadership
+                        // — own-led here, remote-led via PeerLiaisonHeadToHead.dispatch — let the
+                        // two feeders' sends race into the relay mailbox, the t3 AppendOutOfOrder
+                        // hang (see CoilRelay's ordering note).
+                        _ <- conn.coilRelay.traverse_(_ ! brief)
 
                         _ <- conn.fastConsensusActor ! softAck
                     } yield ()

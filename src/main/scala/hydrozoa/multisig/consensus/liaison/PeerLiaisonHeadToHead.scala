@@ -274,16 +274,17 @@ abstract class PeerLiaisonHeadToHead(
                 _ <- m.softAck.traverse_(conn.consensusActor ! _)
                 _ <- m.headHardAck.traverse_(conn.slowConsensusActor ! _)
                 _ <- m.hubHardAck.traverse_(hc => conn.slowConsensusActor ! hc.ack)
-                // On a hub, forward this remote head peer's whole production to CoilRelay so its
-                // coil peers hear the full population — including the block/stack briefs this remote
-                // leads. The mesh liaisons relay remote-led briefs; the hub's own JointLedger /
-                // StackComposer relay only their own-led briefs (see those sites), so every brief
-                // reaches CoilRelay exactly once. They arrive in spine order — CoilRelay needs no
-                // reordering; see its doc for the proof.
+                // On a hub, forward this remote head peer's per-author artifacts (requests, acks) to
+                // CoilRelay so its coil peers hear the full population. Block and stack briefs are
+                // deliberately NOT forwarded here: those relay lanes are contiguous and must have a
+                // single ordered feeder — the hub's own JointLedger (blocks) / StackComposer
+                // (stacks), which relay every brief, own-led and remote-led alike, in spine order.
+                // Forwarding briefs from here too put a second feeder on those lanes and raced its
+                // sends into the relay mailbox — the t3 AppendOutOfOrder hang (see CoilRelay's
+                // ordering note). The per-author lanes below are keyed by author, so each already
+                // has exactly one feeder and is safe.
                 _ <- conn.coilRelay.traverse_ { cr =>
-                    m.block.traverse_(cr ! _) >>
-                        m.stack.traverse_(cr ! _) >>
-                        m.requests.traverse_(cr ! _) >>
+                    m.requests.traverse_(cr ! _) >>
                         m.softAck.traverse_(cr ! _) >>
                         m.headHardAck.traverse_(cr ! _) >>
                         m.hubHardAck.traverse_(cr ! _)
