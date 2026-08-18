@@ -65,6 +65,12 @@ object InitializationTx {
                 case TtlIsMissing
                 case InvalidInitializationTtl
                 case EquityToLow(equity: Coin, fee: Coin)
+                case TreasuryNotBalanced(
+                    imbalance: Value,
+                    treasuryValue: Value,
+                    initialL2Value: Value,
+                    equity: Coin
+                )
 
                 override def toString: String = this match {
                     case MetadataParseError(wrapped) =>
@@ -77,6 +83,10 @@ object InitializationTx {
                         "InvalidInitializationTtl: initialization transaction TTL is invalid"
                     case EquityToLow(equity, fee) =>
                         s"EquityToLow: equity ($equity) is too low to cover fee ($fee)"
+                    case TreasuryNotBalanced(imbalance, treasuryValue, initialL2Value, equity) =>
+                        s"TreasuryNotBalanced: treasury output value ($treasuryValue) must equal" +
+                            s" the initial evacuation map value ($initialL2Value) + equity" +
+                            s" ($equity) + the beacon token, exactly (imbalance: $imbalance)"
                 }
 
             }
@@ -302,6 +312,30 @@ object InitializationTx {
                 // self-contained. The produced treasury holds totalEquity minus this tx's fee.
                 equity <- Equity(md.totalEquity - tx.body.value.fee)
                     .toRight(EquityToLow(md.totalEquity, tx.body.value.fee))
+
+                // The anchor of the head's double-entry balance identity: the treasury output
+                // must hold exactly the initial evacuation map's liabilities plus the equity
+                // plus the beacon token — in the coin and in every asset. Every later slow-side
+                // state derives from this one through conserving steps (the per-command
+                // conservation gate over L2 reports; the settlement builder's value exactness),
+                // so the identity is parsed once here rather than re-checked at runtime.
+                beacon = Value.asset(
+                  expectedHNS.policyId,
+                  config.headTokenNames.treasuryTokenName,
+                  1L
+                )
+                imbalance = actualTreasuryOutput.value -
+                    config.initialEvacuationMap.totalValue - Value(equity.coin) - beacon
+                _ <- Either.cond(
+                  imbalance.isZero,
+                  (),
+                  TreasuryNotBalanced(
+                    imbalance,
+                    actualTreasuryOutput.value,
+                    config.initialEvacuationMap.totalValue,
+                    equity.coin
+                  )
+                )
 
                 treasury = MultisigTreasuryUtxo(
                   treasuryTokenName = config.headTokenNames.treasuryTokenName,

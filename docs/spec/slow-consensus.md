@@ -133,8 +133,10 @@ Gated on `previousStackHardConfirmed` (single-flight) and `isSlowLeader(nextStac
      beacon`) is not re-checked at stack build time: this conservation gate is its
      map-side inductive step, the settlement builder's value exactness is its
      treasury-side step (established by property test — `SettlementTxSeqBuilderTest`'s
-     liability-pool conservation prop), and the anchor's validity is the boundary's
-     concern (the init parse and crash recovery).
+     liability-pool conservation prop), and the anchor is verified once at each
+     boundary where a (treasury, map) pair enters the system —
+     `InitializationTx.Parse` (docs/spec/init-tx-parsing.md) and
+     `StackComposer.State.recover` (docs/spec/persistence-and-crash-recovery.md).
 4. `buildHandoff(unsigned)` signs all own hard-acks upfront via `EffectSigner`: for 2-phase,
    both round-1 and round-2; for 1-phase (all-Minor sole), just the sole ack.
    `nextOwnHardAckNum` is the per-peer counter; the unlock partition is chosen by

@@ -1210,6 +1210,11 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
     state as of `hardAcked` (that key is always present for a non-final `hardAcked`
     stack: its last block is always committed, [§5.2](#52-state-recovery-the-base-snapshots); older committed `EvacuationMap`
     entries stay on disk for the rule-based evacuation read, not loaded into SC state).
+    The recovered pair must satisfy the balance identity
+    (`treasury.value == evacuationMap.totalValue + equity + beacon`, exactly): the two
+    snapshots live under independent store keys, so a divergent pair (partial write,
+    replay bug, doctored store) is store corruption — recovery fails the boot, like a
+    missing key, before the first stack close derives from the pair.
   - Then close stacks `> hardAcked` — never `≤ hardAcked` (no re-signing, CR2).
 - **Bootstrap vs recovery (one seam, two seeds).** On a **cold** store `PreStart`
   runs `bootstrapInitialStack`: stack 0's init + fallback are derived from `config`
