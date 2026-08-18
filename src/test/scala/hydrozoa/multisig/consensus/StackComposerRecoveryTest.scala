@@ -130,7 +130,7 @@ class StackComposerRecoveryTest extends AnyFunSuite:
     /** A balanced treasury for the seeded (empty) evacuation map: value == equity + the head's
       * beacon token — `State.recover` verifies this identity on the recovered pair.
       */
-    private val balancedTreasury: MultisigTreasuryUtxo =
+    private def balancedTreasury: MultisigTreasuryUtxo =
         TreasuryFixture.sampleTreasury.copy(
           treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
           value = Value(TreasuryFixture.sampleTreasury.equity.coin) + headConfig.treasuryToken
