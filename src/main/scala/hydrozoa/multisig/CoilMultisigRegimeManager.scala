@@ -171,6 +171,9 @@ trait CoilMultisigRegimeManager(
                             cardanoBackend = cardanoBackend,
                             persistence = persistence,
                             tracer = tracers.ruleBasedActor,
+                            // The coil multisig manager keeps its own CardanoLiaison alive across
+                            // the handoff, so the rule-based manager must not spawn a second one.
+                            ownLiaison = None,
                           )(using config)
                         )
                         .void

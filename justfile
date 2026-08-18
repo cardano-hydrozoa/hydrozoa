@@ -157,7 +157,9 @@ stage:
   # check sees a real "last staged" time.
   sbt stage && touch "{{hydrozoa}}"
 
-# Build the hydrozoa Docker image locally (cardano-hydrozoa/hydrozoa:<version>); publish via RELEASE.md.
+# Build the hydrozoa Docker image locally — tagged cardano-hydrozoa/hydrozoa:<version> plus
+# ghcr.io/cardano-hydrozoa/hydrozoa at :<version> and :latest, so the composition's default image
+# (…:latest) resolves to this local build without a HYDROZOA_IMAGE override. Publish via RELEASE.md.
 docker-image:
   #!/usr/bin/env bash
   trap 'just notify "docker-image"' EXIT
@@ -247,6 +249,47 @@ build-head-config: _require-launcher
 # Run a head node in the foreground from a generated head-config + a peer's private config.
 serve HEAD_CONFIG PRIVATE_CONFIG: _require-launcher
   {{hydrozoa}} serve {{HEAD_CONFIG}} {{PRIVATE_CONFIG}}
+
+# The Docker composition under $HYDROZOA_HOME. Each peer gets a named-volume RocksDB store (durable
+# across restarts — what `evacuate` reads), and the `evacuate` profile adds one `*-evac` service per
+# peer. Needs head-config.json + the private/ configs generated first. Set HYDROZOA_HOME to the head
+# dir (e.g. `HYDROZOA_HOME=./head/evacuate`).
+
+# Bring the head up (detached) with durable per-peer stores.
+head-up:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{HYDROZOA_HOME}}
+  docker compose up -d
+
+# Stop and remove the head containers, keeping the persisted stores (add `-v` to the command to wipe).
+head-down:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{HYDROZOA_HOME}}
+  docker compose down
+
+# Fresh head: remove ALL containers (serve + evacuate profile) and orphans AND wipe the volume stores.
+head-reset:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{HYDROZOA_HOME}}
+  docker compose --profile evacuate down -v --remove-orphans
+
+# Evacuate the whole head: stop the serve peers, then bring up the evacuate profile (all peers).
+evacuate:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{HYDROZOA_HOME}}
+  docker compose stop
+  docker compose --profile evacuate up
+
+# Drive the head's evacuation from a single peer ad-hoc (default head-0), reusing its store.
+evacuate-peer PEER="head-0":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{HYDROZOA_HOME}}
+  docker compose run --rm {{PEER}} evacuate /configs/head-config.json /configs/private.json
 
 # Interactively build, sign, and submit an L2 transaction to a running head: pick a peer key,
 # pick one of its L2 utxos, enter destination + value.

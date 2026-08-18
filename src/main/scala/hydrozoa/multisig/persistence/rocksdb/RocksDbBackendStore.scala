@@ -102,38 +102,78 @@ object RocksDbBackendStore:
         cfs: List[Cf],
         tracer: ContraTracer[IO, PersistenceEvent]
     ): Resource[IO, BackendStore[IO]] =
+        openInternal(path, cfs, tracer, readOnly = false)
+
+    /** Open an existing store **read-only** — the mode `hydrozoa evacuate` uses (design
+      * `docs/spec/evacuate-command.md`). The rule-based regime only reads persistence, so RO is
+      * both correct and safer: it takes no exclusive lock and any stray write throws at the RocksDB
+      * layer. Refuses a missing or uninitialized store (RO cannot create or version-stamp one).
+      */
+    def openReadOnly(
+        path: Path,
+        cfs: List[Cf],
+        tracer: ContraTracer[IO, PersistenceEvent]
+    ): Resource[IO, BackendStore[IO]] =
+        openInternal(path, cfs, tracer, readOnly = true)
+
+    private def openInternal(
+        path: Path,
+        cfs: List[Cf],
+        tracer: ContraTracer[IO, PersistenceEvent],
+        readOnly: Boolean
+    ): Resource[IO, BackendStore[IO]] =
         for
             _ <- Resource.eval(tracer.traceWith(OpenRocksDbStart(path)))
             _ <- Resource.eval(IO.blocking {
                 RocksDB.loadLibrary()
-                Files.createDirectories(path)
+                if readOnly then
+                    if !Files.isDirectory(path) then
+                        throw new IllegalStateException(
+                          s"No RocksDB store to open read-only at $path"
+                        )
+                    else ()
+                else
+                    Files.createDirectories(path)
+                    ()
             })
             cfOpts <- autoCloseable(new ColumnFamilyOptions())
+            // Create flags are meaningless (and rejected) for a read-only open.
             dbOpts <- autoCloseable(
-              new DBOptions()
-                  .setCreateIfMissing(true)
-                  .setCreateMissingColumnFamilies(true)
+              if readOnly then new DBOptions()
+              else
+                  new DBOptions()
+                      .setCreateIfMissing(true)
+                      .setCreateMissingColumnFamilies(true)
             )
             writeOptions <- autoCloseable(new WriteOptions())
             readOptions <- autoCloseable(new ReadOptions())
-            opened <- openDb(path, dbOpts, cfOpts, cfs)
+            opened <- openDb(path, dbOpts, cfOpts, cfs, readOnly)
             (db, handles) = opened
             backend = new RocksDbBackendStore(db, handles, writeOptions, readOptions)
-            _ <- Resource.eval(versionCheck(backend))
+            _ <- Resource.eval(versionCheck(backend, readOnly))
             _ <- Resource.eval(tracer.traceWith(OpenRocksDbReady(path, handles.size)))
         yield backend
 
-    /** Run the open-time schema-version check. Fresh stores get the current version stamped;
-      * incompatible versions raise.
+    /** Run the open-time schema-version check. On a writable open a fresh store gets the current
+      * version stamped; incompatible versions raise. A read-only open never writes, so a missing
+      * version key is a hard error (an uninitialized store cannot be served read-only).
       */
-    private def versionCheck(backend: BackendStore[IO]): IO[Unit] =
+    private def versionCheck(backend: BackendStore[IO], readOnly: Boolean): IO[Unit] =
         backend.get(Cf.Meta, StoreVersion.key).flatMap {
             case None =>
-                backend.put(
-                  Cf.Meta,
-                  StoreVersion.key,
-                  StoreVersion.encode(StoreVersion.current)
-                )
+                if readOnly then
+                    IO.raiseError(
+                      new IllegalStateException(
+                        s"Persistence store at $backend has no schema version " +
+                            "(uninitialized); cannot open read-only"
+                      )
+                    )
+                else
+                    backend.put(
+                      Cf.Meta,
+                      StoreVersion.key,
+                      StoreVersion.encode(StoreVersion.current)
+                    )
             case Some(bytes) =>
                 val found = StoreVersion.decode(bytes)
                 if found == StoreVersion.current then IO.unit
@@ -150,7 +190,8 @@ object RocksDbBackendStore:
         path: Path,
         dbOpts: DBOptions,
         cfOpts: ColumnFamilyOptions,
-        cfs: List[Cf]
+        cfs: List[Cf],
+        readOnly: Boolean
     ): Resource[IO, (RocksDB, Map[Cf, ColumnFamilyHandle])] =
         Resource
             .make(IO.blocking {
@@ -162,7 +203,10 @@ object RocksDbBackendStore:
                     descriptors.add(new ColumnFamilyDescriptor(cfNameBytes(cf), cfOpts))
                 )
                 val outHandles = new JArrayList[ColumnFamilyHandle]()
-                val db = RocksDB.open(dbOpts, path.toString, descriptors, outHandles)
+                val db =
+                    if readOnly then
+                        RocksDB.openReadOnly(dbOpts, path.toString, descriptors, outHandles)
+                    else RocksDB.open(dbOpts, path.toString, descriptors, outHandles)
                 val allHandles = outHandles.asScala.toList
                 // `allHandles.head` is the default CF; the tail aligns positionally with `cfs`.
                 val handlesByCf: Map[Cf, ColumnFamilyHandle] = cfs.zip(allHandles.tail).toMap

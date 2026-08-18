@@ -23,7 +23,10 @@ object RuleBasedActorEventFormat:
             case Backend.ErrorContinuingTxs(err) =>
                 warn(s"Backend error querying continuing txs. Will retry.\n\tError: $err")
             case Backend.ErrorSubmittingTx(err) =>
-                warn(s"Backend error submitting tx. Will retry.\n\tError: $err")
+                // Submission failures are normal in the rule-based regime — peers race the same
+                // dispute/evacuation txs, and inputs get contended or already-spent — so retry
+                // quietly at debug rather than warn.
+                debug(s"Backend error submitting tx (normal; will retry).\n\tError: $err")
 
             case Treasury.Querying         => debug("Querying treasury")
             case Treasury.Found(value)     => debug(s"Found treasury utxo with $value")
@@ -70,7 +73,10 @@ object RuleBasedActorEventFormat:
                 info("Coil dispute state: no ratchet target; falling through to tally/resolve")
 
             case Tick.RecoverableRetry(reason) =>
-                debug(s"Tick did not complete (recoverable); will retry. Reason: $reason")
+                // Info, not debug: this is the per-tick "what am I waiting on" heartbeat (treasury
+                // not up yet, no evacuatees left, deadline not elapsed, …) — the main signal that
+                // the actor is alive and why it is not progressing this tick.
+                info(s"Tick did not complete (recoverable); will retry. Reason: $reason")
 
             case Tx.Building(family) => info(s"Building $family")
             case Tx.Submitting(tx) =>
@@ -93,6 +99,7 @@ object RuleBasedActorEventFormat:
 
             // Diagnostic-only events carry no production rendering — a test-side diagnostic tracer
             // (composed with `|+|`) formats them. Kept at trace so production stays silent.
-            case d: Evacuation.CandidateMaps    => trace(d.toString)
-            case d: Evacuation.ResolvedKzg      => trace(d.toString)
-            case d: Evacuation.EvacuationAnchor => trace(d.toString)
+            case d: Evacuation.CandidateMaps       => trace(d.toString)
+            case d: Evacuation.CandidateMapSources => trace(d.toString)
+            case d: Evacuation.ResolvedKzg         => trace(d.toString)
+            case d: Evacuation.EvacuationAnchor    => trace(d.toString)

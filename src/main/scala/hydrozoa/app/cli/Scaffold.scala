@@ -7,11 +7,11 @@ import java.nio.file.{Files, Path}
 
 /** The `scaffold` subcommand: materialize the operator-facing workspace files that are baked into
   * the image, so a Docker-only user never has to clone the repo. Into `<dir>` (default `.`) it
-  * writes `docker-compose.yml`, `hydrozoa.sh` (the CLI alias — `source` it), and
-  * `template/peer-private.template.json.local` (fill in `blockfrostApiKey`) — the layout every
-  * later command expects, so they run with no path flags. The scaffold dir itself is the head
-  * directory (the default `$HYDROZOA_HOME` that `hydrozoa.sh` sets), so the whole workspace is
-  * self-contained. Refuses to overwrite existing files.
+  * writes `docker-compose.yml` (durable stores + an `evacuate` profile built in), `hydrozoa.sh`
+  * (the CLI alias — `source` it), and `template/peer-private.template.json.local` (fill in
+  * `blockfrostApiKey`) — the layout every later command expects, so they run with no path flags.
+  * The scaffold dir itself is the head directory (the default `$HYDROZOA_HOME` that `hydrozoa.sh`
+  * sets), so the whole workspace is self-contained. Refuses to overwrite existing files.
   */
 object Scaffold:
 

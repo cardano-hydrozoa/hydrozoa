@@ -139,9 +139,42 @@ final case class StackComposer(
             handoff <- buildHandoff(unsigned)
             conn <- getConnections
             _ <- tracer.traceWith(StackComposerEvent.InitialStackBootstrapped)
+            // Persist the stack-0 close bundle BEFORE the own hard-acks cross the peer boundary via
+            // SlowConsensusActor's broadcast (CR4), so the slow side can recover stack 0.
+            _ <- persistInitialStackClose(unsigned, handoff.ownAcks)
             _ <- conn.slowConsensusActor ! handoff
         } yield ()
     }
+
+    /** Persist stack 0's close bundle so the slow side can recover it after a crash — the bootstrap
+      * analogue of [[persistOwnStackClose]]. Stack 0 is exogenous (no `BlockResult`s, so no
+      * partition fold, and no `StackBrief` on the `Stack` lane, which starts at stack 1), so this
+      * writes only the fixed genesis snapshot: the unsigned stack (so `SlowConsensusActor` can
+      * re-form its in-flight cell on recovery), this peer's two own hard-acks (round-1 / round-2),
+      * the initial treasury, and the initial evacuation map at block 0. Atomic, in the same shape
+      * `State.recover` reads back for a hard-acked stack.
+      *
+      * Without it the own `HardAck` journal stays empty until a later stack closes: `State.recover`
+      * re-runs `bootstrapInitialStack` on every restart, and — worse — the own-hard-ack outbound
+      * lane restores cold, so when the hub (or a mesh peer) re-pulls a stack-0 ack the lane reports
+      * out-of-bounds and the node fatally terminates.
+      */
+    private def persistInitialStackClose(
+        unsigned: Stack.Unsigned,
+        ownAcks: List[HardAck]
+    ): IO[Unit] =
+        persistence.arrivalStamp.flatMap { stamp =>
+            val base = WriteBatch.start
+                .put(StoreKey.UnsignedStack(unsigned.brief.stackNum))(unsigned)
+                .put(StoreKey.Treasury)(config.initializationTx.treasuryProduced)
+                .put(StoreKey.EvacuationMap(unsigned.brief.lastBlockNum))(
+                  config.initialEvacuationMap
+                )
+            val full = ownAcks.foldLeft(base)((b, ack) =>
+                b.put(JournalKey.HardAck(ack.peerId, ack.hardAckNum))(JournalValue(stamp, ack))
+            )
+            persistence.write(full)
+        }
 
     private def handleBlockResult(r: BlockResult): IO[Unit] = for {
         _ <- state.update(_.recordBlockResult(r))

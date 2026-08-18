@@ -10,6 +10,12 @@
 # Each service pins a fixed container_name (head-0, coil-0, …) so container names stay clean (no
 # compose `-N` index suffix). Because those names are host-global, only one head can run per machine
 # at a time — bring one down before starting another (e.g. a different network's head directory).
+#
+# State is DURABLE: each peer's RocksDB store lives on a named volume, so it survives a container
+# restart/recreation (which is what crash recovery and evacuation read). Reset to a fresh head with
+# `docker compose down -v` (wipes the volumes). The `evacuate` profile adds one `*-evac` service per
+# peer that runs `hydrozoa evacuate` against that store; it stays inert on a plain `up` and starts
+# only with `--profile evacuate` (see docs/user-guide/DEPLOYMENT.md, "Evacuation").
 
 name: hydrozoa
 
@@ -20,9 +26,9 @@ networks:
       com.docker.network.driver.mtu: 1400
 
 x-hydrozoa: &hydrozoa
-  image: ${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:${HYDROZOA_VERSION:-0.1.6}}
+  image: ${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:${HYDROZOA_VERSION:-latest}}
   # root: the image's non-root user cannot write the RocksDB stores / logs under the /opt/docker
-  # workdir. State is ephemeral here (no volumes) — restarting re-initializes a fresh head (§5b).
+  # workdir.
   user: root
   environment:
     JAVA_OPTS: -Xmx1g -Xms256m
@@ -36,6 +42,34 @@ x-hydrozoa: &hydrozoa
   stop_grace_period: 120s
   restart: on-failure
 
+# The `evacuate`-profile counterpart: same image, but runs `hydrozoa evacuate` (the rule-based
+# regime — submit the fallback, resolve the dispute, pay every L2 utxo back out on L1) against a
+# peer's durable store, opened read-only. `evacuate` requires an image that includes it (`:latest`
+# once a release ships it, or a local build via HYDROZOA_IMAGE / HYDROZOA_VERSION).
+x-hydrozoa-evac: &hydrozoa-evac
+  image: ${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:${HYDROZOA_VERSION:-latest}}
+  user: root
+  environment:
+    JAVA_OPTS: -Xmx1g -Xms256m
+  command: ["evacuate", "/configs/head-config.json", "/configs/private.json"]
+  networks: [mesh]
+  dns:
+    - 8.8.8.8
+    - 8.8.4.4
+  # Don't start on a plain `up`; only with `--profile evacuate`. Stop the matching serve peer first.
+  profiles: ["evacuate"]
+  stop_grace_period: 120s
+  restart: on-failure
+
+# Durable per-peer stores. Named volumes persist across container recreation; wipe with `down -v`.
+volumes:
+  hydrozoa-data-head-0:
+  hydrozoa-data-head-1:
+  hydrozoa-data-coil-0:
+  hydrozoa-data-coil-1:
+  hydrozoa-data-coil-2:
+  hydrozoa-data-coil-3:
+
 services:
   ## ---------------------------------------------------------- head peers (publish the HTTP API)
 
@@ -45,6 +79,7 @@ services:
     ports:
       - "8080:8080"   # head-0 user/admin HTTP API
     volumes:
+      - hydrozoa-data-head-0:/opt/docker/.hydrozoa-data
       - ./head-config/head-config.json:/configs/head-config.json:ro
       - ./private/head-0/private.json:/configs/private.json:ro
 
@@ -54,6 +89,7 @@ services:
     ports:
       - "8081:8080"   # head-1 user/admin HTTP API
     volumes:
+      - hydrozoa-data-head-1:/opt/docker/.hydrozoa-data
       - ./head-config/head-config.json:/configs/head-config.json:ro
       - ./private/head-1/private.json:/configs/private.json:ro
 
@@ -63,6 +99,7 @@ services:
     <<: *hydrozoa
     container_name: coil-0
     volumes:
+      - hydrozoa-data-coil-0:/opt/docker/.hydrozoa-data
       - ./head-config/head-config.json:/configs/head-config.json:ro
       - ./private/coil-0/private.json:/configs/private.json:ro
 
@@ -70,6 +107,7 @@ services:
     <<: *hydrozoa
     container_name: coil-1
     volumes:
+      - hydrozoa-data-coil-1:/opt/docker/.hydrozoa-data
       - ./head-config/head-config.json:/configs/head-config.json:ro
       - ./private/coil-1/private.json:/configs/private.json:ro
 
@@ -77,6 +115,7 @@ services:
     <<: *hydrozoa
     container_name: coil-2
     volumes:
+      - hydrozoa-data-coil-2:/opt/docker/.hydrozoa-data
       - ./head-config/head-config.json:/configs/head-config.json:ro
       - ./private/coil-2/private.json:/configs/private.json:ro
 
@@ -84,5 +123,58 @@ services:
     <<: *hydrozoa
     container_name: coil-3
     volumes:
+      - hydrozoa-data-coil-3:/opt/docker/.hydrozoa-data
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-3/private.json:/configs/private.json:ro
+
+  ## -------------------------------------------------------------- evacuation (profile: evacuate)
+  ## One service per peer, each reading that peer's store (read-only) and driving the rule-based
+  ## regime. Stop the matching serve peer before running these.
+
+  head-0-evac:
+    <<: *hydrozoa-evac
+    container_name: head-0-evac
+    volumes:
+      - hydrozoa-data-head-0:/opt/docker/.hydrozoa-data
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/head-0/private.json:/configs/private.json:ro
+
+  head-1-evac:
+    <<: *hydrozoa-evac
+    container_name: head-1-evac
+    volumes:
+      - hydrozoa-data-head-1:/opt/docker/.hydrozoa-data
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/head-1/private.json:/configs/private.json:ro
+
+  coil-0-evac:
+    <<: *hydrozoa-evac
+    container_name: coil-0-evac
+    volumes:
+      - hydrozoa-data-coil-0:/opt/docker/.hydrozoa-data
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-0/private.json:/configs/private.json:ro
+
+  coil-1-evac:
+    <<: *hydrozoa-evac
+    container_name: coil-1-evac
+    volumes:
+      - hydrozoa-data-coil-1:/opt/docker/.hydrozoa-data
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-1/private.json:/configs/private.json:ro
+
+  coil-2-evac:
+    <<: *hydrozoa-evac
+    container_name: coil-2-evac
+    volumes:
+      - hydrozoa-data-coil-2:/opt/docker/.hydrozoa-data
+      - ./head-config/head-config.json:/configs/head-config.json:ro
+      - ./private/coil-2/private.json:/configs/private.json:ro
+
+  coil-3-evac:
+    <<: *hydrozoa-evac
+    container_name: coil-3-evac
+    volumes:
+      - hydrozoa-data-coil-3:/opt/docker/.hydrozoa-data
       - ./head-config/head-config.json:/configs/head-config.json:ro
       - ./private/coil-3/private.json:/configs/private.json:ro
