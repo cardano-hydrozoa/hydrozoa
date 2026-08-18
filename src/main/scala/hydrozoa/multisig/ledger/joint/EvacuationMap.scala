@@ -113,7 +113,7 @@ final case class EvacuationMap(
         evacuationMap.keySet.subsetOf(other.evacuationMap.keySet)
 
     def totalValue: Value =
-        evacuationMap.foldLeft(Value.zero)((acc, evacuatee) => acc + evacuatee._2.utxo.value.value)
+        Value.combine(evacuationMap.values.map(_.utxo.value.value))
 
     override def iteratorFrom(start: EvacuationKey): Iterator[(EvacuationKey, Payout.Obligation)] =
         evacuationMap.iteratorFrom(start)

@@ -48,7 +48,7 @@ class RolloutPayoutOrderingTest extends AnyFunSuite:
         val indexOfValue: Map[Long, Int] =
             obligations.zipWithIndex.map((o, i) => o.utxo.value.value.coin.value -> i).toMap
 
-        val totalPayoutValue = obligations.foldLeft(Value.zero)((v, o) => v + o.utxo.value.value)
+        val totalPayoutValue = Value.combine(obligations.map(_.utxo.value.value))
         val equity = Equity(Coin(5_000_000_000L)).get
         val treasury = MultisigTreasuryUtxo(
           treasuryTokenName = config.headTokenNames.treasuryTokenName,
