@@ -27,6 +27,12 @@
         <appender-ref ref="ASYNC_STDOUT"/>
     </root>
     <logger name="hydrozoa" level="info"/>
+    <!-- The RuleBasedActor / CardanoLiaison tracers log under their own top-level logger names (not
+         hydrozoa.*), so without these they inherit root=warn and only their error events show. Route
+         them at info so the rule-based regime (dispute + evacuation) and the L1 liaison narrate what
+         they are doing — `hydrozoa evacuate` runs both. -->
+    <logger name="RuleBasedActor" level="info"/>
+    <logger name="CardanoLiaison" level="info"/>
     <logger name="com.bloxbean" level="warn"/>
     <logger name="scalus" level="warn"/>
     <logger name="CardanoBackend" level="warn"/>

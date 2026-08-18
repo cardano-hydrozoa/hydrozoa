@@ -60,8 +60,11 @@ private object VoteTxOps {
             override def getMessage: String = this match {
                 case i: Error.InvalidVoteDatum     => s"Invalid vote datum: $i.msg"
                 case _: Error.VoteAlreadyCast.type => "Vote has already been cast"
-                case b: Error.BuildError =>
-                    s"Build error encountered in vote tx. ${b.wrapped.toString}"
+                case b: Error.BuildError           =>
+                    // `.reason` unwraps a phase-2 evaluation failure into a message that includes
+                    // the Plutus VM logs (the on-chain `require` traces), which `.toString` omits —
+                    // so a rejected VoteTx reports *which* dispute-resolution check failed.
+                    s"Build error encountered in vote tx. ${b.wrapped.reason.getMessage}"
                 case t: TreasuryParseError => t.wrapped.getMessage
             }
     }

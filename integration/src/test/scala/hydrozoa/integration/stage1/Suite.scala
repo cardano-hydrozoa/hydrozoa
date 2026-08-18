@@ -21,7 +21,6 @@ import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, info, trace}
-import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -386,11 +385,7 @@ case class Suite(
                 config.headConfig.maxCardanoLiaisonPollingPeriod
               )
             )
-            _ <- pick(
-              generateNodeOperationEvacuationConfig(
-                testPeers.walletFor(Alice)
-              )
-            )
+            _ <- pick(generateNodeOperationEvacuationConfig)
         } yield Model
             .State(
               multiNodeConfig = config,
@@ -523,17 +518,8 @@ case class Suite(
                       nodeConfig.headPeers.nHeadPeers: Int
                     )
                   )
-                  // No HMRM in stage1 — provide a stub actor that swallows any HandoffToRuleBased
-                  // signal. Stage 1 doesn't exercise fallback-to-rule-based (single-peer / happy
-                  // path only), so the ref is a required-but-inert construction parameter.
-                  mrmSelfStub <- system.actorOf(
-                    new Actor[IO, HeadMultisigRegimeManager.HandoffToRuleBased.type] {
-                        override def receive
-                            : Receive[IO, HeadMultisigRegimeManager.HandoffToRuleBased.type] =
-                            _ => IO.unit
-                    }
-                  )
-                  // Cardano liaison
+                  // Cardano liaison. Stage 1 doesn't exercise fallback-to-rule-based (single-peer /
+                  // happy path only), so observing the rule-based regime is an inert no-op here.
                   cardanoLiaison <- system.actorOf(
                     CardanoLiaison(
                       nodeConfig,
@@ -541,7 +527,7 @@ case class Suite(
                       CardanoLiaison.Connections(blockWeaver),
                       clTracer,
                       persistence,
-                      mrmSelf = mrmSelfStub,
+                      onRuleBasedRegimeObserved = _ => IO.unit,
                       // Stage1 runs no user-facing HTTP server, so the readiness status has
                       // no reader.
                       advanceNodeStatus = _ => IO.unit,

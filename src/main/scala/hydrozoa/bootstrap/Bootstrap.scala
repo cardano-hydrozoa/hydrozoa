@@ -573,10 +573,10 @@ end Bootstrap
   *     coil peers that name them as hubs.
   *   - `--template private-template.json --out private.json` writes the peer's private node config:
   *     the template with `ownPeerPrivate` replaced by the generated wallet (as `ownHeadWallet` /
-  *     `ownCoilWallet` per `--role`) and a second fresh key pair spliced in as the evacuation
-  *     `ruleBasedWallet`. The splice works on the JSON tree because the stock config encoders
-  *     deliberately withhold signing keys ([[PeerWallet.dummyPeerWalletEncoder]]). Head peer 0's L1
-  *     address must be funded before [[BuildHeadConfig]] — print it with [[PrintHeadZeroAddress]].
+  *     `ownCoilWallet` per `--role`). The splice works on the JSON tree because the stock config
+  *     encoders deliberately withhold signing keys ([[PeerWallet.dummyPeerWalletEncoder]]). Head
+  *     peer 0's L1 address must be funded before [[BuildHeadConfig]] — print it with
+  *     [[PrintHeadZeroAddress]].
   *
   * Usage:
   * {{{
@@ -788,7 +788,12 @@ object GenerateKeyPair:
     } yield Json.fromJsonObject(withPeer)
 
     /** Fill the private-config template: set `ownPeerPrivate` to the generated wallet under the
-      * role's field name, and replace the evacuation `ruleBasedWallet` with a fresh key pair.
+      * role's field name.
+      *
+      * The rule-based regime (dispute + evacuation) signs and funds every tx with this one
+      * `ownWallet` — the peer's consensus key — because the dispute ballot boxes are locked to it
+      * by the fallback tx (see `docs/spec/evacuate-command.md`). There is no separate evacuation
+      * wallet.
       */
     private def writePrivateConfig(
         templatePath: Path,
@@ -799,17 +804,10 @@ object GenerateKeyPair:
     ): IO[Unit] = for {
         templateStr <- IO.blocking(Files.readString(templatePath))
         template <- IO.fromEither(parser.parse(templateStr))
-        ruleBasedKeyPair <- Bootstrap.generateKeyPair()
-        (rbVKey, rbSKey) = ruleBasedKeyPair
         filled <- IO.fromEither(
-          fillPrivateConfig(
-            template,
-            role,
-            vKeyHex,
-            sKeyHex,
-            mkHex(rbVKey.bytes.toArray),
-            mkHex(rbSKey.bytes.toArray)
-          ).left.map(new IllegalArgumentException(_))
+          fillPrivateConfig(template, role, vKeyHex, sKeyHex).left.map(
+            new IllegalArgumentException(_)
+          )
         )
         _ <- IO.blocking {
             Option(outPath.getParent).foreach(Files.createDirectories(_))
@@ -822,9 +820,7 @@ object GenerateKeyPair:
         template: Json,
         role: Role,
         vKeyHex: String,
-        sKeyHex: String,
-        ruleBasedVKeyHex: String,
-        ruleBasedSKeyHex: String
+        sKeyHex: String
     ): Either[String, Json] = {
         def mkWallet(v: String, s: String): Json = Json.obj(
           "verificationKey" -> Json.fromString(v),
@@ -836,18 +832,9 @@ object GenerateKeyPair:
         }
         for {
             obj <- template.asObject.toRight("template is not a JSON object")
-            evac <- obj("nodeOperationEvacuationConfig")
-                .flatMap(_.asObject)
-                .toRight("template missing nodeOperationEvacuationConfig object")
         } yield Json.fromJsonObject(
           obj
               .add("ownPeerPrivate", Json.obj(walletField -> mkWallet(vKeyHex, sKeyHex)))
-              .add(
-                "nodeOperationEvacuationConfig",
-                Json.fromJsonObject(
-                  evac.add("ruleBasedWallet", mkWallet(ruleBasedVKeyHex, ruleBasedSKeyHex))
-                )
-              )
         )
     }
 

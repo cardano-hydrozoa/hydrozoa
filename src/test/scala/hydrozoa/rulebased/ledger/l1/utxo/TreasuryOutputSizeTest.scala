@@ -55,12 +55,16 @@ class TreasuryOutputSizeTest extends AnyFunSuite:
             (name, sized.size, minAda)
         }
 
-        // The slim datum makes the treasury output small and constant-size; assert a generous
-        // upper bound well under FallbackContingency's 6960-byte assumption.
+        // The slim datum makes the treasury output small and constant-size. Assert it stays within
+        // FallbackContingency's sizing assumption — undersizing that constant would make
+        // minAdaForTreasury too small for a real treasury utxo.
+        val assumedMax: Int =
+            hydrozoa.config.head.multisig.fallback.FallbackContingency.Assumptions.maxNoLiabilitiesTreasuryUtxoBytes
         rows.foreach { (name, size, minAda) =>
             val _ = assert(
-              size <= 400,
-              s"$name treasury output measured $size CBOR bytes; expected <= 400"
+              size <= assumedMax,
+              s"$name treasury output measured $size CBOR bytes; exceeds " +
+                  s"maxNoLiabilitiesTreasuryUtxoBytes ($assumedMax) — raise that assumption"
             )
             assert(minAda.value > 0, s"$name minAda must be positive (was ${minAda.value})")
         }

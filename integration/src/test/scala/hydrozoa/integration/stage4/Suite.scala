@@ -376,10 +376,10 @@ case class Stage4Suite(
       *   2. `Cf.Treasury` holds its single snapshot blob (always exactly 1 — overwritten per
       *      close).
       *   3. `Cf.EvacuationMap` holds one entry per committed block (major / SEC minor) of every
-      *      Regular stack the peer hard-confirmed — the only maps that back an on-chain commitment,
-      *      counted from each stack's partitions (mirroring `StackComposer.committedBlockNums`).
-      *      `Initial` (stack 0) contributes nothing since `bootstrapInitialStack` doesn't go
-      *      through the close paths.
+      *      Regular stack the peer hard-confirmed — the maps that back an on-chain commitment,
+      *      counted from each stack's partitions (mirroring `StackComposer.committedBlockNums`) —
+      *      plus one for `Initial` (stack 0), whose block-0 map `persistInitialStackClose` writes
+      *      so the slow side can recover stack 0.
       *   4. The fast side wrote: `Cf.BlockResult` / `Cf.SoftConfirmation` non-empty and
       *      `Cf.DepositMap` a singleton — a peer that hard-confirmed necessarily produced and
       *      soft-confirmed blocks first (sanity lower bounds, not exact counts).
@@ -408,11 +408,12 @@ case class Stage4Suite(
                 // `StackEffectsBuilder.mkEffectsRegular`. So per Regular stack the count is, over
                 // its partitions: Major → 1 (the major) + 1 iff it carries a trailing-minor SEC;
                 // Minor → 1 (its mandatory SEC minor); Final → 0 (drains the map, commits nothing).
-                // `Initial` (stack 0) goes through `bootstrapInitialStack`, never the close paths,
-                // so it contributes nothing.
+                // `Initial` (stack 0) persists exactly one `EvacuationMap` (at block 0) via
+                // `bootstrapInitialStack` → `persistInitialStackClose`, so the slow side can recover
+                // stack 0 (`State.recover` reads `EvacuationMap(lastBlockNum=0)`).
                 val expectedEvac = captured.map { s =>
                     s.effects match {
-                        case _: StackEffects.HardConfirmed.Initial => 0
+                        case _: StackEffects.HardConfirmed.Initial => 1
                         case r: StackEffects.HardConfirmed.Regular =>
                             r.partitions.toList.map {
                                 case m: PartitionEffects.Major[?] =>

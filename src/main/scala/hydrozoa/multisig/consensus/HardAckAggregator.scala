@@ -90,15 +90,18 @@ final class HardAckAggregator() {
                 }
         }
 
-    /** Per-partition SEC header signatures across the `signers`, in their given order, aligned to
-      * the effects' partition list. A partition with no SEC contributes an empty list; a present
-      * SEC has one header sig per signer (verification already enforced presence + count). Empty
-      * list overall for an Initial stack (no partitions).
+    /** Per-partition SEC header signatures aligned to `signers` **position for position** — one
+      * `Option` slot per peer in `signers` order, `Some(sig)` where that peer signed the
+      * partition's SEC and `None` otherwise. Callers pass the full ordered peer set (all head peers
+      * ++ all coil peers, sorted) so the resulting slots line up with the dispute-resolution
+      * script's `regimeDatum.headPeers`/`coilPeers`; a coil signature must sit at its own coil's
+      * index, never densely packed. A partition with no SEC contributes an empty list; empty
+      * overall for an Initial stack (no partitions).
       */
     def collectSecSignatures(
         cell: Cell.WaitingRound2 | Cell.WaitingSole,
         signers: List[PeerId]
-    ): List[List[BlockHeader.HeaderSignature]] =
+    ): List[List[Option[BlockHeader.HeaderSignature]]] =
         regularPartitions(cell.unsigned) match {
             case None => Nil
             case Some(parts) =>
@@ -122,7 +125,7 @@ final class HardAckAggregator() {
                         }
                     }
                 parts.toList.indices.toList.map { i =>
-                    peerSigParts.flatMap {
+                    peerSigParts.map {
                         case Some(sps) =>
                             sps.toList.lift(i).flatMap {
                                 case HardAck.Round1Payload.PartitionSigs.MajorComplete(
@@ -156,7 +159,7 @@ final class HardAckAggregator() {
     def attachWitnesses(
         unsigned: Stack.Unsigned,
         wmap: WitnessMap,
-        evac: List[List[BlockHeader.HeaderSignature]]
+        evac: List[List[Option[BlockHeader.HeaderSignature]]]
     ): IO[StackEffects.HardConfirmed] = unsigned.effects match {
         case r: StackEffects.Unsigned.Regular =>
             r.partitions.toList

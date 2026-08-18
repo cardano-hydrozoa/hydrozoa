@@ -52,18 +52,21 @@ final case class StandaloneEvacuationCommitment(
 
 object StandaloneEvacuationCommitment {
 
-    /** The hard-confirmed form: the dormant record plus every head peer's signature over the
-      * committed minor block's header (the consensus artifact that makes the commitment usable —
-      * presented in the rule-based regime's vote tx after a fallback). Mirrors
-      * [[hydrozoa.multisig.ledger.block.BlockEffects.HardConfirmed.Minor]] `headerMultiSigned`.
+    /** The hard-confirmed form: the dormant record plus the peers' signatures over the committed
+      * minor block's header (the consensus artifact that makes the commitment usable — presented in
+      * the rule-based regime's vote tx after a fallback).
       *
       * @param headerMultiSigned
-      *   one header signature per head peer (deterministic peer order), over `blockNum`'s header —
-      *   the same bytes every peer hard-acked.
+      *   an ordered, peer-position-aligned list over `allHeadPeers.sorted ++ allCoilPeers.sorted`:
+      *   `Some(sig)` where that peer signed `blockNum`'s header, `None` otherwise. Head peers
+      *   always sign (AllOf), so only coil slots ever carry `None`. The alignment is load-bearing:
+      *   the dispute-resolution script verifies `coilMultisig[i]` against
+      *   `regimeDatum.coilPeers[i]`, so a coil signature MUST sit at its own coil peer's index, not
+      *   densely packed.
       */
     final case class MultiSigned(
         commitment: StandaloneEvacuationCommitment,
-        headerMultiSigned: List[BlockHeader.Minor.HeaderSignature]
+        headerMultiSigned: List[Option[BlockHeader.Minor.HeaderSignature]]
     )
 
     /** The PlutusData shape the rule-based dispute-resolution script consumes as the vote

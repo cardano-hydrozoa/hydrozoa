@@ -76,6 +76,15 @@ final case class SlowConsensusActor(
     private lazy val allHeadPeers: Set[PeerId] =
         config.headPeerNums.toList.map(n => PeerId.Head(n)).toSet
 
+    /** The full ordered peer set the SEC header-signature slots align to: every head peer, then
+      * every coil peer, each sorted — matching the dispute-resolution script's
+      * `regimeDatum.headPeers` / `coilPeers` positions, so a coil signature sits at its own coil's
+      * index (see [[HardAckAggregator.collectSecSignatures]]).
+      */
+    private lazy val allSecPeers: List[PeerId] =
+        allHeadPeers.toList.sorted ++
+            config.coilPeers.coilPeerNumbers.map(n => PeerId.Coil(n): PeerId).sorted
+
     private def coilQuorum: Int = config.coilQuorum
 
     private def coilPeerCount(peers: Set[PeerId]): Int =
@@ -357,12 +366,16 @@ final case class SlowConsensusActor(
         // carry exactly that round's quorum (head peers + `coilQuorum` coil peers) — the round-1
         // and round-2 coil subsets need not coincide.
         selection = selectSigners(cell)
-        (restricted, txSigners, secSigners) = selection
+        (restricted, txSigners, _) = selection
         vkeys <- txSigners
             .traverse(p => ackVerifier.resolvePeerVKey(p).map(p -> _))
             .map(_.toMap)
         wmap = ackAggregator.aggregateTxSignatures(restricted, vkeys)
-        evac = ackAggregator.collectSecSignatures(restricted, secSigners)
+        // Align SEC sig slots to ALL peers (heads ++ all coils, sorted), not the selected quorum:
+        // the `restricted` cell yields a sig only for a selected signer, so non-selected coils fall
+        // through to `None` at their own index — which is what the dispute script's positional
+        // coil-signature check requires.
+        evac = ackAggregator.collectSecSignatures(restricted, allSecPeers)
         signed <- ackAggregator.attachWitnesses(restricted.unsigned, wmap, evac)
         hardConfirmed = Stack.HardConfirmed(restricted.unsigned.brief, signed)
         _ <- persistHardConfirmation(stackNum, restricted.unsigned.brief, signed)

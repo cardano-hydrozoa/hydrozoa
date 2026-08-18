@@ -522,18 +522,16 @@ object MultiPeerHeadHarness:
                             generateBlockCreationEndTime = generateHeadStartTime(takeoffTime),
                           ),
                     ),
-                    generateNodeOperationEvacuationConfig = w =>
-                        Gen.const(
-                          NodeOperationEvacuationConfig(
-                            // Mock (no real script refs) polls fast; a real Blockfrost-backed
-                            // backend polls at `liveBackendPollingPeriod` so per-tick probes don't
-                            // overwhelm the store (yaci) / API (public testnet).
-                            evacuationBotPollingPeriod =
-                                if scriptReferenceUtxos.isDefined then liveBackendPollingPeriod
-                                else 100.millis,
-                            ruleBasedWallet = w,
-                          )
-                        ),
+                    generateNodeOperationEvacuationConfig = Gen.const(
+                      NodeOperationEvacuationConfig(
+                        // Mock (no real script refs) polls fast; a real Blockfrost-backed
+                        // backend polls at `liveBackendPollingPeriod` so per-tick probes don't
+                        // overwhelm the store (yaci) / API (public testnet).
+                        evacuationBotPollingPeriod =
+                            if scriptReferenceUtxos.isDefined then liveBackendPollingPeriod
+                            else 100.millis
+                      )
+                    ),
                     generateNodeOperationMultisigConfig = hc =>
                         val nomc = generateNodeOperationMultisigConfig(
                           maxPollingPeriod =

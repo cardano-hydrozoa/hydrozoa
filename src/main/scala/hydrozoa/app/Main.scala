@@ -11,6 +11,7 @@ import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles,
   * command. Each subcommand is defined next to its logic and surfaced here as a `Command` value:
   *
   *   - `serve` — run a head node ([[Serve]])
+  *   - `evacuate` — run the rule-based regime standalone from a left-over database ([[Evacuate]])
   *   - `keygen-fleet` / `keygen` / `init-bootstrap-files` / `head-zero-address` /
   *     `deploy-scripts-and-g2-setup` / `build-head-config` — the bootstrap ladder ([[KeygenFleet]],
   *     [[GenerateKeyPair]], [[InitBootstrapFiles]], [[PrintHeadZeroAddress]],
@@ -43,6 +44,7 @@ object Main
     override def main: Opts[IO[ExitCode]] =
         Opts.subcommands(
           Serve.command,
+          Evacuate.command,
           KeygenFleet.command,
           GenerateKeyPair.command,
           InitBootstrapFiles.command,
