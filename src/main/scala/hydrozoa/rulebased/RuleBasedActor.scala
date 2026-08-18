@@ -68,6 +68,10 @@ final case class RuleBasedActor(
 )(using config: Config)
     extends Actor[IO, RuleBasedActor.Requests.Request] {
 
+    // Handle to the self-tick fiber ([[startTickTimer]]); cancelled in [[postStop]] so it doesn't
+    // outlive the actor.
+    private val tickFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
+
     /** Rule-based backend queries used by this actor. Each helper bakes in tracing of its specific
       * backend-error event and lifts recoverable errors into `Error.RecoverableErrors`.
       */
@@ -1116,7 +1120,23 @@ final case class RuleBasedActor(
         context.self ! Requests.PreStart
 
     private def preStartLocal: IO[Unit] =
-        context.setReceiveTimeout(config.evacuationBotPollingPeriod, Tick)
+        startTickTimer
+
+    // Drive the poll loop from a side fiber rather than `context.setReceiveTimeout`: the latter is
+    // implemented by cats-actors with a hardcoded ~1s internal ping keyed off
+    // `System.currentTimeMillis`, and under CPU starvation the `Tick` can silently stop firing — the
+    // evacuation regime then spawns but never polls, so funds never come back (custody-critical). A
+    // fixed-cadence self-tick fires every `evacuationBotPollingPeriod` regardless of mailbox
+    // activity, which is correct here because `handleTick` is a poll-then-retry safe to re-run.
+    private def startTickTimer: IO[Unit] =
+        (IO.sleep(config.evacuationBotPollingPeriod) >> (context.self ! Tick)).foreverM.start
+            .flatMap(fib => tickFiber.set(Some(fib)))
+
+    /** Cancel the self-tick fiber so it stops pinging `self` once the actor has stopped, instead of
+      * leaking a fiber that keeps delivering `Tick` to a dead actor (dead letters).
+      */
+    override def postStop: IO[Unit] =
+        tickFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 
     override def receive: Receive[IO, Requests.Request] = {
         case _: Requests.PreStart.type => preStartLocal

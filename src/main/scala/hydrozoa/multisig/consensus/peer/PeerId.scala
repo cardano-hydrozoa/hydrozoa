@@ -43,4 +43,15 @@ object PeerId {
             case Head(n) => (n.convert << 1) | 1
             case Coil(n) => n.convert << 1
         }
+
+        /** Whether this peer is a coil peer. Coil peers never lead and follow the head peers'
+          * soft-confirmed view of L1 rather than their own fresh polls.
+          */
+        def isCoil: Boolean = self match {
+            case _: Coil => true
+            case _: Head => false
+        }
+
+        /** Whether this peer is a head peer. */
+        def isHead: Boolean = !self.isCoil
 }
