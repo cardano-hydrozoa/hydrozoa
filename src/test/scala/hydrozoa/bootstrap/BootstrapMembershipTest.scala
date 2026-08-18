@@ -86,7 +86,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
 
     test("defaults.json round-trips each supported chain/endpoint combination") {
         // The chain and the endpoint serving it are independent fields; every combination below is
-        // a supported deployment (see DEPLOYMENT.md). A chain that is not one of the three standard
+        // a supported deployment (see docs/user-guide/DEPLOYMENT.md). A chain that is not one of the three standard
         // ones carries its own complete CardanoInfo, so nothing has to be resolved at read time.
         val privateUrl = "https://bf.internal/api/v1"
         val devnet = CardanoNetwork.Custom(CardanoInfo.preview, protocolMagic = 42L)

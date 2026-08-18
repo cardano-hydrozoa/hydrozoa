@@ -6,16 +6,22 @@
 #
 # Run `scripts/yaci-devnet.sh` with no arguments for the commands, or reach them as
 # `just yaci-devnet <command>`. Intended as the one implementation of the devnet path — for a human
-# following DEPLOYMENT.md and for the Docker smoke-test alike, so the suite ends up exercising the
-# documented path instead of a lookalike.
+# following docs/user-guide/DEPLOYMENT.md and for the Docker smoke-test alike, so the suite ends up
+# exercising the documented path instead of a lookalike.
 #
-# The devnet is added to the shipped `docker-compose.yml` by the `docker-compose.yaci.yml` overlay,
-# never in place of it. Set COMPOSE_PROJECT_NAME to run more than one project side by side.
+# The devnet is added to the head directory's scaffolded `docker-compose.yml` by the
+# `docker-compose.yaci.yml` overlay, never in place of it. Set COMPOSE_PROJECT_NAME to run more than
+# one project side by side.
 #
-# See DEPLOYMENT.md.
+# See docs/user-guide/DEPLOYMENT.md.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+# The head directory the deployment file was scaffolded into — the same $HYDROZOA_HOME the `just`
+# recipes and `hydrozoa.sh` set, defaulting to the guide's head/demo.
+head_dir=${HYDROZOA_HOME:-$repo_root/head/demo}
+head_compose="$head_dir/docker-compose.yml"
 
 # The devnet's host-mapped ports (docker-compose.yaci.yml). The peers reach the same devnet in-mesh
 # at http://yaci:8080/api/v1 instead — see the overlay's port-split note.
@@ -170,11 +176,15 @@ address_funded() {
 
 # ---- plumbing ----------------------------------------------------------------------------------
 
-# The shipped deployment file plus the devnet overlay, in that order — the same pair DEPLOYMENT.md
-# gives an operator. `-p` keeps a local devnet from colliding with a run against a public testnet.
+# The head directory's scaffolded deployment file plus the devnet overlay, in that order — the same
+# pair docs/user-guide/DEPLOYMENT.md gives an operator. The first -f also fixes the project
+# directory, so the deployment file's `./head-config` and `./private` mounts resolve under the head
+# directory. `-p` keeps a local devnet from colliding with a run against a public testnet.
 compose() {
+    [[ -f $head_compose ]] ||
+        die "no $head_compose — scaffold the head directory first ('hydrozoa scaffold $head_dir')"
     docker compose -p "${COMPOSE_PROJECT_NAME:-hydrozoa-local}" \
-        -f "$repo_root/docker-compose.yml" \
+        -f "$head_compose" \
         -f "$repo_root/docker-compose.yaci.yml" \
         "$@"
 }

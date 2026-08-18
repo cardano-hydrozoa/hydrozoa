@@ -1,17 +1,19 @@
 # Overlay that adds a local Yaci DevKit devnet as the head's L1, for local development and the
-# Docker smoke-test. Compose it *on top of* the real docker-compose.yml — never instead of it, so
-# what runs locally is the same deployment the shipped file describes:
+# Docker smoke-test. Compose it *on top of* the docker-compose.yml scaffolded into the head
+# directory — never instead of it, so what runs locally is the same deployment the shipped file
+# describes. From the head directory, with this repo checked out at $HYDROZOA_REPO:
 #
-#   docker compose -p hydrozoa-local -f docker-compose.yml -f docker-compose.yaci.yml up -d
+#   docker compose -p hydrozoa-local -f docker-compose.yml \
+#       -f "$HYDROZOA_REPO/docker-compose.yaci.yml" up -d
 #
 # The `-p` project name keeps a local devnet run from colliding with a `docker compose up` against
-# a public testnet. Nothing in docker-compose.yml mentions Yaci; drop this file and the same peers
-# run against Blockfrost.
+# a public testnet. Nothing in the scaffolded docker-compose.yml mentions Yaci; drop this file and
+# the same peers run against Blockfrost.
 #
 # Bring-up is *not* a plain `up`: the peers need an L1 that already exists, and the devnet's slot
 # config is only known once it is running. So this service is started on its own first, the devnet
 # is created inside it, and only then — once its resolved network is in the bootstrap config — are
-# the peers started. See DEPLOYMENT.md.
+# the peers started. See docs/user-guide/DEPLOYMENT.md.
 #
 # Port split — the containers and the host reach the same devnet at different addresses:
 #   in-mesh (peers)              http://yaci:8080/api/v1

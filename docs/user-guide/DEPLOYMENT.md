@@ -271,17 +271,20 @@ script — so these commands stay exercised rather than drifting from what the s
 Unlike the rest of this guide, the devnet path **needs this repo checked out** (the script and the
 compose overlay live here, not in the published image) and a staged launcher for the `network`
 command — so run `just stage` first (§3). The generation steps themselves still work either way.
+The head directory must already be scaffolded (`just scaffold`, §3): the devnet joins the same
+`mesh` the deployment file declares, so the script composes that file plus the overlay.
 
 ```bash
 export COMPOSE_PROJECT_NAME=hydrozoa-local   # keeps a devnet run apart from a public-testnet one
+export HYDROZOA_REPO=$PWD                    # this checkout — §5 composes the overlay from it
 
 just yaci-devnet up                          # create a devnet, wait until both its APIs answer
 just yaci-devnet network head/network.json   # write its chain description
 ```
 
-The devnet is added to the shipped `docker-compose.yml` by the `docker-compose.yaci.yml` overlay —
-composed *on top of* it, never instead of it, so what you run locally is the deployment the shipped
-file describes. Drop the overlay and the same peers run against Blockfrost.
+The devnet is added to the head directory's `docker-compose.yml` by the `docker-compose.yaci.yml`
+overlay — composed *on top of* it, never instead of it, so what you run locally is the deployment
+the shipped file describes. Drop the overlay and the same peers run against Blockfrost.
 
 **URL split — the containers and the host reach the same devnet at different addresses:**
 
@@ -344,10 +347,8 @@ the table above describes.
 >
 > ```bash
 > hydrozoa keygen-fleet 2 4 2 --cardano-network-file head/network.json          # Docker
-> just keygen-fleet 2 4 2 head/demo --cardano-network-file head/network.json    # local
+> just keygen-fleet 2 4 2 --cardano-network-file head/network.json              # local
 > ```
->
-> (`HOME` is positional in the `just` recipe, so name it when passing extra flags.)
 
 Output layout:
 
@@ -430,8 +431,10 @@ just deploy-scripts-and-g2-setup        # local
 >
 > ```bash
 > hydrozoa deploy-scripts-and-g2-setup --blockfrost-url "$YACI_HOST_URL"           # Docker
-> just deploy-scripts-and-g2-setup head/demo "" --blockfrost-url "$YACI_HOST_URL"  # local
+> just deploy-scripts-and-g2-setup "" --blockfrost-url "$YACI_HOST_URL"            # local
 > ```
+>
+> (`LADDER_REFS` comes first in the `just` recipe, hence the empty argument.)
 
 The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators — and
 the G2 setup ladder — as **reference UTxOs** at startup. This target deploys the currently
@@ -463,7 +466,7 @@ network does not match the bootstrap config's `cardanoNetwork`.
 >
 > ```bash
 > hydrozoa build-head-config --blockfrost-url "$YACI_HOST_URL"           # Docker
-> just build-head-config head/demo --blockfrost-url "$YACI_HOST_URL"     # local
+> just build-head-config --blockfrost-url "$YACI_HOST_URL"               # local
 > ```
 
 At this point every node has its two files, and the composition (§5) mounts
@@ -507,11 +510,13 @@ Default — pull the published image and run the scaffolded head:
 just head-up          # pulls ghcr.io/cardano-hydrozoa/hydrozoa:latest on first run
 ```
 
-**On a devnet** — compose the overlay alongside the shipped file, which starts the peers next to the
-devnet already running from the prologue (`COMPOSE_PROJECT_NAME` keeps the pair together):
+**On a devnet** — compose the overlay alongside the scaffolded file, which starts the peers next to
+the devnet already running from the prologue (`COMPOSE_PROJECT_NAME` keeps the pair together). The
+overlay lives in the repo, the deployment file in the head directory, so run this from the latter:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.yaci.yml up -d
+cd "$HYDROZOA_HOME"
+docker compose -f docker-compose.yml -f "$HYDROZOA_REPO/docker-compose.yaci.yml" up -d
 ```
 
 Tear the whole thing down with the same file pair plus `down -v`. To replace just the chain and keep

@@ -36,15 +36,16 @@ import scalus.uplc.builtin.ByteString
   *
   * Subclass it with a [[DockerTopology]] — that is the only thing that varies. See
   * [[DockerSmokeTest]] for the deployment we ship, and the E2E section of
-  * `docs/integration-stages.md` for where this level sits among the others.
+  * `docs/spec/integration-stages.md` for where this level sits among the others.
   *
   * '''Only head peers are observable.''' `runCoilNode` starts no `HydrozoaServer`, so the HTTP
   * assertions cover head peers alone. Coil peers are still load-bearing: the head cannot initialize
   * without `coilQuorum` of them signing, so a broken coil surfaces as a `/ready` timeout rather
   * than passing unnoticed.
   *
-  * '''Devnet bring-up goes through `scripts/yaci-devnet.sh`''' — the same script DEPLOYMENT.md
-  * hands an operator, rather than a Scala reimplementation that could drift from it. That script
+  * '''Devnet bring-up goes through `scripts/yaci-devnet.sh`''' — the same script
+  * docs/user-guide/DEPLOYMENT.md hands an operator, rather than a Scala reimplementation that could
+  * drift from it. That script
   * owns every devnet-specific step: creating the devnet, describing its chain, and funding head-0
   * (a devnet has no faucet).
   *
@@ -52,7 +53,8 @@ import scalus.uplc.builtin.ByteString
   * and **hard-excluded from CI** by FQN via `Tests.Exclude` in `build.sbt`, like
   * `Stage1PropertiesYaci` — so a new subclass must be added there too, or CI will start running it.
   *
-  * The flow mirrors DEPLOYMENT.md against a devnet:
+  * The flow mirrors docs/user-guide/DEPLOYMENT.md against a devnet:
+  *   0. `scaffold` — the head workspace, `docker-compose.yml` included;
   *   1. `yaci-devnet.sh up` — the devnet container, and a node inside it;
   *   2. `yaci-devnet.sh network` — the chain description, since a devnet has no baked-in one;
   *   3. `keygen-fleet <heads> <coils> <quorum> --cardano-network-file` — keys, roster,
@@ -77,7 +79,7 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
     private val CoilQuorum = topology.coilQuorum
     private val ComposeProject = topology.project
     private val Tag = topology.tag
-    private val composeFiles = topology.composeFiles
+    private val composeOverlays = topology.composeOverlays
 
     /** Head peers publish the user HTTP API; coil peers dial out only (`runCoilNode` starts no
       * `HydrozoaServer`), so only these are observable over HTTP.
@@ -120,8 +122,13 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
 
     private def runScenario(home: Path, client: Client[IO]): IO[Unit] =
         for {
-            _ <- log(s"home=$home image=$image compose=${composeFiles.mkString(" + ")}")
+            _ <- log(s"home=$home image=$image compose=${composeFiles(home).mkString(" + ")}")
             _ <- writePrivateTemplate(home)
+
+            // The workspace is scaffolded exactly as an operator's is, so the compose file the
+            // rest of the run drives is the shipped one, materialized the documented way.
+            _ <- log("scaffolding the head workspace…")
+            _ <- cli("scaffold", home.toString)
 
             // Steps 1-2 both come from the script, so this drives the documented commands rather
             // than a copy of them.
@@ -289,7 +296,7 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
 
     // ---- process orchestration ---------------------------------------------------------------
 
-    /** Run `scripts/yaci-devnet.sh`, the same entry point DEPLOYMENT.md documents.
+    /** Run `scripts/yaci-devnet.sh`, the same entry point the deployment guide documents.
       *
       * `COMPOSE_PROJECT_NAME` points it at this run's project, so the devnet it creates is the one
       * the peers join, and `HYDROZOA_BIN` at the staged launcher the recipe just built.
@@ -309,21 +316,26 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
         (List("yaci") ++ peerServices).traverse_ { svc =>
             log(s"──────── docker logs: $svc ────────") *>
                 runProcessLenient(
-                  composeCmd("logs", "--no-color", "--tail", "200", svc),
+                  composeCmd(home, "logs", "--no-color", "--tail", "200", svc),
                   composeEnv(home)
                 )
         }
 
     private def compose(home: Path, args: String*): IO[Unit] =
-        runProcess(composeCmd(args*), cwd = None, extraEnv = composeEnv(home))
+        runProcess(composeCmd(home, args*), cwd = None, extraEnv = composeEnv(home))
 
-    /** The shipped `docker-compose.yml` plus the Yaci overlay — the same pair, in the same order,
-      * that DEPLOYMENT.md tells an operator to run, so this suite exercises the real deployment
-      * rather than a test-only copy of it. `-p` isolates the run from an operator's own project.
+    /** The head directory's scaffolded `docker-compose.yml` plus the Yaci overlay — the same pair,
+      * in the same order, that the deployment guide tells an operator to run, so this
+      * suite exercises the real deployment rather than a test-only copy of it. The first `-f` also
+      * fixes the project directory, so the file's `./head-config` and `./private` mounts resolve
+      * under the workspace. `-p` isolates the run from an operator's own project.
       */
-    private def composeCmd(args: String*): Seq[String] =
+    private def composeFiles(home: Path): List[Path] =
+        home.resolve("docker-compose.yml") :: composeOverlays
+
+    private def composeCmd(home: Path, args: String*): Seq[String] =
         Seq("docker", "compose", "-p", ComposeProject) ++
-            composeFiles.flatMap(f => Seq("-f", f.toString)) ++ args
+            composeFiles(home).flatMap(f => Seq("-f", f.toString)) ++ args
 
     private def composeEnv(home: Path): Seq[(String, String)] =
         Seq("HYDROZOA_HOME" -> home.toString, "HYDROZOA_IMAGE" -> image)
@@ -473,8 +485,8 @@ object DockerHeadSuite:
             .resolve("bin")
             .resolve("hydrozoa")
 
-    /** The devnet harness DEPLOYMENT.md documents; the suite drives it rather than reimplementing
-      * its steps.
+    /** The devnet harness docs/user-guide/DEPLOYMENT.md documents; the suite drives it rather than
+      * reimplementing its steps.
       */
     private lazy val devnetScript: Path = {
         val path = repoRoot.resolve("scripts").resolve("yaci-devnet.sh")
