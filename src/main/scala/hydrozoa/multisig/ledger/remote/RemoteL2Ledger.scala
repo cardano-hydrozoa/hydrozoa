@@ -8,7 +8,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, RegisterDepositResponse, RestoreError}
-import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request}
+import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.parser.*
 import io.circe.syntax.*
@@ -124,14 +124,52 @@ class RemoteL2Ledger private (
           RemoteL2LedgerError(s"remote L2 ledger answered $response for a $command command")
         )
 
-    /** A no-op: the remote black box owns its own recovery, so there is nothing to co-anchor here.
-      * It must not fail — `JointLedger.State.recover` treats a `Left` as fatal, so returning an
-      * error would crash a remote-backed node at boot after its first block. A real desync between
-      * the restored JointLedger command number and the remote's own position surfaces on the next
-      * command as [[L2LedgerResponse.UnrecoverableError.OutOfOrder]], not here.
+    /** Co-anchor the remote with the restored JointLedger command number: send a
+      * [[Request.Restore]] so the remote rewinds its own command-number tip (and committed state)
+      * to `commandNumber`. Without this the remote keeps its durable position, so the JointLedger
+      * re-issues an already-applied command and the remote rejects it as
+      * [[L2LedgerResponse.UnrecoverableError.OutOfOrder]] — the crash loop on recovery.
+      *
+      * Success maps to `Right(())`. A restore failure asking for a command number past the remote's
+      * durable tip (`requested > tip`) maps to [[RestoreError.CommandNumberTooHigh]]; any other
+      * failure to [[RestoreError.OtherError]]. Both are typed `Left`s, never thrown —
+      * `JointLedger.State.recover` treats them as fatal. A broken *transport* or a protocol
+      * violation still fail-stops (a raise) like the other requests.
       */
     override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
-        EitherT.rightT(())
+        EitherT(sendRestoreRequest(Request.Restore(commandNumber)).map {
+            case _: RestoreResponse.Restored => Right(())
+            case RestoreResponse.RestoreFailed(requested, tip, reason) =>
+                if requested.value > tip.value then
+                    Left(RestoreError.CommandNumberTooHigh(requested, tip))
+                else Left(RestoreError.OtherError(reason))
+        })
+
+    /** Send a [[Request.Restore]] and return the remote's [[RestoreResponse]]. Like
+      * [[sendRequest]], transport failure is retried through by [[exchange]] and never seen here;
+      * the IO fails only on a broken *transport* — an undecodable frame, or a response whose echoed
+      * command number does not match the request. Those are protocol violations, not verdicts, so
+      * they fail-stop.
+      */
+    private def sendRestoreRequest(request: Request.Restore): IO[RestoreResponse] =
+        exchange(request).flatMap { text =>
+            decode[RestoreResponse](text) match {
+                case Left(err) =>
+                    IO.raiseError(
+                      RemoteL2LedgerError(
+                        s"remote L2 ledger sent an undecodable restore response: ${err.getMessage}"
+                      )
+                    )
+                case Right(response) if response.commandNumber != request.commandNumber =>
+                    IO.raiseError(
+                      RemoteL2LedgerError(
+                        s"remote L2 ledger answered restore command ${response.commandNumber} " +
+                            s"but we sent ${request.commandNumber}"
+                      )
+                    )
+                case Right(response) => IO.pure(response)
+            }
+        }
 
     /** Send a request and return the remote's total [[L2LedgerResponse]]. Transport failure is
       * retried through by [[exchange]] and never seen here, so a returned response is always a real
@@ -310,6 +348,37 @@ object RemoteL2Ledger {
             commandNumber: L2CommandNumber,
             command: L2LedgerCommand.ApplyTransaction
         ) extends Request
+
+        /** Instruct the remote to rewind its command-number tip (and committed state) to
+          * `commandNumber`. Carries no command payload — the number *is* the instruction. Sent by
+          * [[RemoteL2Ledger.restoreTo]] on crash-recovery boot to co-anchor the remote with the
+          * restored JointLedger command number.
+          */
+        final case class Restore(commandNumber: L2CommandNumber) extends Request
+    }
+
+    /** The remote's answer to a [[Request.Restore]]: it rewound to the requested command number
+      * ([[Restored]] carrying its resulting `tip`, which equals the request on success), or the
+      * rewind failed ([[RestoreFailed]] carrying the `requested` number, the remote's current
+      * durable `tip`, and a reason). Kept out of [[L2LedgerResponse]] — a restore is a boot-time
+      * reconstruction, not a numbered command verdict — but [[commandNumber]] still echoes the
+      * requested number so [[RemoteL2Ledger.sendRestoreRequest]] can correlate it with the request.
+      */
+    sealed trait RestoreResponse {
+        def commandNumber: L2CommandNumber
+    }
+
+    object RestoreResponse {
+        final case class Restored(tip: L2CommandNumber) extends RestoreResponse {
+            def commandNumber: L2CommandNumber = tip
+        }
+        final case class RestoreFailed(
+            requested: L2CommandNumber,
+            tip: L2CommandNumber,
+            reason: String
+        ) extends RestoreResponse {
+            def commandNumber: L2CommandNumber = requested
+        }
     }
 
     /** Create a RemoteL2Ledger as a [[Resource]] owning one shared WebSocket client for its whole
