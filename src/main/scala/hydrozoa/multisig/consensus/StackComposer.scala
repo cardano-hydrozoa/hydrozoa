@@ -191,9 +191,9 @@ final case class StackComposer(
 
     private def handleIncomingStackBrief(brief: StackBrief): IO[Unit] = for {
         _ <- state.update(_.withInboundLeaderBrief(brief))
-        // Stack briefs led by OTHER heads are relayed to CoilRelay by the hub's mesh liaisons, not
-        // here — so this actor relays only its OWN-led briefs (in tryCloseAsLeader). That keeps each
-        // brief relayed exactly once, in spine order.
+        // Relaying to CoilRelay happens when a stack actually closes (tryCloseAsLeader /
+        // tryCloseAsFollower), not on brief arrival — StackComposer is the single ordered feeder
+        // into the relay's stack lane. See tryCloseAsLeader.
         _ <- tryProgress
     } yield ()
 
@@ -256,9 +256,11 @@ final case class StackComposer(
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
                     // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
                     _ <- (conn.headPeerLiaisons ! brief).parallel
-                    // A hub relays its OWN-led stack brief to CoilRelay (§5.4) [doc-ref]; briefs led by other
-                    // heads are relayed by the hub's mesh liaisons, so each is relayed once, in spine
-                    // order. No-op off a hub.
+                    // Feed the hub's CoilRelay stack lane from StackComposer for every stack it
+                    // closes — own-led here, remote-led in tryCloseAsFollower. StackComposer closes
+                    // stacks serially in spine order (single-flight on previousStackHardConfirmed),
+                    // so it is the single ordered feeder into the relay's contiguous stack lane; a
+                    // hub relays each stack exactly once. No-op off a hub. (§5.4) [doc-ref]
                     _ <- conn.coilRelay.traverse_(_ ! brief)
                     // Hand the unsigned stack + own pre-signed hard-acks to SlowConsensusActor
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
@@ -458,6 +460,9 @@ final case class StackComposer(
                                   handoff.ownAcks,
                                   withdrawalTracking
                                 )
+                                // Relay this reproduced stack brief to the hub's coil peers — the
+                                // follower half of the single-feeder rule (see tryCloseAsLeader).
+                                _ <- conn.coilRelay.traverse_(_ ! brief)
                                 _ <- conn.slowConsensusActor ! handoff
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
