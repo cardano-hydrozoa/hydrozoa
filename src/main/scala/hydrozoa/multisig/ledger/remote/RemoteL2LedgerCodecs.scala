@@ -201,6 +201,51 @@ object RemoteL2LedgerCodecs {
                 }
         }
 
+    // Restore-response codec. The remote answers a Restore request with the command number it
+    // rewound to (`Restored`) or a failure carrying a reason (`RestoreFailed`) — single-key tagged
+    // objects, mirroring the request and verdict wire shapes. Kept separate from L2LedgerResponse: a
+    // restore is a boot-time reconstruction, not a numbered command verdict.
+    import RemoteL2Ledger.RestoreResponse
+    given restoreResponseCodec: Codec[RestoreResponse] = Codec.from(
+      decodeA = c =>
+          c.keys
+              .flatMap(_.headOption)
+              .toRight(
+                io.circe.DecodingFailure("RestoreResponse must have exactly one field", c.history)
+              )
+              .flatMap {
+                  case "Restored" =>
+                      c.downField("Restored")
+                          .downField("commandNumber")
+                          .as[L2CommandNumber]
+                          .map(RestoreResponse.Restored.apply)
+                  case "RestoreFailed" =>
+                      val body = c.downField("RestoreFailed")
+                      for {
+                          cn <- body.downField("commandNumber").as[L2CommandNumber]
+                          reason <- body.downField("reason").as[String]
+                      } yield RestoreResponse.RestoreFailed(cn, reason)
+                  case other =>
+                      Left(
+                        io.circe.DecodingFailure(
+                          s"Unknown RestoreResponse type: $other",
+                          c.history
+                        )
+                      )
+              },
+      encodeA = {
+          case RestoreResponse.Restored(cn) =>
+              io.circe.Json.obj("Restored" -> io.circe.Json.obj("commandNumber" -> cn.asJson))
+          case RestoreResponse.RestoreFailed(cn, reason) =>
+              io.circe.Json.obj(
+                "RestoreFailed" -> io.circe.Json.obj(
+                  "commandNumber" -> cn.asJson,
+                  "reason" -> reason.asJson
+                )
+              )
+      }
+    )
+
     // Request codecs. Each request is a single-key object tagging the command variant, whose value
     // carries the Hydrozoa-assigned `commandNumber` and the `command` payload.
     import RemoteL2Ledger.Request
@@ -225,6 +270,11 @@ object RemoteL2LedgerCodecs {
                   tagged("ApplyDepositDecisions", cn, command.asJson)
               case Request.ApplyTransaction(cn, command) =>
                   tagged("ApplyTransaction", cn, command.asJson)
+              // Restore carries no command payload — the command number is the whole instruction.
+              case Request.Restore(cn) =>
+                  io.circe.Json.obj(
+                    "Restore" -> io.circe.Json.obj("commandNumber" -> cn.asJson)
+                  )
           },
           decodeA = c =>
               c.keys
@@ -252,6 +302,8 @@ object RemoteL2LedgerCodecs {
                                   n <- cn
                                   cmd <- command.as[L2LedgerCommand.ApplyTransaction]
                               } yield Request.ApplyTransaction(n, cmd)
+                          case "Restore" =>
+                              cn.map(Request.Restore.apply)
                           case other =>
                               Left(
                                 io.circe.DecodingFailure(s"Unknown request type: $other", c.history)
