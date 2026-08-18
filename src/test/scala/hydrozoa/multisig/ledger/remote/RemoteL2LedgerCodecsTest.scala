@@ -7,6 +7,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
 import hydrozoa.multisig.ledger.l2.L2LedgerResponse.UnrecoverableError
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerResponse}
+import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, RestoreResponse}
 import io.circe.syntax.*
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
@@ -89,5 +90,37 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
     test("UnrecoverableError.OtherError (string reason) round-trips") {
         assert(
           roundTrips(UnrecoverableError.OtherError(L2CommandNumber(5L), "merge failed"))
+        )
+    }
+
+    // Golden wire-shape tests pinning the exact SugarRush #140 JSON for the three restoreTo frames —
+    // the cross-repo contract with the SugarRush ledger. Each asserts both the encoded string equals
+    // the canonical JSON and the JSON decodes back to the original value.
+
+    test("RestoreTo request encodes to the canonical SugarRush wire shape and round-trips") {
+        val request: Request = Request.Restore(L2CommandNumber(7L))
+        val json = request.asJson.noSpaces
+        assert(
+          json == """{"RestoreTo":{"commandNumber":7}}"""
+              && io.circe.parser.decode[Request](json) == Right(request)
+        )
+    }
+
+    test("Restored success encodes to the canonical SugarRush wire shape and round-trips") {
+        val response: RestoreResponse = RestoreResponse.Restored(L2CommandNumber(7L))
+        val json = response.asJson.noSpaces
+        assert(
+          json == """{"Restored":{"tip":7}}"""
+              && io.circe.parser.decode[RestoreResponse](json) == Right(response)
+        )
+    }
+
+    test("RestoreFailed failure encodes to the canonical SugarRush wire shape and round-trips") {
+        val response: RestoreResponse =
+            RestoreResponse.RestoreFailed(L2CommandNumber(9L), L2CommandNumber(4L), "tip too low")
+        val json = response.asJson.noSpaces
+        assert(
+          json == """{"RestoreFailed":{"requested":9,"tip":4,"reason":"tip too low"}}"""
+              && io.circe.parser.decode[RestoreResponse](json) == Right(response)
         )
     }
