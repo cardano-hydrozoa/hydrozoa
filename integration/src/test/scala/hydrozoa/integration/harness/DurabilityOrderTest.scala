@@ -51,9 +51,11 @@ class DurabilityOrderTest extends AnyFunSuite {
       3 -> 3,
     )
 
-    // Fiber turns handed out before each durable write; see SlowPersistence. Two settings, because
-    // the number of turns decides which interleavings are reachable: too few and the racing fiber
-    // never gets scheduled in the window, too many and it always completes before the window opens.
+    // Fiber turns handed out before each durable write; see SlowPersistence. Several settings,
+    // because the number of turns decides which interleavings are reachable: too few and the racing
+    // fiber never gets scheduled inside the window, too many and it always completes before the
+    // window opens. Zero is the control — it must pass whatever the write ordering is, since
+    // nothing is given a turn, and it did even against the pre-fix JointLedger.
     private val yieldSettings: List[Int] = List(0, 2, 8)
 
     for

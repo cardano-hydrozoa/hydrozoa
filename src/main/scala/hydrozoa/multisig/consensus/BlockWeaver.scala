@@ -22,6 +22,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.metrics.PeerMetrics
+import hydrozoa.multisig.persistence.{Markers, Persistence, StoreKey}
 import scala.collection.immutable.Queue
 
 final case class BlockWeaver(
@@ -30,8 +31,18 @@ final case class BlockWeaver(
         BlockWeaver.ConnectionsPartial,
     tracer: ContraTracer[IO, BlockWeaverEvent],
     metrics: PeerMetrics,
+    /** Read-only here: the weaver authors no journal. It still has base state to recover (§5.2) —
+      * which block to resume on, and whether the one before it was already confirmed — and, like
+      * every other actor with base state, it reads its own in [[receive]]'s `PreStart`.
+      */
+    persistence: Persistence[IO],
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
+
+    /** `config` is a `CardanoNetwork.Section`; expose it as a given so the `StoreKey` codec used
+      * when re-reading the last soft-confirmation resolves.
+      */
+    private given CardanoNetwork.Section = config
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
@@ -54,9 +65,20 @@ final case class BlockWeaver(
     override def receive: Receive[IO, BlockWeaver.Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
+                // Blocks on the start barrier. Everything below therefore runs BEFORE any replayed
+                // journal entry is processed, because `ReplayActor` fills the mailboxes while this
+                // is still suspended and the barrier opens only afterwards (§5.6, §8). That is the
+                // same base-state-then-tail ordering `JointLedger`, `StackComposer` and
+                // `CardanoLiaison` get, and it is why the base is read here rather than handed in.
                 connections <- initializeConnections
-                startingState <- State.start(config, connections, tracer)
-                _ <- become(startingState)
+                // The weaver and `JointLedger` step through the block spine in lockstep and recover
+                // from the same anchor, so this mirrors `JointLedger.preStartLocal`.
+                fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
+                recovered <- State.recover(config, connections, tracer, persistence, fastBlockMark)
+                // `None` means the store says this head already finalized, so the weaver retires
+                // instead of opening a block — the same outcome the live path reaches when a Final
+                // confirmation arrives.
+                _ <- recovered.fold(context.self.stop)(become)
             } yield ()
         case x =>
             IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
@@ -196,10 +218,80 @@ object BlockWeaver {
     }
 
     object State {
+
+        /** The weaver's base state (§5.2), rebuilt from the store — the counterpart of
+          * `JointLedger.State.recover`, which the weaver moves through the block spine in lockstep
+          * with.
+          *
+          * Two facts make it up. [[start]] applies the first: resume on `fastBlockMark + 1`, the
+          * block after the highest this peer durably applied. This applies the second: whether that
+          * block's predecessor was already confirmed.
+          *
+          * `softConfirmed == fastBlockMark` is precisely the statement that it was — this peer
+          * confirmed everything it applied, the ordinary clean-crash case. A leader opening on
+          * `fastBlockMark + 1` will not complete that block until its predecessor is confirmed, and
+          * the confirmation is on disk but below every replay floor (`ReplayCursors` starts the
+          * aggregator at `softConfirmed + 1`), so nothing re-derives it. Left unapplied the weaver
+          * waits forever: the peer comes up active, fills its mempool, and produces no blocks.
+          *
+          * The stored confirmation is fed through `react` rather than used to construct the
+          * successor state directly, because the transition does more than change state — it arms
+          * the deadman `Wakeup` fiber that forces a major block. Building `Leader.AwaitingRequest`
+          * by hand would skip that, and nothing would fail until a settlement silently never
+          * happened.
+          *
+          * `None` when the last confirmed block was `Final`: the transition retires the weaver, as
+          * it does on the live path. When `softConfirmed < fastBlockMark` the predecessor genuinely
+          * is not confirmed yet and the `FastConsensusActor` re-derives it as the replayed tail
+          * re-saturates its cells, so this is a no-op — as it is on a follower, which waits on
+          * briefs rather than confirmations, and on a cold store.
+          */
+        def recover(
+            config: Config,
+            connections: Connections,
+            tracer: ContraTracer[IO, BlockWeaverEvent],
+            persistence: Persistence[IO],
+            fastBlockMark: Option[BlockNumber]
+        ): IO[Option[Reactive]] =
+            given CardanoNetwork.Section = config
+            for {
+                softConfirmed <- Markers.recoverSoftConfirmed(persistence.backend)
+                opening <- start(config, connections, tracer, fastBlockMark)
+                resumed <- (fastBlockMark, softConfirmed) match {
+                    case (Some(applied), Some(confirmed)) if applied == confirmed =>
+                        persistence
+                            .getOrFail(StoreKey.SoftConfirmation(applied))
+                            .flatMap(stamped => opening.react(config)(stamped.payload))
+                    case _ => IO.pure(Some(opening))
+                }
+            } yield resumed
+
+        /** The weaver's opening state.
+          *
+          * `fastBlockMark` is the peer's fast anchor at boot — `max(BlockResult)`, the highest
+          * block it durably finalized — and the weaver resumes at the block after it. On a cold
+          * store it is `None` and the weaver opens on block 1 as before.
+          *
+          * This is the "base = state at `fastBlockMark`" half of the weaver's recovery
+          * (`docs/spec/persistence-and-crash-recovery.md` §6.2.1); the `ReplayActor` supplies the
+          * other half by re-feeding the briefs above that anchor. Only the tail was ever supplied,
+          * so a peer that had applied everything it received — the ordinary case — got nothing
+          * replayed and opened on block 1 while the head was at block n. It then armed as leader
+          * for block 2, and the first confirmation the `FastConsensusActor` re-derived (for a block
+          * at or above the anchor) hit the armed leader's "current or future block" guard and
+          * terminated the actor system. Recovery therefore worked only for a peer that crashed
+          * within its first block or two, which is why the crash-restart tests — which crash during
+          * bring-up — did not see it.
+          *
+          * Whether the block before `fastBlockMark + 1` is already confirmed is the other half of
+          * the base state; [[BlockWeaver.resumePreviousConfirmation]] applies it to the state this
+          * returns.
+          */
         def start(
             config: Config,
             connections: Connections,
-            tracer: ContraTracer[IO, BlockWeaverEvent]
+            tracer: ContraTracer[IO, BlockWeaverEvent],
+            fastBlockMark: Option[BlockNumber]
         ): IO[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
             for {
                 state: Some[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] <-
@@ -209,7 +301,7 @@ object BlockWeaver {
                       pollResults = PollResults.empty,
                       finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
                       mempool = Mempool.empty,
-                      nextBlockNumber = BlockNumber.zero.increment
+                      nextBlockNumber = fastBlockMark.fold(BlockNumber.zero.increment)(_.increment)
                     ).act(config)
             } yield state.get
 

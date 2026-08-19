@@ -140,7 +140,7 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
     ): IO[CoreActors] =
         for {
             blockWeaver <- context.actorOf(
-              BlockWeaver(config, pendingConnections, tracers.blockWeaver, metrics)
+              BlockWeaver(config, pendingConnections, tracers.blockWeaver, metrics, persistence)
             )
             cardanoLiaison <- context.actorOf(
               CardanoLiaison(
