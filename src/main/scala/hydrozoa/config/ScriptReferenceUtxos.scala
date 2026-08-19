@@ -126,7 +126,7 @@ object ScriptReferenceUtxos {
             scriptReferenceUtxos.setupLadderUtxos.utxos.map(_.input)
     }
 
-    enum Error extends Throwable:
+    enum Error extends RuntimeException:
         case InvalidTreasuryScriptUtxo
         case InvalidDisputeScriptUtxo
         case InvalidSetupLadderUtxo(detail: String)

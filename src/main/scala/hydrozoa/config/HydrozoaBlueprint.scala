@@ -18,7 +18,7 @@ import scalus.uplc.builtin.ByteString
   */
 object HydrozoaBlueprint {
 
-    enum Error extends Throwable:
+    enum Error extends RuntimeException:
         case BlueprintLoadError(message: String, cause: Option[Throwable] = None)
 
         override def toString: String = this match

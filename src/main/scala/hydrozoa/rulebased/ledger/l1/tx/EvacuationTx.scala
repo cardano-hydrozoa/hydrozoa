@@ -51,7 +51,7 @@ private object EvacuationTxOps {
     type Config = HeadConfig.Bootstrap.Section & NodeOperationEvacuationConfig.Section
 
     object Build {
-        enum Error extends Throwable:
+        enum Error extends RuntimeException:
             case InvalidTreasuryDatum(msg: String)
             case TreasuryNotResolved
             case InsufficientTreasuryFunds(negativeDiff: Value)

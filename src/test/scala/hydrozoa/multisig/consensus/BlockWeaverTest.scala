@@ -25,6 +25,7 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.metrics.PeerMetrics
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Gen, Properties, PropertyM, Test}
@@ -110,7 +111,14 @@ object BlockWeaverTestHelpers {
             metrics = PeerMetrics.create(0L, Vector(peerNumber: Int))
             connections = BlockWeaver.ConnectionsPartial(env.jointLedgerMockActor, metrics)
             tracer = Slf4jTracer.sink.contramap(BlockWeaverEventFormat.humanFormat(peerNumber))
-            actor <- lift(env.system.actorOf(BlockWeaver(config, connections, tracer, metrics)))
+            // An empty store: these cases exercise the live block cycle from a cold start, so the
+            // weaver's base state (§5.2) is the cold one — it opens on block 1, as before.
+            persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+            backend <- lift(InMemoryBackendStore.open(persistenceTracer).allocated.map(_._1))
+            persistence <- lift(Persistence.fromBackend(backend, persistenceTracer)(using config))
+            actor <- lift(
+              env.system.actorOf(BlockWeaver(config, connections, tracer, metrics, persistence))
+            )
         } yield actor
 
     /** Empty final block brief for block 1, so Carol reproduces the head's last block and then arms

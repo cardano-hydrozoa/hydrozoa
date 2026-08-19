@@ -22,6 +22,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.metrics.PeerMetrics
+import hydrozoa.multisig.persistence.{Markers, Persistence, StoreKey}
 import scala.collection.immutable.Queue
 
 final case class BlockWeaver(
@@ -30,6 +31,10 @@ final case class BlockWeaver(
         BlockWeaver.ConnectionsPartial,
     tracer: ContraTracer[IO, BlockWeaverEvent],
     metrics: PeerMetrics,
+    /** Read-only: the weaver authors no journal, but it has base state to recover (§5.2) — which
+      * block to resume on, and whether its predecessor is confirmed — and reads it in `PreStart`.
+      */
+    persistence: Persistence[IO],
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
@@ -54,9 +59,15 @@ final case class BlockWeaver(
     override def receive: Receive[IO, BlockWeaver.Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
+                // Suspends on the start barrier, so the base below is in place before any
+                // replayed journal entry is processed (§5.6, §8).
                 connections <- initializeConnections
-                startingState <- State.start(config, connections, tracer)
-                _ <- become(startingState)
+                // Same anchor as `JointLedger.preStartLocal`: the two step the spine in lockstep.
+                fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
+                recovered <- State.recover(config, connections, tracer, persistence, fastBlockMark)
+                // `None`: the store says this head finalized, so the weaver retires rather than
+                // opening a block, as on the live path.
+                _ <- recovered.fold(context.self.stop)(become)
             } yield ()
         case x =>
             IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
@@ -196,10 +207,61 @@ object BlockWeaver {
     }
 
     object State {
+
+        /** The weaver's base state (§5.2), rebuilt from the store — the counterpart of
+          * `JointLedger.State.recover`.
+          *
+          * [[start]] gives the resume position; this adds the other half, whether that block's
+          * predecessor is already confirmed (`softConfirmed == fastBlockMark` is exactly that
+          * statement). It has to be applied here: a leader will not complete `fastBlockMark + 1`
+          * until its predecessor is confirmed, and that confirmation lies below every replay floor
+          * (`ReplayCursors` starts the aggregator at `softConfirmed + 1`), so nothing re-derives it
+          * — the peer comes up active, fills its mempool and produces no blocks.
+          *
+          * Feed the stored confirmation through `react` rather than constructing the successor
+          * directly: the transition also arms the deadman `Wakeup` fiber that forces a major block.
+          * `None` retires the weaver — the last confirmed block was `Final`. When
+          * `softConfirmed < fastBlockMark` the predecessor is genuinely unconfirmed and
+          * `FastConsensusActor` re-derives it from the replayed tail, so this is a no-op.
+          */
+        def recover(
+            config: Config,
+            connections: Connections,
+            tracer: ContraTracer[IO, BlockWeaverEvent],
+            persistence: Persistence[IO],
+            fastBlockMark: Option[BlockNumber]
+        ): IO[Option[Reactive]] =
+            for {
+                softConfirmed <- Markers.recoverSoftConfirmed(persistence.backend)
+                opening <- start(config, connections, tracer, fastBlockMark)
+                // `filter(softConfirmed.contains)` is the "confirmed everything it applied" test.
+                resumed <- fastBlockMark
+                    .filter(softConfirmed.contains)
+                    .fold(IO.pure(Some(opening)))(applied =>
+                        persistence
+                            .getOrFail(StoreKey.SoftConfirmation(applied))
+                            .flatMap(stamped => opening.react(config)(stamped.payload))
+                    )
+            } yield resumed
+
+        /** The weaver's opening state: resume at `fastBlockMark + 1`, the block after the highest
+          * this peer durably applied (`max(BlockResult)`). `None` is a cold store, and opens on
+          * block 1.
+          *
+          * This is the "base = state at `fastBlockMark`" half of the weaver's recovery
+          * (`docs/spec/persistence-and-crash-recovery.md` §6.2.1); `ReplayActor` supplies the other
+          * half by re-feeding the briefs above the anchor. Do not open on block 1 against a
+          * non-empty store: that arms the peer as leader for block 2, and the first confirmation
+          * `FastConsensusActor` re-derives at or above the anchor trips the armed leader's "current
+          * or future block" guard and terminates the actor system.
+          *
+          * [[recover]] applies the other half — whether block `fastBlockMark` is already confirmed.
+          */
         def start(
             config: Config,
             connections: Connections,
-            tracer: ContraTracer[IO, BlockWeaverEvent]
+            tracer: ContraTracer[IO, BlockWeaverEvent],
+            fastBlockMark: Option[BlockNumber]
         ): IO[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
             for {
                 state: Some[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] <-
@@ -209,7 +271,7 @@ object BlockWeaver {
                       pollResults = PollResults.empty,
                       finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
                       mempool = Mempool.empty,
-                      nextBlockNumber = BlockNumber.zero.increment
+                      nextBlockNumber = fastBlockMark.fold(BlockNumber.zero.increment)(_.increment)
                     ).act(config)
             } yield state.get
 

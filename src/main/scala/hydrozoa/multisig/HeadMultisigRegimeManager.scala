@@ -234,7 +234,8 @@ trait HeadMultisigRegimeManager(
               peers = config.headPeerIds.map(_.peerNum).toList,
               hubs = config.hubHeadPeerNumbers,
               coils = hubbedCoilPeers,
-              treasuryAddress = config.initializationTx.treasuryProduced.address
+              treasuryAddress = config.initializationTx.treasuryProduced.address,
+              leadsFastBlock = config.canLeadFast
             )(using config)
 
             _ <- pendingConnections.complete(connections)

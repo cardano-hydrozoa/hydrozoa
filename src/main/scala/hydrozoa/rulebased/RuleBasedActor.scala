@@ -1381,7 +1381,10 @@ object RuleBasedActor {
             case object NoEvacuateesRemaining extends Recoverable
         }
 
-        sealed trait BuildError extends Throwable
+        /** Namespace for the per-tx build failures. Each case is an [[Unrecoverable]] in its own
+          * right; there is deliberately no `BuildError` supertype, because nothing dispatches on
+          * "was a build failure" as a category.
+          */
         object BuildError {
             case class Vote(wrapped: VoteTx.Build.Error) extends Unrecoverable {
                 override def getMessage: String = wrapped.getMessage

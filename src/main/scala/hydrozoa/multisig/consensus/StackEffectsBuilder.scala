@@ -418,7 +418,7 @@ object StackEffectsBuilder {
     type Config = HeadConfig.Section
 
     /** Failure building the treasury-spending effects of a regular stack. Raised by the caller. */
-    sealed trait Error extends Throwable
+    sealed trait Error extends RuntimeException
 
     object Error {
         final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Build.Error)

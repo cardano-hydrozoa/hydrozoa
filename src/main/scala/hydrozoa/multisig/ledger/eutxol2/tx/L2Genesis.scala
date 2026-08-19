@@ -101,7 +101,7 @@ given genesisObligationDecoder: Decoder[GenesisObligation] =
     summon[Decoder[TransactionOutput]].mapEither(to => GenesisObligation.fromTransactionOutput(to))
 
 object GenesisObligation {
-    enum Error extends Throwable:
+    enum Error extends RuntimeException:
         case L2OutputNotShelleyAddress(babbage: Babbage)
         case L2OutputDatumNotInline(babbage: Babbage)
         case L2OutputRefScriptInvalid(babbage: Babbage)

@@ -77,7 +77,9 @@ abstract class CoilRelay(
 
     private def getConnections: IO[CoilRelay.Connections] =
         connections.get.flatMap(
-          _.fold(IO.raiseError(java.lang.Error("CoilRelay missing its connections.")))(IO.pure)
+          _.fold(IO.raiseError(IllegalStateException("CoilRelay missing its connections.")))(
+            IO.pure
+          )
         )
 
     private def resolveConnections: IO[CoilRelay.Connections] = pendingConnections match {

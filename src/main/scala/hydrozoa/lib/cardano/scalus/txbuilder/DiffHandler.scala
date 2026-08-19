@@ -8,7 +8,7 @@ object DiffHandler {
 
     /** A wrapper for [[reportLovelaceDiffHandler]] and [[prebalancedLovelaceDiffHandler]]
       */
-    final case class WrappedCoin(coin: Coin) extends Throwable
+    final case class WrappedCoin(coin: Coin) extends RuntimeException
 
     /** A diff handler for [[LowLevelTxBalancer]] that simply reports the difference as a
       * Left(CantBalance(diff)). Note that this handler returns left _even if the diff is zero_.

@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup}
   * one fatal caller (`JointLedger.State.recover`, at boot) can raise it directly; it is still a
   * typed `Either` value the caller matches on, never thrown from `restoreTo` itself.
   */
-sealed trait RestoreError extends Throwable
+sealed trait RestoreError extends RuntimeException
 
 object RestoreError:
     /** The requested command number is beyond the ledger's durable tip — a corruption tripwire (the

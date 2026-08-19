@@ -62,6 +62,8 @@ final case class RemoteL2LedgerError(message: String) extends RuntimeException(m
   *   The current connection and its finalizer (None when not connected)
   * @param requestTimeout
   *   Upper bound on one request/response exchange before the connection is dropped and retried
+  * @param restoreTimeout
+  *   Upper bound on a `Restore` exchange, which is not retried on expiry — see [[restoreTo]]
   * @param initialBackoff
   *   Backoff before the first reconnect attempt; doubles each attempt up to [[maxBackoff]]
   * @param maxBackoff
@@ -73,6 +75,7 @@ class RemoteL2Ledger private (
     mutex: Mutex[IO],
     connRef: Ref[IO, Option[Conn]],
     requestTimeout: FiniteDuration,
+    restoreTimeout: FiniteDuration,
     initialBackoff: FiniteDuration,
     maxBackoff: FiniteDuration,
     config: RemoteL2Ledger.Config,
@@ -135,6 +138,9 @@ class RemoteL2Ledger private (
       * failure to [[RestoreError.OtherError]]. Both are typed `Left`s, never thrown —
       * `JointLedger.State.recover` treats them as fatal. A broken *transport* or a protocol
       * violation still fail-stops (a raise) like the other requests.
+      *
+      * Bounded by [[restoreTimeout]], not the ordinary `requestTimeout`, and an expiry is **not**
+      * retried — see that parameter for why.
       */
     override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
         EitherT(sendRestoreRequest(Request.Restore(commandNumber)).map {
@@ -152,7 +158,7 @@ class RemoteL2Ledger private (
       * they fail-stop.
       */
     private def sendRestoreRequest(request: Request.Restore): IO[RestoreResponse] =
-        exchange(request).flatMap { text =>
+        exchange(request, restoreTimeout, retryOnTimeout = false).flatMap { text =>
             decode[RestoreResponse](text) match {
                 case Left(err) =>
                     IO.raiseError(
@@ -180,7 +186,7 @@ class RemoteL2Ledger private (
       * verdicts, so they fail-stop rather than being turned into a response.
       */
     private def sendRequest(request: Request): IO[L2LedgerResponse] =
-        exchange(request).flatMap { text =>
+        exchange(request, requestTimeout, retryOnTimeout = true).flatMap { text =>
             decode[L2LedgerResponse](text) match {
                 case Left(err) =>
                     IO.raiseError(
@@ -211,7 +217,11 @@ class RemoteL2Ledger private (
       * there is no competing caller to starve — a stall correctly blocks only the one driver, which
       * has nothing else to do until its command lands.
       */
-    private def exchange(request: Request): IO[String] = {
+    private def exchange(
+        request: Request,
+        timeout: FiniteDuration,
+        retryOnTimeout: Boolean
+    ): IO[String] = {
         val message = request.asJson.noSpaces
         mutex.lock.surround {
             def attempt(n: Int): IO[String] =
@@ -227,19 +237,32 @@ class RemoteL2Ledger private (
                             text <- conn.incoming.take
                             _ <- tracer.traceWith(Received(text))
                         } yield text
-                        once.timeout(requestTimeout).onError { case _ => drop(conn) }
+                        once.timeout(timeout).onError { case _ => drop(conn) }
                     }
-                    .handleErrorWith { err =>
-                        val wait = backoff(n)
-                        // A timeout is not a transport failure: the remote may be fine and the
-                        // response simply undelivered in time. Log it distinctly so a receive stall
-                        // is unambiguous in the logs, then drop-and-retry like any other error.
-                        val event = err match {
-                            case _: TimeoutException =>
-                                ExchangeTimedOut(request.commandNumber, requestTimeout, n, wait)
-                            case _ => ConnectionError(n, wait, err)
-                        }
-                        tracer.traceWith(event) >> IO.sleep(wait) >> attempt(n + 1)
+                    .handleErrorWith {
+                        // Terminal (`retryOnTimeout = false`): re-sending a restore livelocks it
+                        // (see `restoreTimeout`). A supervisor restart retries at process
+                        // granularity instead, where it is visible and rate-limited.
+                        case _: TimeoutException if !retryOnTimeout =>
+                            tracer.traceWith(RestoreTimedOut(request.commandNumber, timeout)) >>
+                                IO.raiseError(
+                                  RemoteL2LedgerError(
+                                    "remote L2 ledger did not answer restore to command " +
+                                        s"${request.commandNumber} within $timeout"
+                                  )
+                                )
+                        case err =>
+                            val wait = backoff(n)
+                            // A timeout is not a transport failure: the remote may be fine and the
+                            // response simply undelivered in time. Log it distinctly so a receive
+                            // stall is unambiguous in the logs, then drop-and-retry like any other
+                            // error.
+                            val event = err match {
+                                case _: TimeoutException =>
+                                    ExchangeTimedOut(request.commandNumber, timeout, n, wait)
+                                case _ => ConnectionError(n, wait, err)
+                            }
+                            tracer.traceWith(event) >> IO.sleep(wait) >> attempt(n + 1)
                     }
             attempt(0)
         }
@@ -394,6 +417,14 @@ object RemoteL2Ledger {
       *   How long one exchange may take before the connection is dropped and retried (default 5s).
       *   Kept well under a block cycle so a stuck receive is cut off and retried rather than
       *   stalling the whole (serialised) mutation path.
+      * @param restoreTimeout
+      *   How long a `Restore` may take (default 10 minutes). It needs its own bound because the
+      *   remote answers one by rebuilding its ledger from the whole command log — no snapshots yet
+      *   — so the cost is linear in the log, not in the command. SugarRush replays at ~1.3 µs/event
+      *   (its `restore_cost_by_log_length` probe: 1.4 ms at 1k, 64 ms at 50k, flat per event), so
+      *   the 5s command bound expires past a few million events while this default covers hundreds
+      *   of millions. Expiry is **terminal**, not retried: a retry re-sends the restore and the
+      *   remote starts the rebuild over, so the pair livelocks and no peer ever boots.
       * @param initialBackoff
       *   Backoff before the first reconnect attempt (default 1s), doubled per attempt
       * @param maxBackoff
@@ -404,6 +435,7 @@ object RemoteL2Ledger {
         config: Config,
         tracer: ContraTracer[IO, RemoteL2LedgerEvent],
         requestTimeout: FiniteDuration = 5.seconds,
+        restoreTimeout: FiniteDuration = 10.minutes,
         initialBackoff: FiniteDuration = 1.second,
         maxBackoff: FiniteDuration = 30.seconds,
     ): Resource[IO, RemoteL2Ledger] =
@@ -421,6 +453,7 @@ object RemoteL2Ledger {
           mutex,
           connRef,
           requestTimeout,
+          restoreTimeout,
           initialBackoff,
           maxBackoff,
           config,

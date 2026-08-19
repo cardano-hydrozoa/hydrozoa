@@ -40,7 +40,7 @@ private object ResolutionTxOps {
         OwnPeerPrivate.Section
 
     object Build {
-        enum Error extends Throwable:
+        enum Error extends RuntimeException:
             case AbsentVoteDatum(utxo: TransactionInput)
             case InvalidVoteDatum(utxo: TransactionInput, msg: String)
             case InvalidTreasuryDatum(msg: String)

@@ -15,7 +15,7 @@ import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, Stack, StackBrief, StackEffects, StackNumber}
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{Persistence, StoreKey, Timestamped, WriteBatch}
+import hydrozoa.multisig.persistence.{Markers, Persistence, StoreKey, Timestamped, WriteBatch}
 
 /** Slow-consensus actor.
   *
@@ -109,7 +109,17 @@ final case class SlowConsensusActor(
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case PreStart =>
-            initializeConnections
+            for {
+                _ <- initializeConnections
+                // This actor's base: the highest stack it hard-confirmed. Without it
+                // `lastConfirmed` stays `None`, the surplus guard in `handleRemoteHardAck` is
+                // inert, and replayed remote acks for confirmed stacks are `bufferOrphan`ed rather
+                // than dropped — orphans `clearOrphans` never reaches, since no cell is re-created
+                // for a confirmed stack. The hard-ack journals scan from key 0, so the buffer would
+                // retain every remote ack the head ever produced, on every restart.
+                hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
+                _ <- stateRef.update(_.withLastConfirmed(hardConfirmed))
+            } yield ()
         case h: StackHandoff =>
             handleStackHandoff(h)
         case h: HardAck =>
@@ -491,7 +501,7 @@ final case class SlowConsensusActor(
     private def getConnections: IO[Connections] = for {
         mConn <- connections.get
         conn <- mConn.liftTo[IO](
-          java.lang.Error("SlowConsensusActor is missing its connections to other actors.")
+          IllegalStateException("SlowConsensusActor is missing its connections to other actors.")
         )
     } yield conn
 
@@ -592,6 +602,13 @@ object SlowConsensusActor {
             copy(orphanAcks =
                 orphanAcks.updated(h.stackNum, orphanAcks.getOrElse(h.stackNum, Nil) :+ h)
             )
+
+        /** Seed the confirmed high-water on recovery. Stacks confirm strictly in order, so this is
+          * exactly the boundary `handleRemoteHardAck` needs to tell a late surplus ack from a
+          * genuinely-early orphan.
+          */
+        def withLastConfirmed(stackNum: Option[StackNumber]): State =
+            copy(lastConfirmed = stackNum)
         def clearOrphans(stackNum: StackNumber): State =
             copy(orphanAcks = orphanAcks - stackNum)
         def dropCell(stackNum: StackNumber): State =
@@ -601,12 +618,12 @@ object SlowConsensusActor {
         def initial: State = State(Map.empty, Map.empty, None)
     }
 
-    enum HandoffError extends Throwable:
+    enum HandoffError extends RuntimeException:
         case MissingOwnAck(what: String)
         override def getMessage: String = this match
             case MissingOwnAck(w) => s"StackHandoff missing $w ack"
 
-    enum CellError extends Throwable:
+    enum CellError extends RuntimeException:
         case NoCell(stackNum: StackNumber)
         case UnknownPeer(peer: PeerId)
         case UnexpectedPayload(stackNum: StackNumber, roundLabel: String)

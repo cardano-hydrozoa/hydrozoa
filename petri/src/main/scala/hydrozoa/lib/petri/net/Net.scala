@@ -18,7 +18,7 @@ trait Net[
 
 object Net {
 
-    trait Error extends Throwable
+    trait Error extends RuntimeException
 
     /** The authoritative structure of the net (ISO Concept 1): the place set, the transition set,
       * and the flow relation `F`. Any data that must be associated with every element (annotations,

@@ -148,7 +148,7 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
                     )
                     _ <- delivered.set(served.flatten)
                 } yield ()
-            }.attempt // the raise emergency-stops the actor system; that is the incident
+            }.attempt // the raise takes the actor system down; that is the incident
             errs <- raised.get
             n <- delivered.get
         } yield (errs.headOption, n)

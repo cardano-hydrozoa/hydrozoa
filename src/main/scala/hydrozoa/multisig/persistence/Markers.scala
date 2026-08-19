@@ -87,6 +87,14 @@ object Markers:
     ): IO[Option[HardAckNumber]] =
         backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard))
 
+    /** `softConfirmed = max(SoftConfirmation.key)` — the fast-side confirmation mark, written by
+      * `FastConsensusActor` when a consensus cell saturates. Standalone like the other anchors, so
+      * a consumer needing only this mark skips the full [[Markers]] bundle — and its parallel
+      * reads, which a caller comparing two marks against each other must avoid.
+      */
+    def recoverSoftConfirmed(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
+        backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum))
+
     /** `hardConfirmed = max(HardConfirmation.key)` — the `HardConfirmation` CF is keyed by
       * `StackNumber`, written at confirmation by every peer (§6 `SlowConsensusActor`). Exposed
       * standalone so a consumer that needs only this mark (e.g. `StackComposer`'s recover) reads it

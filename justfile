@@ -67,7 +67,9 @@ build-werror:
 integration-fast:
   #!/usr/bin/env bash
   trap 'just notify "integration-fast"' EXIT
-  sbt "integration/testOnly * -- -s 10 -f ^(?!.*\(extended\))"
+  # The -s 10 / (extended) filter now live in build.sbt, scoped to the ScalaCheck framework —
+  # passing them here handed them to ScalaTest too, which rejects -s and fails the run.
+  sbt "integration/testOnly *"
 
 integration:
   #!/usr/bin/env bash

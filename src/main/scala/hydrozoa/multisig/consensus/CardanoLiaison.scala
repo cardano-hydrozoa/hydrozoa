@@ -1086,7 +1086,7 @@ trait CardanoLiaison(
         }
     }
 
-    private enum EffectError extends Throwable:
+    private enum EffectError extends RuntimeException:
         case UnexpectedRolloutEffect(effectId: EffectId)
         case UnexpectedInitializationEffect(effectId: EffectId)
         case FallbackNotFound(effectId: EffectId)
