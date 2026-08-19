@@ -280,7 +280,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                   JournalValue(stamp, hardAck(peer = 0, ackNum = 0, stack = stackN))
                 )
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
-                _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
+                // Balanced, like the other seeds here: `recover` raises on an unbalanced
+                // treasury/evacuation pair, which would fail before the pairing assertion is reached.
+                _ <- p.put(StoreKey.Treasury)(balancedTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 br3 <- blockResult(3)
                 br4 <- blockResult(4)
