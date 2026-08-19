@@ -80,13 +80,15 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
       */
     private class LiaisonStub(
         lane: LaneOutbound[BlockBrief.Next, BlockNumber],
-        raised: cats.effect.Ref[IO, Vector[Throwable]]
+        raised: cats.effect.Ref[IO, Vector[Throwable]],
+        appended: cats.effect.Ref[IO, Int]
     ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
         override def receive: Receive[IO, LiaisonProtocol.HubToCoilRequest] = {
             // Record and re-raise: the raise is the incident (it kills the actor system), and the
-            // record is how the harness observes it afterwards.
+            // record is how the harness observes it afterwards. `appended` counts briefs the lane
+            // has finished with either way, which is what [[run]] waits on.
             case b: BlockBrief.Next =>
-                lane.append(b).onError(t => raised.update(_ :+ t))
+                lane.append(b).onError(t => raised.update(_ :+ t)).guarantee(appended.update(_ + 1))
             case _ => IO.unit
         }
     }
@@ -106,6 +108,23 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
         /** The fix: one actor owns the lane, so it emits in spine order whoever is descheduled. */
         case SingleFeeder
 
+    /** Wait for the scenario to settle: both briefs through the lane, or one of them raised — which
+      * takes the actor system down, so the other never lands. The sends are asynchronous, so
+      * something has to gate the read below; a fixed sleep expires mid-drain on a loaded box and
+      * the read comes back short, which is a false falsification (finding #63). The bound turns a
+      * genuine stall back into a property failure rather than a hang.
+      */
+    private def awaitSettled(
+        appended: cats.effect.Ref[IO, Int],
+        raised: cats.effect.Ref[IO, Vector[Throwable]]
+    ): IO[Unit] =
+        (appended.get, raised.get)
+            .mapN((n, errs) => n >= 2 || errs.nonEmpty)
+            .flatTap(settled => if settled then IO.unit else IO.sleep(2.millis))
+            .iterateUntil(identity)
+            .void
+            .timeoutTo(10.seconds, IO.unit)
+
     /** Drive a real [[CoilRelay]] and a real block lane with the given interleaving, and return
       * whatever the lane raised. The lane resumes at the high-water the crash reports and the
       * briefs are the ones it reports, so a reproduction is recognisable by its message.
@@ -113,19 +132,22 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
     private def run(interleaving: Interleaving): (Option[Throwable], List[Int]) = {
         val io = for {
             raised <- cats.effect.Ref[IO].of(Vector.empty[Throwable])
+            appended <- cats.effect.Ref[IO].of(0)
             delivered <- cats.effect.Ref[IO].of(List.empty[Int])
             _ <- ActorSystem[IO]("coil-relay-ordering-test").use { system =>
                 for {
                     now <- realTimeQuantizedInstant(headConfig.slotConfig)
                     lane = blockLane
                     _ <- lane.seedHighWater(Some(BlockNumber(4920)))
-                    liaison <- system.actorOf(new LiaisonStub(lane, raised))
+                    liaison <- system.actorOf(new LiaisonStub(lane, raised, appended))
                     relay <- system.actorOf(
                       CoilRelay(CoilRelay.Connections(coilPeerLiaisons = List(liaison)))
                     )
                     _ <- IO.sleep(50.millis) // let CoilRelay.PreStart resolve its connections
                     remoteLed = relay ! brief(4921, now)
                     ownLed = relay ! brief(4922, now)
+                    // The sleeps below only space the two sends; which brief the relay sees first
+                    // is fixed by the send order and its FIFO mailbox, not by the clock.
                     _ <- interleaving match {
                         case Interleaving.MeshFirst =>
                             remoteLed >> IO.sleep(50.millis) >> ownLed
@@ -136,7 +158,7 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
                         case Interleaving.SingleFeeder =>
                             remoteLed >> ownLed
                     }
-                    _ <- IO.sleep(200.millis)
+                    _ <- awaitSettled(appended, raised)
                     // Presence-of-effect: the briefs the lane will actually serve a coil
                     // peer, in order. The block lane's `maxPerReply` is 1, so pull twice.
                     served <- List(4921, 4922).traverse(n =>
