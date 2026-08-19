@@ -45,6 +45,15 @@ class ReplayActorTest extends AnyFunSuite:
     private given CardanoNetwork.Section = config
     private val stamp: ArrivalStamp = ArrivalStamp(generation = 0, monotonicNanos = 1L)
 
+    /** Fast-cycle leadership for this node, taken from the production rule
+      * ([[hydrozoa.multisig.consensus.peer.HeadPeerId.isLeader]]) rather than re-derived here.
+      */
+    private lazy val ownLeadsFastBlock: BlockNumber => Boolean =
+        config.headPeerIds
+            .find(_.peerNum == ownNum)
+            .map(_.isLeader)
+            .getOrElse((_: BlockNumber) => false)
+
     /** This node's head peer number (the fixture config is always a head node). */
     private val ownNum: HeadPeerNumber = config.ownPeerId match {
         case PeerId.Head(n) => n
@@ -59,8 +68,10 @@ class ReplayActorTest extends AnyFunSuite:
         // BlockWeaver: first PollResults + the block brief (>= fastBlockMark+1 = 0).
         val _ = assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
         val _ = assert(hasBlock(c.bw, 5), "BW block 5")
-        // FastConsensusActor: the block brief (aggregator floor softConfirmed+1).
-        val _ = assert(hasBlock(c.fca, 5), "FCA block 5")
+        // FastConsensusActor gets it from JointLedger once BlockWeaver has woven it, exactly as on
+        // the live path — NOT a second time straight from replay. This assertion used to read
+        // `hasBlock(c.fca, 5)`, which pinned the double-feed that killed a peer on boot.
+        val _ = assert(!hasBlock(c.fca, 5), "FCA must NOT also get block 5")
         // SlowConsensusActor: the reconstructed in-flight handoff + every HardAck (own round-1 +
         // round-2 for stack 1, plus the remote peer's).
         val _ = assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
@@ -70,6 +81,38 @@ class ReplayActorTest extends AnyFunSuite:
         assert(
           c.sc.collect { case b: StackBrief => b.stackNum } == Vector(StackNumber(2)),
           "SC only stack 2"
+        )
+    }
+
+    test("ReplayActor sends each block brief to exactly ONE of FCA / BlockWeaver") {
+        // The regression test for the double-feed. The Block CF is scanned from the AGGREGATOR
+        // floor (softConfirmed+1) and partitioned at the LEDGER floor (fastBlockMark+1):
+        //   - at or below fastBlockMark this peer already accepted the block, so JointLedger will
+        //     never re-handle it and only FCA — which tracks the COLLECTIVE mark and so lags — needs it;
+        //   - above it BlockWeaver weaves it and JointLedger forwards the brief to FCA itself.
+        // Sending to both delivered the same brief twice, and `ConsensusCell.acceptBrief` rejects a
+        // second brief for a block, so the peer died on boot whenever the upper band was non-empty.
+        val c = runReplay(seedTwoBandBlocks)
+        val _ = assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
+        // softConfirmed = 2, fastBlockMark = 4 ⇒ lower band [3, 4] → FCA, upper band [5, …] → BW.
+        val _ = assert(hasBlock(c.fca, 3) && hasBlock(c.fca, 4), "FCA gets the accepted band 3..4")
+        val _ = assert(!hasBlock(c.fca, 5), "FCA must not get block 5 (above the ledger floor)")
+        val _ = assert(hasBlock(c.bw, 5), "BW gets block 5")
+        val _ = assert(!hasBlock(c.bw, 3) && !hasBlock(c.bw, 4), "BW must not re-weave 3..4")
+        // The property that actually matters, stated directly: no brief reaches both targets.
+        val both = List(3, 4, 5).filter(n => hasBlock(c.fca, n) && hasBlock(c.bw, n))
+        assert(both.isEmpty, s"blocks delivered to BOTH targets: $both")
+    }
+
+    test("ReplayActor refuses an own-led brief above the ledger floor") {
+        // Above the floor a brief can only be one this peer FOLLOWS: an own-led brief is written in
+        // the same atomic batch as its `BlockResult`, so it cannot outlive it. Handing an own-led
+        // brief to BlockWeaver would hit a Leader state, which treats `BlockBrief.Next` as
+        // `Unexpected` and panics. Assert the invariant loudly instead of deadlocking later.
+        val c = runReplay(seedOwnLedAboveFloor)
+        assert(
+          c.outcome.swap.toOption.exists(_.isInstanceOf[IllegalStateException]),
+          s"expected IllegalStateException for an own-led brief above the floor, got ${c.outcome}"
         )
     }
 
@@ -120,8 +163,8 @@ class ReplayActorTest extends AnyFunSuite:
         // BlockWeaver: first PollResults + the block brief (>= coilBlockMark+1 = 3).
         val _ = assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
         val _ = assert(hasBlock(c.bw, 5), "BW block 5")
-        // FastConsensusActor: the block brief (aggregator floor softConfirmed+1 = 0).
-        val _ = assert(hasBlock(c.fca, 5), "FCA block 5")
+        // As on a head peer: above the ledger floor JointLedger is FCA's source, not replay.
+        val _ = assert(!hasBlock(c.fca, 5), "FCA must NOT also get block 5")
         // SlowConsensusActor: the reconstructed in-flight handoff + every coil-quorum hard-ack —
         // this coil peer's own two coil HardAcks (stack 1) routed back, plus the hub's HubHardAck
         // (unwrapped to its `.ack`).
@@ -187,7 +230,8 @@ class ReplayActorTest extends AnyFunSuite:
                               peers,
                               hubs,
                               coils,
-                              treasuryAddress
+                              treasuryAddress,
+                              leadsFastBlock = ownLeadsFastBlock
                             )
                             .attempt
                         _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
@@ -234,7 +278,9 @@ class ReplayActorTest extends AnyFunSuite:
                               peers,
                               hubs,
                               Nil,
-                              treasuryAddress
+                              treasuryAddress,
+                              // A coil peer never leads a fast block.
+                              leadsFastBlock = _ => false
                             )
                             .attempt
                         _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
@@ -290,6 +336,51 @@ class ReplayActorTest extends AnyFunSuite:
             s2 <- stackBrief(2, 1, 1)
             _ <- p.put(JournalKey.Stack(StackNumber(1)))(JournalValue(stamp, s1))
             _ <- p.put(JournalKey.Stack(StackNumber(2)))(JournalValue(stamp, s2))
+        } yield ()
+
+    /** Blocks straddling BOTH replay bands: `softConfirmed = 2` and `fastBlockMark = 4`, with block
+      * briefs at 3, 4 (already accepted) and 5 (not yet). Block 5 must not be one this peer leads,
+      * or the own-led guard fires instead — pick the first non-own-led number above the floor.
+      */
+    private def seedTwoBandBlocks(p: Persistence[IO]): IO[Unit] =
+        for {
+            _ <- p.backend.put(
+              Cf.SoftConfirmation,
+              StoreKey.SoftConfirmation(BlockNumber(2)).encode,
+              Array[Byte](0)
+            )
+            br <- blockResult(4)
+            _ <- p.put(StoreKey.BlockResult(BlockNumber(4)))(br.persisted)
+            // The fast anchor's RequestHighWater is written in the same per-block bundle, so it
+            // must exist for the block-result scan (`getOrFail`) to resolve.
+            _ <- p.put(StoreKey.RequestHighWater(BlockNumber(4)))(
+              Map.empty[HeadPeerNumber, RequestNumber]
+            )
+            _ <- List(3, 4, 5).traverse_ { n =>
+                blockBrief(n).flatMap(b =>
+                    p.put(JournalKey.Block(BlockNumber(n)))(JournalValue(stamp, b))
+                )
+            }
+        } yield ()
+
+    /** `fastBlockMark = 2` with a brief above the floor for a block this peer LEADS — the state the
+      * atomic own-ack bundle makes unreachable, and which `route` now rejects.
+      */
+    private def seedOwnLedAboveFloor(p: Persistence[IO]): IO[Unit] =
+        val ownLed = LazyList.from(3).map(BlockNumber(_)).filter(ownLeadsFastBlock).head
+        for {
+            _ <- p.backend.put(
+              Cf.SoftConfirmation,
+              StoreKey.SoftConfirmation(BlockNumber(2)).encode,
+              Array[Byte](0)
+            )
+            br <- blockResult(2)
+            _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br.persisted)
+            _ <- p.put(StoreKey.RequestHighWater(BlockNumber(2)))(
+              Map.empty[HeadPeerNumber, RequestNumber]
+            )
+            b <- blockBrief(ownLed)
+            _ <- p.put(JournalKey.Block(ownLed))(JournalValue(stamp, b))
         } yield ()
 
     /** softConfirmed = 5 but fastBlockMark = max(BlockResult) = 2 → confirmed > acked, a torn
