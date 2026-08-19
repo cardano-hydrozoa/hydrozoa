@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
-import hydrozoa.multisig.persistence.recovery.BlockResultScan
+import hydrozoa.multisig.persistence.recovery.{BlockResultScan, SoftConfirmationScan}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 import scala.annotation.tailrec
 import scalus.cardano.ledger.TransactionHash
@@ -1020,9 +1020,9 @@ object StackComposer {
                         treasury <- persistence.getOrFail(StoreKey.Treasury)
                         evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
                         blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
-                    } yield Some(
-                      blockResults.foldLeft(
-                        State(
+                        softConfirmeds <- SoftConfirmationScan.scanFrom(persistence, lastBlockNum)
+                    } yield {
+                        val opening = State(
                           pending = Map.empty,
                           ready = Map.empty,
                           inboundLeaderBrief = Map.empty,
@@ -1034,7 +1034,24 @@ object StackComposer {
                           treasury = treasury,
                           evacuationMap = evacuationMap
                         )
-                      )(_.recordBlockResult(_))
-                    )
+                        // Restore BOTH halves of each block's pair from the store, then pair them,
+                        // mirroring what `handleBlockResult` / `handleSoftConfirmed` do live. The
+                        // soft-confirmed half used to be left to the replay tail, which cannot
+                        // carry it: the block-spine replay floor is `softConfirmed + 1`, while
+                        // these blocks start just after the last CLOSED stack's `lastBlockNum` —
+                        // always below that floor. A follower therefore never covered the leader's
+                        // brief, waited silently in `tryCloseAsFollower`'s "not yet covered" branch
+                        // for events that had already happened, and the whole head's slow side
+                        // stopped while its fast side kept producing blocks.
+                        val withResults = blockResults.foldLeft(opening)(_.recordBlockResult(_))
+                        val withBoth =
+                            softConfirmeds.foldLeft(withResults)(_.recordSoftConfirmed(_))
+                        Some(
+                          (blockResults.map(_.brief.blockNum) ++ softConfirmeds.map(
+                            _.blockNum
+                          )).distinct
+                              .foldLeft(withBoth)(_.tryPair(_))
+                        )
+                    }
     }
 }
