@@ -150,7 +150,7 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
           nPayouts,
           value => genKnownValuePayoutObligationWithMinAdaEnsured(value)(using config)
         )
-        totalPayoutValue = payouts.foldLeft(Value.zero)((v, payout) => v + payout.utxo.value.value)
+        totalPayoutValue = Value.combine(payouts.toList.map(_.utxo.value.value))
 
         kzg: KzgCommitment <- kzgCommitment match {
             case None =>
