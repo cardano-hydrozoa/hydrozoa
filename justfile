@@ -102,7 +102,7 @@ integration-yaci-docker:
 integration-e2e-docker:
   #!/usr/bin/env bash
   trap 'just notify "integration-e2e-docker"' EXIT
-  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt Docker/publishLocal stage "integration/testOnly hydrozoa.integration.e2e.DockerSmokeTest"
+  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "Docker/publishLocal; stage; integration/testOnly hydrozoa.integration.e2e.DockerSmokeTest"
 
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
 export:
