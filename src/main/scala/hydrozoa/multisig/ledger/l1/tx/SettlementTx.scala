@@ -261,7 +261,7 @@ private object SettlementTxOps {
             private val spendDeposits: List[Spend] = depositsToSpend.toList.map(mkDepositStep)
 
             private val valueAbsorbed: Value =
-                depositsToSpend.map(_.l2Value).foldLeft(Value.zero)(_ + _)
+                Value.combine(depositsToSpend.map(_.l2Value))
 
             /////////////////////////////////////////////////////////
             // Send rollout (maybe)

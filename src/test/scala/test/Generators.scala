@@ -289,9 +289,7 @@ object Generators {
             for {
                 addr <- genShelleyAddress
 
-                inputValue: Value = inputUtxos.values.foldLeft(Value.zero)((acc, output) => {
-                    acc + output.value
-                })
+                inputValue: Value = Value.combine(inputUtxos.values.map(_.value))
 
                 output = Babbage(addr, inputValue, None, None)
 
@@ -702,7 +700,7 @@ object GeneratorTests extends Properties("Generator Tests") {
     val _ = property("value distribution sums to original amount") =
         Prop.forAll(Arbitrary.arbitrary[Value], Gen.posNum[Int])((amount, n) =>
             Prop.forAll(Generators.Other.genValueDistribution(amount, n))(distribution =>
-                distribution.foldLeft(Value.zero)(_ + _) == amount
+                Value.combine(distribution.toList) == amount
             )
         )
 
@@ -722,11 +720,8 @@ object GeneratorTests extends Properties("Generator Tests") {
                 utxoList = NonEmptyList.fromListUnsafe(utxos),
               )
             )(distribution =>
-                val expectedAmount =
-                    distribution.toList.map(_.output.value).foldLeft(Value.zero)(_ + _)
-                expectedAmount == amount + utxos
-                    .map(_.output.value)
-                    .foldLeft(Value.zero)(_ + _)
+                val expectedAmount = Value.combine(distribution.toList.map(_.output.value))
+                expectedAmount == amount + Value.combine(utxos.map(_.output.value))
             )
         )
     )

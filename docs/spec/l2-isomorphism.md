@@ -143,8 +143,9 @@ The deposit path, in order (client steps marked):
    - on success builds the `ScreenDeposit` command — `depositId`, `depositFee`, `depositL2Value`,
      `refundDestination`, `l2Payload` — for the ledger.
 3. **Ledger screening** — `sendScreenDeposit(ScreenDeposit)`. The EUTXO ledger decodes the
-   `GenesisObligation`s and checks that `depositL2Value` covers the `l2Payload` outputs
-   componentwise (the value difference has no negative coin or asset quantity).
+   `GenesisObligation`s and checks that `depositL2Value` equals the `l2Payload` outputs
+   exactly, componentwise (spawning more would mint L2 value; spawning less would silently
+   donate the difference to the treasury, unaccounted by the evacuation map).
 4. **Client:** registration returns the `RequestId`; the depositor signs the deposit tx and
    submits it to L1 — the head does not submit it.
 5. **Absorption** — the head observes the deposit on L1 and, once matured, absorbs it at block

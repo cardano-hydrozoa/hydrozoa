@@ -4,6 +4,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationMap.mkScalar
 import hydrozoa.multisig.ledger.joint.EvacuationMapInstances.given
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -112,7 +113,7 @@ final case class EvacuationMap(
         evacuationMap.keySet.subsetOf(other.evacuationMap.keySet)
 
     def totalValue: Value =
-        evacuationMap.foldLeft(Value.zero)((acc, evacuatee) => acc + evacuatee._2.utxo.value.value)
+        Value.combine(evacuationMap.values.map(_.utxo.value.value))
 
     override def iteratorFrom(start: EvacuationKey): Iterator[(EvacuationKey, Payout.Obligation)] =
         evacuationMap.iteratorFrom(start)
@@ -152,14 +153,31 @@ object EvacuationMap:
     def empty: EvacuationMap = EvacuationMap(TreeMap.empty)
 
     def applyDiffs(evacuationMap: EvacuationMap, diffs: Seq[EvacuationDiff]): EvacuationMap =
-        evacuationMap |> diffs
-            .map {
+        applyDiffsWithDelta(evacuationMap, diffs)._1
+
+    /** Apply `diffs` and return the updated map together with the net change in the map's total
+      * value (possibly negative in the coin or an asset). An `Update` contributes its new value
+      * minus the overwritten entry's (zero when the key is fresh); a `Delete` subtracts the removed
+      * entry's value (zero when the key is absent) — so the delta always equals
+      * `result.totalValue - evacuationMap.totalValue`, without an O(map) refold.
+      */
+    def applyDiffsWithDelta(
+        evacuationMap: EvacuationMap,
+        diffs: Seq[EvacuationDiff]
+    ): (EvacuationMap, Value) =
+        diffs.foldLeft((evacuationMap, Value.zero)) { case ((em, delta), diff) =>
+            diff match {
                 case EvacuationDiff.Update(key, value) =>
-                    (em: EvacuationMap) => EvacuationMap(em.evacuationMap.updated(key, value))
+                    val overwritten = em.get(key).fold(Value.zero)(_.utxo.value.value)
+                    (
+                      EvacuationMap(em.evacuationMap.updated(key, value)),
+                      delta + value.utxo.value.value - overwritten
+                    )
                 case EvacuationDiff.Delete(key) =>
-                    (em: EvacuationMap) => EvacuationMap(em.evacuationMap.removed(key))
+                    val removed = em.get(key).fold(Value.zero)(_.utxo.value.value)
+                    (EvacuationMap(em.evacuationMap.removed(key)), delta - removed)
             }
-            .foldLeft(identity: EvacuationMap => EvacuationMap)(_.andThen(_))
+        }
 
     private def mkHash(key: EvacuationKey, output: TxOut): ByteString = {
         (key, output)
@@ -180,6 +198,68 @@ object EvacuationMap:
 enum EvacuationDiff:
     case Update(key: EvacuationKey, value: Payout.Obligation)
     case Delete(key: EvacuationKey)
+
+/** One L2 command's evacuation diffs, with the per-command boundary preserved from the ledger's
+  * [[hydrozoa.multisig.ledger.l2.L2LedgerResponse.Applied]] responses (the ledger answers one
+  * command at a time). The slow side checks value conservation per group, not per block: a block's
+  * aggregate delta can be zero while individual transactions over- and under-credit accounts in
+  * compensating directions (e.g. rounding errors on opposite trade directions), so the block-level
+  * sum proves nothing about any single transaction.
+  */
+sealed trait EvacuationDiffGroup {
+
+    /** The group's diffs, in application order. */
+    def diffs: Vector[EvacuationDiff]
+}
+
+object EvacuationDiffGroup {
+
+    /** An `ApplyTransaction`'s diffs, tagged with the producing request. */
+    final case class Transaction(requestId: RequestId, diffs: Vector[EvacuationDiff])
+        extends EvacuationDiffGroup
+
+    /** The block's `ApplyDepositDecisions` diffs — the absorbed deposits' spawned L2 genesis
+      * outputs (empty for a rejected-only decisions command).
+      */
+    final case class DepositDecisions(diffs: Vector[EvacuationDiff]) extends EvacuationDiffGroup
+
+    given Encoder[EvacuationDiffGroup] = Encoder.instance {
+        case Transaction(requestId, diffs) =>
+            io.circe.Json.obj(
+              "tag" -> io.circe.Json.fromString("Transaction"),
+              "requestId" -> requestId.asJson,
+              "diffs" -> diffs.asJson
+            )
+        case DepositDecisions(diffs) =>
+            io.circe.Json.obj(
+              "tag" -> io.circe.Json.fromString("DepositDecisions"),
+              "diffs" -> diffs.asJson
+            )
+    }
+
+    given evacuationDiffGroupDecoder(using
+        config: CardanoNetwork.Section
+    ): Decoder[EvacuationDiffGroup] = {
+        Decoder.instance { c =>
+            c.downField("tag").as[String].flatMap {
+                case "Transaction" =>
+                    for {
+                        requestId <- c.downField("requestId").as[RequestId]
+                        diffs <- c.downField("diffs").as[Vector[EvacuationDiff]]
+                    } yield Transaction(requestId, diffs)
+                case "DepositDecisions" =>
+                    c.downField("diffs").as[Vector[EvacuationDiff]].map(DepositDecisions.apply)
+                case other =>
+                    Left(
+                      io.circe.DecodingFailure(
+                        s"Unknown EvacuationDiffGroup tag: $other",
+                        c.history
+                      )
+                    )
+            }
+        }
+    }
+}
 
 object EvacuationDiff {
 
