@@ -86,7 +86,7 @@ class RestartAfterBlocksTest extends AnyFunSuite {
                 s"and $after at the end of the window"
           ),
         ).flatten
-        assert(problems.isEmpty, problems.mkString("; "))
+        val _ = assert(problems.isEmpty, problems.mkString("; "))
 
     /** Warm the head up, restart the named peer, then keep kicking blocks. Returns the uncaught
       * actor errors and the victim's own fast anchor at restart and at the end.
