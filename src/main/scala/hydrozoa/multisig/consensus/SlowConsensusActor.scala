@@ -15,7 +15,7 @@ import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, Stack, StackBrief, StackEffects, StackNumber}
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{Persistence, StoreKey, Timestamped, WriteBatch}
+import hydrozoa.multisig.persistence.{Markers, Persistence, StoreKey, Timestamped, WriteBatch}
 
 /** Slow-consensus actor.
   *
@@ -109,7 +109,24 @@ final case class SlowConsensusActor(
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case PreStart =>
-            initializeConnections
+            for {
+                _ <- initializeConnections
+                // Read this actor's own base after the connections barrier, like every other actor
+                // with base state (JointLedger's `fastBlockMark`, StackComposer's
+                // `recoverOrBootstrap`, BlockWeaver's `State.recover`): `ReplayActor` runs before
+                // the barrier opens, so the journal tail is already queued behind this PreStart and
+                // drains only once the base is in place.
+                //
+                // The base here is one marker: the highest stack this peer has hard-confirmed.
+                // Without it `lastConfirmed` stays `None`, the surplus guard in
+                // `handleRemoteHardAck` is inert, and every replayed remote ack for an
+                // already-confirmed stack is `bufferOrphan`ed instead of dropped — orphans that
+                // `clearOrphans` never reaches, because a cell is never re-created for a stack that
+                // already confirmed. The hard-ack journals are scanned from key 0, so that retained
+                // nothing less than every remote ack the head has ever produced, on every restart.
+                hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
+                _ <- stateRef.update(_.withLastConfirmed(hardConfirmed))
+            } yield ()
         case h: StackHandoff =>
             handleStackHandoff(h)
         case h: HardAck =>
@@ -592,6 +609,13 @@ object SlowConsensusActor {
             copy(orphanAcks =
                 orphanAcks.updated(h.stackNum, orphanAcks.getOrElse(h.stackNum, Nil) :+ h)
             )
+
+        /** Seed the confirmed high-water on recovery. Stacks confirm strictly in order, so this is
+          * exactly the boundary `handleRemoteHardAck` needs to tell a late surplus ack from a
+          * genuinely-early orphan.
+          */
+        def withLastConfirmed(stackNum: Option[StackNumber]): State =
+            copy(lastConfirmed = stackNum)
         def clearOrphans(stackNum: StackNumber): State =
             copy(orphanAcks = orphanAcks - stackNum)
         def dropCell(stackNum: StackNumber): State =

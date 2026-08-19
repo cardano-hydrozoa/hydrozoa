@@ -284,6 +284,14 @@ object ReplayActor:
             case k: JournalKey.SoftAck =>
                 targets.fastConsensusActor ! k.decodeValue(entry.framed).payload
             case k: JournalKey.HardAck =>
+                // Scanned from key 0 (no `StackNumber -> HardAckNumber` correspondence exists to
+                // floor it — see `ReplayCursors`, deferred to R3 / §10 Q9), so this re-sends every
+                // hard-ack the peer has ever seen on every boot. SlowConsensusActor classifies
+                // them: own-authored are echo-dropped, remote at/above the in-flight stack feed the
+                // re-formed cell (the reason this arm exists), and remote for already-confirmed
+                // stacks are dropped as surplus — which needs its `lastConfirmed` restored in its
+                // PreStart, or they leak into the orphan buffer. With that in place this is
+                // wasteful but harmless; the tight floor remains OPEN.
                 targets.slowConsensusActor ! k.decodeValue(entry.framed).payload
             case k: JournalKey.Block =>
                 val brief = k.decodeValue(entry.framed).payload
