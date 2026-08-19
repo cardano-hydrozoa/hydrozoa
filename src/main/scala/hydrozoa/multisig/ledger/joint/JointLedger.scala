@@ -665,13 +665,16 @@ final case class JointLedger(
     }
 
     /** When the joint ledger finishes producing (or reproducing) a brief:
-      *   1. Forward the brief to the fast-consensus actor — every peer does this.
-      *   2. If this peer is a hub, relay the brief to its coil peers — every brief, in block order.
+      *   1. Persist this peer's per-block bundle — every peer does this, and it goes **first**, so
+      *      `BlockResult[n]` is durable before anything can soft-confirm block `n` (see the note in
+      *      the body, and `ReplayActor.validateInvariants`).
+      *   2. Forward the brief to the fast-consensus actor — every peer does this.
+      *   3. If this peer is a hub, relay the brief to its coil peers — every brief, in block order.
       *      No-op off a hub.
-      *   3. If this peer is a head peer: broadcast the brief to the head-peer mesh when it leads
+      *   4. If this peer is a head peer: broadcast the brief to the head-peer mesh when it leads
       *      the block, and author its own soft-ack (for every block). A coil peer does neither — it
       *      can't lead (leadership implies being a head peer) and authors no soft-acks.
-      *   4. Hand the block result to the stack composer (slow side).
+      *   5. Hand the block result to the stack composer (slow side).
       *
       * L1 effect signing (slow consensus) does not happen here.
       */
@@ -690,48 +693,57 @@ final case class JointLedger(
                     tracer.traceWith(JointLedgerEvent.BriefProduced(b))
                 case _ => IO.unit
             }
-            // Every peer forwards the brief to its consensus actor.
-            _ <- conn.fastConsensusActor ! brief
-            // Every peer persists its per-block snapshot bundle (its fast-side recovery anchor),
-            // but only a head peer EMITS on the fast cycle — it broadcasts the brief when it leads
-            // the block and authors a soft-ack for every block. A coil peer never leads and authors
-            // none, so it persists the snapshot subset and emits nothing.
-            _ <- config.ownPeerId match {
+            // Every peer persists its per-block snapshot bundle (its fast-side recovery anchor)
+            // BEFORE the brief reaches fast consensus. The order matters: the brief is the last
+            // thing a consensus cell waits for, so handing it over can soft-confirm the block —
+            // and `softConfirmed` (max SoftConfirmation) must never outrun `fastBlockMark`
+            // (max BlockResult), or `ReplayActor.validateInvariants` refuses to boot the peer.
+            // A head peer is safe either way, since its cell also waits for its own soft-ack,
+            // authored below; a coil peer authors none and receives the head peers' acks through
+            // its hub, so its cell can already be one brief short of saturated when this runs.
+            // Persisting first makes the invariant hold by construction for both peer types
+            // rather than only for head peers.
+            softAck <- config.ownPeerId match {
                 case PeerId.Head(peerNum) =>
                     // Persist this peer's own per-soft-ack bundle before the soft-ack leaves (CR4
                     // write-before-send): own brief (leader) + own soft-ack lanes + BlockResult +
                     // deposits snapshot, in one atomic WriteBatch.
-                    val softAck = SoftAck(
+                    val ack = SoftAck(
                       peerNum = peerNum,
                       blockNum = brief.blockNum,
                       header = config.ownWallet.mkHeaderSignature(brief.header.signingBytes),
                       finalizationRequested = localFinalization.asBoolean
                     )
-                    for {
-                        _ <- persistOwnAckBundle(brief, softAck, blockResult)
-
-                        // Broadcast our OWN-led brief to the head mesh — only blocks WE lead go
-                        // to the mesh.
-                        _ <- IO.whenA(config.canLeadFast(brief.blockNum))(
-                          (conn.headPeerLiaisons ! brief).parallel
-                        )
-
-                        // Feed the hub's CoilRelay block lane from JointLedger for EVERY block —
-                        // own-led and remote-led (reproduced) alike. JointLedger applies blocks
-                        // serially in spine order, so it is the single ordered feeder into the
-                        // relay's contiguous block lane, and a hub relays each block exactly once.
-                        // (No-op off a hub, where coilRelay is None.) Splitting this by leadership
-                        // — own-led here, remote-led via PeerLiaisonHeadToHead.dispatch — let the
-                        // two feeders' sends race into the relay mailbox, the t3 AppendOutOfOrder
-                        // hang (see CoilRelay's ordering note).
-                        _ <- conn.coilRelay.traverse_(_ ! brief)
-
-                        _ <- conn.fastConsensusActor ! softAck
-                    } yield ()
+                    persistOwnAckBundle(brief, ack, blockResult).as(Some(ack))
                 case PeerId.Coil(_) =>
                     // No own brief lane (never leads) and no soft-ack (authors none) — persist only
                     // the per-block snapshot bundle, anchored at coilBlockMark = max(BlockResult).
-                    persistCoilBlockBundle(brief, blockResult)
+                    persistCoilBlockBundle(brief, blockResult).as(None)
+            }
+            // Every peer forwards the brief to its consensus actor.
+            _ <- conn.fastConsensusActor ! brief
+            // Only a head peer EMITS on the fast cycle — it broadcasts the brief when it leads the
+            // block and authors a soft-ack for every block. A coil peer emits nothing.
+            _ <- softAck.traverse_ { ack =>
+                for {
+                    // Broadcast our OWN-led brief to the head mesh — only blocks WE lead go
+                    // to the mesh.
+                    _ <- IO.whenA(config.canLeadFast(brief.blockNum))(
+                      (conn.headPeerLiaisons ! brief).parallel
+                    )
+
+                    // Feed the hub's CoilRelay block lane from JointLedger for EVERY block —
+                    // own-led and remote-led (reproduced) alike. JointLedger applies blocks
+                    // serially in spine order, so it is the single ordered feeder into the
+                    // relay's contiguous block lane, and a hub relays each block exactly once.
+                    // (No-op off a hub, where coilRelay is None.) Splitting this by leadership
+                    // — own-led here, remote-led via PeerLiaisonHeadToHead.dispatch — let the
+                    // two feeders' sends race into the relay mailbox, the t3 AppendOutOfOrder
+                    // hang (see CoilRelay's ordering note).
+                    _ <- conn.coilRelay.traverse_(_ ! brief)
+
+                    _ <- conn.fastConsensusActor ! ack
+                } yield ()
             }
             // Slow side: hand the block result to the stack composer (independent of fast cycle).
             _ <- conn.stackComposer ! blockResult
