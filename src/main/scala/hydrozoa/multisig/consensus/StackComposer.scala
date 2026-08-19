@@ -8,7 +8,6 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
@@ -23,7 +22,7 @@ import hydrozoa.multisig.ledger.stack.*
 import hydrozoa.multisig.persistence.recovery.BlockResultScan
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 import scala.annotation.tailrec
-import scalus.cardano.ledger.TransactionHash
+import scalus.cardano.ledger.{TransactionHash, Value}
 
 /** Stack composer.
   *
@@ -54,12 +53,12 @@ final case class StackComposer(
 ) extends Actor[IO, StackComposer.Request] {
     import StackComposer.*
 
-    /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section` →
-      * `HeadConfig.Bootstrap.Section` → `CardanoNetwork.Section`); expose it as a given so the
-      * typed `WriteBatch.put` / `Persistence.write` calls used by [[persistOwnStackClose]] pick it
-      * up implicitly.
+    /** `config` is a `HeadConfig.Bootstrap.Section` transitively (`HeadConfig.Section` extends it),
+      * and that section is a `CardanoNetwork.Section`; expose it as a given so the typed
+      * `WriteBatch.put` / `Persistence.write` calls used by [[persistOwnStackClose]] and
+      * [[State.recover]] pick it up implicitly.
       */
-    private given CardanoNetwork.Section = config
+    private given HeadConfig.Bootstrap.Section = config
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -334,7 +333,7 @@ final case class StackComposer(
                     List.empty[(BlockVersion.Full, Int)]
                   )
                 ) { case ((runMap, batch, maps), result) =>
-                    val nextMap = EvacuationMap.applyDiffs(runMap, result.evacuationMapDiff)
+                    val nextMap = EvacuationMap.applyDiffs(runMap, result.flatEvacuationDiffs)
                     if committed.contains(result.brief.blockNum) then
                         (
                           nextMap,
@@ -1002,7 +1001,7 @@ object StackComposer {
             hardAcked: Option[HardAckNumber],
             hardConfirmed: Option[StackNumber],
             own: PeerId
-        )(using CardanoNetwork.Section): IO[Option[State]] =
+        )(using config: HeadConfig.Bootstrap.Section): IO[Option[State]] =
             hardAcked match
                 case None => IO.pure(None)
                 case Some(hardAckNum) =>
@@ -1019,6 +1018,23 @@ object StackComposer {
                         lastBlockNum = unsignedStack.brief.lastBlockNum
                         treasury <- persistence.getOrFail(StoreKey.Treasury)
                         evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
+                        // The recovered pair is the balance-identity anchor re-entering the
+                        // system: the treasury and map snapshots live under two independent
+                        // store keys, so a divergent pair (partial write, replay bug, doctored
+                        // store) must be caught here, before the first stack close derives from
+                        // it. Like a missing key, an unbalanced pair is store corruption: fail
+                        // the boot.
+                        imbalance = treasury.value - evacuationMap.totalValue -
+                            Value(treasury.equity.coin) - config.treasuryToken
+                        _ <- IO.raiseWhen(!imbalance.isZero)(
+                          new IllegalStateException(
+                            "Recovered slow-side state is not balanced: treasury value" +
+                                s" (${treasury.value}) must equal the evacuation map total" +
+                                s" (${evacuationMap.totalValue}) + equity" +
+                                s" (${treasury.equity.coin}) + the beacon token, exactly" +
+                                s" (imbalance: $imbalance)"
+                          )
+                        )
                         blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
                     } yield Some(
                       blockResults.foldLeft(

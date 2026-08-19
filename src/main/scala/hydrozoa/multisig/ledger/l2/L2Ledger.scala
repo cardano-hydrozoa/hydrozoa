@@ -3,8 +3,8 @@ package hydrozoa.multisig.ledger.l2
 import cats.Monad
 import cats.data.EitherT
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup}
 
 /** Why [[L2Ledger.restoreTo]] could not reconstruct the committed state. Extends `Throwable` so the
   * one fatal caller (`JointLedger.State.recover`, at boot) can raise it directly; it is still a
@@ -29,7 +29,8 @@ object RestoreError:
   *
   * @param diffs
   *   Evacuation diffs generated from [[L2LedgerCommand.ApplyDepositDecisions]]s and
-  *   [[L2LedgerCommand.ApplyTransaction]]
+  *   [[L2LedgerCommand.ApplyTransaction]], one [[EvacuationDiffGroup]] per applied command in
+  *   command order — the per-command boundary the slow side's value-conservation check needs.
   *
   * @param payouts
   *   Payouts generated from [[L2LedgerCommand.ApplyTransaction]]
@@ -40,19 +41,24 @@ object RestoreError:
   *   tracking; never on the wire or on-chain.
   */
 final case class L2LedgerInteractionState private (
-    diffs: Vector[EvacuationDiff],
+    diffs: Vector[EvacuationDiffGroup],
     payouts: Vector[Payout.Obligation],
     payoutRequestIds: Vector[RequestId]
 ):
     /** Fold in an [[L2LedgerResponse.Applied.ApplyDepositDecisions]]'s effects: append its
-      * evacuation diffs.
+      * evacuation diffs as the block's [[EvacuationDiffGroup.DepositDecisions]] group.
       */
     def appendDecisionEffects(extraDiffs: Vector[EvacuationDiff]): L2LedgerInteractionState =
-        L2LedgerInteractionState(diffs ++ extraDiffs, payouts, payoutRequestIds)
+        L2LedgerInteractionState(
+          diffs :+ EvacuationDiffGroup.DepositDecisions(extraDiffs),
+          payouts,
+          payoutRequestIds
+        )
 
-    /** Fold in an [[L2LedgerResponse.Applied.ApplyTransaction]]'s effects: append its diffs and
-      * payouts, tagging each payout with the producing `requestId` — the ledger-agnostic
-      * withdrawal-effect provenance (all payouts of one transaction share its request).
+    /** Fold in an [[L2LedgerResponse.Applied.ApplyTransaction]]'s effects: append its diffs as an
+      * [[EvacuationDiffGroup.Transaction]] group and its payouts, tagging both with the producing
+      * `requestId` — the ledger-agnostic withdrawal-effect provenance (all payouts of one
+      * transaction share its request).
       */
     def appendTransactionEffects(
         extraDiffs: Vector[EvacuationDiff],
@@ -60,7 +66,7 @@ final case class L2LedgerInteractionState private (
         requestId: RequestId
     ): L2LedgerInteractionState =
         L2LedgerInteractionState(
-          diffs ++ extraDiffs,
+          diffs :+ EvacuationDiffGroup.Transaction(requestId, extraDiffs),
           payouts ++ extraPayouts,
           payoutRequestIds ++ Vector.fill(extraPayouts.length)(requestId)
         )
@@ -74,7 +80,7 @@ object L2LedgerInteractionState:
       * (driven by the ledger's [[L2LedgerResponse.Applied]] effects).
       */
     protected[l2] def apply(
-        diffs: Vector[EvacuationDiff],
+        diffs: Vector[EvacuationDiffGroup],
         payouts: Vector[Payout.Obligation],
         payoutRequestIds: Vector[RequestId]
     ) =

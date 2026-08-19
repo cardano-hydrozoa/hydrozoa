@@ -307,10 +307,14 @@ case class EutxoL2Ledger private (
                 val attempt = for {
                     l2Genesis <- Try(L2Genesis.fromDepositEventRegistration(req)).toEither.left
                         .map(e => s"Invalid deposit transaction payload $e")
-                    // Reject a deposit that fails value conservation (cover) or spawns a sub-min-ada
-                    // output on the live path, before applyMutation — deliberately not inside
-                    // applyMutation, so restoreTo's replay never re-litigates validity.
-                    _ <- EutxoDepositGates.validateDepositCover(l2Genesis, req.depositL2Value)
+                    // Reject a deposit that fails value conservation (spawned != depositL2Value)
+                    // or spawns a sub-min-ada output on the live path, before applyMutation —
+                    // deliberately not inside applyMutation, so restoreTo's replay never
+                    // re-litigates validity.
+                    _ <- EutxoDepositGates.validateDepositConservation(
+                      l2Genesis,
+                      req.depositL2Value
+                    )
                     _ <- EutxoDepositGates.validateSpawnedOutputs(l2Genesis, config)
                     next <- applyMutation(commandNumber, before, req)
                 } yield next

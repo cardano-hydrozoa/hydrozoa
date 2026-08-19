@@ -7,7 +7,6 @@ import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
@@ -22,6 +21,7 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
@@ -30,6 +30,7 @@ import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.Value
 import scalus.uplc.builtin.ByteString
 
 /** Tests for the R2-fast recover seams — the pure-over-store reconstruction of `JointLedger`'s and
@@ -42,8 +43,8 @@ import scalus.uplc.builtin.ByteString
 class RecoverSeamsTest extends AnyFunSuite:
 
     /** A deterministic node config (fixed seed) — supplies the L2 ledger's genesis utxos, the head
-      * config for building briefs, and the `CardanoNetwork.Section` the store codecs round-trip
-      * under.
+      * config for building briefs, and the `HeadConfig.Bootstrap.Section` the store codecs
+      * round-trip under (and `StackComposer.State.recover` reads the beacon token from).
       */
     private val config: NodeConfig =
         MultiNodeConfig.generateDefault
@@ -52,9 +53,18 @@ class RecoverSeamsTest extends AnyFunSuite:
 
     private val headConfig: HeadConfig = config.headConfig
 
-    private given CardanoNetwork.Section = config
+    private given HeadConfig.Bootstrap.Section = config
 
     private val stamp: ArrivalStamp = ArrivalStamp(generation = 0, monotonicNanos = 1L)
+
+    /** A balanced treasury for the seeded (empty) evacuation map: value == equity + the head's
+      * beacon token — `StackComposer.State.recover` verifies this identity on the recovered pair.
+      */
+    private val balancedTreasury: MultisigTreasuryUtxo =
+        TreasuryFixture.sampleTreasury.copy(
+          treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
+          value = Value(TreasuryFixture.sampleTreasury.equity.coin) + headConfig.treasuryToken
+        )
 
     /** This node's head peer number (the fixture config is always a head node). */
     private val ownNum: HeadPeerNumber = config.ownPeerId match {
@@ -171,7 +181,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   JournalValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
                 )
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
-                _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
+                _ <- p.put(StoreKey.Treasury)(balancedTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 markers = Markers(
                   softConfirmed = None,
@@ -192,7 +202,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   s.lastClosedBlockNum == BlockNumber(lastBlock) &&
                   s.nextOwnHardAckNum == HardAckNumber(hardAckNum + 1) &&
                   s.previousStackHardConfirmed &&
-                  s.treasury == TreasuryFixture.sampleTreasury &&
+                  s.treasury == balancedTreasury &&
                   s.evacuationMap == EvacuationMap.empty &&
                   s.pending.isEmpty &&
                   s.ready.isEmpty
@@ -215,7 +225,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   JournalValue(stamp, hardAck(peer = 0, ackNum = 0, stack = stackN))
                 )
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
-                _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
+                _ <- p.put(StoreKey.Treasury)(balancedTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 // A stale BlockResult at the last closed block must be excluded (scan is exclusive).
                 // Persisted BlockResults hold only the deltas; recover rehydrates each brief from the
@@ -294,7 +304,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(hardAckNum)))(
                   JournalValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
                 )
-                _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
+                _ <- p.put(StoreKey.Treasury)(balancedTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 // A stale BlockResult at the last closed block is excluded (scan is exclusive).
                 // Persisted BlockResults hold only the deltas; the brief is rehydrated from the
@@ -316,7 +326,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   s.lastClosedBlockNum == BlockNumber(lastBlock) &&
                   s.nextOwnHardAckNum == HardAckNumber(hardAckNum + 1) &&
                   s.previousStackHardConfirmed &&
-                  s.treasury == TreasuryFixture.sampleTreasury &&
+                  s.treasury == balancedTreasury &&
                   s.evacuationMap == EvacuationMap.empty &&
                   s.pending.keySet == Set(BlockNumber(8))
               }

@@ -83,6 +83,14 @@ resolution-for-parse comes from the config, not L1.
 **B. `InitializationTx.Parse` takes equity from the metadata.** It reads `md.totalEquity − fee`
 rather than `config.initialEquityContributed`.
 
+**B′. The parse anchors the balance identity.** The treasury output's value must equal
+`config.initialEvacuationMap.totalValue + equity + beacon` exactly, in the coin and in every asset
+(`Error.TreasuryNotBalanced` otherwise). This is the anchor of the head's double-entry identity
+(`treasury.value == map total + equity + beacon`): every later slow-side state derives from the
+parsed one through conserving steps (the per-command conservation gate over L2 reports;
+the settlement builder's value exactness, established by property test), so the identity is parsed
+once here — a doctored or mis-built init tx fails at config load, before the head runs.
+
 **C. Config-read parses, and the config has its own codec.** `HeadConfig.headConfigDecoder` takes a
 parse path (reusing `InitializationTxSeq.Parse`'s parse-init→`FallbackTx.Build` flow, without any
 body-compare against a supplied fallback). A dedicated config encoder/decoder serializes the init tx

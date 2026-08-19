@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerComman
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
-import scalus.cardano.ledger.{Coin, TransactionHash, TransactionInput, Value}
+import scalus.cardano.ledger.{AssetName, Coin, TransactionHash, TransactionInput, Value}
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
@@ -20,9 +20,11 @@ import test.Generators.Hydrozoa.genGenesisObligation
 
 /** EUTXO stateless screening (docs/spec/l2-isomorphism.md): a transaction payload must parse (and
   * carry the headId pin, tested separately in [[HeadIdPinTest]]); a deposit's l2Payload must decode
-  * to GenesisObligations whose total value is covered by depositL2Value. The accept path for
-  * well-formed transactions is covered by the stage integration suites; deposit L1 screening (the
-  * l2Payload pin + accept-by) is Hydrozoa-side and out of the ledger's scope.
+  * to GenesisObligations whose total value equals depositL2Value exactly — spawning more would mint
+  * L2 value, spawning less would silently donate the difference to the treasury (value the
+  * evacuation map never accounts for). The accept path for well-formed transactions is covered by
+  * the stage integration suites; deposit L1 screening (the l2Payload pin + accept-by) is
+  * Hydrozoa-side and out of the ledger's scope.
   */
 class EutxoL2ScreenTest extends AnyFunSuite:
 
@@ -107,7 +109,7 @@ class EutxoL2ScreenTest extends AnyFunSuite:
         assert(screener.screenTx(garbage).value.unsafeRunSync().isLeft)
     }
 
-    test("screenDeposit accepts when depositL2Value covers the l2Payload outputs (Yes)") {
+    test("screenDeposit accepts when depositL2Value equals the l2Payload outputs (Yes)") {
         assert(
           screener.screenDeposit(mkScreenDeposit(Value.ada(5))).value.unsafeRunSync().isRight
         )
@@ -116,6 +118,27 @@ class EutxoL2ScreenTest extends AnyFunSuite:
     test("screenDeposit rejects when the l2Payload outputs exceed depositL2Value (No)") {
         assert(
           screener.screenDeposit(mkScreenDeposit(Value.ada(4))).value.unsafeRunSync().isLeft
+        )
+    }
+
+    test("screenDeposit rejects when depositL2Value exceeds the l2Payload outputs (No)") {
+        // An under-spawning deposit: 6 ADA absorbed by the treasury but only 5 ADA spawned on L2.
+        // The 1 ADA difference would enter the treasury without ever entering the evacuation map —
+        // unaccounted value that breaks the map == deposits − payouts conservation invariant.
+        assert(
+          screener.screenDeposit(mkScreenDeposit(Value.ada(6))).value.unsafeRunSync().isLeft
+        )
+    }
+
+    test("screenDeposit rejects a depositL2Value asset the l2Payload does not spawn (No)") {
+        val withToken = Value.asset(
+          nodeConfig.headConfig.headMultisigScript.script.scriptHash,
+          AssetName.fromHex("deadbeef"),
+          1L,
+          Coin.ada(5)
+        )
+        assert(
+          screener.screenDeposit(mkScreenDeposit(withToken)).value.unsafeRunSync().isLeft
         )
     }
 
@@ -148,13 +171,28 @@ class EutxoL2ScreenTest extends AnyFunSuite:
     }
 
     test(
-      "registerDeposit rejects when spawned outputs exceed depositL2Value (cover, at registration)"
+      "registerDeposit rejects when spawned outputs exceed depositL2Value (at registration)"
     ) {
-        // l2Payload spawns 5 ADA; a 4-ADA deposit does not cover it, so registration must reject —
-        // cover is authoritative at registration, not only at the (origin-peer, stub-for-remote) screen.
+        // l2Payload spawns 5 ADA; a 4-ADA deposit would over-credit the L2 (mint value), so
+        // registration must reject — conservation is authoritative at registration, not only at
+        // the (origin-peer, stub-for-remote) screen.
         assert(
           freshLedger
               .registerDeposit(L2CommandNumber(1L), mkRegisterDeposit(Value.ada(4), l2Payload))
+              .unsafeRunSync()
+              .isInstanceOf[L2LedgerResponse.Rejected]
+        )
+    }
+
+    test(
+      "registerDeposit rejects when depositL2Value exceeds spawned outputs (at registration)"
+    ) {
+        // l2Payload spawns 5 ADA; a 6-ADA deposit would under-credit the L2 (the depositor's
+        // missing 1 ADA is absorbed by the treasury but never enters the evacuation map), so
+        // registration must reject.
+        assert(
+          freshLedger
+              .registerDeposit(L2CommandNumber(1L), mkRegisterDeposit(Value.ada(6), l2Payload))
               .unsafeRunSync()
               .isInstanceOf[L2LedgerResponse.Rejected]
         )
