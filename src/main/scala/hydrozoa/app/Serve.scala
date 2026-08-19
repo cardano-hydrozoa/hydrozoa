@@ -20,7 +20,7 @@ import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTra
 import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
-import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener}
+import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener, RemoteL2ScreenerEventFormat}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat}
@@ -28,8 +28,10 @@ import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, Hyd
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
 import org.http4s.Uri
+import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
+import scala.concurrent.duration.*
 
 /** The head-node server: the `serve` subcommand of the `hydrozoa` CLI.
   *
@@ -251,7 +253,43 @@ object Serve {
                       config = nodeConfig,
                       tracer = tracer,
                     )
-                } yield (ledger, RemoteL2Screener, Option.empty[EutxoL2LedgerReader[IO]])
+                    screener <- mkRemoteScreener(nodeConfig)
+                } yield (ledger, screener, Option.empty[EutxoL2LedgerReader[IO]])
+        }
+
+    /** The screener for a remote-ledger node: the stateless check every request must pass before it
+      * is assigned a RequestId. With `remoteScreenerUri` configured, deposits are screened by the
+      * remote ledger's screening endpoint, reached over a dedicated ember client so screening never
+      * shares the mutation transport. Without it, screening is a passthrough — every request is
+      * accepted here and checked only at submission.
+      */
+    private def mkRemoteScreener(nodeConfig: NodeConfig): Resource[IO, L2Screener[IO]] =
+        nodeConfig.remoteScreenerUri match {
+            case None =>
+                Resource
+                    .eval(log.info("L2 screener: passthrough (no remoteScreenerUri)"))
+                    .map(_ => RemoteL2Screener.passthrough)
+            case Some(uri) =>
+                for {
+                    parsedUri <- Resource.eval(
+                      IO.fromEither(
+                        Uri.fromString(uri)
+                            .left
+                            .map(e =>
+                                new IllegalArgumentException(s"invalid remoteScreenerUri: $e")
+                            )
+                      )
+                    )
+                    _ <- Resource.eval(log.info(s"L2 screener: remote at $uri"))
+                    // A short timeout, not ember's 45s default: screening is a fail-open
+                    // advisory gate on the request path, so a hung screener should cost a
+                    // request a few seconds at most before it proceeds unscreened.
+                    client <- EmberClientBuilder.default[IO].withTimeout(5.seconds).build
+                } yield RemoteL2Screener(
+                  client,
+                  parsedUri,
+                  Slf4jTracer.sink.contramap(RemoteL2ScreenerEventFormat.humanFormat),
+                )
         }
 
     /** Build the head-node transports (mesh + optional hub-coil), bind one shared `NodeWsServer`,

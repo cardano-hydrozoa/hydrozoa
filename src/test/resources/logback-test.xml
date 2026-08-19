@@ -31,6 +31,7 @@
     <logger name="CoilAckSequencer" level="warn"/>
     <logger name="HydrozoaHttp" level="warn"/>
     <logger name="RemoteL2Ledger" level="warn"/>
+    <logger name="RemoteL2Screener" level="warn"/>
     <logger name="BlockHeader" level="warn"/>
     <logger name="TxTiming" level="warn"/>
     <logger name="DepositsMap" level="warn"/>

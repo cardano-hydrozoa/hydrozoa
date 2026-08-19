@@ -44,6 +44,7 @@ case class MultiNodeConfig private (
                       nodeOperationMultisigConfig = pc.nodeOperationMultisigConfig,
                       pc.blockfrostApiKey,
                       pc.remoteLedgerUri,
+                      pc.remoteScreenerUri,
                       pc.adminUsername,
                       pc.adminPassword,
                       pc.httpHost,

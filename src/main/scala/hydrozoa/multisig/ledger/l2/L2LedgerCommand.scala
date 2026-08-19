@@ -76,22 +76,31 @@ object L2LedgerCommand {
 
     object RegisterDeposit {
 
+        // A RegisterDeposit is a ScreenDeposit plus the consensus-assigned fields, and the wire
+        // form keeps that relationship: the deposit-reference fields are encoded by the
+        // ScreenDeposit encoder (the screening endpoint's request body,
+        // hydrozoa.multisig.ledger.remote.RemoteL2Screener), so the two bodies cannot drift.
         given depositRegistrationEncoder: io.circe.Encoder[L2LedgerCommand.RegisterDeposit] = {
-            import Destination.given
-            import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Encoder_Value, given_Encoder_Coin}
-            import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
+            import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _}
+            import hydrozoa.multisig.ledger.remote.RemoteL2Screener.screenDepositEncoder
             import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
             (r: L2LedgerCommand.RegisterDeposit) =>
-                io.circe.Json.obj(
-                  "requestId" -> r.requestId.asJson,
-                  "blockNumber" -> r.blockNumber.asJson,
-                  "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
-                  "depositId" -> r.depositId.asJson,
-                  "depositFee" -> r.depositFee.asJson,
-                  "depositL2Value" -> r.depositL2Value.asJson,
-                  "refundDestination" -> r.refundDestination.asJson,
-                  "l2Payload" -> summon[io.circe.Encoder[ByteString]].apply(r.l2Payload)
-                )
+                L2Screener
+                    .ScreenDeposit(
+                      depositId = r.depositId,
+                      depositFee = r.depositFee,
+                      depositL2Value = r.depositL2Value,
+                      refundDestination = r.refundDestination,
+                      l2Payload = r.l2Payload
+                    )
+                    .asJson
+                    .deepMerge(
+                      io.circe.Json.obj(
+                        "requestId" -> r.requestId.asJson,
+                        "blockNumber" -> r.blockNumber.asJson,
+                        "blockCreationStartTime" -> r.blockCreationStartTime.asJson
+                      )
+                    )
         }
 
         // FIXME (from Peter, after relocating from `RemoteL2LedgerCodecs`):
