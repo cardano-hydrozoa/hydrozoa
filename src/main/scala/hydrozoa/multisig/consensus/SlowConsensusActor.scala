@@ -601,12 +601,12 @@ object SlowConsensusActor {
         def initial: State = State(Map.empty, Map.empty, None)
     }
 
-    enum HandoffError extends Throwable:
+    enum HandoffError extends RuntimeException:
         case MissingOwnAck(what: String)
         override def getMessage: String = this match
             case MissingOwnAck(w) => s"StackHandoff missing $w ack"
 
-    enum CellError extends Throwable:
+    enum CellError extends RuntimeException:
         case NoCell(stackNum: StackNumber)
         case UnknownPeer(peer: PeerId)
         case UnexpectedPayload(stackNum: StackNumber, roundLabel: String)

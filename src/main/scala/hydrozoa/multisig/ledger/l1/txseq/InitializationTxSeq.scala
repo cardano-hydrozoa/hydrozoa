@@ -21,7 +21,7 @@ private object InitializationTxSeqOps {
     type Config = HeadConfig.Bootstrap.Section
 
     object Build {
-        enum Error extends Throwable {
+        enum Error extends RuntimeException {
             case InitializationTxError(e: (SomeBuildErrorOnly, String))
             case FallbackTxError(e: SomeBuildError)
 

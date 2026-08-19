@@ -69,8 +69,9 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       * failure. The previous version stopped at `case _: Exception`, which reads as exhaustive and
       * is not — `Throwable` has a second child, `Error` (`StackOverflowError`, `OutOfMemoryError`),
       * and Scala, unlike Java, has no checked-exception pressure to make you notice a class that
-      * extends `Throwable` directly. Several of ours do, including `LaneOutbound.AppendOutOfOrder`,
-      * which is raised on the hub's contiguous coil lanes.
+      * extends `Throwable` directly. Several of ours did, `LaneOutbound.AppendOutOfOrder` — raised
+      * on the hub's contiguous coil lanes — among them; they have since been re-rooted at
+      * `RuntimeException`, which leaves this arm as belt-and-braces rather than the live path.
       *
       * A failure outside the decider's domain is not a handled failure. It surfaced as
       * `emergency stop: exception in failure handling for …`, which discards the original error and
