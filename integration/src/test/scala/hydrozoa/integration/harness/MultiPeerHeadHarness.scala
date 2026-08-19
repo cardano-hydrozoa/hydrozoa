@@ -1,6 +1,7 @@
 package hydrozoa.integration.harness
 
 import cats.data.ReaderT
+import cats.effect.std.Supervisor
 import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import com.comcast.ip4s.{Port, host}
@@ -736,34 +737,16 @@ object MultiPeerHeadHarness:
                     .nodeConfigs(peerNum)
                     .nodeOperationMultisigConfig
                     .cardanoLiaisonPollingPeriod
-            // Per-peer CL tick fibers, tracked (as cancel actions) so a crash-restart can cancel the
-            // victim's old tick — which would otherwise keep poking its stopped CardanoLiaison, a
-            // dead-letter flood — and start a fresh one. All are cancelled on release.
-            headTicks <- Resource.make(
-              Ref[IO].of(Map.empty[HeadPeerNumber, IO[Unit]]).flatTap { ref =>
-                  peerConnections.toList.traverse_ { case (peerNum, conns) =>
-                      Ticks
-                          .tickLoop(headPollingPeriodOf(peerNum), conns)
-                          .start
-                          .flatMap(fib => ref.update(_.updated(peerNum, fib.cancel)))
-                  }
-              }
-            )(_.get.flatMap(_.values.toList.traverse_(identity)))
             coilPollingPeriodOf = (coilNum: CoilPeerNumber) =>
                 coilMrms(coilNum).config.nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
-            // Per-coil CL tick fibers, tracked as cancel actions for the same reason as headTicks:
-            // a crash-restart must retire the victim's old tick, which would otherwise keep poking
-            // its stopped CardanoLiaison.
-            coilTicks <- Resource.make(
-              Ref[IO].of(Map.empty[CoilPeerNumber, IO[Unit]]).flatTap { ref =>
-                  coilConnections.toList.traverse_ { case (coilNum, conns) =>
-                      Ticks
-                          .tickLoop(coilPollingPeriodOf(coilNum), conns)
-                          .start
-                          .flatMap(fib => ref.update(_.updated(coilNum, fib.cancel)))
-                  }
-              }
-            )(_.get.flatMap(_.values.toList.traverse_(identity)))
+            // Every CL tick fiber — initial and restart-spawned — is owned by this Supervisor, which
+            // cancels all outstanding fibers on release. The `headTicks`/`coilTicks` refs it returns
+            // index the per-peer/coil cancel actions so a crash-restart can retire the victim's old
+            // tick — which would otherwise keep poking its stopped CardanoLiaison, a dead-letter
+            // flood — before spawning a fresh one.
+            tickSupervisor <- Supervisor[IO]
+            headTicks <- Ticks.superviseAll(tickSupervisor, peerConnections, headPollingPeriodOf)
+            coilTicks <- Ticks.superviseAll(tickSupervisor, coilConnections, coilPollingPeriodOf)
             peerEntries <- Resource.eval(
               peerConnections.toList.traverse { case (peerNum, conns) =>
                   for
@@ -792,9 +775,9 @@ object MultiPeerHeadHarness:
                   }
               }
             )
-            // Crash-restart bookkeeping: the current per-peer runtime (updated on each restart),
-            // an actor-name generation counter, and the restart-started tick fibers (cancelled on
-            // release; the initial bulk ticks are owned by Ticks.startForHeads above).
+            // Crash-restart bookkeeping: the current per-peer runtime (updated on each restart) and
+            // an actor-name generation counter. (Restart-spawned tick fibers are owned by
+            // tickSupervisor, like the initial ones.)
             peerRuntime <- Resource.eval(Ref[IO].of(peerMrms))
             coilRuntime <- Resource.eval(Ref[IO].of(coilMrms))
             restartGen <- Resource.eval(Ref[IO].of(0))
@@ -824,9 +807,11 @@ object MultiPeerHeadHarness:
                     (mrm, ref) = spawned
                     conns <- mrm.connectionsDeferred.get
                     // Cancel the victim's previous tick (its CardanoLiaison is now stopped), then
-                    // start a fresh tick against the new connections.
+                    // start a fresh supervised tick against the new connections.
                     _ <- headTicks.get.flatMap(_.getOrElse(peerNum, IO.unit))
-                    tickFib <- Ticks.tickLoop(headPollingPeriodOf(peerNum), conns).start
+                    tickFib <- tickSupervisor.supervise(
+                      Ticks.tickLoop(headPollingPeriodOf(peerNum), conns)
+                    )
                     _ <- headTicks.update(_.updated(peerNum, tickFib.cancel))
                     submissionClient <- Http.mkPeerSubmissionClient(peerNum, conns, multiNodeConfig)
                     h <- hooks.handle(PeerId.Head(peerNum), conns)
@@ -866,7 +851,9 @@ object MultiPeerHeadHarness:
                     (mrm, ref) = spawned
                     conns <- mrm.connectionsDeferred.get
                     _ <- coilTicks.get.flatMap(_.getOrElse(coilNum, IO.unit))
-                    tickFib <- Ticks.tickLoop(coilPollingPeriodOf(coilNum), conns).start
+                    tickFib <- tickSupervisor.supervise(
+                      Ticks.tickLoop(coilPollingPeriodOf(coilNum), conns)
+                    )
                     _ <- coilTicks.update(_.updated(coilNum, tickFib.cancel))
                     h <- hooks.handle(PeerId.Coil(coilNum), conns)
                     _ <- coilRuntime.update(
@@ -1752,21 +1739,25 @@ object MultiPeerHeadHarness:
           * `System.currentTimeMillis()` rather than the F-effect clock — both unusable under
           * TestControl).
           */
-        def startForHeads(
-            connections: Map[HeadPeerNumber, HeadMultisigRegimeManager.Connections],
-            pollingPeriodOf: HeadPeerNumber => FiniteDuration,
-        ): Resource[IO, Unit] =
-            connections.toList.traverse_ { case (peerNum, conns) =>
-                startedFiber(tickLoop(pollingPeriodOf(peerNum), conns))
-            }
-
-        def startForCoils(
-            connections: Map[CoilPeerNumber, HeadMultisigRegimeManager.Connections],
-            pollingPeriodOf: CoilPeerNumber => FiniteDuration,
-        ): Resource[IO, Unit] =
-            connections.toList.traverse_ { case (coilNum, conns) =>
-                startedFiber(tickLoop(pollingPeriodOf(coilNum), conns))
-            }
+        /** Spawn one supervised CL tick fiber per key against its connections, returning a ref of
+          * per-key cancel actions. The Supervisor owns the fibers — registering each at spawn time
+          * and cancelling all on its own release — so a crash partway through the spawn still
+          * unwinds the fibers already started. The ref is only a restart index, letting a
+          * crash-restart retire a single victim's tick before spawning its replacement.
+          */
+        def superviseAll[K](
+            supervisor: Supervisor[IO],
+            connections: Map[K, HeadMultisigRegimeManager.Connections],
+            pollingPeriodOf: K => FiniteDuration,
+        ): Resource[IO, Ref[IO, Map[K, IO[Unit]]]] =
+            for
+                ticks <- Resource.eval(Ref[IO].of(Map.empty[K, IO[Unit]]))
+                _ <- Resource.eval(connections.toList.parTraverse_ { case (k, conns) =>
+                    supervisor
+                        .supervise(tickLoop(pollingPeriodOf(k), conns))
+                        .flatMap(fib => ticks.update(_.updated(k, fib.cancel)))
+                })
+            yield ticks
 
         // Non-private so a crash-restart can start a fresh tick for the rebuilt peer's new
         // connections (the restarted peer's old tick keeps poking its now-stopped CardanoLiaison —
