@@ -333,7 +333,7 @@ object Metadata {
         } yield (headId, innerMap)
     }
 
-    sealed trait ParseError extends Throwable
+    sealed trait ParseError extends RuntimeException
     case class CborDecodingError(wrapped: Throwable) extends ParseError {
         override def toString: String = s"CBOR Decoding failed during metadata parsing $wrapped"
     }

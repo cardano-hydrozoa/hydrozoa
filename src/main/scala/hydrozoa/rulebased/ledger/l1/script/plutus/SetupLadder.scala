@@ -38,7 +38,7 @@ object SetupLadder {
     def rungDatums: NonEmptyList[Data] =
         NonEmptyList.fromListUnsafe(List.tabulate(rungCount)(rungDatum))
 
-    final case class UncoveredEvacuationCount(k: Int) extends Throwable {
+    final case class UncoveredEvacuationCount(k: Int) extends RuntimeException {
         override def getMessage: String =
             s"No setup ladder rung covers $k evacuations (valid range: 1 to ${1 << (rungCount - 1)})"
     }

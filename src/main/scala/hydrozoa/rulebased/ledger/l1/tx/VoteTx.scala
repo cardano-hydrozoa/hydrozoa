@@ -49,7 +49,7 @@ private object VoteTxOps {
         FallbackContingency.Section & OwnPeerPrivate.Section
 
     object Build {
-        enum Error extends Throwable:
+        enum Error extends RuntimeException:
             case InvalidVoteDatum(msg: String)
             case VoteAlreadyCast
             case TreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)

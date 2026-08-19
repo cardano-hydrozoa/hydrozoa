@@ -25,7 +25,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
   */
 object CollateralUtxo {
 
-    sealed trait ParseError extends Throwable
+    sealed trait ParseError extends RuntimeException
 
     object ParseError {
         case object NotABabbageOutput extends ParseError {

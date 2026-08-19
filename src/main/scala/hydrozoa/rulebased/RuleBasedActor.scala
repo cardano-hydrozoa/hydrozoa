@@ -1381,7 +1381,7 @@ object RuleBasedActor {
             case object NoEvacuateesRemaining extends Recoverable
         }
 
-        sealed trait BuildError extends Throwable
+        sealed trait BuildError extends RuntimeException
         object BuildError {
             case class Vote(wrapped: VoteTx.Build.Error) extends Unrecoverable {
                 override def getMessage: String = wrapped.getMessage

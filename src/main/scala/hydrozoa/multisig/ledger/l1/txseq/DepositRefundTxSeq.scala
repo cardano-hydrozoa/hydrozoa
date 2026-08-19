@@ -78,7 +78,7 @@ private object DepositRefundTxSeqOps {
         InitializationParameters.Section & TxTiming.Section & FallbackContingency.Section
 
     object Build {
-        sealed trait Error extends Throwable {
+        sealed trait Error extends RuntimeException {
             override def toString: String = this match {
                 case Error.Deposit((err, s)) => s"Deposit tx builder failed: $s, error: $err"
                 case Error.Refund((err, s))  => s"Refund tx builder failed: $s, error: $err"
@@ -192,7 +192,7 @@ private object DepositRefundTxSeqOps {
     object Parse {
         type ParseErrorOr[A] = Either[Error, A]
 
-        enum Error extends Throwable {
+        enum Error extends RuntimeException {
             case Deposit(e: DepositTx.Parse.Error)
             case RefundBuildError(e: (SomeBuildErrorOnly, String))
 

@@ -933,7 +933,7 @@ object JointLedger {
         coilRelay: Option[CoilRelay.Handle] = None
     )
 
-    enum UserRequestError extends Throwable:
+    enum UserRequestError extends RuntimeException:
         // Inherits Throwable.toString = "<className>: <getMessage>"; we override getMessage so
         // the rejection log shows both timestamps and can be diagnosed at a glance.
         override def getMessage: String = this match

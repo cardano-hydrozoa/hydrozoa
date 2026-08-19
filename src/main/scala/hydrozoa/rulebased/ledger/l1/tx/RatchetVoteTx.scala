@@ -49,7 +49,7 @@ private object RatchetVoteTxOps {
         FallbackContingency.Section & OwnPeerPrivate.Section
 
     object Build {
-        enum Error extends Throwable:
+        enum Error extends RuntimeException:
             case NotMonotonic(wrapped: RatchetNotMonotonic)
             case TreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
             case BuildError(wrapped: SomeBuildError)
