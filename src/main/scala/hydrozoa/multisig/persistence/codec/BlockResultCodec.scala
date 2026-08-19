@@ -14,7 +14,8 @@ import io.circe.{Decoder, Encoder}
   * [[BlockResult.persisted]]). The slow side rebuilds its `pending` map from these on restart (§6).
   *
   * Derived structurally from the field leaf codecs:
-  *   - `EvacuationDiff` — the diff codec on `EvacuationMap`'s companion;
+  *   - `EvacuationDiffGroup` (per-command diff groups, wrapping `EvacuationDiff`) — the codecs on
+  *     their companions in `hydrozoa.multisig.ledger.joint`;
   *   - `Payout.Obligation` — `RemoteL2LedgerCodecs`;
   *   - `RefundTx.PostDated` — [[RefundTxCodec]];
   *   - `DepositUtxo` — [[DepositUtxoCodec]];

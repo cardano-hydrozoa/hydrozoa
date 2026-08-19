@@ -38,11 +38,11 @@ final class EutxoL2Screener(config: EutxoL2Ledger.Config) extends L2Screener[IO]
             l2Genesis <- Try(
               L2Genesis.fromDepositPayload(req.depositId, req.l2Payload)
             ).toEither.left.map(e => L2ScreenError(s"Invalid deposit transaction payload $e"))
-            // depositL2Value must cover the spawned outputs, and each output must clear min-ada on
-            // its own — the same two gates registration applies, so a screened deposit can be both
-            // registered and absorbed.
+            // depositL2Value must equal the spawned outputs exactly, and each output must clear
+            // min-ada on its own — the same two gates registration applies, so a screened deposit
+            // can be both registered and absorbed.
             _ <- EutxoDepositGates
-                .validateDepositCover(l2Genesis, req.depositL2Value)
+                .validateDepositConservation(l2Genesis, req.depositL2Value)
                 .left
                 .map(L2ScreenError(_))
             _ <- EutxoDepositGates

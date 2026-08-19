@@ -5,7 +5,7 @@ import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
+import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, Metadata as MD}
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
@@ -407,11 +407,14 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                 // - Collaterals (n)
                 // - Peer Votes (n)
                 // - Default Vote (1)
+                // Ballot boxes are per HEAD peer, so the slice is keyed on the head-peer count.
+                // `numSigners` (head peers + coilQuorum) coincides with it only on a coil-free
+                // head, which is all this suite generates today.
                 val actualPeerVoteOutputs = NonEmptyList.fromListUnsafe(
                   fbTxBody.outputs
                       .slice(
-                        1 + expectedHeadNativeScript.numSigners,
-                        1 + (expectedHeadNativeScript.numSigners * 2)
+                        1 + config.headPeerIds.length,
+                        1 + (config.headPeerIds.length * 2)
                       )
                       .toList
                       .map(_.value)
@@ -548,6 +551,36 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                     .result
 
                 s"InitializationTxSeq should parse successfully $parseRes" |: parseRes.isRight
+            }
+
+            // The init tx anchors the head's double-entry balance identity: the treasury output
+            // must equal the initial evacuation map's value + equity + the beacon token exactly,
+            // and the parse enforces it. One extra lovelace on the treasury output (value the
+            // books attribute to nobody) must fail the parse as TreasuryNotBalanced.
+            props.append {
+                val body = iTx.tx.body.value
+                val doctoredOutputs = body.outputs.updated(
+                  0,
+                  body.outputs(0).value match {
+                      case b: Babbage =>
+                          Sized[TransactionOutput](b.copy(value = b.value + Value(Coin(1L))))
+                      case _ => body.outputs(0)
+                  }
+                )
+                val doctoredTx = iTx.tx.copy(body = KeepRaw(body.copy(outputs = doctoredOutputs)))
+                val parseRes = InitializationTx
+                    .Parse(config)(
+                      blockCreationEndTime = config.initialBlock.blockBrief.endTime,
+                      tx = doctoredTx,
+                      resolvedUtxos = iTx.resolvedUtxos
+                    )
+                    .result
+                val rejected = parseRes match {
+                    case Left(_: InitializationTx.Parse.Error.TreasuryNotBalanced) => true
+                    case _                                                         => false
+                }
+                "a treasury output one lovelace above map + equity + beacon must fail the" +
+                    s" parse as TreasuryNotBalanced, got $parseRes" |: rejected
             }
 
             props.fold(Prop(true))(_ && _)

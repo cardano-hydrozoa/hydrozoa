@@ -127,11 +127,19 @@ private object FallbackTxOps {
                 def apply(): List[Mint] =
                     List(MintVotes())
 
+                /** One vote token per ballot box produced below: one per head peer plus the public
+                  * box. NOT `hns.numSigners`, which counts head peers **plus `coilQuorum`** — coil
+                  * peers get no ballot box, so that over-mints by `coilQuorum`, and the surplus
+                  * falls to the balancing change output (peer 0's collateral payout), leaving loose
+                  * vote tokens that also stop that utxo from serving as the ada-only collateral the
+                  * rule-based regime needs. The on-chain `Resolve` requires the tallied box to hold
+                  * exactly `headPeersN + 1` tokens.
+                  */
                 private object MintVotes {
                     def apply(): Mint = Mint(
                       hns.policyId,
                       assetName = config.headTokenNames.voteTokenName,
-                      amount = hns.numSigners + 1L,
+                      amount = config.headPeerIds.length + 1L,
                       witness = hns.witnessAttached
                     )
                 }

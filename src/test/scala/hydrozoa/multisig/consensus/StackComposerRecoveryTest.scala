@@ -8,7 +8,6 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
@@ -17,12 +16,14 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.Value
 import scalus.uplc.builtin.ByteString
 
 /** Records the stack-0 [[SlowConsensusActor.StackHandoff]] a bootstrapping [[StackComposer]] emits,
@@ -53,7 +54,7 @@ class StackComposerRecoveryTest extends AnyFunSuite:
             .map(_.nodeConfigs(HeadPeerNumber.zero))
             .pureApply(Gen.Parameters.default, org.scalacheck.rng.Seed(0L))
     private val headConfig: HeadConfig = config.headConfig
-    private given CardanoNetwork.Section = config
+    private given HeadConfig.Bootstrap.Section = config
     private val stamp: ArrivalStamp = ArrivalStamp(generation = 0, monotonicNanos = 1L)
 
     /** This node's head peer number (the fixture config is always a head node). */
@@ -77,11 +78,76 @@ class StackComposerRecoveryTest extends AnyFunSuite:
         }
     }
 
+    test("State.recover accepts a balanced treasury / evacuation-map pair") {
+        withPersistence { p =>
+            for {
+                _ <- seedRecoverable(p)
+                recovered <- StackComposer.State.recover(
+                  p,
+                  Some(HardAckNumber(0)),
+                  None,
+                  PeerId.Head(ownNum)
+                )
+            } yield recovered match {
+                case Some(state) => assert(state.treasury == balancedTreasury)
+                case None        => fail("expected a recovered state, got None")
+            }
+        }
+    }
+
+    // The treasury and evacuation-map snapshots live under independent store keys, so a divergent
+    // pair (partial write, replay bug, doctored store) is possible on disk; recovery must refuse
+    // to re-anchor the head's balance identity on it. The codec fixture treasury (5 ADA value,
+    // 1 ADA equity, no beacon) is exactly such a pair against the empty map.
+    test("State.recover rejects a treasury / evacuation-map pair that does not balance") {
+        withPersistence { p =>
+            for {
+                _ <- seedRecoverableWith(p, TreasuryFixture.sampleTreasury)
+                outcome <- StackComposer.State
+                    .recover(p, Some(HardAckNumber(0)), None, PeerId.Head(ownNum))
+                    .attempt
+            } yield outcome match {
+                case Left(e) =>
+                    assert(
+                      e.getMessage.contains("not balanced"),
+                      s"expected the balance-identity failure, got: $e"
+                    )
+                case Right(r) => fail(s"recovery accepted an unbalanced pair: $r")
+            }
+        }
+    }
+
+    /** Open an in-memory persistence (no actor system) for direct [[StackComposer.State.recover]]
+      * calls.
+      */
+    private def withPersistence[A](use: Persistence[IO] => IO[A]): A =
+        val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        InMemoryBackendStore
+            .open(persistenceTracer)
+            .use(backend => Persistence.fromBackend(backend, persistenceTracer).flatMap(use))
+            .unsafeRunSync()
+
+    /** A balanced treasury for the seeded (empty) evacuation map: value == equity + the head's
+      * beacon token — `State.recover` verifies this identity on the recovered pair.
+      */
+    private def balancedTreasury: MultisigTreasuryUtxo =
+        TreasuryFixture.sampleTreasury.copy(
+          treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
+          value = Value(TreasuryFixture.sampleTreasury.equity.coin) + headConfig.treasuryToken
+        )
+
     /** Seed exactly what `StackComposer.State.recover` reads for a peer that hard-acked stack 1
       * (last block 3): the own hard-ack, the unsigned stack (the `lastBlockNum` source), the
       * treasury, and the evacuation map.
       */
     private def seedRecoverable(p: Persistence[IO]): IO[Unit] =
+        seedRecoverableWith(p, balancedTreasury)
+
+    /** [[seedRecoverable]] with the seeded treasury chosen by the test. */
+    private def seedRecoverableWith(
+        p: Persistence[IO],
+        treasury: MultisigTreasuryUtxo
+    ): IO[Unit] =
         val own = ownNum
         for {
             us <- unsignedStack(stack = 1, firstBlock = 0, lastBlock = 3)
@@ -89,7 +155,7 @@ class StackComposerRecoveryTest extends AnyFunSuite:
               JournalValue(stamp, hardAck(peer = own.convert, ackNum = 0, stack = 1))
             )
             _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(us)
-            _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
+            _ <- p.put(StoreKey.Treasury)(treasury)
             _ <- p.put(StoreKey.EvacuationMap(BlockNumber(3)))(EvacuationMap.empty)
         } yield ()
 
