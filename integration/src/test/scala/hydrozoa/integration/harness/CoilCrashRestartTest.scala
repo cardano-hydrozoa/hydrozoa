@@ -15,10 +15,6 @@ import scala.concurrent.duration.*
 /** The coil-side counterpart to [[CrashRestartTest]]: crash a coil peer at a chosen durable write,
   * restart it against its own store, and assert the head goes on hard-confirming.
   *
-  * Coil recovery had no end-to-end exercise at all — the harness could not even restart a coil
-  * (`restartCoilPeer` and the `wrapPersistence` hook on `buildCoil` are new), which is part of why
-  * the fleet's coil peers were the ones that would not come back.
-  *
   * What is asserted is that the RESTARTED coil's own fast anchor keeps advancing. `fastBlockMark`
   * is `max(BlockResult)`, written by the coil itself once per block it applies, so a mark that
   * climbs after the restart means the coil rebuilt its state from its store, re-attached to its
