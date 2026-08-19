@@ -45,25 +45,24 @@ import scalus.uplc.builtin.ByteString
   *
   * '''Devnet bring-up goes through `scripts/yaci-devnet.sh`''' — the same script
   * docs/user-guide/DEPLOYMENT.md hands an operator, rather than a Scala reimplementation that could
-  * drift from it. That script
-  * owns every devnet-specific step: creating the devnet, describing its chain, and funding head-0
-  * (a devnet has no faucet).
+  * drift from it. That script owns every devnet-specific step: creating the devnet, describing its
+  * chain, and funding head-0 (a devnet has no faucet).
   *
   * These suites are **heavy** (minutes-long, needing Docker + a Yaci container + the built image)
   * and **hard-excluded from CI** by FQN via `Tests.Exclude` in `build.sbt`, like
   * `Stage1PropertiesYaci` — so a new subclass must be added there too, or CI will start running it.
   *
   * The flow mirrors docs/user-guide/DEPLOYMENT.md against a devnet:
-  *   0. `scaffold` — the head workspace, `docker-compose.yml` included;
-  *   1. `yaci-devnet.sh up` — the devnet container, and a node inside it;
-  *   2. `yaci-devnet.sh network` — the chain description, since a devnet has no baked-in one;
-  *   3. `keygen-fleet <heads> <coils> <quorum> --cardano-network-file` — keys, roster,
+  *   1. `scaffold` — the head workspace, `docker-compose.yml` included;
+  *   2. `yaci-devnet.sh up` — the devnet container, and a node inside it;
+  *   3. `yaci-devnet.sh network` — the chain description, since a devnet has no baked-in one;
+  *   4. `keygen-fleet <heads> <coils> <quorum> --cardano-network-file` — keys, roster,
   *      `defaults.json`, opening L2 state, per-peer configs;
-  *   4. `yaci-devnet.sh topup` — fund head peer 0;
-  *   5. `deploy-scripts-and-g2-setup` — deploy the treasury/dispute validators (+ G2 ladder);
-  *   6. `build-head-config` — resolve the ref UTxOs into the shared head config;
-  *   7. `docker compose up` — every peer;
-  *   8. wait for `/ready`, submit an L2 tx to head-0, poll the head peers until convergence.
+  *   5. `yaci-devnet.sh topup` — fund head peer 0;
+  *   6. `deploy-scripts-and-g2-setup` — deploy the treasury/dispute validators (+ G2 ladder);
+  *   7. `build-head-config` — resolve the ref UTxOs into the shared head config;
+  *   8. `docker compose up` — every peer;
+  *   9. wait for `/ready`, submit an L2 tx to head-0, poll the head peers until convergence.
   *
   * URL split (the containers and the host reach the same devnet at different addresses): the peers
   * reach it in-mesh at `http://yaci:8080` (written into each `private.json` via the template's
@@ -325,10 +324,10 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
         runProcess(composeCmd(home, args*), cwd = None, extraEnv = composeEnv(home))
 
     /** The head directory's scaffolded `docker-compose.yml` plus the Yaci overlay — the same pair,
-      * in the same order, that the deployment guide tells an operator to run, so this
-      * suite exercises the real deployment rather than a test-only copy of it. The first `-f` also
-      * fixes the project directory, so the file's `./head-config` and `./private` mounts resolve
-      * under the workspace. `-p` isolates the run from an operator's own project.
+      * in the same order, that the deployment guide tells an operator to run, so this suite
+      * exercises the real deployment rather than a test-only copy of it. The first `-f` also fixes
+      * the project directory, so the file's `./head-config` and `./private` mounts resolve under
+      * the workspace. `-p` isolates the run from an operator's own project.
       */
     private def composeFiles(home: Path): List[Path] =
         home.resolve("docker-compose.yml") :: composeOverlays
