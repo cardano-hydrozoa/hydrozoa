@@ -39,11 +39,6 @@ final case class BlockWeaver(
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
-    /** `config` is a `CardanoNetwork.Section`; expose it as a given so the `StoreKey` codec used
-      * when re-reading the last soft-confirmation resolves.
-      */
-    private given CardanoNetwork.Section = config
-
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
         _ <- context.become(receive)
@@ -253,7 +248,6 @@ object BlockWeaver {
             persistence: Persistence[IO],
             fastBlockMark: Option[BlockNumber]
         ): IO[Option[Reactive]] =
-            given CardanoNetwork.Section = config
             for {
                 softConfirmed <- Markers.recoverSoftConfirmed(persistence.backend)
                 opening <- start(config, connections, tracer, fastBlockMark)
