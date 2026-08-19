@@ -1733,12 +1733,6 @@ object MultiPeerHeadHarness:
     // ===================================
 
     object Ticks:
-        /** Per-peer fibers that periodically poke each `CardanoLiaison` with
-          * `CardanoLiaison.Timeout`. Replaces the broken `setReceiveTimeout`-based polling
-          * (cats-actors `setReceiveTimeout` checks via a hardcoded 1s ping AND uses
-          * `System.currentTimeMillis()` rather than the F-effect clock — both unusable under
-          * TestControl).
-          */
         /** Spawn one supervised CL tick fiber per key against its connections, returning a ref of
           * per-key cancel actions. The Supervisor owns the fibers — registering each at spawn time
           * and cancelling all on its own release — so a crash partway through the spawn still
@@ -1752,16 +1746,25 @@ object MultiPeerHeadHarness:
         ): Resource[IO, Ref[IO, Map[K, IO[Unit]]]] =
             for
                 ticks <- Resource.eval(Ref[IO].of(Map.empty[K, IO[Unit]]))
-                _ <- Resource.eval(connections.toList.parTraverse_ { case (k, conns) =>
+                _ <- Resource.eval(connections.toList.traverse_ { case (k, conns) =>
                     supervisor
                         .supervise(tickLoop(pollingPeriodOf(k), conns))
                         .flatMap(fib => ticks.update(_.updated(k, fib.cancel)))
                 })
             yield ticks
 
-        // Non-private so a crash-restart can start a fresh tick for the rebuilt peer's new
-        // connections (the restarted peer's old tick keeps poking its now-stopped CardanoLiaison —
-        // harmless dead letters).
+        /** Periodically poke one `CardanoLiaison` with `CardanoLiaison.Timeout`, standing in for
+          * `setReceiveTimeout`, which is unusable here: cats-actors checks it via a hardcoded 1s
+          * ping and reads `System.currentTimeMillis()` rather than the F-effect clock, so neither
+          * works under TestControl.
+          *
+          * Never completes, so its Supervisor must be the cancelling kind — `Supervisor[IO]`, whose
+          * `await` defaults to false. With `await = true` the Supervisor's release would wait on
+          * these fibers forever and teardown would hang.
+          *
+          * Non-private so a crash-restart can start a fresh tick against the rebuilt peer's new
+          * connections.
+          */
         def tickLoop(
             pollingPeriod: FiniteDuration,
             conns: HeadMultisigRegimeManager.Connections,
