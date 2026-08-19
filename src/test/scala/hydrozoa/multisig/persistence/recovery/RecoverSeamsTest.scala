@@ -15,7 +15,7 @@ import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaison, StackComposer}
-import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -25,7 +25,7 @@ import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey, Timestamped}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
@@ -246,6 +246,62 @@ class RecoverSeamsTest extends AnyFunSuite:
                   s.pending.keySet == Set(BlockNumber(4), BlockNumber(5)) &&
                   !s.previousStackHardConfirmed
               }
+            )
+        }
+    }
+
+    test(
+      "StackComposer.recover PAIRS blocks whose SoftConfirmation is also durable, and honours the " +
+          "exclusive floor"
+    ) {
+        // The regression test for the stall that froze the whole head's slow side. `recover` used
+        // to rebuild only the `BlockResult` half and leave the `Block.SoftConfirmed` halves "to
+        // replay" — but the block-spine replay floor is `softConfirmed + 1`, while these blocks
+        // start just after the last CLOSED stack's `lastBlockNum`, always below it. The tail is
+        // empty by construction, so nothing ever paired, `tryCloseAsFollower` sat in its "not yet
+        // covered" branch forever, and `previousStackHardConfirmed` never advanced on ANY peer.
+        withStore { p =>
+            val own = HeadPeerNumber(0)
+            val stackN = 1
+            val lastBlock = 3
+            for
+                us <- unsignedStack(stack = stackN, firstBlock = 0, lastBlock = lastBlock)
+                _ <- p.put(JournalKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
+                  JournalValue(stamp, hardAck(peer = 0, ackNum = 0, stack = stackN))
+                )
+                _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
+                _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
+                _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
+                br3 <- blockResult(3)
+                br4 <- blockResult(4)
+                br5 <- blockResult(5)
+                _ <- List(br3, br4, br5).traverse_(br =>
+                    p.put(StoreKey.BlockResult(br.brief.blockNum))(br.persisted)
+                )
+                _ <- List(br4, br5).traverse_(br =>
+                    p.put(JournalKey.Block(br.brief.blockNum))(JournalValue(stamp, br.brief))
+                )
+                // BOTH halves durable for 4 and 5 — and for 3, which sits AT the last closed block
+                // and must be excluded by the exclusive floor, exactly like its BlockResult.
+                _ <- List(br3, br4, br5).traverse_(br =>
+                    p.put(StoreKey.SoftConfirmation(br.brief.blockNum))(
+                      Timestamped(stamp, softConfirmedOf(br))
+                    )
+                )
+                recovered <- StackComposer.State.recover(
+                  p,
+                  Some(HardAckNumber(0)),
+                  Some(StackNumber(0)),
+                  PeerId.Head(own)
+                )
+            yield assert(
+              recovered.exists { s =>
+                  // Pre-fix `ready` was empty by construction and these sat unpaired in `pending`.
+                  s.ready.keySet == Set(BlockNumber(4), BlockNumber(5)) &&
+                  s.pending.isEmpty
+              },
+              "expected blocks 4,5 paired into `ready` and nothing left pending; got " +
+                  s"${recovered.map(s => (s.ready.keySet, s.pending.keySet))}"
             )
         }
     }
@@ -574,6 +630,15 @@ class RecoverSeamsTest extends AnyFunSuite:
           BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
         )
     }
+
+    /** The soft-confirmed half of a block's pair, wrapping the SAME brief the `BlockResult` carries
+      * so `tryPair` joins two halves of one block rather than two unrelated fixtures.
+      */
+    private def softConfirmedOf(br: BlockResult): Block.SoftConfirmed.Next =
+        br.brief match
+            case m: BlockBrief.Minor =>
+                Block.SoftConfirmed.Minor(m, headerMultiSigned = Nil, finalizationRequested = false)
+            case other => fail(s"fixture builds Minor briefs; got $other")
 
     private def blockResult(blockNum: Int): IO[BlockResult] =
         realTimeQuantizedInstant(headConfig.slotConfig).map { now =>
