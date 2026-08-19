@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.eutxol2.store.{L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMap, evacuationKeyOrdering}
+import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMap, EvacuationMapHash, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
@@ -381,7 +381,9 @@ case class EutxoL2Ledger private (
       * target beyond the recorded tip (a corruption tripwire — the co-anchoring ordering prevents
       * it).
       */
-    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
+    override def restoreTo(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, EvacuationMapHash] =
         for {
             tip <- EitherT.right(store.getTip.map(_.getOrElse(L2CommandNumber.zero)))
             _ <- EitherT.cond[IO](
@@ -419,7 +421,18 @@ case class EutxoL2Ledger private (
                     .replace(frozenAt)
               )
             )
-        } yield ()
+            // The digest of the state we just restored to. For this backend the caller's check is
+            // a tautology at a cold start — the ledger seeds its own genesis from the same
+            // `initialEvacuationMap` the caller compares against — but it keeps one boot path for
+            // every backend, and it is a real check against a remote ledger that owns its state.
+            digest <- EitherT.fromEither[IO](
+              restored.activeUtxos
+                  .toEvacuationMap(config)
+                  .left
+                  .map(violation => RestoreError.OtherError(violation.toString))
+                  .map(_.digest)
+            )
+        } yield digest
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
       * `transientTokens`, `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).

@@ -209,6 +209,89 @@ remote co-anchored recovery — a crash-time re-drive of `[anchor+1, head]` agai
 *ahead* of the anchor — is out of scope here; the self-correlating wire (responses echo the number,
 client asserts + fail-stops) is the safe interim.
 
+### Startup is the zeroth recovery case
+
+**JL calls `restoreTo` on every boot, including a cold one**, where the anchor is command `0`. This
+is not a special case bolted on: an empty store means JL persisted no block, and blocks are numbered
+from 1, so a crash part-way through block 1 leaves the ledger at `tip > 0` with JL's saved index at
+`0`. `restoreTo(0)` is what the ordering argument above already prescribes there — it rolls the
+orphaned commands back and consensus re-drives them. Making it unconditional removes the only path
+on which JL adopts a ledger it never spoke to.
+
+`restoreTo(0)` returns the ledger to its **initial state**: the state the ledger built from its own
+configuration before any command, with the tip at `0` and the event log truncated to that boundary.
+
+### The evacuation map is verified against the ledger, not assumed
+
+The head config's `initialEvacuationMap` is the head's opening L2 state, and the initialization
+transaction commits to it on L1 (treasury value, plus its KZG in the treasury datum). The two are
+authored independently — the config by the bootstrap tooling, the state by the ledger itself — so a
+head can otherwise run for its whole life on an evacuation map the ledger never agreed to, and
+discover it only when falling back, at which point the committed payouts are unevacuable.
+
+So **every `Restored` reply carries the ledger's `evacuationMapHash`** at the restored command number
+([the digest](#the-evacuation-map-digest)), and JL checks it **at every anchor**:
+
+- **At a cold start** (`restoreTo(0)`) against the digest of its configured `initialEvacuationMap`.
+- **After a crash** against its own map at the fast anchor. JL does not keep that map directly — the
+  slow side stores it per block, and only at blocks whose map backs an on-chain KZG commitment — so
+  JL takes the highest stored map at or below the anchor (the config's initial map when no stack has
+  closed) and folds each remaining `BlockResult`'s `evacuationMapDiff` onto it. The slow side never
+  runs ahead of the fast one, so that base is always at or below the anchor.
+
+**A mismatch is fatal either way: the node refuses to boot.** It is not recoverable at runtime and
+not safe to run through — the on-chain commitment is already wrong, or the ledger is the wrong one.
+
+The operator gets the two sides to agree by generating the config from the ledger rather than by
+hand: the ledger prints its initial evacuation map in exactly the head config's encoding, and the
+bootstrap consumes that ([Initial evacuation map](#initial-evacuation-map)).
+
+## The evacuation map digest
+
+A digest over an evacuation map, defined so that both a Scala head and a Rust sidecar can compute it
+from bytes they already hold — no Plutus `Data` encoding and no BLS12-381. It is a **coordination
+check, not an on-chain commitment**; the on-chain commitment stays the KZG in the treasury datum.
+
+Each entry contributes the two byte strings that are already the wire form of an evacuation-map
+entry: the raw **evacuation key**, and the raw **CBOR of the entry's L1 transaction output** — the
+exact bytes, never a re-encoding. (The head keeps them verbatim in `Payout.Obligation`'s
+`KeepRaw[TransactionOutput]` precisely so this holds.)
+
+```
+evacuationMapHash(M) = blake2b_256(
+     "gummiworm-evacuation-map-v1"          -- domain tag, ASCII, no terminator
+  || uint32_be(entryCount(M))
+  || for each (key, output) of M, ascending by key:
+         uint32_be(len(key))    || key
+      || uint32_be(len(output)) || output
+)
+```
+
+- **Order** is ascending by the raw key bytes, compared **unsigned, byte by byte, shorter prefix
+  first**. Both sides' native map ordering already is this (scalus's `Ordering[ByteString]`, Rust's
+  `Ord` on byte slices), so both fold in iteration order without re-sorting.
+- **Length framing** is mandatory: keys are not fixed-width across backends (the EUTXO ledger keys by
+  CBOR of a `TransactionInput`, Sugar Rush by a 28-byte account key hash zero-padded to 32), so
+  unframed concatenation would be ambiguous.
+- **The empty map** hashes the domain tag and a zero count — a defined value, not a special case.
+- **Backends do not share a key space.** The digest proves the two sides hold the same map; it does
+  not make an EUTXO-keyed map meaningful to an account-keyed ledger. That is the point — this is the
+  check that catches exactly that substitution.
+
+## Initial evacuation map
+
+A ledger implementation **must** provide an out-of-band way to print the evacuation map of its
+initial state, in the head config's encoding for `initialEvacuationMap`:
+
+```json
+{ "<evacuationKeyHex>": "<transactionOutputCborHex>", ... }
+```
+
+It is computed from the ledger's own configuration, without touching a durable store, so an operator
+can produce it before the head exists. This file is the bootstrap input for a remote-ledger head —
+backend-agnostic, and already in final form: the bootstrap copies it into the head config rather than
+deriving anything from it.
+
 ## Wire protocol
 
 The command envelope wraps the coordination number around each command; the response is the
@@ -219,6 +302,21 @@ type GummiwormCommand =
   | { "RegisterDeposit":        { commandNumber: CommandNumber, command: RegisterDeposit } }
   | { "ApplyDepositDecisions":  { commandNumber: CommandNumber, command: ApplyDepositDecisions } }
   | { "ApplyTransaction":       { commandNumber: CommandNumber, command: ApplyTransaction } }
+```
+
+`restoreTo` rides the same socket as a separate un-numbered frame. Its tag is disjoint from every
+command tag, so the two never collide:
+
+```typescript
+type RestoreRequest =
+  | { "RestoreTo": { commandNumber: CommandNumber } }
+
+type RestoreResponse =
+  // Reconstructed as of the requested number. `tip` equals the request. `evacuationMapHash` is the
+  // digest of the ledger's evacuation map at that state — 32 bytes, hex.
+  | { "Restored":      { tip: CommandNumber, evacuationMapHash: string } }
+  // `requested` is the asked-for number, `tip` the ledger's current durable tip.
+  | { "RestoreFailed": { requested: CommandNumber, tip: CommandNumber, reason: string } }
 ```
 
 Delta from the spec (`/whitepaper/sugar-rush/commands`):

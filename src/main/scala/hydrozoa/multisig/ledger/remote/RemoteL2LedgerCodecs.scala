@@ -4,8 +4,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputDecoder, keepRawTransactionOutputEncoder}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationMapHash}
 import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -216,10 +216,11 @@ object RemoteL2LedgerCodecs {
               )
               .flatMap {
                   case "Restored" =>
-                      c.downField("Restored")
-                          .downField("tip")
-                          .as[L2CommandNumber]
-                          .map(RestoreResponse.Restored.apply)
+                      val body = c.downField("Restored")
+                      for {
+                          tip <- body.downField("tip").as[L2CommandNumber]
+                          hash <- body.downField("evacuationMapHash").as[EvacuationMapHash]
+                      } yield RestoreResponse.Restored(tip, hash)
                   case "RestoreFailed" =>
                       val body = c.downField("RestoreFailed")
                       for {
@@ -236,8 +237,13 @@ object RemoteL2LedgerCodecs {
                       )
               },
       encodeA = {
-          case RestoreResponse.Restored(tip) =>
-              io.circe.Json.obj("Restored" -> io.circe.Json.obj("tip" -> tip.asJson))
+          case RestoreResponse.Restored(tip, evacuationMapHash) =>
+              io.circe.Json.obj(
+                "Restored" -> io.circe.Json.obj(
+                  "tip" -> tip.asJson,
+                  "evacuationMapHash" -> evacuationMapHash.asJson
+                )
+              )
           case RestoreResponse.RestoreFailed(requested, tip, reason) =>
               io.circe.Json.obj(
                 "RestoreFailed" -> io.circe.Json.obj(
