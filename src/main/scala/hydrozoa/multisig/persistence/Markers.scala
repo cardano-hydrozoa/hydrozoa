@@ -88,10 +88,9 @@ object Markers:
         backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard))
 
     /** `softConfirmed = max(SoftConfirmation.key)` — the fast-side confirmation mark, written by
-      * `FastConsensusActor` when a consensus cell saturates. Exposed standalone, like the other
-      * three anchors, so a consumer that needs only this mark reads it without deriving the full
-      * [[Markers]] bundle — and, unlike [[derive]], without the parallel reads, which matter to a
-      * caller comparing two marks against each other.
+      * `FastConsensusActor` when a consensus cell saturates. Standalone like the other anchors, so
+      * a consumer needing only this mark skips the full [[Markers]] bundle — and its parallel
+      * reads, which a caller comparing two marks against each other must avoid.
       */
     def recoverSoftConfirmed(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
         backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum))

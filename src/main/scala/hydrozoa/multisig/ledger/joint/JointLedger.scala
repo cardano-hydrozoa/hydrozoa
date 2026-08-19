@@ -697,16 +697,11 @@ final case class JointLedger(
                     tracer.traceWith(JointLedgerEvent.BriefProduced(b))
                 case _ => IO.unit
             }
-            // Every peer persists its per-block snapshot bundle (its fast-side recovery anchor)
-            // BEFORE the brief reaches fast consensus. The order matters: the brief is the last
-            // thing a consensus cell waits for, so handing it over can soft-confirm the block —
-            // and `softConfirmed` (max SoftConfirmation) must never outrun `fastBlockMark`
-            // (max BlockResult), or `ReplayActor.validateInvariants` refuses to boot the peer.
-            // A head peer is safe either way, since its cell also waits for its own soft-ack,
-            // authored below; a coil peer authors none and receives the head peers' acks through
-            // its hub, so its cell can already be one brief short of saturated when this runs.
-            // Persisting first makes the invariant hold by construction for both peer types
-            // rather than only for head peers.
+            // Step 1, and it must stay first: the brief is the last thing a consensus cell waits
+            // for, so handing it over can soft-confirm the block, and `softConfirmed` must never
+            // outrun `fastBlockMark`. A coil peer is the tight case — it authors no soft-ack and
+            // holds the head acks via its hub, so its cell can already be one brief short of
+            // saturated here.
             softAck <- config.ownPeerId match {
                 case PeerId.Head(peerNum) =>
                     // Persist this peer's own per-soft-ack bundle before the soft-ack leaves (CR4
@@ -724,26 +719,20 @@ final case class JointLedger(
                     // the per-block snapshot bundle, anchored at coilBlockMark = max(BlockResult).
                     persistCoilBlockBundle(brief, blockResult).as(None)
             }
-            // Every peer forwards the brief to its consensus actor.
             _ <- conn.fastConsensusActor ! brief
-            // Only a head peer EMITS on the fast cycle — it broadcasts the brief when it leads the
-            // block and authors a soft-ack for every block. A coil peer emits nothing.
+            // Head peers only: a coil authors no soft-ack and emits nothing on the fast cycle.
             _ <- softAck.traverse_ { ack =>
                 for {
-                    // Broadcast our OWN-led brief to the head mesh — only blocks WE lead go
-                    // to the mesh.
                     _ <- IO.whenA(config.canLeadFast(brief.blockNum))(
                       (conn.headPeerLiaisons ! brief).parallel
                     )
 
-                    // Feed the hub's CoilRelay block lane from JointLedger for EVERY block —
-                    // own-led and remote-led (reproduced) alike. JointLedger applies blocks
-                    // serially in spine order, so it is the single ordered feeder into the
-                    // relay's contiguous block lane, and a hub relays each block exactly once.
-                    // (No-op off a hub, where coilRelay is None.) Splitting this by leadership
-                    // — own-led here, remote-led via PeerLiaisonHeadToHead.dispatch — let the
-                    // two feeders' sends race into the relay mailbox, the t3 AppendOutOfOrder
-                    // hang (see CoilRelay's ordering note).
+                    // Feed the hub's CoilRelay block lane from JointLedger for EVERY block,
+                    // own-led and remote-led alike: JointLedger applies blocks serially in spine
+                    // order, so it is the single ordered feeder into the relay's contiguous lane
+                    // and a hub relays each block exactly once. (No-op off a hub.) Split it by
+                    // leadership and the two feeders' sends race into the relay mailbox —
+                    // AppendOutOfOrder; see CoilRelay's ordering note.
                     _ <- conn.coilRelay.traverse_(_ ! brief)
 
                     _ <- conn.fastConsensusActor ! ack

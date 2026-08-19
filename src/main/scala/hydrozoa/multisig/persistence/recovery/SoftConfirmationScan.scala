@@ -11,15 +11,12 @@ import java.nio.ByteBuffer
   *
   * The mirror of [[BlockResultScan]], and needed for the same reason. `StackComposer` pairs a
   * `BlockResult` with a `Block.SoftConfirmed` per block before that block can enter a stack, and
-  * `StackComposer.State.recover` rebuilds the `BlockResult` half by scanning the store. The
-  * soft-confirmed half used to be left to the replay tail, but that tail cannot carry it: the
-  * block-spine replay floor is `softConfirmed + 1` (see [[ReplayCursors]]), whereas the blocks the
-  * next stack needs run from the last CLOSED stack's `lastBlockNum` — a mark that trails
-  * `softConfirmed` by a whole stack, and by far more than that once a stack round has stalled. So
-  * every block in the range is below the replay floor and is never replayed, the composer can never
-  * pair those blocks, and a follower waits in `tryCloseAsFollower`'s "not yet covered" branch
-  * forever — for events that already happened and will never re-fire. Scanning the store makes the
-  * pairing complete by construction, exactly as it already is for the `BlockResult` half.
+  * both halves must come from the store: the replay tail cannot supply the soft-confirmed one,
+  * because the block-spine replay floor is `softConfirmed + 1` (see [[ReplayCursors]]) while the
+  * blocks the next stack needs run from the last CLOSED stack's `lastBlockNum` — a mark trailing
+  * `softConfirmed` by at least a stack, and by far more once a stack round has stalled. Every block
+  * in that range therefore sits below the floor and is never replayed. Scanning makes the pairing
+  * complete by construction, as it already is for the `BlockResult` half.
   *
   * `SoftConfirmation` values are [[hydrozoa.multisig.persistence.Timestamped]], so the payload is
   * unwrapped here; the codec strips the stamp, unlike the raw-bytes `BlockResult` values.

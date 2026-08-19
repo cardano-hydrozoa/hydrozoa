@@ -111,19 +111,12 @@ final case class SlowConsensusActor(
         case PreStart =>
             for {
                 _ <- initializeConnections
-                // Read this actor's own base after the connections barrier, like every other actor
-                // with base state (JointLedger's `fastBlockMark`, StackComposer's
-                // `recoverOrBootstrap`, BlockWeaver's `State.recover`): `ReplayActor` runs before
-                // the barrier opens, so the journal tail is already queued behind this PreStart and
-                // drains only once the base is in place.
-                //
-                // The base here is one marker: the highest stack this peer has hard-confirmed.
-                // Without it `lastConfirmed` stays `None`, the surplus guard in
-                // `handleRemoteHardAck` is inert, and every replayed remote ack for an
-                // already-confirmed stack is `bufferOrphan`ed instead of dropped — orphans that
-                // `clearOrphans` never reaches, because a cell is never re-created for a stack that
-                // already confirmed. The hard-ack journals are scanned from key 0, so that retained
-                // nothing less than every remote ack the head has ever produced, on every restart.
+                // This actor's base: the highest stack it hard-confirmed. Without it
+                // `lastConfirmed` stays `None`, the surplus guard in `handleRemoteHardAck` is
+                // inert, and replayed remote acks for confirmed stacks are `bufferOrphan`ed rather
+                // than dropped — orphans `clearOrphans` never reaches, since no cell is re-created
+                // for a confirmed stack. The hard-ack journals scan from key 0, so the buffer would
+                // retain every remote ack the head ever produced, on every restart.
                 hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
                 _ <- stateRef.update(_.withLastConfirmed(hardConfirmed))
             } yield ()

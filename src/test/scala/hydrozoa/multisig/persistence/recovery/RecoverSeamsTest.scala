@@ -308,7 +308,8 @@ class RecoverSeamsTest extends AnyFunSuite:
                 )
             yield assert(
               recovered.exists { s =>
-                  // Pre-fix `ready` was empty by construction and these sat unpaired in `pending`.
+                  // Restore only the BlockResult half and `ready` is empty by construction, with
+                  // these two stranded unpaired in `pending`.
                   s.ready.keySet == Set(BlockNumber(4), BlockNumber(5)) &&
                   s.pending.isEmpty
               },

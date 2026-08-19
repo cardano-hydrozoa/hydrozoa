@@ -18,8 +18,8 @@ import scala.concurrent.duration.*
   * What is asserted is that the RESTARTED coil's own fast anchor keeps advancing. `fastBlockMark`
   * is `max(BlockResult)`, written by the coil itself once per block it applies, so a mark that
   * climbs after the restart means the coil rebuilt its state from its store, re-attached to its
-  * hub, and is applying the blocks being relayed to it. A coil that refused to boot — the fleet's
-  * failure — leaves it pinned wherever recovery found it.
+  * hub, and is applying the blocks being relayed to it. A coil that fails to boot leaves the mark
+  * pinned wherever recovery found it.
   *
   * Asserting on the head's hard-confirmation instead would not work: `CrashingPersistence` signals
   * the crash point and lets the peer keep running (blocking there would stall its mailbox so `stop`
