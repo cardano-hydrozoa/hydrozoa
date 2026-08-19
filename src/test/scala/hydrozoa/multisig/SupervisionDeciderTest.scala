@@ -198,7 +198,7 @@ class SupervisionDeciderTest extends AnyFunSuite {
         // The claim the fix rests on: with a total decider, a bare Throwable behaves exactly as a
         // RuntimeException already did. Whatever that behaviour is, the two must now agree.
         // Anti-vacuity: a run where the child never raised proves nothing at all.
-        assert(
+        val _ = assert(
           List(matched, unmatched, totalled).forall(_.raises > 0),
           "the child never raised, so this test observed nothing: " +
               s"matched=$matched unmatched=$unmatched totalled=$totalled",
