@@ -1,8 +1,6 @@
 package hydrozoa.integration.harness
 
 import cats.effect.IO
-import cats.effect.testkit.TestControl
-import cats.effect.unsafe.implicits.global
 import hydrozoa.integration.stage4.Stage4Suite
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -105,44 +103,8 @@ class CrashRestartTest extends AnyFunSuite {
                 }
             yield outcome
 
-        // Drive the virtual clock like ModelBasedSuite does (NOT TestControl.executeEmbed, which
-        // spins forever on the per-actor 1 s ping loops): tick eligible fibers, and when none is
-        // eligible advance to the next timer, until the inner program (including resource teardown)
-        // has produced its result.
-        def tickUntilAdvancing[A](tc: TestControl[A]): IO[Unit] =
-            tc.tickOne.flatMap {
-                case true => tickUntilAdvancing(tc)
-                case false =>
-                    tc.results.flatMap {
-                        case Some(_) => IO.unit
-                        case None =>
-                            tc.nextInterval.flatMap { next =>
-                                if next > Duration.Zero then
-                                    tc.advance(next) >> tickUntilAdvancing(tc)
-                                else
-                                    IO.raiseError(
-                                      new RuntimeException(
-                                        "TestControl deadlock: no eligible fibers, no timer"
-                                      )
-                                    )
-                            }
-                    }
-            }
-
-        val (errors, headConfirmed, victimOwnAcks) =
-            TestControl
-                .execute(program)
-                .flatMap(tc =>
-                    tickUntilAdvancing(tc) >> tc.results.flatMap {
-                        case Some(cats.effect.Outcome.Succeeded(value)) => IO.pure(value)
-                        case Some(cats.effect.Outcome.Errored(e))       => IO.raiseError(e)
-                        case Some(cats.effect.Outcome.Canceled()) =>
-                            IO.raiseError(new RuntimeException("inner program canceled"))
-                        case None =>
-                            IO.raiseError(new RuntimeException("inner program did not terminate"))
-                    }
-                )
-                .unsafeRunSync()
+        // Driven on the virtual clock (see TestControlDriver for why not executeEmbed).
+        val (errors, headConfirmed, victimOwnAcks) = TestControlDriver.run(program)
 
         // Collect all failures so one assertion reports the full picture.
         val problems = List(
