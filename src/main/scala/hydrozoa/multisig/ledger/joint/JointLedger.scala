@@ -1029,9 +1029,10 @@ object JointLedger {
           * Beyond rebuilding `Done` from the store ([[recoverState]]), this reads the L2 command
           * number recorded for the `fastBlockMark` block and calls [[L2Ledger.restoreTo]] — the
           * only effect on the L2 ledger. The consensus → L2 mapping stays wholly on this side; only
-          * the recorded command number crosses, never an ack (§R2b). A `RemoteL2Ledger` owns its
-          * own recovery and leaves `restoreTo` unsupported, so this path is for the EUTXO reference
-          * ledger.
+          * the recorded command number crosses, never an ack (§R2b). Every L2 backend implements
+          * `restoreTo`, so this path runs for all of them: the EUTXO reference ledger rewinds its
+          * committed state locally, and a `RemoteL2Ledger` sends a `Restore` request so the remote
+          * rewinds its own command-number tip.
           */
         def recover(
             persistence: Persistence[IO],
