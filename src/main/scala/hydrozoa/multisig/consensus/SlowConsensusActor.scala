@@ -491,7 +491,7 @@ final case class SlowConsensusActor(
     private def getConnections: IO[Connections] = for {
         mConn <- connections.get
         conn <- mConn.liftTo[IO](
-          java.lang.Error("SlowConsensusActor is missing its connections to other actors.")
+          IllegalStateException("SlowConsensusActor is missing its connections to other actors.")
         )
     } yield conn
 

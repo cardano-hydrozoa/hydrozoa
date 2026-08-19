@@ -173,7 +173,7 @@ class FastConsensusActor(
         connections.get.flatMap(
           _.fold(
             IO.raiseError(
-              java.lang.Error("Consensus Actor is missing its connections to other actors.")
+              IllegalStateException("Consensus Actor is missing its connections to other actors.")
             )
           )(IO.pure)
         )

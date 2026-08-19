@@ -159,7 +159,9 @@ abstract class PeerLiaisonHeadToHead(
 
     private def getConnections: IO[PeerLiaisonHeadToHead.Connections] =
         connections.get.flatMap(
-          _.fold(IO.raiseError(java.lang.Error("Head↔head liaison missing its connections.")))(
+          _.fold(
+            IO.raiseError(IllegalStateException("Head↔head liaison missing its connections."))
+          )(
             IO.pure
           )
         )

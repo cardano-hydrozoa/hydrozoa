@@ -751,7 +751,7 @@ final case class StackComposer(
         mConn <- connections.get
         conn <- mConn.fold(
           IO.raiseError(
-            java.lang.Error("StackComposer is missing its connections to other actors.")
+            IllegalStateException("StackComposer is missing its connections to other actors.")
           )
         )(IO.pure)
     } yield conn

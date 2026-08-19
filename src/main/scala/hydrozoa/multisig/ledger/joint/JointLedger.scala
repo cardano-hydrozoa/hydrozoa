@@ -113,7 +113,7 @@ final case class JointLedger(
         mConn <- this.connections.get
         conn <- mConn.fold(
           IO.raiseError(
-            java.lang.Error(
+            IllegalStateException(
               "Joint ledger is missing its connections to other actors."
             )
           )
