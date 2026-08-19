@@ -407,11 +407,14 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                 // - Collaterals (n)
                 // - Peer Votes (n)
                 // - Default Vote (1)
+                // Ballot boxes are per HEAD peer, so the slice is keyed on the head-peer count.
+                // `numSigners` (head peers + coilQuorum) coincides with it only on a coil-free
+                // head, which is all this suite generates today.
                 val actualPeerVoteOutputs = NonEmptyList.fromListUnsafe(
                   fbTxBody.outputs
                       .slice(
-                        1 + expectedHeadNativeScript.numSigners,
-                        1 + (expectedHeadNativeScript.numSigners * 2)
+                        1 + config.headPeerIds.length,
+                        1 + (config.headPeerIds.length * 2)
                       )
                       .toList
                       .map(_.value)
