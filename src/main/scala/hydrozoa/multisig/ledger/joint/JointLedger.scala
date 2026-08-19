@@ -1129,7 +1129,7 @@ object JointLedger {
             persistence: Persistence[IO],
             blockNum: BlockNumber,
             initialEvacuationMap: EvacuationMap
-        )(using CardanoNetwork.Section): IO[EvacuationMap] =
+        ): IO[EvacuationMap] =
             for {
                 mapMark <- Markers.recoverEvacuationMapMark(persistence.backend)
                 base <- mapMark.fold(IO.pure(BlockNumber.zero -> initialEvacuationMap))(mark =>
