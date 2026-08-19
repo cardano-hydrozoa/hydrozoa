@@ -1,19 +1,20 @@
 package hydrozoa.multisig.consensus
 
 import cats.data.NonEmptyList
+import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockResult, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockResult, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap.applyDiffs
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.joint.{EvacuationDiffGroup, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
 import hydrozoa.multisig.ledger.l1.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackPartition, StandaloneEvacuationCommitment}
-import scalus.cardano.ledger.TransactionHash
+import scalus.cardano.ledger.{TransactionHash, Value}
 
 /** Effect derivation for a closed stack. Two entry points:
   *
@@ -65,7 +66,7 @@ object StackEffectsBuilder {
       */
     def mkEffectsRegular(
         config: Config, // TODO: narrow?
-        treasury: MultisigTreasuryUtxo,
+        initialTreasury: MultisigTreasuryUtxo,
         partitions: NonEmptyList[StackPartition],
         initialEvacuationMap: EvacuationMap,
     ): Either[
@@ -143,6 +144,7 @@ object StackEffectsBuilder {
         // `kzg` is the KZG commitment of the evacuation map at the END of the block being
         // committed (computed slow-side by folding diffs over the running map).
         val headId = config.headTokenNames.treasuryTokenName.bytes
+
         def secOf(b: BlockResult, kzg: KzgCommitment): StandaloneEvacuationCommitment = {
             val h = b.brief.header
             StandaloneEvacuationCommitment(
@@ -160,34 +162,29 @@ object StackEffectsBuilder {
         // only at the blocks that need it: each Major (for its settlement's `nextKzg`) and each
         // last-of-partition minor (for its SEC). Other minors in a run only get their diffs
         // applied; no KZG paid. The fold short-circuits on the first treasury-build `Left`.
-        type Acc =
-            (
-                List[PartitionEffects[StandaloneEvacuationCommitment]],
-                MultisigTreasuryUtxo,
-                EvacuationMap,
-                List[(RequestId, TransactionHash)]
-            )
+        val seed = Acc(initialTreasury, initialEvacuationMap)
 
-        val seed: Either[Error, Acc] = Right((Nil, treasury, initialEvacuationMap, Nil))
-
-        val folded: Either[Error, Acc] = partitions.toList.foldLeft(seed) { (accE, p) =>
-            accE.flatMap { case (effectsAcc, tre, runningMap, withdrawalTrackingAcc) =>
+        val folded: Either[Error, Acc] = partitions.toList.foldM(seed) { (acc, p) =>
+            import acc.*
+            // Conservation gate first — cheap and pure, before any tx building: each block's
+            // reported diffs must move the map by exactly what crossed the L1 boundary.
+            checkPartitionConservation(evacuationMap, p).flatMap { _ =>
                 p.kind match {
                     case StackPartition.Kind.Major =>
                         val major = p.blocks.head
                         val trailingMinors = p.blocks.tail
-                        val mapAfterMajor = applyDiffs(runningMap, major.evacuationMapDiff)
+                        val mapAfterMajor = applyDiffs(evacuationMap, major.flatEvacuationDiffs)
                         // Apply trailing minors' diffs cumulatively; the LAST minor's
                         // post-map provides the SEC's KZG (if any trailing minor exists).
                         val mapAfterPartition =
                             trailingMinors.foldLeft(mapAfterMajor)((m, b) =>
-                                applyDiffs(m, b.evacuationMapDiff)
+                                applyDiffs(m, b.flatEvacuationDiffs)
                             )
                         major.brief match {
                             case mb: BlockBrief.Major =>
                                 mkSettlementTxSeq(
                                   config = config,
-                                  treasury = tre,
+                                  treasury = treasury,
                                   nextKzg = mapAfterMajor.kzgCommitment,
                                   absorbedDeposits = major.absorbedDeposits,
                                   payoutObligations = major.payoutObligations.toVector,
@@ -206,16 +203,16 @@ object StackEffectsBuilder {
                                     // The settlement drains the major block's withdrawals — every
                                     // obligation is a real request (the settlement input is
                                     // `major.payoutObligations`), so the whole vector is the prefix.
-                                    val withdrawalTracking =
+                                    val newWithdrawals =
                                         trackWithdrawals(
                                           major.payoutRequestIds.toVector,
                                           settlementSlices(seq)
                                         )
-                                    (
-                                      pe :: effectsAcc,
-                                      newTreasury,
-                                      mapAfterPartition,
-                                      withdrawalTracking ++ withdrawalTrackingAcc
+                                    acc.copy(
+                                      treasury = newTreasury,
+                                      evacuationMap = mapAfterPartition,
+                                      effectsReversed = pe :: effectsReversed,
+                                      withdrawalTracking = newWithdrawals ++ withdrawalTracking
                                     )
                                 }
                             case _ =>
@@ -234,12 +231,12 @@ object StackEffectsBuilder {
                         // recognizable prefix (they carry request provenance; the residual balances
                         // do not).
                         val fin = p.blocks.head
-                        val mapAfterFinal = applyDiffs(runningMap, fin.evacuationMapDiff)
+                        val mapAfterFinal = applyDiffs(evacuationMap, fin.flatEvacuationDiffs)
                         val payoutObligationsRemaining =
                             fin.payoutObligations.toVector ++ mapAfterFinal.outputs.toVector
                         finalizeLedger(
                           config = config,
-                          treasury = tre,
+                          treasury = treasury,
                           payoutObligationsRemaining = payoutObligationsRemaining,
                           competingFallbackValidityStart = fin.competingFallbackTxTime
                         ).map { seq =>
@@ -251,28 +248,33 @@ object StackEffectsBuilder {
                             // finalization input (`fin.payoutObligations ++ residual`), so its
                             // request ids `[0, N)` are exactly the withdrawal positions; the residual
                             // balances after them are not withdrawals.
-                            val withdrawalTracking =
+                            val newWithdrawals =
                                 trackWithdrawals(
                                   fin.payoutRequestIds.toVector,
                                   finalizationSlices(seq)
                                 )
-                            (
-                              pe :: effectsAcc,
-                              tre,
-                              EvacuationMap.empty,
-                              withdrawalTracking ++ withdrawalTrackingAcc
+                            acc.copy(
+                              evacuationMap = EvacuationMap.empty,
+                              effectsReversed = pe :: effectsReversed,
+                              withdrawalTracking = newWithdrawals ++ withdrawalTracking
                             )
                         }
                     case StackPartition.Kind.Minor =>
-                        val mapAfterRun = p.blocks.toList.foldLeft(runningMap)((m, b) =>
-                            applyDiffs(m, b.evacuationMapDiff)
+                        val mapAfterRun = p.blocks.toList.foldLeft(evacuationMap)((m, b) =>
+                            applyDiffs(m, b.flatEvacuationDiffs)
                         )
                         val pe = PartitionEffects.Minor(
                           sec = secOf(p.blocks.last, mapAfterRun.kzgCommitment),
                           refunds = partitionRefunds(p.blocks.toList)
                         ): PartitionEffects[StandaloneEvacuationCommitment]
-                        // Minor blocks carry no withdrawals (a withdrawal forces a Major block).
-                        Right((pe :: effectsAcc, tre, mapAfterRun, withdrawalTrackingAcc))
+                        // Minor blocks carry no withdrawals (a withdrawal forces a Major
+                        // block); a minor partition leaves the treasury untouched.
+                        Right(
+                          acc.copy(
+                            evacuationMap = mapAfterRun,
+                            effectsReversed = pe :: effectsReversed
+                          )
+                        )
                     case StackPartition.Kind.Initial =>
                         throw new IllegalStateException(
                           "mkEffectsRegular received an Initial partition " +
@@ -282,7 +284,7 @@ object StackEffectsBuilder {
             }
         }
 
-        folded.map { case (effectsReversed, finalTreasury, finalMap, withdrawalTracking) =>
+        folded.map { case Acc(finalTreasury, finalMap, effectsReversed, withdrawalTracking) =>
             val nel = NonEmptyList
                 .fromList(effectsReversed.reverse)
                 .getOrElse(
@@ -291,6 +293,19 @@ object StackEffectsBuilder {
             (StackEffects.Unsigned.Regular(nel), finalTreasury, finalMap, withdrawalTracking)
         }
     }
+
+    /** Accumulator threaded through [[mkEffectsRegular]]'s partition fold: the treasury and
+      * cumulative evacuation map after the partitions consumed so far, the [[PartitionEffects]]
+      * built so far (newest first), and the withdrawal-tracking pairs collected so far. The
+      * defaults are the fold's seed: nothing built yet, starting from the stack's opening treasury
+      * and map.
+      */
+    private final case class Acc(
+        treasury: MultisigTreasuryUtxo,
+        evacuationMap: EvacuationMap,
+        effectsReversed: List[PartitionEffects[StandaloneEvacuationCommitment]] = Nil,
+        withdrawalTracking: List[(RequestId, TransactionHash)] = Nil
+    )
 
     /** Construct a settlement tx seq and return the treasury it produces. The collective value of
       * the payouts must '''not''' exceed the treasury value.
@@ -344,6 +359,62 @@ object StackEffectsBuilder {
             .left
             .map(Error.FinalizationTxSeqBuilderError.apply)
 
+    /** Check L2 value conservation across a partition's blocks, one L2 command at a time: folding
+      * an [[EvacuationDiffGroup]] must change the running map's total value by exactly what that
+      * command moved across the L1 boundary — a transaction group by minus its payouts (zero for a
+      * pure L2 transfer), the deposit-decisions group by the absorbed deposits' `l2Value` — in the
+      * coin and in every asset. Anything else over- or under-credits an L2 account: a remote L2
+      * controls the reports, so a mismatched delta (e.g. a rounding error minting a token unit, or
+      * an account silently drained) is rejected before any effect tx is built or signed. Per
+      * command, not per block: a block's aggregate delta can be zero while individual transactions
+      * err in compensating directions. A final block-level identity (`Σ groups == absorbed −
+      * payouts`) backstops the shape — it catches absorbed deposits whose decisions group never
+      * arrived, which no per-group check would demand.
+      */
+    private def checkPartitionConservation(
+        startMap: EvacuationMap,
+        partition: StackPartition
+    ): Either[Error, Unit] =
+        partition.blocks.toList
+            .foldM(startMap) { (runMap, block) =>
+                val blockNum = block.brief.blockNum
+                val absorbed = Value.combine(block.absorbedDeposits.map(_.l2Value))
+                val paidOut = Value.combine(block.payoutObligations.map(_.utxo.value.value))
+                // A transaction's payouts, summed by its producing request (`payoutObligations`
+                // and `payoutRequestIds` are aligned).
+                val paidOutByRequest: Map[RequestId, Value] =
+                    block.payoutRequestIds
+                        .zip(block.payoutObligations)
+                        .groupMapReduce(_._1)(_._2.utxo.value.value)(_ + _)
+                for {
+                    checkedGroups <- block.evacuationMapDiff.toList
+                        .foldM((runMap, Value.zero)) { case ((m, blockDelta), group) =>
+                            val (next, actual) = EvacuationMap.applyDiffsWithDelta(m, group.diffs)
+                            val (origin, expected) = group match {
+                                case EvacuationDiffGroup.Transaction(requestId, _) =>
+                                    (
+                                      Some(requestId),
+                                      -paidOutByRequest.getOrElse(requestId, Value.zero)
+                                    )
+                                case EvacuationDiffGroup.DepositDecisions(_) => (None, absorbed)
+                            }
+                            Either.cond(
+                              (actual - expected).isZero,
+                              (next, blockDelta + actual),
+                              Error.EvacuationMapNotConserved(blockNum, origin, expected, actual)
+                            )
+                        }
+                    (next, blockDelta) = checkedGroups
+                    blockExpected = absorbed - paidOut
+                    _ <- Either.cond(
+                      (blockDelta - blockExpected).isZero,
+                      (),
+                      Error.EvacuationMapNotConserved(blockNum, None, blockExpected, blockDelta)
+                    )
+                } yield next
+            }
+            .void
+
     type Config = HeadConfig.Section
 
     /** Failure building the treasury-spending effects of a regular stack. Raised by the caller. */
@@ -358,6 +429,31 @@ object StackEffectsBuilder {
         final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Build.Error)
             extends Error {
             override def toString: String = "Finalization tx-seq error:\n" + wrapped.toString
+        }
+
+        /** An L2 command's reported diff group breaks value conservation: folding it moved the
+          * map's total value by `actualDelta`, but the command's L1 boundary crossings account for
+          * `expectedDelta` (a transaction: minus its payouts; the deposit-decisions command: the
+          * absorbed deposits' `l2Value`). The difference over- or under-credits an L2 account — a
+          * bogus or malicious L2 report — so the stack is rejected.
+          *
+          * @param origin
+          *   the producing request for a transaction group; `None` for the block's
+          *   deposit-decisions command (or the block-level aggregate backstop).
+          */
+        final case class EvacuationMapNotConserved(
+            blockNum: BlockNumber,
+            origin: Option[RequestId],
+            expectedDelta: Value,
+            actualDelta: Value
+        ) extends Error {
+            override def toString: String =
+                s"Evacuation map diffs of ${origin.fold(
+                      "the deposit-decisions command / block " +
+                          "aggregate"
+                    )(r => s"request $r")} at block $blockNum break L2 value" +
+                    s" conservation: the map changed by $actualDelta, but the command's L1" +
+                    s" boundary crossings account for $expectedDelta"
         }
     }
 }

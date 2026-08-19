@@ -2,8 +2,8 @@ package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 
@@ -19,9 +19,12 @@ import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
   *     partitions; its `blockNum` keys block pairing and the stack's `[first, last]` range; its
   *     `header` (block version, end time) feeds each SEC and the Major settlement's validity
   *     window.
-  *   - `evacuationMapDiff` — per-block delta to the evacuation map. The builder folds these into a
-  *     cumulative map threaded across the stack; that map's KZG commitment supplies each Major
-  *     settlement's `nextKzg` and each last-of-partition minor's SEC.
+  *   - `evacuationMapDiff` — per-block delta to the evacuation map, grouped per L2 command
+  *     ([[EvacuationDiffGroup]]) in command order. The builder folds these into a cumulative map
+  *     threaded across the stack; that map's KZG commitment supplies each Major settlement's
+  *     `nextKzg` and each last-of-partition minor's SEC. The per-command boundaries feed the
+  *     builder's value-conservation check (a block-level aggregate would let compensating
+  *     per-transaction errors cancel).
   *   - `payoutObligations` — L2 **withdrawal** obligations visible at this block (snapshot of the
   *     L2 ledger's `payouts` after this block's L2 mutations applied) — funds an L2 request moves
   *     out to L1. A Major block's snapshot drains into its own settlement tx
@@ -41,13 +44,18 @@ import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
   */
 final case class BlockResult(
     brief: BlockBrief.Next,
-    evacuationMapDiff: Seq[EvacuationDiff],
+    evacuationMapDiff: Seq[EvacuationDiffGroup],
     payoutObligations: List[Payout.Obligation],
     payoutRequestIds: List[RequestId],
     postDatedRefundTxs: List[RefundTx.PostDated],
     absorbedDeposits: List[DepositUtxo],
     competingFallbackTxTime: FallbackTxStartTime
 ):
+    /** The block's evacuation diffs in application order, boundaries erased — for folding the
+      * cumulative evacuation map.
+      */
+    def flatEvacuationDiffs: Seq[EvacuationDiff] = evacuationMapDiff.flatMap(_.diffs)
+
     /** The on-disk projection — everything **except** `brief`. The brief already lives durably in
       * the `Block` journal (`JournalKey.Block[blockNum]` — written by the leader, or
       * inbound-replicated by `PeerLiaison*.persistInbound` on head and coil peers alike), so
@@ -72,7 +80,7 @@ object BlockResult:
       * ([[BlockResult.persisted]]).
       */
     final case class Persisted(
-        evacuationMapDiff: Seq[EvacuationDiff],
+        evacuationMapDiff: Seq[EvacuationDiffGroup],
         payoutObligations: List[Payout.Obligation],
         payoutRequestIds: List[RequestId],
         postDatedRefundTxs: List[RefundTx.PostDated],

@@ -21,23 +21,32 @@ import hydrozoa.multisig.ledger.stack.StackBrief
   *
   * ==Who feeds it==
   *
-  * Every population artifact reaches this relay '''exactly once''', from whichever side owns it:
-  *   - '''Own production''' — the hub's own producers (`JointLedger` / `StackComposer` /
-  *     `FastConsensusActor` / `SlowConsensusActor` / `RequestSequencer` / `CoilAckSequencer`) each
-  *     send only their '''own''' output (own-led briefs, own acks/requests). Not a received-traffic
-  *     relay — just one extra broadcast target alongside the head mesh.
-  *   - '''Other heads' output''' — the hub's mesh [[PeerLiaisonHeadToHead]]s forward what they
-  *     receive from other head peers, including the block/stack briefs those heads lead.
+  * Every population artifact reaches this relay '''exactly once'''. The per-author artifacts
+  * (requests, soft-acks, hard-acks) are forwarded by whichever side owns them — the hub's own
+  * producers (`FastConsensusActor` / `SlowConsensusActor` / `RequestSequencer` /
+  * `CoilAckSequencer`) for its own output, the hub's mesh [[PeerLiaisonHeadToHead]]s for other
+  * heads' — and each lands on a '''per-author''' lane, so every such lane has exactly one feeder.
   *
-  * So a block/stack brief is relayed by the mesh liaison of the head that led it, or by the hub's
-  * own JL/SC if the hub led it — never both.
+  * The block and stack briefs are different: their lanes are '''contiguous''' and every brief —
+  * own-led AND remote-led — is fed by a '''single''' hub-local actor:
+  *   - blocks by [[JointLedger]], which applies every block serially in spine order (its own when
+  *     it leads, a reproduction when it follows);
+  *   - stacks by [[StackComposer]], which closes every stack serially in spine order (single-flight
+  *     on `previousStackHardConfirmed`).
+  * A remote-led brief reaches that single feeder through the mesh (`dispatch` → `BlockWeaver` →
+  * `JointLedger`, `dispatch` → `StackComposer`) and is relayed from there — never directly from the
+  * mesh liaison.
   *
   * ==Why no reordering is needed==
   *
-  * The block/stack lanes on each [[PeerLiaisonHubToCoil]] are '''contiguous''', so they must be fed
-  * in ascending spine order. They are — not because this relay sorts anything, but because of an
-  * end-to-end consensus invariant. The hub is a head peer, and a leader cannot produce artifact N+1
-  * until artifact N is confirmed by '''all''' head peers:
+  * A contiguous lane must be fed in ascending spine order. It is — because a single actor feeds
+  * each brief lane and emits from '''one''' fiber, so its `!` sends keep their order
+  * (`ActorCell.sendMessage` enqueues without suspending). The relay's FIFO mailbox and the
+  * contiguous outbox preserve that order downstream.
+  *
+  * That the feeder emits in spine order in the first place rests on an all-head confirmation
+  * invariant: a leader cannot produce brief N+1 until brief N is confirmed by '''all''' head peers,
+  * so the hub applies/closes N before N+1 exists:
   *   - Blocks: a leader seals block K only on `Block.SoftConfirmed(K-1)` ([[BlockWeaver]]
   *     `Leader.AwaitingConfirmation`), and soft-confirmation requires every head peer's ack
   *     ([[FastConsensusActor]]: a cell saturates iff `acks.keySet == headPeerVKeys`).
@@ -45,20 +54,21 @@ import hydrozoa.multisig.ledger.stack.StackBrief
   *     `tryProgress` gates on `previousStackHardConfirmed`), and hard-confirmation requires every
   *     head peer ([[SlowConsensusActor]]: `AllOf(head)` ∧ a coil quorum).
   *
-  * Since the hub is in every all-head quorum, it must have received (and acked) brief N before
-  * brief N+1 can be produced anywhere — so it always holds brief N before brief N+1 exists, and
-  * relays them in that order. This relay's FIFO mailbox and the contiguous outbox preserve it. The
-  * contiguous `LaneOutbound.append` is the backstop: if the invariant were ever violated it raises
+  * An earlier form of this proof argued only that the hub '''holds''' brief N before N+1 — true,
+  * but insufficient. With two feeders (mesh liaison for remote-led, own producer for own-led),
+  * held-at-the-node did not imply enqueued-at-the-relay: an own-led N+1 could overtake a remote-led
+  * N whose forwarding fiber was descheduled, raising `AppendOutOfOrder` (the t3 hang). The single
+  * feeder closes that gap — order at the node IS order at the relay. The contiguous
+  * `LaneOutbound.append` remains the backstop: if the invariant were ever violated it raises
   * `AppendOutOfOrder` (a loud crash, never silent corruption) rather than appending out of order.
   *
-  * '''Three invariants keep this true — don't break them:'''
-  *   1. Confirmation is '''all-head''' (soft: `acks.keySet == headPeerVKeys`; hard: `AllOf(head)`).
-  *      A `< nHead` threshold would let a hub be skipped and receive N+1 before N — then a reorder
-  *      buffer here would be required.
-  *   2. A leader gates the next artifact on the prior's confirmation (no pipelining past one).
-  *   3. Every brief fed here is one the hub itself received or produced (mesh liaison for
-  *      remote-led, own JL/SC for own-led) — don't add a feeder that forwards a brief the hub
-  *      hasn't itself seen.
+  * '''Invariants that keep this true — don't break them:'''
+  *   1. One feeder per brief lane: [[JointLedger]] for blocks, [[StackComposer]] for stacks, for
+  *      BOTH own-led and remote-led. Never forward a block/stack brief to this relay from the mesh
+  *      [[PeerLiaisonHeadToHead]] (or any second actor) — that reintroduces the race.
+  *   2. Confirmation is '''all-head''' (soft: `acks.keySet == headPeerVKeys`; hard: `AllOf(head)`),
+  *      and a leader gates the next brief on the prior's confirmation (no pipelining past one) — so
+  *      the single feeder observes briefs in spine order to begin with.
   */
 abstract class CoilRelay(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | CoilRelay.Connections
