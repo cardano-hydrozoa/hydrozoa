@@ -291,11 +291,17 @@ object RemoteL2LedgerCodecs {
                       val cn = body.downField("commandNumber").as[L2CommandNumber]
                       val command = body.downField("command")
                       tag match {
+                          // RegisterDeposit is encode-only on this wire: Hydrozoa sends it, the
+                          // remote ledger decodes it with its own types, and the Scala decoder
+                          // could not invert the lossy Destination encoding (see
+                          // L2LedgerCommand.RegisterDeposit).
                           case "RegisterDeposit" =>
-                              for {
-                                  n <- cn
-                                  cmd <- command.as[L2LedgerCommand.RegisterDeposit]
-                              } yield Request.RegisterDeposit(n, cmd)
+                              Left(
+                                io.circe.DecodingFailure(
+                                  "RegisterDeposit is encode-only on the remote-ledger wire",
+                                  c.history
+                                )
+                              )
                           case "ApplyDepositDecisions" =>
                               for {
                                   n <- cn
