@@ -425,11 +425,15 @@ object RemoteL2Ledger {
       *   Kept well under a block cycle so a stuck receive is cut off and retried rather than
       *   stalling the whole (serialised) mutation path.
       * @param restoreTimeout
-      *   How long a `Restore` may take (default 30 minutes). It gets its own bound because the
+      *   How long a `Restore` may take (default 10 minutes). It gets its own bound because the
       *   remote answers one by rebuilding its ledger from the whole command log — there are no
-      *   snapshots yet — so the honest bound is minutes, not seconds, and it grows with the log.
-      *   Unlike an ordinary exchange it is **not** retried on expiry; see
-      *   [[RemoteL2Ledger.restoreTo]].
+      *   snapshots yet — so the cost is linear in the log and unrelated to the cost of a command.
+      *   SugarRush replays at roughly 1.3 µs/event on the dev box (its `restore_cost_by_log_length`
+      *   probe: 1.4 ms at 1k events, 64 ms at 50k, flat per event), so the 5s command bound expires
+      *   somewhere past a few million events while the default here covers hundreds of millions —
+      *   generous by two orders of magnitude against any real log, and still short enough that a
+      *   genuinely stuck restore surfaces the same hour it happens. Unlike an ordinary exchange it
+      *   is **not** retried on expiry; see [[RemoteL2Ledger.restoreTo]].
       * @param initialBackoff
       *   Backoff before the first reconnect attempt (default 1s), doubled per attempt
       * @param maxBackoff
@@ -440,7 +444,7 @@ object RemoteL2Ledger {
         config: Config,
         tracer: ContraTracer[IO, RemoteL2LedgerEvent],
         requestTimeout: FiniteDuration = 5.seconds,
-        restoreTimeout: FiniteDuration = 30.minutes,
+        restoreTimeout: FiniteDuration = 10.minutes,
         initialBackoff: FiniteDuration = 1.second,
         maxBackoff: FiniteDuration = 30.seconds,
     ): Resource[IO, RemoteL2Ledger] =
