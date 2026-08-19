@@ -69,8 +69,8 @@ class ReplayActorTest extends AnyFunSuite:
         val _ = assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
         val _ = assert(hasBlock(c.bw, 5), "BW block 5")
         // FastConsensusActor gets it from JointLedger once BlockWeaver has woven it, exactly as on
-        // the live path — NOT a second time straight from replay. This assertion used to read
-        // `hasBlock(c.fca, 5)`, which pinned the double-feed that killed a peer on boot.
+        // the live path — NOT a second time straight from replay. Asserting `hasBlock(c.fca, 5)`
+        // here instead would pin the double-feed that kills a peer on boot.
         val _ = assert(!hasBlock(c.fca, 5), "FCA must NOT also get block 5")
         // SlowConsensusActor: the reconstructed in-flight handoff + every HardAck (own round-1 +
         // round-2 for stack 1, plus the remote peer's).

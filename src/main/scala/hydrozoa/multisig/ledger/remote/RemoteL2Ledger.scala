@@ -139,13 +139,8 @@ class RemoteL2Ledger private (
       * `JointLedger.State.recover` treats them as fatal. A broken *transport* or a protocol
       * violation still fail-stops (a raise) like the other requests.
       *
-      * The exchange runs under [[restoreTimeout]] rather than the ordinary `requestTimeout`, and an
-      * expiry is **not** retried. Both matter: the remote serves a restore by rebuilding its ledger
-      * from the whole command log (there are no snapshots yet), which takes far longer than a
-      * command and grows with the log — so the 5s command bound expires routinely on a real store,
-      * and the ordinary drop-and-retry then re-sends the restore, making the remote start the
-      * rebuild over. That pair livelocks: every peer in a recovering fleet spins, none boots, and
-      * nothing in the logs names the cause. Failing loudly is the honest outcome.
+      * Bounded by [[restoreTimeout]], not the ordinary `requestTimeout`, and an expiry is **not**
+      * retried — see that parameter for why.
       */
     override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
         EitherT(sendRestoreRequest(Request.Restore(commandNumber)).map {
@@ -245,11 +240,9 @@ class RemoteL2Ledger private (
                         once.timeout(timeout).onError { case _ => drop(conn) }
                     }
                     .handleErrorWith {
-                        // An expired `Restore` is terminal (`retryOnTimeout = false`): the remote
-                        // rebuilds its whole log to serve one, so re-sending restarts that work
-                        // and the pair livelocks — the exchange never completes and the peer never
-                        // boots. Fail the recovery loudly instead; a supervisor restart retries at
-                        // process granularity, where it is visible and rate-limited.
+                        // Terminal (`retryOnTimeout = false`): re-sending a restore livelocks it
+                        // (see `restoreTimeout`). A supervisor restart retries at process
+                        // granularity instead, where it is visible and rate-limited.
                         case _: TimeoutException if !retryOnTimeout =>
                             tracer.traceWith(RestoreTimedOut(request.commandNumber, timeout)) >>
                                 IO.raiseError(
@@ -425,15 +418,13 @@ object RemoteL2Ledger {
       *   Kept well under a block cycle so a stuck receive is cut off and retried rather than
       *   stalling the whole (serialised) mutation path.
       * @param restoreTimeout
-      *   How long a `Restore` may take (default 10 minutes). It gets its own bound because the
-      *   remote answers one by rebuilding its ledger from the whole command log — there are no
-      *   snapshots yet — so the cost is linear in the log and unrelated to the cost of a command.
-      *   SugarRush replays at roughly 1.3 µs/event on the dev box (its `restore_cost_by_log_length`
-      *   probe: 1.4 ms at 1k events, 64 ms at 50k, flat per event), so the 5s command bound expires
-      *   somewhere past a few million events while the default here covers hundreds of millions —
-      *   generous by two orders of magnitude against any real log, and still short enough that a
-      *   genuinely stuck restore surfaces the same hour it happens. Unlike an ordinary exchange it
-      *   is **not** retried on expiry; see [[RemoteL2Ledger.restoreTo]].
+      *   How long a `Restore` may take (default 10 minutes). It needs its own bound because the
+      *   remote answers one by rebuilding its ledger from the whole command log — no snapshots yet
+      *   — so the cost is linear in the log, not in the command. SugarRush replays at ~1.3 µs/event
+      *   (its `restore_cost_by_log_length` probe: 1.4 ms at 1k, 64 ms at 50k, flat per event), so
+      *   the 5s command bound expires past a few million events while this default covers hundreds
+      *   of millions. Expiry is **terminal**, not retried: a retry re-sends the restore and the
+      *   remote starts the rebuild over, so the pair livelocks and no peer ever boots.
       * @param initialBackoff
       *   Backoff before the first reconnect attempt (default 1s), doubled per attempt
       * @param maxBackoff

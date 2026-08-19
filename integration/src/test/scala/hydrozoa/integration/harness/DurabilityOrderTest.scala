@@ -152,6 +152,6 @@ class DurabilityOrderTest extends AnyFunSuite {
                 found.take(10).map("\n  " + _).mkString
           ),
         ).flatten
-        assert(problems.isEmpty, problems.mkString("; "))
+        val _ = assert(problems.isEmpty, problems.mkString("; "))
     }
 }

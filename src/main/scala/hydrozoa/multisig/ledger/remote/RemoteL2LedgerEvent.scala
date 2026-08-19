@@ -33,10 +33,8 @@ object RemoteL2LedgerEvent:
         backoff: FiniteDuration
     ) extends RemoteL2LedgerEvent
 
-    /** A [[RemoteL2Ledger.restoreTo]] exchange for [[commandNumber]] exceeded [[timeout]] before
-      * the remote answered. Unlike [[ExchangeTimedOut]] this is terminal: a restore is not retried,
-      * because re-sending it makes the remote start its (snapshot-less, whole-log) rebuild over
-      * from the beginning — the retry loop that kept a fleet of peers from ever booting.
+    /** A [[RemoteL2Ledger.restoreTo]] exchange for [[commandNumber]] exceeded [[timeout]]. Unlike
+      * [[ExchangeTimedOut]] this is terminal — retrying a restore livelocks it.
       */
     final case class RestoreTimedOut(
         commandNumber: L2CommandNumber,
