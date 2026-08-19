@@ -62,14 +62,34 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       */
     val nodeStatus: Ref[IO, NodeStatus] = Ref.unsafe[IO, NodeStatus](NodeStatus.Initializing)
 
+    /** Every failure escalates, and the decider is **total**.
+      *
+      * Totality is the point of the `PartialFunction.fromFunction` wrapper: it makes `isDefinedAt`
+      * unconditionally true, so the supervisor can never observe this decider as undefined for a
+      * failure. The previous version stopped at `case _: Exception`, which reads as exhaustive and
+      * is not — `Throwable` has a second child, `Error` (`StackOverflowError`, `OutOfMemoryError`),
+      * and Scala, unlike Java, has no checked-exception pressure to make you notice a class that
+      * extends `Throwable` directly. Several of ours do, including `LaneOutbound.AppendOutOfOrder`,
+      * which is raised on the hub's contiguous coil lanes.
+      *
+      * A failure outside the decider's domain is not a handled failure. It surfaced as
+      * `emergency stop: exception in failure handling for …`, which discards the original error and
+      * leaves whatever was waiting on this actor's subtree waiting forever — a silent hang rather
+      * than a loud failure. CI wedged that way repeatedly, for up to six hours a run.
+      */
     override def supervisorStrategy: SupervisionStrategy[IO] =
-        OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute) {
-            case _: IllegalArgumentException =>
-                Escalate // Normally `Stop` but we can't handle stopped actors yet
-            case _: RuntimeException =>
-                Escalate // Normally `Restart` but our actors can't do that yet
-            case _: Exception => Escalate
-        }
+        OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute)(
+          PartialFunction.fromFunction {
+              case _: IllegalArgumentException =>
+                  Escalate // Normally `Stop` but we can't handle stopped actors yet
+              case _: RuntimeException =>
+                  Escalate // Normally `Restart` but our actors can't do that yet
+              case _: Exception => Escalate
+              // `Error`, and anything extending `Throwable` directly. Keeping this arm last leaves
+              // the intent of the arms above legible for when they can take their real directives.
+              case _ => Escalate
+          }
+        )
 
     override def preStart: IO[Unit] = context.self ! PreStart
 
