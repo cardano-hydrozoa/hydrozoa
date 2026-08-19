@@ -1128,6 +1128,10 @@ final case class RuleBasedActor(
     // evacuation regime then spawns but never polls, so funds never come back (custody-critical). A
     // fixed-cadence self-tick fires every `evacuationBotPollingPeriod` regardless of mailbox
     // activity, which is correct here because `handleTick` is a poll-then-retry safe to re-run.
+    // TODO(#622-review): this overwrites `tickFiber` without cancelling any fiber already there. If
+    // cats-actors ever re-runs `preStart` on a restart without `postStop` in between, the old tick
+    // fiber orphans (two poll loops, one uncancellable). Cancel the existing fiber before replacing
+    // it — or confirm cats-actors' restart path always runs `postStop` first, and note that here.
     private def startTickTimer: IO[Unit] =
         (IO.sleep(config.evacuationBotPollingPeriod) >> (context.self ! Tick)).foreverM.start
             .flatMap(fib => tickFiber.set(Some(fib)))
