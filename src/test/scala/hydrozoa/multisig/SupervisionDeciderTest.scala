@@ -9,13 +9,11 @@ import com.suprnation.actor.{ActorSystem, OneForOneStrategy, SupervisionStrategy
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.*
 
-/** What a supervised actor's failure actually does, split by the two variables that were confounded
-  * in the CI incident: whether the decider is defined for the thrown value, and whether the failing
-  * actor has a supervising ancestor at all.
-  *
-  * The incident was `emergency stop: exception in failure handling for class
-  * LaneOutbound$AppendOutOfOrder`, carrying `NoSuchElementException: None.get` — the original error
-  * discarded and everything waiting on the subtree left waiting.
+/** What a supervised actor's failure actually does, split by the two variables that a silent CI
+  * hang confounds: whether the decider is defined for the thrown value, and whether the failing
+  * actor has a supervising ancestor at all. The shape under test is `emergency stop: exception in
+  * failure handling for …` carrying `NoSuchElementException: None.get` — the original error
+  * discarded, and everything waiting on the subtree left waiting.
   *
   * ==What this pins down, deterministically==
   *
@@ -46,16 +44,14 @@ import scala.concurrent.duration.*
   */
 class SupervisionDeciderTest extends AnyFunSuite {
 
-    /** The decider as it was: no arm matches a value that extends `Throwable` directly. */
+    /** Without a catch-all: no arm matches a value that extends `Throwable` directly. */
     private val nonTotal: PartialFunction[Throwable, Directive] = {
         case _: IllegalArgumentException => Escalate
         case _: RuntimeException         => Escalate
         case _: Exception                => Escalate
     }
 
-    /** The decider as it now is — every arm plus a catch-all, wrapped so `isDefinedAt` is always
-      * true and the supervisor can never see it as undefined.
-      */
+    /** With a catch-all, wrapped so `isDefinedAt` is always true. */
     private val total: PartialFunction[Throwable, Directive] =
         PartialFunction.fromFunction {
             case _: IllegalArgumentException => Escalate
