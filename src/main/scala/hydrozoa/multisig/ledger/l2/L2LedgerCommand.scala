@@ -103,14 +103,12 @@ object L2LedgerCommand {
                     )
         }
 
-        // FIXME (from Peter, after relocating from `RemoteL2LedgerCodecs`):
-        // How does this round-trip? Derived decoder with custom encoder??
-        given depositRegistrationDecoder: io.circe.Decoder[L2LedgerCommand.RegisterDeposit] = {
-            import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
-            import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Decoder_Value, given_Decoder_Coin}
-            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
-            io.circe.generic.semiauto.deriveDecoder
-        }
+        // Deliberately encode-only: Hydrozoa only ever *sends* a RegisterDeposit (the remote
+        // ledger decodes it with its own types). A decoder could not invert the encoder anyway —
+        // `Destination` is encoded as a lossy `{address, datum}` object while its circe decoder
+        // reads a CBOR-hex string. The one path that needs an exact RegisterDeposit round-trip,
+        // the EUTXO ledger's durable command log, re-derives symmetric store-local codecs
+        // (`eutxol2.store.L2StoreCodecs`) instead of using this wire form.
     }
 
     final case class ApplyDepositDecisions(
