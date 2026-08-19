@@ -64,19 +64,14 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
 
     /** Every failure escalates, and the decider is **total**.
       *
-      * Totality is the point of the `PartialFunction.fromFunction` wrapper: it makes `isDefinedAt`
-      * unconditionally true, so the supervisor can never observe this decider as undefined for a
-      * failure. The previous version stopped at `case _: Exception`, which reads as exhaustive and
-      * is not — `Throwable` has a second child, `Error` (`StackOverflowError`, `OutOfMemoryError`),
-      * and Scala, unlike Java, has no checked-exception pressure to make you notice a class that
-      * extends `Throwable` directly. Several of ours did, `LaneOutbound.AppendOutOfOrder` — raised
-      * on the hub's contiguous coil lanes — among them; they have since been re-rooted at
-      * `RuntimeException`, which leaves this arm as belt-and-braces rather than the live path.
-      *
-      * A failure outside the decider's domain is not a handled failure. It surfaced as
-      * `emergency stop: exception in failure handling for …`, which discards the original error and
-      * leaves whatever was waiting on this actor's subtree waiting forever — a silent hang rather
-      * than a loud failure. CI wedged that way repeatedly, for up to six hours a run.
+      * Totality is what the `PartialFunction.fromFunction` wrapper buys: `isDefinedAt` is
+      * unconditionally true, so the supervisor can never see this decider as undefined. A failure
+      * outside a decider's domain is not a handled failure — it surfaces as `emergency stop:
+      * exception in failure handling for …`, which discards the original error and leaves whatever
+      * waits on this subtree waiting forever: a silent hang rather than a loud failure. Stopping at
+      * `case _: Exception` reads as exhaustive and is not, since `Throwable`'s other child is
+      * `Error`, and Scala applies no checked-exception pressure to make a bare `Throwable`
+      * conspicuous.
       */
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute)(
