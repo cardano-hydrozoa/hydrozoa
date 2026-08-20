@@ -373,6 +373,11 @@ lazy val integration: Project = (project in file("integration"))
         // so `YaciCardanoContainer.start` can talk to the daemon.
         "org.testcontainers" % "testcontainers" % "1.21.3" % Test
       ),
+      // yaci-cardano-test also drags in `org.testcontainers:junit-jupiter:1.17.6`, which the single
+      // `testcontainers` bump above doesn't cover — leaving a split 1.17.6/1.21.3 testcontainers
+      // surface on the test classpath. Force the companion module to match so the whole group
+      // resolves to one version.
+      dependencyOverrides += "org.testcontainers" % "junit-jupiter" % "1.21.3",
       // testcontainers' `DockerClientProviderStrategy.getClientForConfig` unconditionally forces
       // the shaded docker-java `apiVersion` to `VERSION_1_32` whenever the config resolves to
       // `UNKNOWN_VERSION` (a compat fallback for pre-1.24 daemons). Modern rootless dockerd

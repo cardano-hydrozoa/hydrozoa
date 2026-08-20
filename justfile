@@ -93,7 +93,15 @@ integration-yaci-docker:
   #!/usr/bin/env bash
   set -eo pipefail
   trap 'just notify "integration-yaci-docker"' EXIT
+  # After the probes JVM auto-discovers Docker, testcontainers persists the winning
+  # `docker.client.strategy` to ~/.testcontainers.properties. The separate MBT JVM then loads only
+  # that pinned strategy, and under sbt's forked-test classloader the load throws
+  # ClassNotFoundException — so testcontainers reports "Could not find a valid Docker environment"
+  # with no fallback to auto-discovery. Drop the stale pin before each JVM so both re-discover.
+  drop_tc_strategy() { [ -f "$HOME/.testcontainers.properties" ] && sed -i '/^docker\.client\.strategy/d' "$HOME/.testcontainers.properties" || true; }
+  drop_tc_strategy
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
+  drop_tc_strategy
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
 
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
