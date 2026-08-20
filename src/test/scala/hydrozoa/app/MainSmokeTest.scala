@@ -28,6 +28,10 @@ import test.TestPeers
   * milestone we can reach without real network IO. It implies that all earlier startup steps
   * succeeded: actors spawned, `WatchingActors` fired, `connectionsDeferred` resolved, and Ember
   * bound on its port.
+  *
+  * The bind alone is not enough to assert on: the consensus bootstrap runs concurrently with it, so
+  * a test that only raced the milestone against `runNode` returning would pass whenever binding
+  * merely won. This one also requires the node to outlive the bind.
   */
 class MainSmokeTest extends AnyFunSuite:
 
@@ -125,7 +129,21 @@ class MainSmokeTest extends AnyFunSuite:
                       )
                     )
             }
-            _ <- fiber.cancel
+
+            // The bind says nothing about the actors started alongside it. An escalation to the
+            // guardian ends `runNode` whatever exit code it carries, so give it room to happen.
+            _ <- IO.sleep(2.seconds)
+            died <- fiber.join.as(true).timeoutTo(1.second, IO.pure(false))
+            _ <- IO.raiseWhen(died)(
+              new AssertionError(
+                "Serve.runNode reached ServerStarted but the node then terminated; " +
+                    "look for an [EventBus] => Error line naming kukku://hydrozoa-demo"
+              )
+            )
+
+            // ⚠️ Do not await this. Cancelling a *live* node never returns, and `Fiber.cancel` is
+            // itself uncancelable, so no timeout bounds it. The daemon threads go with the JVM.
+            _ <- fiber.cancel.start.void
         } yield ()
 
         testIO.unsafeRunSync()

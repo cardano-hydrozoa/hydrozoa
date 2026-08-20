@@ -37,6 +37,58 @@ val http4sVersion = "0.23.32"
 val tapirVersion = "1.13.25"
 
 // Cardano on-chain validators and shared on-chain types
+// sbt 2 renamed the class ScalaCheck sniffs to recognise a forked run, so ScalaCheck falls back to
+// a path whose per-property events sbt's forked worker collapses: a falsified property is reported
+// as `Passed: Total 1` with exit code 0. `ScalaCheckFrameworkFixed` delegates to ScalaCheck and
+// only consolidates event delivery — properties still run concurrently. It lives in the root-level
+// `test` package of core's test sources, which `integration` and `examples` get via their
+// `test->test` dependency. NB: not `hydrozoa.test` — that shadows the top-level `test` package for
+// every file under `hydrozoa.*`, breaking `import test.Generators...` on a clean compile.
+//
+// A bare (non-`ThisBuild`) `testFrameworks` setting in this file reaches every project, so one
+// registration covers them all; `checkScalaCheckFramework` asserts that it actually did. Remove
+// both, and `ScalaCheckFrameworkFixed`, once the upstream fixes are in a resolved version.
+lazy val scalaCheckFramework: TestFramework =
+  new TestFramework("test.ScalaCheckFrameworkFixed")
+
+lazy val useFixedScalaCheck: Setting[Seq[TestFramework]] =
+  testFrameworks := testFrameworks.value.filterNot(_ == TestFrameworks.ScalaCheck) :+
+    scalaCheckFramework
+
+// Registering the wrapper is per-project, and forgetting it in a new subproject would silently
+// restore the dropped-failure behaviour — a green build, the same signature as the bug itself. This
+// check fails the run instead. It inspects every project, so it also covers projects that never
+// applied `useFixedScalaCheck`, which is precisely the case a per-project check would miss.
+lazy val checkScalaCheckFramework =
+  taskKey[Unit]("Fail if any project registers ScalaCheck's own sbt framework.")
+
+lazy val everyProject = ScopeFilter(inAnyProject)
+
+useFixedScalaCheck
+
+checkScalaCheckFramework := Def.uncached {
+  val ids = thisProject.all(everyProject).value.map(_.id)
+  val frameworks = (Test / testFrameworks).all(everyProject).value
+  val classpaths = (Test / dependencyClasspath).all(everyProject).value
+  val offenders = ids.zip(frameworks).zip(classpaths).collect {
+    case ((id, fws), cp)
+        if fws.contains(TestFrameworks.ScalaCheck) &&
+          cp.exists(_.data.id.contains("scalacheck_")) =>
+      id
+  }
+  if (offenders.nonEmpty) {
+    sys.error(
+      s"${offenders.mkString(", ")} registers ScalaCheck's own sbt framework, which drops all but " +
+        "one property result per suite on a forked run — a falsified property is then reported as " +
+        "passed with exit code 0. Add `useFixedScalaCheck` to those projects. Remove this check, " +
+        "`useFixedScalaCheck` and `ScalaCheckFrameworkFixed` once build.sbt resolves an sbt or " +
+        "ScalaCheck version carrying the upstream fixes: typelevel/scalacheck#1195 " +
+        "(fork detection) or sbt/sbt#9642 (events keyed per task overwrite one another)."
+    )
+  }
+}
+
+
 lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
     .settings(
       name := "hydrozoa-cardano-onchain",
@@ -301,8 +353,11 @@ lazy val integration: Project = (project in file("integration"))
       //
       // A full, unfiltered run is the same opt-out the Yaci recipes already use:
       //   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly *"
+      // Scoped to `scalaCheckFramework`, not `TestFrameworks.ScalaCheck`: testOptions are matched
+      // by framework, so naming a framework this build does not register would silently drop the
+      // tuning — 100 cases instead of 10, and `(extended)` properties back in the fast run.
       Test / testOptions += Tests.Argument(
-        TestFrameworks.ScalaCheck,
+        scalaCheckFramework,
         "-s",
         "10",
         "-f",
@@ -318,6 +373,11 @@ lazy val integration: Project = (project in file("integration"))
         // so `YaciCardanoContainer.start` can talk to the daemon.
         "org.testcontainers" % "testcontainers" % "1.21.3" % Test
       ),
+      // yaci-cardano-test also drags in `org.testcontainers:junit-jupiter:1.17.6`, which the single
+      // `testcontainers` bump above doesn't cover — leaving a split 1.17.6/1.21.3 testcontainers
+      // surface on the test classpath. Force the companion module to match so the whole group
+      // resolves to one version.
+      dependencyOverrides += "org.testcontainers" % "junit-jupiter" % "1.21.3",
       // testcontainers' `DockerClientProviderStrategy.getClientForConfig` unconditionally forces
       // the shaded docker-java `apiVersion` to `VERSION_1_32` whenever the config resolves to
       // `UNKNOWN_VERSION` (a compat fallback for pre-1.24 daemons). Modern rootless dockerd

@@ -135,7 +135,12 @@ integration-rbr-preview:
   trap 'just notify "integration-rbr-preview"' EXIT
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
 
-precommit: lint-check fmt-check nixfmt-check
+# Fail if any project registers ScalaCheck's own sbt framework instead of the wrapper that keeps
+# a suite's property events in one batch. See `ScalaCheckFrameworkFixed` for why that matters.
+scalacheck-framework-check:
+  sbt checkScalaCheckFramework
+
+precommit: lint-check fmt-check nixfmt-check scalacheck-framework-check
   just notify "precommit"
 
 # Like precommit, but cleans first — matches CI's fresh-target behaviour so
