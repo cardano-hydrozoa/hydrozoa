@@ -78,7 +78,7 @@ object RuleBasedTreasuryUtxo {
             case 1 => parse(Utxo(utxos.head)).left.map(LookupError.ParseFailed(_))
             case _ => Left(LookupError.MultipleFound(utxos))
 
-    sealed trait LookupError extends Throwable
+    sealed trait LookupError extends RuntimeException
     object LookupError:
         case object Missing extends LookupError:
             override def getMessage: String =
@@ -185,7 +185,7 @@ object RuleBasedTreasuryOutput {
           value = value
         )
 
-    sealed trait ParseError extends Throwable {
+    sealed trait ParseError extends RuntimeException {
         override def toString: String = getMessage
 
         override def getMessage: String

@@ -118,7 +118,7 @@ case object RuleBasedRegimeOutput {
             }
         } yield ()
 
-    enum ParseError extends Throwable:
+    enum ParseError extends RuntimeException:
         case RegimeAtWrongAddress(output: TransactionOutput)
         case RegimeBeaconMissing(output: TransactionOutput)
         case RegimeDatumMissing(output: TransactionOutput)

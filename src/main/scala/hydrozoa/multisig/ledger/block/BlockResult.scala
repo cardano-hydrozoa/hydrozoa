@@ -86,7 +86,13 @@ object BlockResult:
         postDatedRefundTxs: List[RefundTx.PostDated],
         absorbedDeposits: List[DepositUtxo],
         competingFallbackTxTime: FallbackTxStartTime
-    )
+    ):
+
+        /** The block's evacuation diffs in application order, boundaries erased — as
+          * [[BlockResult.flatEvacuationDiffs]], but off the stored projection, so a caller folding
+          * the cumulative map on boot needs no brief.
+          */
+        def flatEvacuationDiffs: Seq[EvacuationDiff] = evacuationMapDiff.flatMap(_.diffs)
 
     /** Reassemble the full [[BlockResult]] at recovery from its persisted projection + the brief
       * read back from the `Block` journal.

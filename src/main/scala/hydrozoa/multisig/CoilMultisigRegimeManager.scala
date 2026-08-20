@@ -125,7 +125,8 @@ trait CoilMultisigRegimeManager(
               // A coil peer is never a hub, so it re-feeds no coil-ack gap (its Targets carries no
               // CoilAckSequencer either — the gap step is a no-op).
               coils = Nil,
-              treasuryAddress = config.initializationTx.treasuryProduced.address
+              treasuryAddress = config.initializationTx.treasuryProduced.address,
+              leadsFastBlock = config.canLeadFast
             )(using config)
 
             _ <- pendingConnections.complete(connections)

@@ -809,7 +809,7 @@ object Model:
             yield ()
     }
 
-    enum Error extends Throwable:
+    enum Error extends RuntimeException:
         case UnexpectedState(msg: String)
 
         override def getMessage: String = this match {

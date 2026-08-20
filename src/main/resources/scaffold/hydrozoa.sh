@@ -13,7 +13,7 @@
 # scaffolded workspace — resolved to an absolute path, so the alias mounts correctly no matter which
 # directory you run it from. Override HYDROZOA_HOME (to an absolute path) or HYDROZOA_VERSION before
 # sourcing, or edit the defaults below.
-: "${HYDROZOA_VERSION:=0.1.6}"   # published image tag (ghcr.io/cardano-hydrozoa/hydrozoa)
+: "${HYDROZOA_VERSION:=0.1.8}"   # published image tag (ghcr.io/cardano-hydrozoa/hydrozoa)
 : "${HYDROZOA_HOME:=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"   # head directory (absolute)
 export HYDROZOA_VERSION HYDROZOA_HOME
 

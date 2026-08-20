@@ -29,6 +29,14 @@ object RemoteL2LedgerEventFormat:
                       s"(attempt ${attempt + 1}); dropping connection, retrying after $backoff",
                   routingKey = Some("RemoteL2Ledger")
                 )
+            case RestoreTimedOut(commandNumber, timeout) =>
+                LogEvent(
+                  Level.Error,
+                  s"Restore to command $commandNumber timed out after $timeout. The remote L2 " +
+                      "ledger rebuilds its whole log on a restore, so this is not retried — " +
+                      "re-issuing it would restart that rebuild. Failing recovery instead.",
+                  routingKey = Some("RemoteL2Ledger")
+                )
             case ReconnectionAttemptFailed(cause) =>
                 LogEvent(
                   Level.Debug,

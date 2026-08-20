@@ -139,11 +139,13 @@ object RocksDbBackendStore:
             cfOpts <- autoCloseable(new ColumnFamilyOptions())
             // Create flags are meaningless (and rejected) for a read-only open.
             dbOpts <- autoCloseable(
-              if readOnly then new DBOptions()
+              if readOnly then memoryBounds(new DBOptions())
               else
-                  new DBOptions()
-                      .setCreateIfMissing(true)
-                      .setCreateMissingColumnFamilies(true)
+                  memoryBounds(
+                    new DBOptions()
+                        .setCreateIfMissing(true)
+                        .setCreateMissingColumnFamilies(true)
+                  )
             )
             writeOptions <- autoCloseable(new WriteOptions())
             readOptions <- autoCloseable(new ReadOptions())
@@ -153,6 +155,37 @@ object RocksDbBackendStore:
             _ <- Resource.eval(versionCheck(backend, readOnly))
             _ <- Resource.eval(tracer.traceWith(OpenRocksDbReady(path, handles.size)))
         yield backend
+
+    /** Two host-shaped bounds on this store's off-heap memory. Both default to RocksDB's own
+      * values, so an environment that sets neither behaves exactly as it did before.
+      *
+      * `dbWriteBufferSize` caps total memtable memory for the whole DB, flushing the largest column
+      * family when the cap is reached. It is the bound worth setting on a host whose memory is the
+      * scarce resource, because the per-family sizes multiply and no single per-family setting
+      * names the total: this store opens one column family per lane plus one per peer for each of
+      * the four per-author families, so a two-peer head runs ~26 and a six-node fleet ~32. At the
+      * stock 64 MB x 2 buffers each, that is gigabytes of headroom, and a host that runs out names
+      * no memory setting as the cause. 0 leaves it uncapped, as today.
+      *
+      * `maxOpenFiles` bounds the table cache, which holds every open SST's index and filter blocks
+      * and so grows with the file count rather than with the data. -1 keeps every file open, as
+      * today; a bound trades an occasional reopen for a ceiling.
+      */
+    private def memoryBounds(opts: DBOptions): DBOptions =
+        opts
+            .setDbWriteBufferSize(envLong("HYDROZOA_ROCKSDB_DB_WRITE_BUFFER_BYTES", 0L))
+            .setMaxOpenFiles(envInt("HYDROZOA_ROCKSDB_MAX_OPEN_FILES", -1))
+
+    /** A numeric RocksDB knob read from the environment, falling back to the compiled-in default.
+      * An unparseable value takes the default rather than failing the boot: these are host-shaped
+      * tuning hints, not correctness settings, and a node that refuses to start is the worse
+      * outcome.
+      */
+    private def envLong(name: String, default: Long): Long =
+        sys.env.get(name).flatMap(_.trim.toLongOption).getOrElse(default)
+
+    private def envInt(name: String, default: Int): Int =
+        sys.env.get(name).flatMap(_.trim.toIntOption).getOrElse(default)
 
     /** Run the open-time schema-version check. On a writable open a fresh store gets the current
       * version stamped; incompatible versions raise. A read-only open never writes, so a missing

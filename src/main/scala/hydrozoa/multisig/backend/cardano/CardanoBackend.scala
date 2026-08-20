@@ -90,7 +90,7 @@ object CardanoBackend:
       */
     final case class ContinuingTx(continuingOutput: Utxo, spendingRedeemer: Data)
 
-    enum Error(msg: String) extends Throwable:
+    enum Error(msg: String) extends RuntimeException(msg):
         case Timeout(msg: String) extends Error(msg)
         case InvalidTx(msg: String) extends Error(msg)
         case Unexpected(msg: String) extends Error(msg)

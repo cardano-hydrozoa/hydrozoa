@@ -59,7 +59,7 @@ object InitializationTx {
             // TODO: Switch to ValidatedNel[Error, A]
             type ParseErrorOr[A] = Either[Error, A]
 
-            enum Error extends Throwable {
+            enum Error extends RuntimeException {
                 case MetadataParseError(wrapped: MD.ParseError)
                 case InvalidTransactionError(msg: String)
                 case TtlIsMissing

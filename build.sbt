@@ -286,6 +286,28 @@ lazy val integration: Project = (project in file("integration"))
           "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
         )
       ),
+      // ScalaCheck tuning for the default integration run: 10 cases per property (ScalaCheck's
+      // own default is 100) and drop the "(extended)" properties, which are a naming convention
+      // nothing else enforces. Together they are the difference between ~25 minutes and hours.
+      //
+      // Scoped to the ScalaCheck framework, and it has to be. Passing them on the command line as
+      // `integration/testOnly * -- -s 10 -f …` hands them to EVERY framework on the module, and
+      // ScalaTest reads `-s` as "run this named suite" and throws:
+      //   IllegalArgumentException: Specifying a suite (-s <suite>) … is not supported when
+      //   running ScalaTest from sbt
+      // That was invisible only because every ScalaTest suite in this module happened to be in the
+      // Tests.Exclude list above, so none was ever discovered. The moment a ScalaTest suite is
+      // added and not excluded — the recovery suites — the recipe dies in five seconds.
+      //
+      // A full, unfiltered run is the same opt-out the Yaci recipes already use:
+      //   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly *"
+      Test / testOptions += Tests.Argument(
+        TestFrameworks.ScalaCheck,
+        "-s",
+        "10",
+        "-f",
+        "^(?!.*\\(extended\\))"
+      ),
       // test dependencies
       libraryDependencies ++= Seq(
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
@@ -364,10 +386,10 @@ addCommandAlias(
   ";cardanoOnchain/scalafixAll --check ;petri/scalafixAll --check ;core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check"
 )
 
-// Test dependencies.
-// NB (sbt 2): bare (not `ThisBuild /`) for the same reason as `scalacOptions` above — otherwise the
-// framework is registered once per subproject (4×) in the shared ThisBuild scope.
-testFrameworks += new TestFramework("org.scalatest.tools.Framework")
+// No `testFrameworks` entry for ScalaTest: sbt's default list already carries it, as
+// `TestFramework(org.scalatest.tools.Framework, org.scalatest.tools.ScalaTestFramework)`. Adding it
+// again registers a *second* framework that resolves to the same runner, and sbt then runs every
+// suite once per entry — twice.
 
 // Tests are wall-clock/sleep-bound (real System timestamps in the cats-actors), so run more
 // suites concurrently than CPU cores to overlap the waits. sbt's default caps concurrency at the
@@ -381,7 +403,7 @@ inThisBuild(
   List(
     // Release version — drives the Docker image tag, `hydrozoa.BuildInfo.version`, and `GET
     // /version`. Bump here for a release (see RELEASE.md), then tag `v<version>`.
-    version := "0.1.6",
+    version := "0.1.8",
     scalaVersion := "3.3.7",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision

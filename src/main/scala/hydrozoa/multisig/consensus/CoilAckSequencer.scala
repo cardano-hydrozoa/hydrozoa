@@ -68,7 +68,7 @@ trait CoilAckSequencer(
         mConn <- this.connections.get
         conn <- mConn.fold(
           IO.raiseError(
-            java.lang.Error("Coil ack sequencer is missing its connections to other actors.")
+            IllegalStateException("Coil ack sequencer is missing its connections to other actors.")
           )
         )(IO.pure)
     } yield conn

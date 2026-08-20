@@ -39,7 +39,7 @@ object TallyTxOps {
         FallbackContingency.Section & OwnPeerPrivate.Section
 
     object Build {
-        enum Error extends Throwable:
+        enum Error extends RuntimeException:
             case AbsentVoteDatum(utxo: TransactionInput)
             case MalformedVoteDatum(utxo: TransactionInput, msg: String)
             case IncompatibleVotes(continuing: (Key, Link), removed: (Key, Link))

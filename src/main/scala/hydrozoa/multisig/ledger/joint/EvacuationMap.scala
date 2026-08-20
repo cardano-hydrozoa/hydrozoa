@@ -13,6 +13,8 @@ import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{payoutObligationDec
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import io.circe.*
 import io.circe.syntax.*
+import java.io.ByteArrayOutputStream
+import java.nio.charset.StandardCharsets.UTF_8
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.util.Try
 import scalus.cardano.ledger.*
@@ -20,7 +22,7 @@ import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v2.TxOut
 import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.{ByteString, Data, ToData}
+import scalus.uplc.builtin.{ByteString, Data, ToData, platform}
 import scalus.|>
 import supranational.blst.Scalar
 
@@ -67,6 +69,45 @@ object EvacuationMapInstances:
             } yield ek
     }
 
+/** A digest of an [[EvacuationMap]], as defined in `docs/spec/l2-ledger-command-coordination.md`
+  * ("The evacuation map digest").
+  *
+  * A **coordination check, not an on-chain commitment**: the head commits to its evacuation map on
+  * L1 with [[EvacuationMap.kzgCommitment]], which needs BLS12-381 and the head's trusted setup.
+  * This digest exists so a remote L2 ledger and the head can cheaply agree that they hold the
+  * *same* map, and so is defined over bytes both already have — the raw evacuation key and the
+  * entry's raw CBOR output — with no Plutus `Data` encoding on either side.
+  *
+  * Sugar Rush computes it in `types/src/types/evacuation_map.rs`; the two are pinned to a shared
+  * golden, so a change to [[EvacuationMap.digest]] is a wire break.
+  */
+final case class EvacuationMapHash(byteString: ByteString) {
+    def toHex: String = byteString.toHex
+
+    override def toString: String = toHex
+}
+
+object EvacuationMapHash:
+
+    /** Mixed in before anything else so this digest can never collide with a hash of the same bytes
+      * taken for another purpose. ASCII, no terminator — the length framing that follows makes the
+      * boundary unambiguous.
+      */
+    val domainTag: Array[Byte] = "gummiworm-evacuation-map-v1".getBytes(UTF_8)
+
+    given Encoder[EvacuationMapHash] =
+        Encoder.encodeString.contramap(_.toHex)
+
+    given Decoder[EvacuationMapHash] =
+        Decoder.decodeString.emap(s =>
+            Try(ByteString.fromHex(s)).toEither.left
+                .map(_ => s"not a hex-encoded evacuation map hash: $s")
+                .flatMap(bs =>
+                    if bs.size == 32 then Right(EvacuationMapHash(bs))
+                    else Left(s"evacuation map hash must be 32 bytes, got ${bs.size}")
+                )
+        )
+
 final case class EvacuationMap(
     evacuationMap: TreeMap[EvacuationKey, Payout.Obligation]
 )(using Ordering[EvacuationKey], ToData[EvacuationKey])
@@ -96,6 +137,49 @@ final case class EvacuationMap(
     val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.utxo.value)
 
     lazy val kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
+
+    /** The [[EvacuationMapHash]] of this map — see that type for what it is for.
+      *
+      * ```
+      * blake2b_256(
+      *      "gummiworm-evacuation-map-v1"
+      *   || uint32_be(entryCount)
+      *   || for each (key, output) ascending by key:
+      *          uint32_be(len(key))    || key
+      *       || uint32_be(len(output)) || output
+      * )
+      * ```
+      *
+      * Both fields are length-framed because evacuation keys are not fixed-width across L2 ledger
+      * backends — the EUTXO ledger keys by the CBOR of a `TransactionInput`, Sugar Rush by a
+      * 28-byte account key hash zero-padded to 32 — so an unframed concatenation would be
+      * ambiguous. The output contributes its **raw** CBOR, which is why [[Payout.Obligation]] holds
+      * a `KeepRaw`: a re-encoding could differ from the bytes the remote hashed.
+      *
+      * Folding in `evacuationMap`'s own iteration order is what the spec requires: scalus's
+      * `Ordering[ByteString]` compares unsigned, byte by byte, shorter prefix first, which is the
+      * same order Rust's `Ord` on byte slices gives the remote.
+      */
+    lazy val digest: EvacuationMapHash = {
+        val buffer = ByteArrayOutputStream()
+        def putLength(n: Int): Unit = {
+            buffer.write((n >>> 24) & 0xff)
+            buffer.write((n >>> 16) & 0xff)
+            buffer.write((n >>> 8) & 0xff)
+            buffer.write(n & 0xff)
+        }
+        def putFramed(bytes: Array[Byte]): Unit = {
+            putLength(bytes.length)
+            buffer.write(bytes)
+        }
+        buffer.write(EvacuationMapHash.domainTag)
+        putLength(evacuationMap.size)
+        evacuationMap.foreach { (key, obligation) =>
+            putFramed(key.byteString.bytes)
+            putFramed(obligation.utxo.raw)
+        }
+        EvacuationMapHash(platform.blake2b_256(ByteString.unsafeFromArray(buffer.toByteArray)))
+    }
 
     lazy val scalars: SList[Scalar] = {
         SList.from(
