@@ -226,7 +226,8 @@ divergence, not a spec change.
 - **`any-remote` screening is active only when configured.** With a `remoteScreenerUri` in the
   node's private config, `RemoteL2Screener` posts each request to the remote ledger's stateless
   screening endpoint — a deposit to `POST /screen/deposit`, a transaction to `POST /screen/tx`
-  (which decrypts the payload, parses it, and verifies its COSE signature) — before a RequestId is
+  (which decrypts the payload, verifies its COSE signature, and runs the ledger's stateless
+  transaction checks) — before a RequestId is
   assigned; a rejection surfaces to the user, while a transport failure fails open (the request
   proceeds unscreened — the remote ledger still checks authoritatively at submission). Without the
   URI, remote screening remains a passthrough.
