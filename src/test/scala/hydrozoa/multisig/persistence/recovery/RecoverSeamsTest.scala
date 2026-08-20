@@ -22,7 +22,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand, RestoreError}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey, Timestamped}
@@ -79,7 +79,12 @@ class RecoverSeamsTest extends AnyFunSuite:
             for
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
-                viaRecover <- JointLedger.State.recover(p, ledger, None)
+                viaRecover <- JointLedger.State.recover(
+                  p,
+                  ledger,
+                  None,
+                  config.initialEvacuationMap
+                )
                 viaState <- JointLedger.State.recoverState(p, None)
             yield assert(viaRecover.isEmpty && viaState.isEmpty)
         }
@@ -119,7 +124,19 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
-                done <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
+                // The fast anchor IS max(BlockResult), so the anchored blocks must be present:
+                // recover folds their evacuation diffs to reach the map at the anchor.
+                _ <- (1 to 2).toList.traverse_(n =>
+                    blockResult(n).flatMap(br =>
+                        p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
+                    )
+                )
+                done <- JointLedger.State.recover(
+                  p,
+                  ledger,
+                  Some(BlockNumber(2)),
+                  config.initialEvacuationMap
+                )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(done.isDefined && anchored == L2CommandNumber(2L))
         }
@@ -144,7 +161,19 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
-                recovered <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
+                // The fast anchor IS max(BlockResult), so the anchored blocks must be present:
+                // recover folds their evacuation diffs to reach the map at the anchor.
+                _ <- (1 to 2).toList.traverse_(n =>
+                    blockResult(n).flatMap(br =>
+                        p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
+                    )
+                )
+                recovered <- JointLedger.State.recover(
+                  p,
+                  ledger,
+                  Some(BlockNumber(2)),
+                  config.initialEvacuationMap
+                )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(
               recovered.exists(d =>
@@ -406,6 +435,99 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
+    test(
+      "JointLedger.recover accepts a cold start whose L2 ledger holds the configured initial " +
+          "evacuation map"
+    ) {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                r <- JointLedger.State
+                    .recover(p, ledger, None, config.initialEvacuationMap)
+                    .attempt
+            yield assert(r == Right(None))
+        }
+    }
+
+    test("JointLedger.recover refuses to boot when the L2 ledger holds a different initial map") {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                // Stand in for the real failure: a head config built against a different ledger,
+                // or against a different configuration of this one. Dropping one entry is enough —
+                // the check is on the digest of the whole map.
+                divergent = EvacuationMap.from(config.initialEvacuationMap.drop(1))
+                r <- JointLedger.State.recover(p, ledger, None, divergent).attempt
+            yield assert(
+              r.swap.toOption.exists {
+                  case RestoreError.EvacuationMapMismatch(expected, actual) =>
+                      expected == divergent.digest && actual == config.initialEvacuationMap.digest
+                  case _ => false
+              }
+            )
+        }
+    }
+
+    test(
+      "JointLedger.recover verifies the evacuation map at the crash anchor, folding onto the "
+          + "last stored map"
+    ) {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                _ <- (1 to 3).toList.traverse_(i =>
+                    ledger.applyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
+                )
+                brief <- blockBrief(2)
+                _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
+                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
+                _ <- (1 to 2).toList.traverse_(n =>
+                    blockResult(n).flatMap(br =>
+                        p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
+                    )
+                )
+                // A stack closed at block 1, so its stored map — not the config's initial one — is
+                // the base, and only block 2's diffs are folded on top.
+                _ <- p.put(StoreKey.EvacuationMap(BlockNumber(1)))(config.initialEvacuationMap)
+                r <- JointLedger.State
+                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap)
+                    .attempt
+            yield assert(r.map(_.isDefined) == Right(true))
+        }
+    }
+
+    test("JointLedger.recover refuses to boot when the map at the crash anchor diverges") {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                _ <- (1 to 3).toList.traverse_(i =>
+                    ledger.applyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
+                )
+                brief <- blockBrief(2)
+                _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
+                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
+                _ <- (1 to 2).toList.traverse_(n =>
+                    blockResult(n).flatMap(br =>
+                        p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
+                    )
+                )
+                // The stack-close base disagrees with what the ledger holds, and the blocks folded
+                // on top carry no diffs to reconcile it — so the anchor maps differ.
+                _ <- p.put(StoreKey.EvacuationMap(BlockNumber(1)))(EvacuationMap.empty)
+                r <- JointLedger.State
+                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap)
+                    .attempt
+            yield assert(
+              r.swap.toOption.exists(_.isInstanceOf[RestoreError.EvacuationMapMismatch])
+            )
+        }
+    }
     test("JointLedger.recover throws when the fastBlockMark block's L2 command number is missing") {
         withStore { p =>
             for
@@ -415,7 +537,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 // L2CommandNumber intentionally not written
-                r <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2))).attempt
+                r <- JointLedger.State
+                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap)
+                    .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
         }
     }

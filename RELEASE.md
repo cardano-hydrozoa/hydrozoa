@@ -16,14 +16,22 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    a few deployment files that do *not* read `build.sbt`, so bump them in lockstep:
 
    - `src/main/resources/scaffold/hydrozoa.sh` — `HYDROZOA_VERSION` default
-   - `src/main/resources/scaffold/docker-compose.yml` — the default
-     `${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z}`
-   - `docs/user-guide/DEPLOYMENT.md` — the `…/hydrozoa:X.Y.Z` pull/run examples
+   - `docs/user-guide/DEPLOYMENT.md` — the `hydrozoa version` sample output, the `git describe`
+     paragraph beneath it, and the `HYDROZOA_VERSION=` / `HYDROZOA_IMAGE=` run examples
 
-   Catch stragglers with `grep -rn "hydrozoa:<previous-version>"` (and the bare previous version in
-   `scaffold/hydrozoa.sh`). Not bumped: `HydrozoaRoutes.apiVersion` + `docs/openapi*.yaml` (the API-contract
-   version, separate from the release version). Commit the bump on `main` (via PR; `main` is
-   protected).
+   `scaffold/docker-compose.yml` needs **no** edit: its image default is
+   `${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:${HYDROZOA_VERSION:-latest}}`, so it follows
+   `hydrozoa.sh` rather than pinning a version of its own.
+
+   Catch stragglers by grepping the bare previous version, not just the image ref — it also appears
+   as `version := "X.Y.Z"` and in prose:
+
+   ```bash
+   grep -rn "0\.1\.7" --include=* . | grep -vE "^\./(target|\.git|head)/"
+   ```
+
+   Not bumped: `HydrozoaRoutes.apiVersion` + `docs/openapi*.yaml` (the API-contract version,
+   separate from the release version). Commit the bump on `main` (via PR; `main` is protected).
 
 2. **Check the baked-in reference-script UTxOs are current.** The image ships per-network default
    reference UTxOs at `src/main/resources/scaffold/ref-utxos/` (Preview and Preprod): the treasury +
