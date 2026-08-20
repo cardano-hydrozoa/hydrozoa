@@ -102,7 +102,7 @@ object JsonCodecs {
 
             // AssetName codec (as plain value, not key)
             given assetNameValueEncoder: Encoder[AssetName] =
-                Encoder.encodeString.contramap(assetName => assetName.bytes.toHex)
+                Encoder.encodeString.contramap(assetName => ByteVector(assetName.bytes.bytes).toHex)
 
             given assetNameValueDecoder: Decoder[AssetName] =
                 Decoder.decodeString.map(s => AssetName.fromHex(s))
@@ -129,7 +129,7 @@ object JsonCodecs {
 
             // Encode/decode byte arrays as lowercase hex strings
             given byteStringEncoder: Encoder[ByteString] =
-                Encoder.encodeString.contramap(_.toHex)
+                Encoder.encodeString.contramap(bs => ByteVector(bs.bytes).toHex)
 
             given byteStringDecoder: Decoder[ByteString] =
                 Decoder.decodeString.emapTry { hexStr =>
@@ -147,7 +147,7 @@ object JsonCodecs {
 
             // Policy ID Codec
             given policyIdKeyEncoder: KeyEncoder[PolicyId] =
-                KeyEncoder.encodeKeyString.contramap(policyId => policyId.toHex)
+                KeyEncoder.encodeKeyString.contramap(policyId => ByteVector(policyId.bytes).toHex)
 
             // Script hash must be exactly 56 hex characters long
             given policyIdKeyDecoder: KeyDecoder[PolicyId] =
@@ -155,7 +155,9 @@ object JsonCodecs {
 
             // Asset Name Codec
             given assetNameKeyEncoder: KeyEncoder[AssetName] =
-                KeyEncoder.encodeKeyString.contramap(assetName => assetName.bytes.toHex)
+                KeyEncoder.encodeKeyString.contramap(assetName =>
+                    ByteVector(assetName.bytes.bytes).toHex
+                )
 
             // Asset name must be exactly 64 hexits
             given assetNameKeyDecoder: KeyDecoder[AssetName] =
@@ -224,7 +226,7 @@ object JsonCodecs {
             implicit val transactionInputEncoder: Encoder[TransactionInput] =
                 (ti: TransactionInput) =>
                     io.circe.Json.obj(
-                      "transaction_id" -> ti.transactionId.toHex.asJson,
+                      "transaction_id" -> ByteVector(ti.transactionId.bytes).toHex.asJson,
                       // N.B.: CIP-0116 defines this a UInt32; scalus defines it as signed.
                       "index" -> ti.index.toInt.asJson
                     )
