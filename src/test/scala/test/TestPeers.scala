@@ -239,7 +239,15 @@ object TestPeers:
       * node that cannot sign. No network input: the key is network-independent; only address
       * encoding downstream is network-specific.
       */
-    def deriveScalusWallet(mnemonic: String, ordinal: Int): PeerWallet = {
+    def deriveScalusWallet(mnemonic: String, ordinal: Int): PeerWallet =
+        val (vk, sk) = deriveScalusKeypair(mnemonic, ordinal)
+        PeerWallet.scalusWallet(vk, sk)
+
+    /** The raw keypair behind [[deriveScalusWallet]]. Exposed so a test that writes a peer's
+      * `private.json` can splice in the real signing key explicitly — the stock config encoders
+      * deliberately withhold it ([[PeerWallet.dummyPeerWalletEncoder]]).
+      */
+    def deriveScalusKeypair(mnemonic: String, ordinal: Int): (VerificationKey, SigningKey) = {
         val seed = MessageDigest
             .getInstance("SHA-256")
             .digest(s"$mnemonic#$ordinal".getBytes(StandardCharsets.UTF_8))
@@ -247,10 +255,7 @@ object TestPeers:
         val vk = VerificationKey.unsafeFromByteString(
           ByteString.fromArray(sk.generatePublicKey().getEncoded)
         )
-        PeerWallet.scalusWallet(
-          vk,
-          SigningKey.unsafeFromByteString(ByteString.fromArray(sk.getEncoded))
-        )
+        (vk, SigningKey.unsafeFromByteString(ByteString.fromArray(sk.getEncoded)))
     }
 
     def arbitrary: Gen[TestPeers] = for {

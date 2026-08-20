@@ -10,12 +10,13 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.server.HydrozoaHttpEvent
-import io.circe.Printer
 import io.circe.syntax.*
+import io.circe.{Json, Printer}
 import java.nio.file.Files
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
+import test.TestPeers
 
 /** End-to-end sanity check: generates a 1-peer sample config in memory, writes it to a temp dir
   * (the head peer's mesh `webSocketAddress` carries port 0 from the test fixture, and `httpPort` is
@@ -57,13 +58,29 @@ class MainSmokeTest extends AnyFunSuite:
 
         val printer = Printer.spaces2.copy(dropNullValues = true)
 
+        // The stock config encoders deliberately withhold signing keys (PeerWallet's encoder writes
+        // an all-zero placeholder), so a serialized private config boots a node that cannot sign —
+        // its stack-0 hard-ack self-verification then fails and terminates the actor system before
+        // the HTTP server binds. Splice peer 0's real signing key back in — the same key TestPeers
+        // derived for the generated config — so the on-disk config is actually runnable.
+        val (_, peerSigningKey) = TestPeers.deriveScalusKeypair(spec.seedPhrase.mnemonic, 0)
+        val runnablePrivateJson = peerPrivate.asJson.deepMerge(
+          Json.obj(
+            "ownPeerPrivate" -> Json.obj(
+              "ownHeadWallet" -> Json.obj(
+                "signingKey" -> Json.fromString(scodec.bits.ByteVector(peerSigningKey.bytes).toHex)
+              )
+            )
+          )
+        )
+
         val testIO = for {
             _ <- IO.blocking(
               Files.writeString(headPath, printer.print(mnc.headConfig.asJson))
             )
             _ <- IO.blocking(Files.createDirectories(privatePath.getParent))
             _ <- IO.blocking(
-              Files.writeString(privatePath, printer.print(peerPrivate.asJson))
+              Files.writeString(privatePath, printer.print(runnablePrivateJson))
             )
 
             mockBackend <- CardanoBackendMock.mockIO(
