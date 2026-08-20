@@ -475,7 +475,8 @@ object Serve {
             }
 
             _ <- system.waitForTermination
-        } yield ExitCode.Success
+            exit <- abnormalTermination
+        } yield exit
 
     private def runCoilNode(
         system: ActorSystem[IO],
@@ -485,7 +486,24 @@ object Serve {
             _ <- system.actorOf(mrm, "CoilMultisigRegimeManager")
             _ <- log.info("Hydrozoa coil node started successfully")
             _ <- system.waitForTermination
-        } yield ExitCode.Success
+            exit <- abnormalTermination
+        } yield exit
+
+    /** Nothing in the node shuts the actor system down deliberately, and an interrupted `serve` is
+      * cancelled rather than resumed here, so reaching this point means the user guardian's
+      * `TerminateActorSystem` fired: an actor escalated and took the system with it. Exit non-zero
+      * so a process supervisor restarts the node.
+      *
+      * The cause is not available to report — cats-actors 2.1.0 records it, then erases it from its
+      * own finalizer before the `Resource` that would re-raise it runs. It reaches the operator
+      * only as the `[EventBus] => Error(...)` line and the stack trace the supervision strategy
+      * prints.
+      */
+    private def abnormalTermination: IO[ExitCode] =
+        log.info(
+          "Actor system terminated: an actor escalated to the guardian. " +
+              "See the [EventBus] error and stack trace above for the cause."
+        ).as(ExitCode.Error)
 
     private sealed trait NodeRun
     private object NodeRun {

@@ -55,6 +55,12 @@ trait WalletModule:
 
     def exportVerificationKey(publicKey: VerificationKey): ScalusVerificationKey
 
+    /** The plain 32-byte ed25519 signing key behind this module's key type, when it has one. A
+      * BIP32 extended key does not — see the note above — so [[BloxBean]] returns `None` and its
+      * wallets cannot be serialized faithfully.
+      */
+    def exportSigningKey(signingKey: SigningKey): Option[ScalusSigningKey]
+
     def signTx(
         tx: Transaction,
         verificationKey: VerificationKey,
@@ -82,6 +88,8 @@ object WalletModule {
             ScalusVerificationKey.unsafeFromByteString(
               ByteString.fromArray(verificationKey.getKeyData)
             )
+
+        override def exportSigningKey(signingKey: SigningKey): Option[ScalusSigningKey] = None
 
         override def signTx(
             tx: Transaction,
@@ -113,6 +121,9 @@ object WalletModule {
 
         override def exportVerificationKey(publicKey: VerificationKey): ScalusVerificationKey =
             publicKey
+
+        override def exportSigningKey(signingKey: SigningKey): Option[ScalusSigningKey] =
+            Some(signingKey)
 
         override def signTx(
             tx: Transaction,

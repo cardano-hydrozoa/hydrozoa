@@ -14,7 +14,7 @@ import io.circe.Printer
 import io.circe.syntax.*
 import java.nio.file.Path
 import org.scalacheck.Gen
-import test.{PeersNumberSpec, SeedPhrase, TestPeersSpec}
+import test.{PeersNumberSpec, SeedPhrase, TestPeers, TestPeersSpec}
 
 /** Dev-time tool: generate a sample multi-peer Hydrozoa config and write it as JSON to disk.
   *
@@ -69,21 +69,33 @@ object GenerateSampleConfig
     def testPeersSpec(spec: Spec): TestPeersSpec =
         TestPeersSpec(spec.seedPhrase, CardanoNetwork.Preprod, PeersNumberSpec.Exact(spec.nPeers))
 
-    /** Drive `MultiNodeConfig.generate(testPeersSpec(spec))()` exactly once; `generationSeed`
-      * controls reproducibility via ScalaCheck's seed mechanism.
+    /** Drive the generator exactly once; `generationSeed` controls reproducibility via ScalaCheck's
+      * seed mechanism.
+      *
+      * Peers are keyed [[TestPeers.KeyScheme.Ed25519]] so the written configs are usable as-is: a
+      * BIP32 wallet cannot be serialized (see [[writeAll]]), and a node reading a config where it
+      * could not would sign with a key its own verification key does not match.
       */
     def generateAndWrite(spec: Spec): IO[Unit] =
         IO(
           MultiNodeConfig
-              .generate(testPeersSpec(spec))()
+              .generateWith(
+                TestPeers(
+                  seedPhrase = spec.seedPhrase,
+                  network = testPeersSpec(spec).network,
+                  peersNumber = spec.nPeers,
+                  keyScheme = TestPeers.KeyScheme.Ed25519
+                )
+              )()
               .pureApply(Gen.Parameters.default, org.scalacheck.rng.Seed(spec.generationSeed))
         ).flatMap(writeAll(spec, _))
 
     /** Serialize the shared head config + per-peer private configs under `spec.outDir`.
       *
-      * NOTE: signing keys are written as dummy all-zero bytes — the BIP32 extended keys used
-      * internally by TestPeers cannot round-trip through the 32-byte Scalus codec. Replace them
-      * before running a node.
+      * NOTE: a peer whose wallet holds a BIP32 extended key — [[TestPeers.KeyScheme.Bip32]], the
+      * default everywhere else — gets dummy all-zero signing-key bytes, because that key has no
+      * 32-byte form to write. Such a config is not runnable: replace the keys first, or generate
+      * with [[TestPeers.KeyScheme.Ed25519]] as [[generateAndWrite]] does.
       */
     def writeAll(spec: Spec, mnc: MultiNodeConfig): IO[Unit] = {
         val printer = Printer.spaces2.copy(dropNullValues = true)

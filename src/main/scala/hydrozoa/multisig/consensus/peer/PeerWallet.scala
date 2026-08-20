@@ -40,6 +40,12 @@ final class PeerWallet(
 
     def exportVerificationKey: VerificationKey = verificationKeysBytes
 
+    /** This wallet's signing key, when the underlying module holds a plain 32-byte ed25519 key.
+      * `None` for a BIP32 extended key, which has no 32-byte form — see
+      * [[hydrozoa.lib.cardano.wallet.WalletModule.exportSigningKey]].
+      */
+    def exportSigningKey: Option[SigningKey] = walletModule.exportSigningKey(signingKey)
+
     def mkVKeyWitness(tx: Transaction): VKeyWitness =
         walletModule.signTx(tx, verificationKey, signingKey)
 
@@ -83,13 +89,17 @@ object PeerWallet:
       signingKey = signingKey
     )
 
-    /** We can't directly access the signing key of a peer wallet, so we serialize a "dummy"
-      * all-zeros signing key in its place.
+    /** A wallet whose key is a plain 32-byte ed25519 key round-trips faithfully. One backed by a
+      * BIP32 extended key cannot — that key has no 32-byte form — so an all-zeros `dummySigningKey`
+      * stands in, and the decoded wallet will sign with a key its own verification key does not
+      * match. Nothing detects that at load; it surfaces as a hard-ack `BadSignature` deep in
+      * consensus, so a config written from a BIP32 wallet must have its signing key replaced before
+      * a node reads it (see `GenerateSampleConfig.writeAll`).
       */
-    given dummyPeerWalletEncoder: Encoder[PeerWallet] = new Encoder[PeerWallet] {
+    given peerWalletEncoder: Encoder[PeerWallet] = new Encoder[PeerWallet] {
         override def apply(w: PeerWallet): Json = Json.obj(
           "verificationKey" -> w.exportVerificationKey.asJson(using given_Encoder_VerificationKey),
-          "signingKey" -> dummySigningKey.asJson
+          "signingKey" -> w.exportSigningKey.getOrElse(dummySigningKey).asJson
         )
     }
 

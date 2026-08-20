@@ -15,6 +15,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.http4s.Uri
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
@@ -24,7 +25,8 @@ import scala.collection.immutable.SortedMap
 import scala.collection.mutable
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
-import scalus.crypto.ed25519.VerificationKey
+import scalus.crypto.ed25519.{SigningKey, VerificationKey}
+import scalus.uplc.builtin.{Builtins, ByteString}
 import scalus.|>
 
 type GenWithTestPeers[A] = ReaderT[Gen, TestPeers, A]
@@ -47,6 +49,7 @@ case class TestPeers private (
     override val cardanoNetwork: CardanoNetwork,
     peersNumber: Int,
     coilPeersNumber: Int,
+    keyScheme: TestPeers.KeyScheme,
 ) extends CardanoNetwork.Section,
       HeadPeers.Section {
     import TestPeerName.maxPeers
@@ -217,19 +220,29 @@ case class TestPeers private (
       */
     private def vkeyFor(peer: TestPeerName): VerificationKey =
         TestPeers.vkeyCache.getOrElseUpdate(
-          (seedPhrase.mnemonic, peer.ordinal),
-          VerificationKey.unsafeFromArray(bloxbeanAccountFor(peer).publicKeyBytes())
+          (seedPhrase.mnemonic, peer.ordinal, keyScheme),
+          keyScheme match {
+              case TestPeers.KeyScheme.Bip32 =>
+                  VerificationKey.unsafeFromArray(bloxbeanAccountFor(peer).publicKeyBytes())
+              case TestPeers.KeyScheme.Ed25519 =>
+                  TestPeers.ed25519KeyPair(seedPhrase, peer)._1
+          }
         )
 
     private def walletFor_(peer: TestPeerName): PeerWallet =
         TestPeers.walletCache.getOrElseUpdate(
-          (seedPhrase.mnemonic, peer.ordinal), {
-              val hdKeyPair = bloxbeanAccountFor(peer).hdKeyPair()
-              PeerWallet(
-                WalletModule.BloxBean,
-                hdKeyPair.getPublicKey,
-                hdKeyPair.getPrivateKey
-              )
+          (seedPhrase.mnemonic, peer.ordinal, keyScheme),
+          keyScheme match {
+              case TestPeers.KeyScheme.Bip32 =>
+                  val hdKeyPair = bloxbeanAccountFor(peer).hdKeyPair()
+                  PeerWallet(
+                    WalletModule.BloxBean,
+                    hdKeyPair.getPublicKey,
+                    hdKeyPair.getPrivateKey
+                  )
+              case TestPeers.KeyScheme.Ed25519 =>
+                  val (vkey, skey) = TestPeers.ed25519KeyPair(seedPhrase, peer)
+                  PeerWallet.scalusWallet(vkey, skey)
           }
         )
 
@@ -254,26 +267,58 @@ object TestPeers:
       *
       * Concurrent by construction — suites run in parallel and share this map.
       */
-    private val vkeyCache: TrieMap[(String, Int), VerificationKey] = TrieMap.empty
+    private val vkeyCache: TrieMap[(String, Int, KeyScheme), VerificationKey] = TrieMap.empty
 
     /** Peer wallets, shared for the same reason as [[vkeyCache]] and keyed identically: the HD key
       * pair behind a wallet comes from the same network-independent derivation. Safe to share —
       * [[PeerWallet]] is an immutable holder of a key pair whose methods are pure.
       */
-    private val walletCache: TrieMap[(String, Int), PeerWallet] = TrieMap.empty
+    private val walletCache: TrieMap[(String, Int, KeyScheme), PeerWallet] = TrieMap.empty
 
     def arbitrary: Gen[TestPeers] = for {
         spec <- TestPeersSpec.generate()
         testPeers <- generate(spec)
     } yield testPeers
 
+    /** Which key type a peer's wallet holds.
+      *
+      * `Bip32` is the default and what every suite has always used: Cardano's Ed25519-BIP32
+      * extended keys, via BloxBean. They cannot be serialized — see
+      * [[hydrozoa.multisig.consensus.peer.PeerWallet.peerWalletEncoder]] — so a config written from
+      * them loads back with a signing key that does not match its own verification key.
+      *
+      * `Ed25519` derives a plain 32-byte key instead, which round-trips through JSON intact. Choose
+      * it when the test writes a config to disk and then runs a node from the file.
+      */
+    enum KeyScheme derives CanEqual:
+        case Bip32, Ed25519
+
+    /** Deterministic plain-ed25519 key pair for a peer, from the same `(mnemonic, ordinal)` the
+      * BIP32 path keys on. Not a BIP32 derivation and not interchangeable with one: it exists only
+      * so a generated config survives a JSON round trip.
+      */
+    private[test] def ed25519KeyPair(
+        seedPhrase: SeedPhrase,
+        peer: TestPeerName
+    ): (VerificationKey, SigningKey) = {
+        val seed = Builtins.blake2b_256(
+          ByteString.fromString(s"${seedPhrase.mnemonic}#${peer.ordinal}")
+        )
+        val sk = Ed25519PrivateKeyParameters(seed.bytes, 0)
+        (
+          VerificationKey.unsafeFromArray(sk.generatePublicKey().getEncoded),
+          SigningKey.unsafeFromByteString(ByteString.fromArray(sk.getEncoded))
+        )
+    }
+
     def apply(
         seedPhrase: SeedPhrase,
         network: CardanoNetwork,
         peersNumber: Int,
         coilPeersNumber: Int = 0,
+        keyScheme: KeyScheme = KeyScheme.Bip32,
     ): TestPeers =
-        new TestPeers(seedPhrase, network, peersNumber, coilPeersNumber)
+        new TestPeers(seedPhrase, network, peersNumber, coilPeersNumber, keyScheme)
 
     def generate(spec: TestPeersSpec): Gen[TestPeers] =
         import TestPeerName.maxPeers
