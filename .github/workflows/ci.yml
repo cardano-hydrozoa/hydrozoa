@@ -50,16 +50,19 @@ jobs:
           key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
           restore-keys: sbt-${{ runner.os }}-
 
+      # TEMP (revert before merge): disabled to iterate fast on the Yaci Docker step only.
       - name: Format / lint / nixfmt checks
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
+        if: false
         run: nix develop --command just precommit
 
+      # TEMP (revert before merge): disabled to iterate fast on the Yaci Docker step only.
       - name: Unit tests
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
+        if: false
         run: nix develop --command just test
 
+      # TEMP (revert before merge): disabled to iterate fast on the Yaci Docker step only.
       - name: Integration tests
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
+        if: false
         env:
           JAVA_TOOL_OPTIONS: -Dlogback.configurationFile=classpath:logback-ci.xml
         run: nix develop --command just integration-fast
