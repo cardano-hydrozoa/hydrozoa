@@ -6,8 +6,12 @@
     </root>
 
     <!-- Testcontainers / docker-java are extremely verbose at DEBUG (HTTP wire logs). -->
+    <!-- DIAGNOSTIC (revert after the RBR MBT Yaci Docker triage): surface the per-strategy
+         Docker-client probe reasons that DockerClientProviderStrategy logs at DEBUG, so we can
+         see why the RBR MBT's forked JVM reports "Could not find a valid Docker environment".
+         com.github.dockerjava stays at warn to avoid the HTTP wire-log flood. -->
     <logger name="com.github.dockerjava" level="warn"/>
-    <logger name="org.testcontainers" level="info"/>
+    <logger name="org.testcontainers" level="debug"/>
     <logger name="tc" level="info"/>
 
     <!-- Bloxbean's Blockfrost client wire-logs every request at DEBUG (tens of thousands of
