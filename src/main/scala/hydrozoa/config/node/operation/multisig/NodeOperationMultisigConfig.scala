@@ -37,7 +37,7 @@ object NodeOperationMultisigConfig {
 
     lazy val default: NodeOperationMultisigConfig = NodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = 10.seconds,
-      peerLiaisonMaxRequestsPerBatch = PositiveInt.unsafeApply(42),
+      peerLiaisonMaxRequestsPerBatch = PositiveInt.unsafeApply(500),
       peerLiaisonResendInterval = 5.seconds,
       rateLimits = RateLimits.default
     )

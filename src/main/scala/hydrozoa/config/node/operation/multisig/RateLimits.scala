@@ -14,8 +14,7 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
   * from limiter-side memory of previous messages. Non-throttled messages on the same lane block
   * behind any currently-held message (strict FIFO).
   *
-  * Defaults are zero (no limiting) so production behavior is unchanged unless explicitly
-  * configured.
+  * The defaults below are non-zero: these lanes are limited unless a config overrides them.
   */
 final case class RateLimits(
     override val softBlockMinPeriod: FiniteDuration,
@@ -44,8 +43,8 @@ object RateLimits {
     }
 
     lazy val default: RateLimits = RateLimits(
-      softBlockMinPeriod = 250.milliseconds,
-      hardStackMinPeriod = 3.minutes
+      softBlockMinPeriod = 100.milliseconds,
+      hardStackMinPeriod = 30.seconds
     )
 
     given Encoder[RateLimits] = deriveEncoder[RateLimits]
