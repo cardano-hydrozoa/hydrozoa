@@ -139,9 +139,9 @@ object RocksDbBackendStore:
             cfOpts <- autoCloseable(new ColumnFamilyOptions())
             // Create flags are meaningless (and rejected) for a read-only open.
             dbOpts <- autoCloseable(
-              if readOnly then memoryBounds(new DBOptions())
+              if readOnly then hostBounds(new DBOptions())
               else
-                  memoryBounds(
+                  hostBounds(
                     new DBOptions()
                         .setCreateIfMissing(true)
                         .setCreateMissingColumnFamilies(true)
@@ -176,6 +176,61 @@ object RocksDbBackendStore:
             .setDbWriteBufferSize(envLong("HYDROZOA_ROCKSDB_DB_WRITE_BUFFER_BYTES", 0L))
             .setMaxOpenFiles(envInt("HYDROZOA_ROCKSDB_MAX_OPEN_FILES", -1))
 
+    /** Every host-shaped bound this store reads from the environment. Split in two because the two
+      * groups answer different questions — how much memory the store may hold, and how long it may
+      * take to open — but they land on the same options object.
+      */
+    private def hostBounds(opts: DBOptions): DBOptions = openTimeBounds(memoryBounds(opts))
+
+    /** Four bounds on how long `RocksDB.open` takes, three of which now default to something other
+      * than RocksDB's own value.
+      *
+      * A node on the production box took **18 minutes** to open its store, and its `LOG` says where
+      * the time went: the first WAL recovery starts 11 ms after the manifest read and the last one
+      * finishes 1,097 s later. Table-handler preload — the one open cost that grows with the store
+      * — was those 11 ms. Essentially all of the 18 minutes was **WAL replay**: 470 files, ~30 GB,
+      * at an effective 27 MB/s on a volume that does 137.
+      *
+      * `maxTotalWalSize` is therefore the setting that matters, and 0 is a bad default because it
+      * does not mean "unbounded" — it means *derived*, as `Σ_CF(writeBufferSize ×
+      * maxWriteBufferNumber) × 4`. The measured store had 31 column families at the stock 64 MiB ×
+      * 2, which derives a ceiling near 16 GB, and nothing in a slow start names a setting as its
+      * cause.
+      *
+      * 2 GiB is chosen as roughly **one full write buffer per column family** (31 × 64 MiB ≈ 1.94
+      * GiB). Below that the cap starts forcing partially-full memtables out on families that are
+      * being written normally, trading replay time for write amplification; at or above it, the cap
+      * only bites the pathology it is meant to catch — a rarely-written family pinning every WAL
+      * segment it has a write in, which is every segment. At the replay rate measured above it puts
+      * a **~80-second ceiling on WAL recovery** where there was an 18-minute floor.
+      *
+      * It bounds *future* growth only: a WAL already on disk is still replayed once, so this
+      * shrinks the next open but not the one that adopts it.
+      *
+      * `skipStatsUpdateOnDbOpen` skips loading table properties from every file to seed compaction
+      * statistics; the stats rebuild as compaction runs, so the cost is slightly worse compaction
+      * decisions early on. `avoidUnnecessaryBlockingIo` moves obsolete-file deletion off the open
+      * path onto a background job. Both are safe to have on by default and are why they now are.
+      *
+      * `skipCheckingSstFileSizesOnDbOpen` is deliberately left **off**. Unlike the other two it
+      * does not skip bookkeeping, it skips verifying that each SST is the size the manifest claims
+      * — which is how a truncated file is caught at open rather than at the read that needs it. Its
+      * saving is a `stat` per file against a WAL replay that dominates the open by orders of
+      * magnitude, so there is nothing to buy with it.
+      */
+    private def openTimeBounds(opts: DBOptions): DBOptions =
+        opts
+            .setMaxTotalWalSize(
+              envLong("HYDROZOA_ROCKSDB_MAX_TOTAL_WAL_BYTES", 2L * 1024 * 1024 * 1024)
+            )
+            .setSkipStatsUpdateOnDbOpen(
+              envBool("HYDROZOA_ROCKSDB_SKIP_STATS_UPDATE_ON_OPEN", true)
+            )
+            .setSkipCheckingSstFileSizesOnDbOpen(
+              envBool("HYDROZOA_ROCKSDB_SKIP_SST_SIZE_CHECK_ON_OPEN", false)
+            )
+            .setAvoidUnnecessaryBlockingIO(envBool("HYDROZOA_ROCKSDB_AVOID_BLOCKING_IO", true))
+
     /** A numeric RocksDB knob read from the environment, falling back to the compiled-in default.
       * An unparseable value takes the default rather than failing the boot: these are host-shaped
       * tuning hints, not correctness settings, and a node that refuses to start is the worse
@@ -186,6 +241,9 @@ object RocksDbBackendStore:
 
     private def envInt(name: String, default: Int): Int =
         sys.env.get(name).flatMap(_.trim.toIntOption).getOrElse(default)
+
+    private def envBool(name: String, default: Boolean): Boolean =
+        sys.env.get(name).flatMap(_.trim.toBooleanOption).getOrElse(default)
 
     /** Run the open-time schema-version check. On a writable open a fresh store gets the current
       * version stamped; incompatible versions raise. A read-only open never writes, so a missing
