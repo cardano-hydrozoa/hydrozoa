@@ -72,10 +72,7 @@ object GenerateSampleConfig
     /** Drive `MultiNodeConfig.generate(testPeersSpec(spec))()` exactly once; `generationSeed`
       * controls reproducibility via ScalaCheck's seed mechanism.
       *
-      * Keeps the default [[test.TestPeers.KeyScheme.Bip32]] on purpose: `defaultSpec` uses
-      * [[SeedPhrase.Yaci]], whose BIP32 derivation lands on the devnet's pre-funded addresses.
-      * `Ed25519` would make the output bootable but move every address off that set — see
-      * [[writeAll]].
+      * See [[writeAll]] for why the configs it writes are not bootable as-is.
       */
     def generateAndWrite(spec: Spec): IO[Unit] =
         IO(
@@ -86,11 +83,9 @@ object GenerateSampleConfig
 
     /** Serialize the shared head config + per-peer private configs under `spec.outDir`.
       *
-      * ⚠️ A [[test.TestPeers.KeyScheme.Bip32]] peer — the default — gets all-zero signing-key bytes
-      * here, and such a config cannot boot a node. Replace the keys first, or build the `TestPeers`
-      * with [[test.TestPeers.KeyScheme.Ed25519]], which round-trips at the cost of moving every
-      * address off whatever the seed phrase's derivation funds. `MainSmokeTest` takes the second
-      * route.
+      * ⚠️ Signing keys are written as all-zero placeholder bytes, so **these configs cannot boot a
+      * node** — it would load a signing key its own verification key does not match. Splice the
+      * real key in first, as `MainSmokeTest` does via `TestPeers.deriveScalusKeypair`.
       */
     def writeAll(spec: Spec, mnc: MultiNodeConfig): IO[Unit] = {
         val printer = Printer.spaces2.copy(dropNullValues = true)

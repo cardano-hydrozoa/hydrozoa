@@ -2,7 +2,7 @@ package hydrozoa.config.node.owninfo
 
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.multisig.consensus.peer.PeerWallet.peerWalletEncoder
+import hydrozoa.multisig.consensus.peer.PeerWallet.dummyPeerWalletEncoder
 import io.circe.*
 import io.circe.syntax.*
 
@@ -30,7 +30,7 @@ object OwnHeadPeerPrivate {
         Encoder.instance(ownHeadPeerPrivate =>
             Json.obj(
               "ownHeadWallet" -> ownHeadPeerPrivate.ownHeadWallet.asJson(using
-                peerWalletEncoder
+                dummyPeerWalletEncoder
               ),
             )
         )

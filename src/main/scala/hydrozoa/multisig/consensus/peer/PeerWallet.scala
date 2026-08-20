@@ -40,9 +40,6 @@ final class PeerWallet(
 
     def exportVerificationKey: VerificationKey = verificationKeysBytes
 
-    /** This wallet's signing key, or `None` when the module holds a BIP32 extended key. */
-    def exportSigningKey: Option[SigningKey] = walletModule.exportSigningKey(signingKey)
-
     def mkVKeyWitness(tx: Transaction): VKeyWitness =
         walletModule.signTx(tx, verificationKey, signingKey)
 
@@ -86,16 +83,16 @@ object PeerWallet:
       signingKey = signingKey
     )
 
-    /** ⚠️ A BIP32 extended key has no 32-byte form, so it serializes as an all-zeros
-      * `dummySigningKey` and the wallet decodes back with a signing key its own verification key
-      * does not match. Nothing detects that at load: it surfaces as a hard-ack `BadSignature` deep
-      * in consensus, and the node dies verifying its own stack-0 ack. Replace the key before a node
-      * reads such a config, or derive the wallet from a plain 32-byte key, which round-trips.
+    /** ⚠️ The signing key is withheld: an all-zeros `dummySigningKey` stands in, so a wallet
+      * decoded from this output signs with a key its own verification key does not match. Nothing
+      * detects that at load — it surfaces as a hard-ack `BadSignature` deep in consensus, and the
+      * node dies verifying its own stack-0 ack. Anything writing a config a node will read must
+      * splice the real key back in, as `GenerateKeyPair` and `MainSmokeTest` do.
       */
-    given peerWalletEncoder: Encoder[PeerWallet] = new Encoder[PeerWallet] {
+    given dummyPeerWalletEncoder: Encoder[PeerWallet] = new Encoder[PeerWallet] {
         override def apply(w: PeerWallet): Json = Json.obj(
           "verificationKey" -> w.exportVerificationKey.asJson(using given_Encoder_VerificationKey),
-          "signingKey" -> w.exportSigningKey.getOrElse(dummySigningKey).asJson
+          "signingKey" -> dummySigningKey.asJson
         )
     }
 

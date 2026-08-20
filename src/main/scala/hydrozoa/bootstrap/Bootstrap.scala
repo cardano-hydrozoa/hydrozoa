@@ -574,8 +574,8 @@ end Bootstrap
   *   - `--template private-template.json --out private.json` writes the peer's private node config:
   *     the template with `ownPeerPrivate` replaced by the generated wallet (as `ownHeadWallet` /
   *     `ownCoilWallet` per `--role`). The splice works on the JSON tree, so it is independent of
-  *     what [[PeerWallet.peerWalletEncoder]] would have written. Head peer 0's L1 address must be
-  *     funded before [[BuildHeadConfig]] — print it with [[PrintHeadZeroAddress]].
+  *     what [[PeerWallet.dummyPeerWalletEncoder]] would have written. Head peer 0's L1 address must
+  *     be funded before [[BuildHeadConfig]] — print it with [[PrintHeadZeroAddress]].
   *
   * Usage:
   * {{{
