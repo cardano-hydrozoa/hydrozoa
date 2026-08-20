@@ -2,9 +2,6 @@ package test
 
 import cats.data.Validated.{Invalid, Valid}
 import cats.data.{NonEmptyList, NonEmptyMap, ReaderT}
-import com.bloxbean.cardano.client.account.Account
-import com.bloxbean.cardano.client.common.model.Network as BloxbeanNetwork
-import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.network.CardanoNetwork
@@ -12,9 +9,11 @@ import hydrozoa.config.head.network.CardanoNetworkGen.given_Arbitrary_CardanoNet
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
-import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.http4s.Uri
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
@@ -24,7 +23,8 @@ import scala.collection.immutable.SortedMap
 import scala.collection.mutable
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
-import scalus.crypto.ed25519.VerificationKey
+import scalus.crypto.ed25519.{SigningKey, VerificationKey}
+import scalus.uplc.builtin.ByteString
 import scalus.|>
 
 type GenWithTestPeers[A] = ReaderT[Gen, TestPeers, A]
@@ -198,39 +198,13 @@ case class TestPeers private (
             case Some(value) => value
         }
 
-    private val accountCache: mutable.Map[TestPeerName, Account] = mutable.Map.empty
-        .withDefault(peer =>
-            Account.createFromMnemonic(
-              cardanoNetwork.asBloxbeanNetwork,
-              seedPhrase.mnemonic,
-              createExternalAddressDerivationPathForAccount(peer.ordinal)
-            )
-        )
-
-    private def bloxbeanAccountFor(peer: TestPeerName): Account = accountCache.useOrCreate(peer)
-
-    /** Caching the [[Account]] is not enough: Bloxbean re-runs the whole derivation on every key
-      * access (`getHdKeyPairFromDerivationPath` → `getRootKeyPairFromMnemonic` →
-      * `pbkdf2HmacSha512`), which dominates the suite's runtime once a generator reaches a peer's
-      * key per sample. The derived key and wallet are therefore cached in the companion, not here —
-      * see [[TestPeers.vkeyCache]] for why instance scope is not enough.
-      */
     private def vkeyFor(peer: TestPeerName): VerificationKey =
-        TestPeers.vkeyCache.getOrElseUpdate(
-          (seedPhrase.mnemonic, peer.ordinal),
-          VerificationKey.unsafeFromArray(bloxbeanAccountFor(peer).publicKeyBytes())
-        )
+        walletFor_(peer).exportVerificationKey
 
     private def walletFor_(peer: TestPeerName): PeerWallet =
         TestPeers.walletCache.getOrElseUpdate(
-          (seedPhrase.mnemonic, peer.ordinal), {
-              val hdKeyPair = bloxbeanAccountFor(peer).hdKeyPair()
-              PeerWallet(
-                WalletModule.BloxBean,
-                hdKeyPair.getPublicKey,
-                hdKeyPair.getPrivateKey
-              )
-          }
+          (seedPhrase.mnemonic, peer.ordinal),
+          TestPeers.deriveScalusWallet(seedPhrase.mnemonic, peer.ordinal)
         )
 
     // Stays instance-scoped: unlike the key it is derived from, an address *is* network-specific.
@@ -243,24 +217,46 @@ case class TestPeers private (
 
 object TestPeers:
 
-    /** Derived peer keys, shared across every [[TestPeers]] instance in the JVM.
+    /** Peer wallets, shared across every [[TestPeers]] instance in the JVM.
       *
       * It has to outlive the instance: `TestPeers.arbitrary` builds a fresh one per ScalaCheck
-      * sample, so an instance-scoped cache would still pay a full BIP32 derivation per peer per
-      * sample — the suite's dominant cost. Keyed by `(mnemonic, ordinal)` and **not** by network,
-      * because BIP32 derivation does not involve the network; only address encoding does, and that
-      * happens downstream of the key. `TestPeersTest` pins that. The key space is therefore tiny:
-      * the few seed phrases in use times at most `TestPeerName.maxPeers`.
+      * sample, so an instance-scoped cache would re-derive every peer's key per sample. Keyed by
+      * `(mnemonic, ordinal)` and **not** by network, because [[deriveScalusWallet]] does not
+      * involve the network; only address encoding does, and that happens downstream of the key.
+      * `TestPeersTest` pins that. The key space is therefore tiny: the few seed phrases in use
+      * times at most `TestPeerName.maxPeers`.
       *
-      * Concurrent by construction — suites run in parallel and share this map.
-      */
-    private val vkeyCache: TrieMap[(String, Int), VerificationKey] = TrieMap.empty
-
-    /** Peer wallets, shared for the same reason as [[vkeyCache]] and keyed identically: the HD key
-      * pair behind a wallet comes from the same network-independent derivation. Safe to share —
-      * [[PeerWallet]] is an immutable holder of a key pair whose methods are pure.
+      * Safe to share — [[PeerWallet]] is an immutable holder of a key pair whose methods are pure —
+      * and concurrent by construction, since suites run in parallel and share this map.
       */
     private val walletCache: TrieMap[(String, Int), PeerWallet] = TrieMap.empty
+
+    /** Deterministic vanilla Ed25519 wallet for a peer, a pure function of `(mnemonic, ordinal)`.
+      *
+      * Replaces the former BloxBean / Ed25519-BIP32 derivation. Vanilla 32-byte keys round-trip
+      * through the private-config JSON codec, so a config generated from these peers is actually
+      * runnable — BIP32 extended keys serialize lossily (a dummy all-zero signing key) and boot a
+      * node that cannot sign. No network input: the key is network-independent; only address
+      * encoding downstream is network-specific.
+      */
+    def deriveScalusWallet(mnemonic: String, ordinal: Int): PeerWallet =
+        val (vk, sk) = deriveScalusKeypair(mnemonic, ordinal)
+        PeerWallet.scalusWallet(vk, sk)
+
+    /** The raw keypair behind [[deriveScalusWallet]]. Exposed so a test that writes a peer's
+      * `private.json` can splice in the real signing key explicitly — the stock config encoders
+      * deliberately withhold it ([[PeerWallet.dummyPeerWalletEncoder]]).
+      */
+    def deriveScalusKeypair(mnemonic: String, ordinal: Int): (VerificationKey, SigningKey) = {
+        val seed = MessageDigest
+            .getInstance("SHA-256")
+            .digest(s"$mnemonic#$ordinal".getBytes(StandardCharsets.UTF_8))
+        val sk = Ed25519PrivateKeyParameters(seed, 0)
+        val vk = VerificationKey.unsafeFromByteString(
+          ByteString.fromArray(sk.generatePublicKey().getEncoded)
+        )
+        (vk, SigningKey.unsafeFromByteString(ByteString.fromArray(sk.getEncoded)))
+    }
 
     def arbitrary: Gen[TestPeers] = for {
         spec <- TestPeersSpec.generate()
@@ -365,11 +361,6 @@ object TestPeersSpec:
             peersNumberSpec <- PeersNumberSpec.generate()
         } yield TestPeersSpec(seedPhrase, network, peersNumberSpec)
 
-extension (self: CardanoNetwork)
-    def asBloxbeanNetwork: BloxbeanNetwork =
-
-        BloxbeanNetwork(self.cardanoInfo.network.networkId.toInt, self.protocolMagic)
-
 enum PeersNumberSpec:
     case Random
     case Range(mbMin: Option[Int] = None, mbMax: Option[Int] = None)
@@ -404,35 +395,20 @@ object TestPeersTest extends Properties("Test peers") {
           .flatMap(TestPeers.generate)
     )(testPeers => Prop.collect(testPeers)(Prop.passed))
 
-    /** [[TestPeers.vkeyCache]] and [[TestPeers.walletCache]] are keyed by `(mnemonic, ordinal)`
-      * with no network component, which is only sound because BIP32 derivation does not involve the
-      * network — only address encoding does, downstream of the key. Pin that: the same seed and
-      * ordinal must yield both the same verification key and an equivalently-signing wallet on any
-      * two networks.
+    /** [[TestPeers.walletCache]] is keyed by `(mnemonic, ordinal)` with no network component, which
+      * is only sound because [[TestPeers.deriveScalusWallet]] is a pure function of the seed and
+      * ordinal — no network, and no randomness. Pin that: the same seed and ordinal yield an
+      * equivalently-signing wallet every time.
       */
-    val _ = property("a peer's key and wallet do not depend on the network") = Prop.forAll(
-      Gen.oneOf(SeedPhrase.Yaci, SeedPhrase.Public),
-      arbitrary[CardanoNetwork],
-      arbitrary[CardanoNetwork],
-      Gen.choose(0, TestPeerName.maxPeers - 1)
-    ) { (seedPhrase, networkA, networkB, ordinal) =>
-        // Derive straight through Bloxbean rather than via TestPeers: going through the caches the
-        // property exists to justify would make it vacuously true.
-        def accountOn(network: CardanoNetwork): Account =
-            Account.createFromMnemonic(
-              network.asBloxbeanNetwork,
-              seedPhrase.mnemonic,
-              createExternalAddressDerivationPathForAccount(ordinal)
-            )
-        def walletOf(account: Account): PeerWallet =
-            val hdKeyPair = account.hdKeyPair()
-            PeerWallet(WalletModule.BloxBean, hdKeyPair.getPublicKey, hdKeyPair.getPrivateKey)
-
-        val accountA = accountOn(networkA)
-        val accountB = accountOn(networkB)
-        // PeerWallet's equality is extensional — same exported vkey *and* same signature over a
-        // fixed message — so this covers the signing key, not just the public one.
-        accountA.publicKeyBytes().toList == accountB.publicKeyBytes().toList &&
-        walletOf(accountA) == walletOf(accountB)
-    }
+    val _ = property("a peer's wallet is a deterministic function of (seed, ordinal)") =
+        Prop.forAll(
+          Gen.oneOf(SeedPhrase.Yaci, SeedPhrase.Public),
+          Gen.choose(0, TestPeerName.maxPeers - 1)
+        ) { (seedPhrase, ordinal) =>
+            // Derive straight, bypassing the cache the property exists to justify.
+            // PeerWallet's equality is extensional — same exported vkey *and* same signature over a
+            // fixed message — so this covers the signing key, not just the public one.
+            TestPeers.deriveScalusWallet(seedPhrase.mnemonic, ordinal) ==
+                TestPeers.deriveScalusWallet(seedPhrase.mnemonic, ordinal)
+        }
 }
