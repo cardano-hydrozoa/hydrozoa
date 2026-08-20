@@ -173,8 +173,56 @@ object DepositsMap {
                 case Compartment.Immature => copy(immature = immature.append(x))
             }
 
+        /** Take the first `n` eligible '''deposits''' for absorption, in absorption-start order and
+          * then queue order, leaving the rest unabsorbed.
+          *
+          * `n` counts deposits, not map keys. The map is two-layer — one queue per absorption start
+          * time, and that time is slot-quantized, so any deposits maturing in the same second share
+          * a key — which means a key-boundary split cannot express the bound at all: a single key
+          * may hold more than `n` deposits on its own. The cut therefore falls '''inside''' a queue
+          * whenever the budget runs out mid-key. Queue order is the request-stream subsequence, so
+          * cutting there absorbs the earliest requests of that second and leaves the later ones for
+          * the next block.
+          *
+          * Bounded by `n`, not by the size of the map: keys are walked in ascending order only
+          * until the budget is spent, `sizeIs` stops measuring an oversized queue as soon as it is
+          * known not to fit, and the unabsorbed tail is taken as a range rather than traversed.
+          */
         def split(n: Int): Split = {
-            val (tmAbsorbed, tmUnabsorbed) = eligible.treeMap.splitAt(n)
+            // The first key whose queue does not fit whole in the remaining budget, with the room
+            // left for it; `None` if every eligible deposit fits.
+            @annotation.tailrec
+            def boundary(
+                remaining: Iterator[(DepositAbsorptionStartTime, Queue[Entry])],
+                taken: Int
+            ): Option[(DepositAbsorptionStartTime, Int)] =
+                if !remaining.hasNext then None
+                else {
+                    val (startTime, queue) = remaining.next()
+                    val room = n - taken
+                    // `sizeIs` short-circuits: it stops counting once the queue is known to be
+                    // longer than `room`, so an enormous same-second queue is never measured.
+                    if queue.sizeIs > room then Some((startTime, room))
+                    else boundary(remaining, taken + queue.size)
+                }
+
+            val (tmAbsorbed, tmUnabsorbed) =
+                boundary(eligible.treeMap.iterator, 0) match {
+                    case None =>
+                        (eligible.treeMap, TreeMap.empty[DepositAbsorptionStartTime, Queue[Entry]])
+                    case Some((startTime, room)) =>
+                        val (headOfQueue, tailOfQueue) = eligible.treeMap(startTime).splitAt(room)
+                        val before = eligible.treeMap.rangeUntil(startTime)
+                        val fromHere = eligible.treeMap.rangeFrom(startTime)
+                        // `room < queue.size` by construction, so the tail is never empty and the
+                        // boundary key always survives; the head is empty only when the budget ran
+                        // out exactly on the previous key.
+                        (
+                          if headOfQueue.isEmpty then before
+                          else before.updated(startTime, headOfQueue),
+                          fromHere.updated(startTime, tailOfQueue)
+                        )
+                }
             val absorbed = DepositsMap(tmAbsorbed)
             val unabsorbed = DepositsMap(tmUnabsorbed)
             Split(
