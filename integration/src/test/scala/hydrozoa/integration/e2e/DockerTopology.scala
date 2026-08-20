@@ -57,4 +57,14 @@ object DockerTopology {
       tag = "[smoke]",
       composeOverlayNames = List("docker-compose.yaci.yml")
     )
+
+    /** [[shipped]] again, under its own compose project. The project namespaces the peers' named
+      * volumes, so a recovery run always starts from empty stores rather than resuming whatever a
+      * smoke run left behind — which matters here, because the point of the run is what a peer
+      * reads back from its own store.
+      */
+    val shippedRecovery: DockerTopology = shipped.copy(
+      project = "hydrozoa-e2e-recovery",
+      tag = "[recovery]"
+    )
 }

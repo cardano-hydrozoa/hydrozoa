@@ -358,7 +358,8 @@ lazy val integration: Project = (project in file("integration"))
           "hydrozoa.integration.yaci.YaciMultiPeerProbe",
           "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci",
           "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic",
-          "hydrozoa.integration.e2e.DockerSmokeTest"
+          "hydrozoa.integration.e2e.DockerSmokeTest",
+          "hydrozoa.integration.e2e.DockerRecoveryTest"
         )
       ),
       // ScalaCheck tuning for the default integration run: 10 cases per property (ScalaCheck's

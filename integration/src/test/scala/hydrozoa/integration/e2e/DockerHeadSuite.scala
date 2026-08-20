@@ -545,7 +545,10 @@ object DockerHeadSuite:
     private val MeshBlockfrostUrl = "http://yaci:8080/api/v1"
 
     private val TopupAda = 100_000L // ADA to head-0 on the devnet
-    private val SendAda = 2L // ADA moved head-0 → head-1 on L2
+    // ADA moved head-0 → head-1 per L2 send. `keygen-fleet` opens each head peer with 5 ADA
+    // (the `l2-cardano-eutxo.json` it writes), and a scenario may send several times off the same
+    // change chain, so this has to leave every change output above min-ADA to the last send.
+    private val SendAda = 1L
     private val RecentTxWindow = 50 // entries pulled from each peer's /transactions feed
 
     // Placeholder Blockfrost key for the keyless devnet — value is ignored (see `cli`).

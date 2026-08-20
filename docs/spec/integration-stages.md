@@ -274,9 +274,13 @@ The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a fe
 
 ---
 
-## E2E: Docker smoke-test on the shipped topology (CI-excluded)
+## E2E: Docker suites on the shipped topology (CI-excluded)
 
-`integration/src/test/scala/hydrozoa/integration/e2e/DockerSmokeTest.scala` is a black-box level outside the `ModelBasedSuite` framework. It stands up the `docker-compose.yml` that `hydrozoa scaffold` writes — **2 head + 4 coil peers** — on a local **Yaci** devnet, forms a head through the packaged image and the real WS mesh + Ember HTTP API, submits an L2 transaction to head-0 over HTTP, and asserts it reaches both head peers' L2 ledgers. It's the one test that covers the documented deployment path end to end (`docker compose`, the image, real sockets, the custom-network config flow); the stages only reach `HydrozoaRoutes` in-process.
+`integration/src/test/scala/hydrozoa/integration/e2e/` is a black-box level outside the `ModelBasedSuite` framework. `DockerHeadSuite` owns the bring-up — everything up to "every head peer reports `/ready`" — and each concrete suite supplies the scenario that runs against the formed head: `DockerSmokeTest` (L2 propagation) and `DockerRecoveryTest` (crash and recovery). Bringing a head up costs minutes, which is why the two share it.
+
+### DockerSmokeTest — L2 propagation
+
+It stands up the `docker-compose.yml` that `hydrozoa scaffold` writes — **2 head + 4 coil peers** — on a local **Yaci** devnet, forms a head through the packaged image and the real WS mesh + Ember HTTP API, submits an L2 transaction to head-0 over HTTP, and asserts it reaches both head peers' L2 ledgers. It's the one test that covers the documented deployment path end to end (`docker compose`, the image, real sockets, the custom-network config flow); the stages only reach `HydrozoaRoutes` in-process.
 
 - **Shipped topology, not a lookalike.** It runs `keygen-fleet 2 4 2` against the scaffolded `docker-compose.yml` + `docker-compose.yaci.yml` overlay — the pair docs/user-guide/DEPLOYMENT.md hands an operator — so a failure is a failure of the documented path. The peer count lives in two places (the `keygen-fleet` args and the compose services); keep them in sync.
 - **Only head peers are asserted on.** Coil peers run no `HydrozoaServer`, but they are load-bearing — the head can't initialize without `coilQuorum` of them signing — so a broken coil surfaces as a `/ready` timeout, not a silent pass.
@@ -286,6 +290,19 @@ The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a fe
 
 ```bash
 just integration-e2e-docker   # builds the image, stages the launcher, runs the suite
+```
+
+### DockerRecoveryTest — a head peer crashes and comes back
+
+Same deployment, run through the loss of a head peer. After a baseline L2 transaction confirms, the test SIGKILLs head-1 (`docker compose kill` — no SIGTERM, no flush, and the daemon treats it as a manual stop so `restart: on-failure` doesn't resurrect it), submits another transaction while the peer is gone, then `docker compose start`s the same container on the same named volume and asserts the head comes back whole: head-1 reaches `/ready` again, its recovered L2 view still carries the pre-crash transaction, the transaction submitted during the outage confirms on every head peer, and a fresh one confirms after that.
+
+- **head-1 is the peer that matters.** The head multisig is *every* head peer plus a coil quorum, so losing one of two head peers is the outage that stops consensus; a coil peer's loss is absorbed by the 2-of-4 quorum. head-1 also publishes the HTTP API, so its recovered state is read directly rather than inferred.
+- **Its own compose project** (`hydrozoa-e2e-recovery`), so the peers' named volumes are namespaced away from a smoke run's — the run must start from empty stores, since what a peer reads back from its store is the point.
+- **It does not assert that head-0's L2 view stays empty during the outage.** A peer's ledger commits a block when the block is *produced*, and only the next block waits on soft-confirmation ([`fast-consensus.md`](fast-consensus.md)), so a surviving leader may legitimately have applied one more block before stalling. Convergence across peers is the property the suite checks instead.
+- It is the black-box counterpart to the crash-restart coverage [`persistence-and-crash-recovery.md`](persistence-and-crash-recovery.md) §9 lists as not yet built: a whole-node reboot end to end, rather than a single actor's recovery contract.
+
+```bash
+just integration-e2e-docker-recovery
 ```
 
 ---
@@ -303,6 +320,7 @@ just integration-e2e-docker   # builds the image, stages the launcher, runs the 
 | L2 ledger correctness under reordering                                         | Stage 4   |
 | L1-side fee / validity-interval / treasury-rotation regression                  | Stage 1 (Yaci/Blockfrost) |
 | Black-box propagation across the packaged image + `docker compose` + HTTP API   | E2E (Docker, CI-excluded) |
+| Whole-node crash + restart against a real store and a real mesh                 | E2E (Docker recovery, CI-excluded) |
 
 A scenario that needs **both** real L1 and slow-cycle multi-peer consensus does not yet have a home — that's the "stage 4 against Yaci" path. The harness already supports the swap (`CardanoBackend[IO]` is the only L1 dependency); only `propEffectsLanded`'s `(attempts, sleep)` budget needs widening.
 
