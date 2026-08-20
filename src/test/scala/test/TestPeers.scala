@@ -282,13 +282,12 @@ object TestPeers:
 
     /** Which key type a peer's wallet holds.
       *
-      * `Bip32` is the default and what every suite has always used: Cardano's Ed25519-BIP32
-      * extended keys, via BloxBean. They cannot be serialized — see
-      * [[hydrozoa.multisig.consensus.peer.PeerWallet.peerWalletEncoder]] — so a config written from
-      * them loads back with a signing key that does not match its own verification key.
+      * `Bip32` is the default: Cardano's Ed25519-BIP32 extended keys, via BloxBean. A config
+      * written from one cannot boot a node
+      * ([[hydrozoa.multisig.consensus.peer.PeerWallet.peerWalletEncoder]]).
       *
-      * `Ed25519` derives a plain 32-byte key instead, which round-trips through JSON intact. Choose
-      * it when the test writes a config to disk and then runs a node from the file.
+      * `Ed25519` derives a plain 32-byte key, which round-trips through JSON intact. Choose it when
+      * a test writes a config to disk and then runs a node from the file.
       */
     enum KeyScheme derives CanEqual:
         case Bip32, Ed25519

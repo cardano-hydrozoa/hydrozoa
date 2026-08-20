@@ -489,15 +489,11 @@ object Serve {
             exit <- abnormalTermination
         } yield exit
 
-    /** Nothing in the node shuts the actor system down deliberately, and an interrupted `serve` is
-      * cancelled rather than resumed here, so reaching this point means the user guardian's
-      * `TerminateActorSystem` fired: an actor escalated and took the system with it. Exit non-zero
-      * so a process supervisor restarts the node.
-      *
-      * The cause is not available to report — cats-actors 2.1.0 records it, then erases it from its
-      * own finalizer before the `Resource` that would re-raise it runs. It reaches the operator
-      * only as the `[EventBus] => Error(...)` line and the stack trace the supervision strategy
-      * prints.
+    /** Nothing here shuts the actor system down deliberately, and an interrupted `serve` is
+      * cancelled rather than resumed past `waitForTermination`. So reaching this point means an
+      * actor escalated to the guardian and took the system with it: exit non-zero, or a process
+      * supervisor will treat a crashed node as a clean stop. cats-actors 2.1.0 clears the cause
+      * before it can be re-raised, which is why this can only point at the log.
       */
     private def abnormalTermination: IO[ExitCode] =
         log.info(

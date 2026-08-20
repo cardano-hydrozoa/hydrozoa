@@ -40,10 +40,7 @@ final class PeerWallet(
 
     def exportVerificationKey: VerificationKey = verificationKeysBytes
 
-    /** This wallet's signing key, when the underlying module holds a plain 32-byte ed25519 key.
-      * `None` for a BIP32 extended key, which has no 32-byte form — see
-      * [[hydrozoa.lib.cardano.wallet.WalletModule.exportSigningKey]].
-      */
+    /** This wallet's signing key, or `None` when the module holds a BIP32 extended key. */
     def exportSigningKey: Option[SigningKey] = walletModule.exportSigningKey(signingKey)
 
     def mkVKeyWitness(tx: Transaction): VKeyWitness =
@@ -89,12 +86,11 @@ object PeerWallet:
       signingKey = signingKey
     )
 
-    /** A wallet whose key is a plain 32-byte ed25519 key round-trips faithfully. One backed by a
-      * BIP32 extended key cannot — that key has no 32-byte form — so an all-zeros `dummySigningKey`
-      * stands in, and the decoded wallet will sign with a key its own verification key does not
-      * match. Nothing detects that at load; it surfaces as a hard-ack `BadSignature` deep in
-      * consensus, so a config written from a BIP32 wallet must have its signing key replaced before
-      * a node reads it (see `GenerateSampleConfig.writeAll`).
+    /** ⚠️ A BIP32 extended key has no 32-byte form, so it serializes as an all-zeros
+      * `dummySigningKey` and the wallet decodes back with a signing key its own verification key
+      * does not match. Nothing detects that at load: it surfaces as a hard-ack `BadSignature` deep
+      * in consensus, and the node dies verifying its own stack-0 ack. Replace the key before a node
+      * reads such a config, or derive the wallet from a plain 32-byte key, which round-trips.
       */
     given peerWalletEncoder: Encoder[PeerWallet] = new Encoder[PeerWallet] {
         override def apply(w: PeerWallet): Json = Json.obj(

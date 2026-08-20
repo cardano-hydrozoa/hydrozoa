@@ -29,14 +29,13 @@ import test.TestPeers
   * succeeded: actors spawned, `WatchingActors` fired, `connectionsDeferred` resolved, and Ember
   * bound on its port.
   *
-  * Reaching that milestone is necessary but not sufficient: the node's consensus bootstrap runs
-  * concurrently with the bind, so the test also requires it to still be alive afterwards. Racing
-  * the milestone against `runNode` returning would pass whenever binding merely won, which is how a
-  * node that died of a hard-ack `BadSignature` on every run went unnoticed for two months.
+  * The bind alone is not enough to assert on: the consensus bootstrap runs concurrently with it, so
+  * a test that only raced the milestone against `runNode` returning would pass whenever binding
+  * merely won. This one also requires the node to outlive the bind.
   *
-  * The peers are keyed [[TestPeers.KeyScheme.Ed25519]] rather than the default BIP32 for the same
-  * reason the node has to survive: a BIP32 wallet does not survive the JSON round trip below, and
-  * the node would load a signing key its own verification key does not match.
+  * Peers are keyed [[TestPeers.KeyScheme.Ed25519]], not the default BIP32, because the config below
+  * is written to disk and read back — and a BIP32 wallet does not survive that round trip
+  * ([[hydrozoa.multisig.consensus.peer.PeerWallet.peerWalletEncoder]]).
   */
 class MainSmokeTest extends AnyFunSuite:
 
@@ -126,9 +125,8 @@ class MainSmokeTest extends AnyFunSuite:
                     )
             }
 
-            // The bind says nothing about the actors started alongside it. Give the consensus
-            // bootstrap room to fail and require the node to outlive it: an escalation to the
-            // guardian ends `runNode`, whatever exit code it carries.
+            // The bind says nothing about the actors started alongside it. An escalation to the
+            // guardian ends `runNode` whatever exit code it carries, so give it room to happen.
             _ <- IO.sleep(2.seconds)
             died <- fiber.join.as(true).timeoutTo(1.second, IO.pure(false))
             _ <- IO.raiseWhen(died)(
@@ -138,9 +136,8 @@ class MainSmokeTest extends AnyFunSuite:
               )
             )
 
-            // Fire-and-forget: awaiting this never returns. Cancelling a *live* node deadlocks —
-            // `Fiber.cancel` back-pressures and is itself uncancelable, so no timeout can bound it.
-            // Until a node can be shut down on demand, the daemon threads go when the JVM does.
+            // ⚠️ Do not await this. Cancelling a *live* node never returns, and `Fiber.cancel` is
+            // itself uncancelable, so no timeout bounds it. The daemon threads go with the JVM.
             _ <- fiber.cancel.start.void
         } yield ()
 

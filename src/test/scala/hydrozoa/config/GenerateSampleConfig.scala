@@ -14,7 +14,7 @@ import io.circe.Printer
 import io.circe.syntax.*
 import java.nio.file.Path
 import org.scalacheck.Gen
-import test.{PeersNumberSpec, SeedPhrase, TestPeers, TestPeersSpec}
+import test.{PeersNumberSpec, SeedPhrase, TestPeersSpec}
 
 /** Dev-time tool: generate a sample multi-peer Hydrozoa config and write it as JSON to disk.
   *
@@ -72,11 +72,10 @@ object GenerateSampleConfig
     /** Drive `MultiNodeConfig.generate(testPeersSpec(spec))()` exactly once; `generationSeed`
       * controls reproducibility via ScalaCheck's seed mechanism.
       *
-      * Deliberately keeps the default [[TestPeers.KeyScheme.Bip32]], so the written keys are the
-      * ones BIP32 derives from `spec.seedPhrase` — and `defaultSpec` uses [[SeedPhrase.Yaci]],
-      * whose derived addresses are the Yaci devnet's pre-funded genesis addresses. Switching to
-      * `Ed25519` here would make the configs bootable but move every address off the funded set.
-      * See [[writeAll]] for what that costs and how a caller opts out.
+      * Keeps the default [[test.TestPeers.KeyScheme.Bip32]] on purpose: `defaultSpec` uses
+      * [[SeedPhrase.Yaci]], whose BIP32 derivation lands on the devnet's pre-funded addresses.
+      * `Ed25519` would make the output bootable but move every address off that set — see
+      * [[writeAll]].
       */
     def generateAndWrite(spec: Spec): IO[Unit] =
         IO(
@@ -87,13 +86,11 @@ object GenerateSampleConfig
 
     /** Serialize the shared head config + per-peer private configs under `spec.outDir`.
       *
-      * NOTE: a peer whose wallet holds a BIP32 extended key — [[TestPeers.KeyScheme.Bip32]], the
-      * default — gets dummy all-zero signing-key bytes, because that key has no 32-byte form to
-      * write. **Such a config cannot boot a node**: it loads with a signing key its own
-      * verification key does not match, and the node dies verifying its own stack-0 hard ack. Either
-      * replace the keys before running a node, or build the `TestPeers` with
-      * [[TestPeers.KeyScheme.Ed25519]], which round-trips — at the cost of moving every address off
-      * whatever the seed phrase's BIP32 derivation funds. `MainSmokeTest` takes the second route.
+      * ⚠️ A [[test.TestPeers.KeyScheme.Bip32]] peer — the default — gets all-zero signing-key bytes
+      * here, and such a config cannot boot a node. Replace the keys first, or build the `TestPeers`
+      * with [[test.TestPeers.KeyScheme.Ed25519]], which round-trips at the cost of moving every
+      * address off whatever the seed phrase's derivation funds. `MainSmokeTest` takes the second
+      * route.
       */
     def writeAll(spec: Spec, mnc: MultiNodeConfig): IO[Unit] = {
         val printer = Printer.spaces2.copy(dropNullValues = true)

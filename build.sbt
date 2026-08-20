@@ -354,7 +354,7 @@ lazy val integration: Project = (project in file("integration"))
       // A full, unfiltered run is the same opt-out the Yaci recipes already use:
       //   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly *"
       // Scoped to `scalaCheckFramework`, not `TestFrameworks.ScalaCheck`: testOptions are matched
-      // by framework, so naming a framework this build no longer registers would silently drop the
+      // by framework, so naming a framework this build does not register would silently drop the
       // tuning — 100 cases instead of 10, and `(extended)` properties back in the fast run.
       Test / testOptions += Tests.Argument(
         scalaCheckFramework,
