@@ -85,30 +85,22 @@ object L2LedgerCommand {
             import hydrozoa.multisig.ledger.remote.RemoteL2Screener.screenDepositEncoder
             import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
             (r: L2LedgerCommand.RegisterDeposit) =>
-                L2Screener
-                    .ScreenDeposit(
-                      depositId = r.depositId,
-                      depositFee = r.depositFee,
-                      depositL2Value = r.depositL2Value,
-                      refundDestination = r.refundDestination,
-                      l2Payload = r.l2Payload
-                    )
-                    .asJson
-                    .deepMerge(
-                      io.circe.Json.obj(
-                        "requestId" -> r.requestId.asJson,
-                        "blockNumber" -> r.blockNumber.asJson,
-                        "blockCreationStartTime" -> r.blockCreationStartTime.asJson
+                io.circe.Json.fromJsonObject(
+                  screenDepositEncoder
+                      .encodeObject(
+                        L2Screener.ScreenDeposit(
+                          depositId = r.depositId,
+                          depositFee = r.depositFee,
+                          depositL2Value = r.depositL2Value,
+                          refundDestination = r.refundDestination,
+                          l2Payload = r.l2Payload
+                        )
                       )
-                    )
+                      .add("requestId", r.requestId.asJson)
+                      .add("blockNumber", r.blockNumber.asJson)
+                      .add("blockCreationStartTime", r.blockCreationStartTime.asJson)
+                )
         }
-
-        // Deliberately encode-only: Hydrozoa only ever *sends* a RegisterDeposit (the remote
-        // ledger decodes it with its own types). A decoder could not invert the encoder anyway —
-        // `Destination` is encoded as a lossy `{address, datum}` object while its circe decoder
-        // reads a CBOR-hex string. The one path that needs an exact RegisterDeposit round-trip,
-        // the EUTXO ledger's durable command log, re-derives symmetric store-local codecs
-        // (`eutxol2.store.L2StoreCodecs`) instead of using this wire form.
     }
 
     final case class ApplyDepositDecisions(

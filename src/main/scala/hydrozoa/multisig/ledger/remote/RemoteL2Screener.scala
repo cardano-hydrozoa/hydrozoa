@@ -108,18 +108,21 @@ object RemoteL2Screener {
       * time), in the same SugarRush-compatible encodings the ws mutation path uses
       * ([[hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit]]'s encoder).
       */
-    given screenDepositEncoder: Encoder[L2Screener.ScreenDeposit] = {
+    // AsObject so RegisterDeposit's encoder can graft the consensus fields onto this body in one
+    // pass (JsonObject.add) rather than serializing twice and deepMerging.
+    given screenDepositEncoder: Encoder.AsObject[L2Screener.ScreenDeposit] = {
         import Destination.given
         import RemoteL2LedgerCodecs.{given_Encoder_Value, given_Encoder_Coin}
         import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
-        (r: L2Screener.ScreenDeposit) =>
-            io.circe.Json.obj(
+        Encoder.AsObject.instance { (r: L2Screener.ScreenDeposit) =>
+            io.circe.JsonObject(
               "depositId" -> r.depositId.asJson,
               "depositFee" -> r.depositFee.asJson,
               "depositL2Value" -> r.depositL2Value.asJson,
               "refundDestination" -> r.refundDestination.asJson,
               "l2Payload" -> summon[io.circe.Encoder[ByteString]].apply(r.l2Payload)
             )
+        }
     }
 
     /** `POST /screen/tx` body: just the transaction's `l2Payload` (hex), the sole input the
