@@ -4,7 +4,7 @@ import cats.Monad
 import cats.data.EitherT
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup}
+import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup, EvacuationMapHash}
 
 /** Why [[L2Ledger.restoreTo]] could not reconstruct the committed state. Extends `Throwable` so the
   * one fatal caller (`JointLedger.State.recover`, at boot) can raise it directly; it is still a
@@ -23,6 +23,23 @@ object RestoreError:
       * [[L2LedgerResponse.UnrecoverableError.OtherError]], the command-path counterpart.
       */
     final case class OtherError(message: String) extends RestoreError
+
+    /** The ledger's evacuation map at the restored command number is not the one this node holds.
+      *
+      * At a cold start that means the head config's `initialEvacuationMap` is not the map the L2
+      * ledger actually starts from — the head was built against a different ledger, or against a
+      * different configuration of this one. The initialization transaction has already committed to
+      * the configured map on L1, so this cannot be repaired at runtime and must not be run through:
+      * the head would work normally for its whole life and produce unevacuable payouts at fallback.
+      * See `docs/spec/l2-ledger-command-coordination.md`.
+      */
+    final case class EvacuationMapMismatch(
+        expected: EvacuationMapHash,
+        actual: EvacuationMapHash
+    ) extends RestoreError {
+        override def getMessage: String =
+            s"L2 ledger evacuation map digest $actual does not match the configured $expected"
+    }
 
 /** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
   * Ledger).
@@ -168,6 +185,11 @@ trait L2Ledger[F[_]] {
       *
       * Unlike the command path, this stays an [[EitherT]]: it is a boot-time reconstruction, not a
       * numbered command, so its failure is a [[RestoreError]] rather than one of the verdicts.
+      *
+      * Returns the [[EvacuationMapHash]] of the ledger's evacuation map at `commandNumber`, so the
+      * caller can check that both sides hold the same map. At a cold start (`commandNumber` zero)
+      * that is the check that the head config's `initialEvacuationMap` is the one this ledger
+      * actually starts from — see [[RestoreError.EvacuationMapMismatch]].
       */
-    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, Unit]
+    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, EvacuationMapHash]
 }

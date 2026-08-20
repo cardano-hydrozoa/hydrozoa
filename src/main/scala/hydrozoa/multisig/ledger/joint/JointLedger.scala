@@ -32,7 +32,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerInteractionState, L2LedgerResponse}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerInteractionState, L2LedgerResponse, RestoreError}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
@@ -194,13 +194,19 @@ final case class JointLedger(
         for {
             _ <- initializeConnections
             // On a non-empty store restore the passive `Done` and co-anchor the L2 ledger to the
-            // fast anchor. Cold start (empty store) leaves `State.initialize`. The
+            // fast anchor. A cold start (empty store) keeps `State.initialize` here, but still
+            // co-anchors the ledger at command zero and verifies its initial evacuation map. The
             // `[anchor + 1, head]` block tail is re-driven by BlockWeaver, not restored here. The
             // fast anchor is `fastBlockMark = max(BlockResult)` (§6), shared by head and coil peers:
             // on a head peer it coincides with `max(own SoftAck)` (both written in the same atomic
             // per-block batch); a coil peer authors no soft-ack and anchors on it directly.
             fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
-            recovered <- State.recover(persistence, l2Ledger, fastBlockMark)
+            recovered <- State.recover(
+              persistence,
+              l2Ledger,
+              fastBlockMark,
+              config.initialEvacuationMap
+            )
             _ <- recovered match {
                 case Some(done) =>
                     state.set(done) >> tracer.traceWith(
@@ -1039,11 +1045,10 @@ object JointLedger {
         )
 
         /** Reconstruct the passive [[Done]] state after a crash and co-anchor the L2 ledger to the
-          * same `fastBlockMark = max(BlockResult)` boundary, or `None` for an empty store (no
-          * `BlockResult` yet — cold start). Shared by head and coil peers: on a head peer the fast
-          * anchor coincides with `max(own SoftAck)` (both written in the same atomic per-block
-          * batch), and a coil peer authors no soft-ack, so `max(BlockResult)` is its sole fast
-          * anchor.
+          * same `fastBlockMark = max(BlockResult)` boundary, or `None` for an empty store (a cold
+          * start). Shared by head and coil peers: on a head peer the fast anchor coincides with
+          * `max(own SoftAck)` (both written in the same atomic per-block batch), and a coil peer
+          * authors no soft-ack, so `max(BlockResult)` is its sole fast anchor.
           *
           * Beyond rebuilding `Done` from the store ([[recoverState]]), this reads the L2 command
           * number recorded for the `fastBlockMark` block and calls [[L2Ledger.restoreTo]] — the
@@ -1052,19 +1057,93 @@ object JointLedger {
           * `restoreTo`, so this path runs for all of them: the EUTXO reference ledger rewinds its
           * committed state locally, and a `RemoteL2Ledger` sends a `Restore` request so the remote
           * rewinds its own command-number tip.
+          *
+          * **A cold start is the zeroth recovery case, not a skipped one**: it restores to command
+          * zero. That is not a formality — blocks are numbered from 1, so a crash part-way through
+          * block 1 leaves the ledger at a tip above zero with nothing persisted here, and the
+          * orphaned commands must be rolled back before consensus re-drives them. It also makes the
+          * ledger's initial evacuation map verifiable, which is the point below.
+          *
+          * **The digest `restoreTo` returns is checked at every anchor, not only at a cold one.**
+          * At command zero it is the ledger's initial evacuation map, checked against the head
+          * config's `initialEvacuationMap`: the two are authored independently and the
+          * initialization transaction has already committed to the configured one on L1, so a
+          * mismatch means this node would run normally and produce unevacuable payouts at fallback.
+          * Past a cold start it is checked against [[evacuationMapAt]] — this side keeps the map on
+          * the slow side at stack boundaries, so reaching the fast anchor means folding the blocks
+          * between. Either way a mismatch raises [[RestoreError.EvacuationMapMismatch]] and the
+          * node does not start.
           */
         def recover(
             persistence: Persistence[IO],
             l2Ledger: L2Ledger[IO],
-            fastBlockMark: Option[BlockNumber]
+            fastBlockMark: Option[BlockNumber],
+            initialEvacuationMap: EvacuationMap
         )(using CardanoNetwork.Section): IO[Option[Done]] =
             fastBlockMark match
-                case None => IO.pure(None)
+                case None =>
+                    l2Ledger
+                        .restoreTo(L2CommandNumber.zero)
+                        .value
+                        .flatMap(IO.fromEither)
+                        .flatMap(actual =>
+                            IO.raiseUnless(actual == initialEvacuationMap.digest)(
+                              RestoreError.EvacuationMapMismatch(
+                                expected = initialEvacuationMap.digest,
+                                actual = actual
+                              )
+                            )
+                        )
+                        .as(None)
                 case Some(blockNum) =>
                     for {
                         done <- doneAt(persistence, blockNum)
-                        _ <- l2Ledger.restoreTo(done.commandNumber).value.flatMap(IO.fromEither)
+                        actual <- l2Ledger
+                            .restoreTo(done.commandNumber)
+                            .value
+                            .flatMap(IO.fromEither)
+                        expected <- evacuationMapAt(persistence, blockNum, initialEvacuationMap)
+                        _ <- IO.raiseUnless(actual == expected.digest)(
+                          RestoreError.EvacuationMapMismatch(
+                            expected = expected.digest,
+                            actual = actual
+                          )
+                        )
                     } yield Some(done)
+
+        /** This peer's cumulative evacuation map at `blockNum` — the fast anchor.
+          *
+          * The slow side stores the map only at blocks whose map backs an on-chain KZG commitment,
+          * and only once a stack closes, so there is usually no entry at the fast anchor itself.
+          * Rebuild it: take the highest stored map at or below the anchor as the base (or the head
+          * config's initial map when no stack has closed) and fold the `evacuationMapDiff` of every
+          * `BlockResult` from there to the anchor.
+          *
+          * `Markers.recoverEvacuationMapMark` is the base block, not a scan bounded by `blockNum`:
+          * the slow side never runs ahead of the fast one, so the highest stored map is always at
+          * or below the anchor. Every `BlockResult` in the folded range is present — the anchor is
+          * `max(BlockResult)` and the CF is contiguous — so a gap is store corruption and
+          * `getOrFail` throws.
+          */
+        private def evacuationMapAt(
+            persistence: Persistence[IO],
+            blockNum: BlockNumber,
+            initialEvacuationMap: EvacuationMap
+        ): IO[EvacuationMap] =
+            for {
+                mapMark <- Markers.recoverEvacuationMapMark(persistence.backend)
+                base <- mapMark.fold(IO.pure(BlockNumber.zero -> initialEvacuationMap))(mark =>
+                    persistence.getOrFail(StoreKey.EvacuationMap(mark)).map(mark -> _)
+                )
+                (baseBlock, baseMap) = base
+                diffs <- ((baseBlock.increment: Int) to (blockNum: Int)).toList
+                    .map(BlockNumber.apply)
+                    .flatTraverse(num =>
+                        persistence
+                            .getOrFail(StoreKey.BlockResult(num))
+                            .map(_.flatEvacuationDiffs.toList)
+                    )
+            } yield EvacuationMap.applyDiffs(baseMap, diffs)
 
         /** The store-only half of [[recover]]: rebuild `Done(previousBlockHeader, deposits)` from
           * the `fastBlockMark` block's persisted brief + the deposits snapshot, with no L2 effect.

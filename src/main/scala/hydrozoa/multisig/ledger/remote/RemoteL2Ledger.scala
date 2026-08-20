@@ -7,6 +7,7 @@ import cats.effect.{Async, FiberIO, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.ledger.joint.EvacuationMapHash
 import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, RegisterDepositResponse, RestoreError}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
@@ -142,9 +143,11 @@ class RemoteL2Ledger private (
       * Bounded by [[restoreTimeout]], not the ordinary `requestTimeout`, and an expiry is **not**
       * retried — see that parameter for why.
       */
-    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
+    override def restoreTo(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, EvacuationMapHash] =
         EitherT(sendRestoreRequest(Request.Restore(commandNumber)).map {
-            case _: RestoreResponse.Restored => Right(())
+            case r: RestoreResponse.Restored => Right(r.evacuationMapHash)
             case RestoreResponse.RestoreFailed(requested, tip, reason) =>
                 if requested.value > tip.value then
                     Left(RestoreError.CommandNumberTooHigh(requested, tip))
@@ -392,7 +395,12 @@ object RemoteL2Ledger {
     }
 
     object RestoreResponse {
-        final case class Restored(tip: L2CommandNumber) extends RestoreResponse {
+
+        /** `evacuationMapHash` is the remote's [[EvacuationMapHash]] at `tip` — the digest the
+          * caller checks its own evacuation map against.
+          */
+        final case class Restored(tip: L2CommandNumber, evacuationMapHash: EvacuationMapHash)
+            extends RestoreResponse {
             def commandNumber: L2CommandNumber = tip
         }
         final case class RestoreFailed(
