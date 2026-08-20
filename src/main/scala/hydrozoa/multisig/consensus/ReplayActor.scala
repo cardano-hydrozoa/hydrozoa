@@ -63,7 +63,8 @@ object ReplayActor:
       * `JournalKey.HardAck(own, n)` with no peer-type branch (§10 Q10). `peers` is every head peer
       * (own included on a head peer), `hubs` every hub head peer (their `HubHardAck` journals carry
       * the coil quorum SCA aggregates, read by both peer types), `coils` the hubbed coils whose ack
-      * gap a hub re-feeds (`Nil` off a hub). `own` and `treasuryAddress` come from the node config.
+      * gap a hub re-feeds (`Nil` off a hub). `own`, `treasuryAddress` and `leadsFastBlock` — the
+      * fast-cycle leadership predicate, always false on a coil — come from the node config.
       */
     def replay(
         persistence: Persistence[IO],
@@ -73,7 +74,8 @@ object ReplayActor:
         peers: List[HeadPeerNumber],
         hubs: List[HeadPeerNumber],
         coils: List[CoilPeerNumber],
-        treasuryAddress: ShelleyAddress
+        treasuryAddress: ShelleyAddress,
+        leadsFastBlock: BlockNumber => Boolean
     )(using CardanoNetwork.Section): IO[Unit] =
         val backend = persistence.backend
         for
@@ -112,7 +114,8 @@ object ReplayActor:
                     _,
                     cursors.blockSpineForLedger.num,
                     cursors.stackSpineForComposer.num,
-                    targets
+                    targets,
+                    leadsFastBlock
                   )
                 )
             // 4. (Hub only) re-feed the received-but-unstamped coil-ack gap to CoilAckSequencer:
@@ -270,7 +273,8 @@ object ReplayActor:
         entry: RawJournalEntry,
         blockLedgerFloor: BlockNumber,
         stackComposerFloor: StackNumber,
-        targets: Targets
+        targets: Targets,
+        leadsFastBlock: BlockNumber => Boolean
     )(using CardanoNetwork.Section): IO[Unit] =
         entry.key match
             case k: JournalKey.Request =>
@@ -278,14 +282,43 @@ object ReplayActor:
             case k: JournalKey.SoftAck =>
                 targets.fastConsensusActor ! k.decodeValue(entry.framed).payload
             case k: JournalKey.HardAck =>
+                // Scanned from key 0 — no `StackNumber -> HardAckNumber` correspondence exists to
+                // floor it (`ReplayCursors`, deferred to R3 / §10 Q9) — so every hard-ack the peer
+                // has seen is re-sent on every boot. SlowConsensusActor classifies them: own-
+                // authored echo-dropped, remote at/above the in-flight stack feed the re-formed
+                // cell (the reason this arm exists), remote for confirmed stacks dropped as
+                // surplus. That last case depends on SCA restoring `lastConfirmed` in its PreStart;
+                // without it they leak into the orphan buffer. Wasteful but harmless.
                 targets.slowConsensusActor ! k.decodeValue(entry.framed).payload
             case k: JournalKey.Block =>
                 val brief = k.decodeValue(entry.framed).payload
-                val toLedger =
-                    if Ordering[BlockNumber].gteq(brief.blockNum, blockLedgerFloor)
-                    then targets.blockWeaver ! brief
-                    else IO.unit
-                (targets.fastConsensusActor ! brief) >> toLedger
+                // EXACTLY ONE target, chosen by the ledger floor — never both. The floor is
+                // `fastBlockMark + 1`: "have I already checked and accepted this block?"
+                // (`fastBlockMark = max(BlockResult)`, the same on both peer types — the
+                // `BlockResult` is the shared core of `persistOwnAckBundle` /
+                // `persistCoilBlockBundle`, and a head peer's own soft-ack rides the same batch.)
+                //   - BELOW the floor: already accepted, so JointLedger never re-handles it and FCA
+                //     — whose `softConfirmed` tracks the COLLECTIVE and so necessarily lags — must
+                //     be re-fed here.
+                //   - AT OR ABOVE it: BlockWeaver weaves it and `JointLedger.handleBlock` forwards
+                //     the brief to FCA itself, as on the live path, where JointLedger is FCA's ONLY
+                //     source of briefs. Sending directly as well double-feeds the cell, and
+                //     `ConsensusCell.acceptBrief` rejects the second brief.
+                if Ordering[BlockNumber].gteq(brief.blockNum, blockLedgerFloor) then
+                    // Above the floor a brief can only be one this peer FOLLOWS: an own-led brief
+                    // shares an atomic batch with its `BlockResult` (`persistOwnAckBundle`, guarded
+                    // by `canLeadFast`), so it cannot sit above `fastBlockMark`. That is what makes
+                    // handing it to BlockWeaver safe — a Leader state treats a `BlockBrief.Next` as
+                    // `Unexpected` and panics. Assert it rather than rely on it, so a break in that
+                    // atomicity fails here instead of deadlocking later.
+                    IO.raiseWhen(leadsFastBlock(brief.blockNum))(
+                      IllegalStateException(
+                        s"replay: own-led brief for block ${brief.blockNum} found above the ledger " +
+                            s"floor $blockLedgerFloor; an own-led brief is persisted atomically with " +
+                            "its BlockResult and cannot outlive it"
+                      )
+                    ) >> (targets.blockWeaver ! brief)
+                else targets.fastConsensusActor ! brief
             case k: JournalKey.Stack =>
                 val brief = k.decodeValue(entry.framed).payload
                 if Ordering[StackNumber].gteq(brief.stackNum, stackComposerFloor)

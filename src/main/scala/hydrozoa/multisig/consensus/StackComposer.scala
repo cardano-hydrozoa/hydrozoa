@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
-import hydrozoa.multisig.persistence.recovery.BlockResultScan
+import hydrozoa.multisig.persistence.recovery.{BlockResultScan, SoftConfirmationScan}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 import scala.annotation.tailrec
 import scalus.cardano.ledger.{TransactionHash, Value}
@@ -750,7 +750,7 @@ final case class StackComposer(
         mConn <- connections.get
         conn <- mConn.fold(
           IO.raiseError(
-            java.lang.Error("StackComposer is missing its connections to other actors.")
+            IllegalStateException("StackComposer is missing its connections to other actors.")
           )
         )(IO.pure)
     } yield conn
@@ -1036,9 +1036,9 @@ object StackComposer {
                           )
                         )
                         blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
-                    } yield Some(
-                      blockResults.foldLeft(
-                        State(
+                        softConfirmeds <- SoftConfirmationScan.scanFrom(persistence, lastBlockNum)
+                    } yield {
+                        val opening = State(
                           pending = Map.empty,
                           ready = Map.empty,
                           inboundLeaderBrief = Map.empty,
@@ -1050,7 +1050,17 @@ object StackComposer {
                           treasury = treasury,
                           evacuationMap = evacuationMap
                         )
-                      )(_.recordBlockResult(_))
-                    )
+                        // Restore BOTH halves of each block's pair, then pair them, mirroring
+                        // live `handleBlockResult` / `handleSoftConfirmed`. Neither half can be
+                        // left to the replay tail — see [[SoftConfirmationScan]] for why.
+                        val recorded = softConfirmeds.foldLeft(
+                          blockResults.foldLeft(opening)(_.recordBlockResult(_))
+                        )(_.recordSoftConfirmed(_))
+                        val restored =
+                            (blockResults.map(_.brief.blockNum) ++ softConfirmeds.map(
+                              _.blockNum
+                            )).distinct
+                        Some(restored.foldLeft(recorded)(_.tryPair(_)))
+                    }
     }
 }

@@ -371,6 +371,11 @@ object StackEffectsBuilder {
       * payouts`) backstops the shape — it catches absorbed deposits whose decisions group never
       * arrived, which no per-group check would demand.
       */
+    // TODO(#622-review): this folds `applyDiffsWithDelta` over every block's diffs to compute the
+    // deltas, but the `mkEffectsRegular` match arms then re-fold `applyDiffs` over those diffs to
+    // thread the running map — the map fold runs twice per partition. `applyDiffsWithDelta` already
+    // yields the updated map; have this return it (or the per-block maps) so the arms reuse it
+    // instead of re-folding, halving the per-partition fold on a large map.
     private def checkPartitionConservation(
         startMap: EvacuationMap,
         partition: StackPartition
@@ -418,7 +423,7 @@ object StackEffectsBuilder {
     type Config = HeadConfig.Section
 
     /** Failure building the treasury-spending effects of a regular stack. Raised by the caller. */
-    sealed trait Error extends Throwable
+    sealed trait Error extends RuntimeException
 
     object Error {
         final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Build.Error)

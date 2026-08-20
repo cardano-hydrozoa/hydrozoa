@@ -80,7 +80,7 @@ object Place {
 
     object Semantics {
 
-        trait MarkingError extends Throwable
+        trait MarkingError extends RuntimeException
 
         trait Bounded[Self <: Place.Syntax.WithTokens[Self] & Semantics[Self]]
             extends Semantics[Self] {

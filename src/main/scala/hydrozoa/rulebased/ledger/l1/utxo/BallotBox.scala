@@ -29,7 +29,7 @@ object BallotBox {
 
     type ParseConfig = HeadPeers.Section & HasTokenNames
 
-    sealed trait ParseError extends Throwable {}
+    sealed trait ParseError extends RuntimeException {}
 
     object ParseError {
         case class MissingDatum(utxo: Utxo) extends ParseError {

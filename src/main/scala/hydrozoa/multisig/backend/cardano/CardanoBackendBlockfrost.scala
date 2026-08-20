@@ -153,11 +153,19 @@ class CardanoBackendBlockfrost private (
             }
     }
 
+    /** `IO.blocking`, here and at every other `backendService` call site: those calls are
+      * synchronous okhttp, so the thread that enters one stays there for the whole HTTPS round
+      * trip. On a compute worker the runtime cannot see that and does not start a replacement, so
+      * the pool runs a thread short until the call returns.
+      *
+      * This one is the worst of them — one round trip per page, on the CardanoLiaison poll path
+      * that runs for the life of the head.
+      */
     private def paginate[A](
         apiCall: Int => Result[java.util.List[A]],
         mbStopPred: Option[A => Boolean] = None
     ): IO[Either[CardanoBackend.Error, List[A]]] =
-        IO {
+        IO.blocking {
             val elems: mutable.Buffer[A] = mutable.Buffer.empty
             var page: Int = 1
 
@@ -352,10 +360,12 @@ class CardanoBackendBlockfrost private (
         (utxoId, output)
     }
 
+    /** `IO.blocking`: a synchronous Blockfrost round trip — see [[paginate]] for why that matters.
+      */
     override def isTxKnown(
         txHash: TransactionHash
     ): IO[Either[CardanoBackend.Error, Boolean]] =
-        IO {
+        IO.blocking {
             val result = backendService.getTransactionService.getTransaction(txHash.toHex)
             if result.isSuccessful then {
                 Right(true)
@@ -633,8 +643,11 @@ class CardanoBackendBlockfrost private (
             )
         )
 
+    /** `IO.blocking`: a synchronous Blockfrost round trip — see [[paginate]] for why that matters.
+      * This one is on the L1 effect path, so a stalled worker here delays settlement itself.
+      */
     override def submitTx(etx: EnrichedTx[?]): IO[Either[CardanoBackend.Error, Unit]] =
-        IO {
+        IO.blocking {
             val result = backendService.getTransactionService.submitTransaction(etx.tx.toCbor)
             if result.isSuccessful
             then Right(())

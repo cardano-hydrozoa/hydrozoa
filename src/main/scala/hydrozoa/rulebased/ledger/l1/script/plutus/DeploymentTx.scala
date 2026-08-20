@@ -54,7 +54,7 @@ private object DeploymentTxOps {
         def data(datum: Data): DeployedPayload = DeployedPayload(None, Some(datum))
     }
 
-    enum Error extends Throwable:
+    enum Error extends RuntimeException:
         case SomeError
 
         override def toString: String = this match

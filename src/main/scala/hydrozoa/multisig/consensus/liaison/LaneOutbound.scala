@@ -160,7 +160,7 @@ object LaneOutbound {
         }
 
     final case class AppendOutOfOrder(last: String, attempted: String, expected: String)
-        extends Throwable(
+        extends RuntimeException(
           s"append out of order: last=$last attempted=$attempted expected=$expected"
         )
 

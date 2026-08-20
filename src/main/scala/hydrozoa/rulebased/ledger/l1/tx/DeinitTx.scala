@@ -52,7 +52,7 @@ private object DeinitTxOps {
 
     object Build {
         // TODO add `getMessage`
-        enum Error extends Throwable:
+        enum Error extends RuntimeException:
             case TreasuryShouldBeResolved
             case TreasuryShouldBeEmpty
             case NoHeadTokensFound

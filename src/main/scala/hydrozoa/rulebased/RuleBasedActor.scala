@@ -1128,6 +1128,10 @@ final case class RuleBasedActor(
     // evacuation regime then spawns but never polls, so funds never come back (custody-critical). A
     // fixed-cadence self-tick fires every `evacuationBotPollingPeriod` regardless of mailbox
     // activity, which is correct here because `handleTick` is a poll-then-retry safe to re-run.
+    // TODO(#622-review): this overwrites `tickFiber` without cancelling any fiber already there. If
+    // cats-actors ever re-runs `preStart` on a restart without `postStop` in between, the old tick
+    // fiber orphans (two poll loops, one uncancellable). Cancel the existing fiber before replacing
+    // it — or confirm cats-actors' restart path always runs `postStop` first, and note that here.
     private def startTickTimer: IO[Unit] =
         (IO.sleep(config.evacuationBotPollingPeriod) >> (context.self ! Tick)).foreverM.start
             .flatMap(fib => tickFiber.set(Some(fib)))
@@ -1381,7 +1385,10 @@ object RuleBasedActor {
             case object NoEvacuateesRemaining extends Recoverable
         }
 
-        sealed trait BuildError extends Throwable
+        /** Namespace for the per-tx build failures. Each case is an [[Unrecoverable]] in its own
+          * right; there is deliberately no `BuildError` supertype, because nothing dispatches on
+          * "was a build failure" as a category.
+          */
         object BuildError {
             case class Vote(wrapped: VoteTx.Build.Error) extends Unrecoverable {
                 override def getMessage: String = wrapped.getMessage

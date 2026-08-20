@@ -154,7 +154,7 @@ trait EnrichedTx[Self <: EnrichedTx[Self]](using val family: TxFamily[Self])
 }
 
 object EnrichedTx {
-    enum SignatureError[T <: EnrichedTx[T]] extends Throwable:
+    enum SignatureError[T <: EnrichedTx[T]] extends RuntimeException:
         case MissingSignature(vkey: VerificationKey, tx: T)
         case InvalidSignature(witness: VKeyWitness, tx: T)
         case TransactionBodyMismatch(otherTx: Transaction, tx: T)

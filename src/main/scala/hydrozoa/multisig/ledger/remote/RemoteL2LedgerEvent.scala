@@ -33,6 +33,14 @@ object RemoteL2LedgerEvent:
         backoff: FiniteDuration
     ) extends RemoteL2LedgerEvent
 
+    /** A [[RemoteL2Ledger.restoreTo]] exchange for [[commandNumber]] exceeded [[timeout]]. Unlike
+      * [[ExchangeTimedOut]] this is terminal — retrying a restore livelocks it.
+      */
+    final case class RestoreTimedOut(
+        commandNumber: L2CommandNumber,
+        timeout: FiniteDuration
+    ) extends RemoteL2LedgerEvent
+
     /** A reconnection attempt during error recovery itself failed; will retry. */
     final case class ReconnectionAttemptFailed(cause: Throwable) extends RemoteL2LedgerEvent
 

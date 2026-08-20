@@ -509,9 +509,12 @@ the band's briefs + acks.
   reconstitute as the replayed briefs + acks land. Anything `≤` the confirmed
   mark has already become a `SoftConfirmation` / `HardConfirmation` record and no
   longer needs re-aggregation.
-- **`BlockWeaver*`* holds no persistent state; it rebuilds mempool +
-  `nextBlockNumber` from the replay tail starting at `fastBlockMark + 1` (driven by
-  `JointLedger`'s signed timeline, not by confirmations).
+- **`BlockWeaver*`* authors no journal, but it does have base state: it resumes on
+  `fastBlockMark + 1` and needs to know whether that block's predecessor was already
+  confirmed. It reads both itself in `PreStart`, exactly as `JointLedger` does — the two
+  step through the block spine in lockstep — and rebuilds only its *mempool* from the
+  replay tail. Deriving `nextBlockNumber` from the tail alone does **not** work: a peer
+  that applied everything it received has an empty tail.
 
 The `2 + 3N + H` per-journal resume cursors that the `ReplayActor` uses to seek into
 the store **derive from the markers** — which derive from CF scans — with no
@@ -972,8 +975,11 @@ enumerated deltas below.
   - `mempool`;
   - `nextBlockNumber`;
   - transient `pollResults` / finalization trigger / `Wakeup`.
-- **Recover (replay):** base = state at `fastBlockMark`; replay `[fastBlockMark + 1, head]`.
-  Mempool and `nextBlockNumber` follow from the replay. **Block-creation timing
+- **Recover (replay):** base = state at `fastBlockMark`, read by the weaver itself in
+  `PreStart` (`nextBlockNumber = fastBlockMark + 1`, plus the stored
+  `SoftConfirmation[fastBlockMark]` when `softConfirmed == fastBlockMark`, so a resuming
+  leader does not wait on a confirmation that already happened); replay
+  `[fastBlockMark + 1, head]`, from which the mempool follows. **Block-creation timing
   uses the live wall clock**: blocks `≤ fastBlockMark` are not re-led (their
   `BlockCreationStart/EndTime` already sit in the persisted brief headers), and a
   block left mid-`Producing` at the crash was never saved or acked, so `BlockWeaver`
@@ -990,9 +996,9 @@ enumerated deltas below.
   `StartBlock`/`CompleteBlock{Regular,Final}`, which authors the brief.
 - **Coil peer:** **follower-only** — never enters Leader role, drives `JointLedger`
   from observed `BlockBrief.Next` + relayed requests + `PollResults` exactly as a
-  head follower does (`coil-network.md` §5.2). Recovery is identical: it holds no
-  persistent state and rebuilds mempool + `nextBlockNumber` from the replay tail
-  off the `fastBlockMark + 1` ([§5.1](#51-the-markers--all-derived-none-stored)).
+  head follower does (`coil-network.md` §5.2). Recovery is identical: it authors no
+  journal, reads the same base state in `PreStart`, and rebuilds its mempool from the
+  replay tail off `fastBlockMark + 1` ([§5.1](#51-the-markers--all-derived-none-stored)).
 
 #### 6.2.2 `JointLedger`
 

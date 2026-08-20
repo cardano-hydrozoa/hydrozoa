@@ -128,11 +128,11 @@ object FastConsensusActor:
           metrics = metrics
         )
 
-    enum Error extends Throwable:
+    enum Error extends RuntimeException:
         case AlienAckAnnouncement
         case UnexpectedPreviousBlockCell
 
-    enum CollectingError extends Throwable:
+    enum CollectingError extends RuntimeException:
         case UnexpectedAck(blockNum: BlockNumber, peerNum: HeadPeerNumber)
         case UnexpectedBlock(blockNum: BlockNumber)
         case UnexpectedPeer(peer: HeadPeerNumber)
@@ -146,7 +146,7 @@ object FastConsensusActor:
             case PostponedAckAlreadySet => "Postponed ack already set"
             case UnexpectedPostponedAck => "Unexpected postponed ack"
 
-    enum CompletionError extends Throwable:
+    enum CompletionError extends RuntimeException:
         case WrongHeaderSignature(vkey: ByteString)
 
 end FastConsensusActor
@@ -173,7 +173,7 @@ class FastConsensusActor(
         connections.get.flatMap(
           _.fold(
             IO.raiseError(
-              java.lang.Error("Consensus Actor is missing its connections to other actors.")
+              IllegalStateException("Consensus Actor is missing its connections to other actors.")
             )
           )(IO.pure)
         )

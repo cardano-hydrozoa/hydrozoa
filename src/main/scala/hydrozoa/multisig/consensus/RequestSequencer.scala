@@ -58,7 +58,7 @@ trait RequestSequencer(
         mConn <- this.connections.get
         conn <- mConn.fold(
           IO.raiseError(
-            java.lang.Error(
+            IllegalStateException(
               "Request sequencer is missing its connections to other actors."
             )
           )

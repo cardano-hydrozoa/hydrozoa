@@ -74,6 +74,18 @@ object Markers:
     def recoverFastBlockMark(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
         backend.lastKey(Cf.BlockResult).map(_.map(decodeBlockNum))
 
+    /** The highest block at which a cumulative evacuation map is durably stored, or `None` when the
+      * slow side has closed no stack yet (the map is then the head config's initial one).
+      *
+      * `Cf.EvacuationMap` is written by `StackComposer` at stack close, only at blocks whose map
+      * backs an on-chain KZG commitment ([[hydrozoa.multisig.persistence.StoreKey.EvacuationMap]]),
+      * so it is sparse and lags [[recoverFastBlockMark]] — the slow side never runs ahead of the
+      * fast one. `JointLedger` reads it on boot as the base to fold the remaining blocks'
+      * `evacuationMapDiff`s onto, to reach the map at the fast anchor.
+      */
+    def recoverEvacuationMapMark(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
+        backend.lastKey(Cf.EvacuationMap).map(_.map(decodeBlockNum))
+
     /** The slow-side anchor: `hardAcked = max(own HardAck.key)` — this peer's last own hard-ack
       * number, or `None` for an empty store. Works for both peer types: `own` is a [[PeerId]], so a
       * head peer reads its head `HardAck` CF and a coil peer reads its coil `HardAck` CF (the stack
@@ -86,6 +98,14 @@ object Markers:
         own: PeerId
     ): IO[Option[HardAckNumber]] =
         backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard))
+
+    /** `softConfirmed = max(SoftConfirmation.key)` — the fast-side confirmation mark, written by
+      * `FastConsensusActor` when a consensus cell saturates. Standalone like the other anchors, so
+      * a consumer needing only this mark skips the full [[Markers]] bundle — and its parallel
+      * reads, which a caller comparing two marks against each other must avoid.
+      */
+    def recoverSoftConfirmed(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
+        backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum))
 
     /** `hardConfirmed = max(HardConfirmation.key)` — the `HardConfirmation` CF is keyed by
       * `StackNumber`, written at confirmation by every peer (§6 `SlowConsensusActor`). Exposed

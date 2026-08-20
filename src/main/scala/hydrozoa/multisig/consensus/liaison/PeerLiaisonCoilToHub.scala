@@ -58,7 +58,7 @@ abstract class PeerLiaisonCoilToHub(
                 shared.get.flatMap(s =>
                     s.remoteHubLiaison.fold(
                       IO.raiseError(
-                        java.lang.Error("Coil→hub liaison requires a hub liaison handle.")
+                        IllegalStateException("Coil→hub liaison requires a hub liaison handle.")
                       )
                     )(hub =>
                         IO.pure(
@@ -148,7 +148,7 @@ abstract class PeerLiaisonCoilToHub(
 
     private def getConnections: IO[PeerLiaisonCoilToHub.Connections] =
         connections.get.flatMap(
-          _.fold(IO.raiseError(java.lang.Error("Coil→hub liaison missing its connections.")))(
+          _.fold(IO.raiseError(IllegalStateException("Coil→hub liaison missing its connections.")))(
             IO.pure
           )
         )

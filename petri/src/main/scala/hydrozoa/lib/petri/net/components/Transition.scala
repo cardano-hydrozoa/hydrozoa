@@ -4,7 +4,7 @@ import scala.concurrent.duration.FiniteDuration
 import spire.math.Natural
 
 object Transition {
-    sealed trait Error extends Throwable
+    sealed trait Error extends RuntimeException
 
     object Error {
         // TODO: data expressions can either be syntactically invalid or have dangling

@@ -14,7 +14,7 @@ import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaison, StackComposer}
-import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -22,10 +22,10 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand, RestoreError}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey, Timestamped}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
@@ -79,7 +79,12 @@ class RecoverSeamsTest extends AnyFunSuite:
             for
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
-                viaRecover <- JointLedger.State.recover(p, ledger, None)
+                viaRecover <- JointLedger.State.recover(
+                  p,
+                  ledger,
+                  None,
+                  config.initialEvacuationMap
+                )
                 viaState <- JointLedger.State.recoverState(p, None)
             yield assert(viaRecover.isEmpty && viaState.isEmpty)
         }
@@ -119,7 +124,19 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
-                done <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
+                // The fast anchor IS max(BlockResult), so the anchored blocks must be present:
+                // recover folds their evacuation diffs to reach the map at the anchor.
+                _ <- (1 to 2).toList.traverse_(n =>
+                    blockResult(n).flatMap(br =>
+                        p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
+                    )
+                )
+                done <- JointLedger.State.recover(
+                  p,
+                  ledger,
+                  Some(BlockNumber(2)),
+                  config.initialEvacuationMap
+                )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(done.isDefined && anchored == L2CommandNumber(2L))
         }
@@ -144,7 +161,19 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
-                recovered <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
+                // The fast anchor IS max(BlockResult), so the anchored blocks must be present:
+                // recover folds their evacuation diffs to reach the map at the anchor.
+                _ <- (1 to 2).toList.traverse_(n =>
+                    blockResult(n).flatMap(br =>
+                        p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
+                    )
+                )
+                recovered <- JointLedger.State.recover(
+                  p,
+                  ledger,
+                  Some(BlockNumber(2)),
+                  config.initialEvacuationMap
+                )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(
               recovered.exists(d =>
@@ -260,6 +289,65 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
+    test(
+      "StackComposer.recover PAIRS blocks whose SoftConfirmation is also durable, and honours the " +
+          "exclusive floor"
+    ) {
+        // The regression test for the stall that froze the whole head's slow side. `recover` used
+        // to rebuild only the `BlockResult` half and leave the `Block.SoftConfirmed` halves "to
+        // replay" — but the block-spine replay floor is `softConfirmed + 1`, while these blocks
+        // start just after the last CLOSED stack's `lastBlockNum`, always below it. The tail is
+        // empty by construction, so nothing ever paired, `tryCloseAsFollower` sat in its "not yet
+        // covered" branch forever, and `previousStackHardConfirmed` never advanced on ANY peer.
+        withStore { p =>
+            val own = HeadPeerNumber(0)
+            val stackN = 1
+            val lastBlock = 3
+            for
+                us <- unsignedStack(stack = stackN, firstBlock = 0, lastBlock = lastBlock)
+                _ <- p.put(JournalKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
+                  JournalValue(stamp, hardAck(peer = 0, ackNum = 0, stack = stackN))
+                )
+                _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
+                // Balanced, like the other seeds here: `recover` raises on an unbalanced
+                // treasury/evacuation pair, which would fail before the pairing assertion is reached.
+                _ <- p.put(StoreKey.Treasury)(balancedTreasury)
+                _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
+                br3 <- blockResult(3)
+                br4 <- blockResult(4)
+                br5 <- blockResult(5)
+                _ <- List(br3, br4, br5).traverse_(br =>
+                    p.put(StoreKey.BlockResult(br.brief.blockNum))(br.persisted)
+                )
+                _ <- List(br4, br5).traverse_(br =>
+                    p.put(JournalKey.Block(br.brief.blockNum))(JournalValue(stamp, br.brief))
+                )
+                // BOTH halves durable for 4 and 5 — and for 3, which sits AT the last closed block
+                // and must be excluded by the exclusive floor, exactly like its BlockResult.
+                _ <- List(br3, br4, br5).traverse_(br =>
+                    p.put(StoreKey.SoftConfirmation(br.brief.blockNum))(
+                      Timestamped(stamp, softConfirmedOf(br))
+                    )
+                )
+                recovered <- StackComposer.State.recover(
+                  p,
+                  Some(HardAckNumber(0)),
+                  Some(StackNumber(0)),
+                  PeerId.Head(own)
+                )
+            yield assert(
+              recovered.exists { s =>
+                  // Restore only the BlockResult half and `ready` is empty by construction, with
+                  // these two stranded unpaired in `pending`.
+                  s.ready.keySet == Set(BlockNumber(4), BlockNumber(5)) &&
+                  s.pending.isEmpty
+              },
+              "expected blocks 4,5 paired into `ready` and nothing left pending; got " +
+                  s"${recovered.map(s => (s.ready.keySet, s.pending.keySet))}"
+            )
+        }
+    }
+
     test("StackComposer.recover (coil) returns None for an empty store (no own coil hard-ack)") {
         withStore { p =>
             StackComposer.State
@@ -347,6 +435,99 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
+    test(
+      "JointLedger.recover accepts a cold start whose L2 ledger holds the configured initial " +
+          "evacuation map"
+    ) {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                r <- JointLedger.State
+                    .recover(p, ledger, None, config.initialEvacuationMap)
+                    .attempt
+            yield assert(r == Right(None))
+        }
+    }
+
+    test("JointLedger.recover refuses to boot when the L2 ledger holds a different initial map") {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                // Stand in for the real failure: a head config built against a different ledger,
+                // or against a different configuration of this one. Dropping one entry is enough —
+                // the check is on the digest of the whole map.
+                divergent = EvacuationMap.from(config.initialEvacuationMap.drop(1))
+                r <- JointLedger.State.recover(p, ledger, None, divergent).attempt
+            yield assert(
+              r.swap.toOption.exists {
+                  case RestoreError.EvacuationMapMismatch(expected, actual) =>
+                      expected == divergent.digest && actual == config.initialEvacuationMap.digest
+                  case _ => false
+              }
+            )
+        }
+    }
+
+    test(
+      "JointLedger.recover verifies the evacuation map at the crash anchor, folding onto the "
+          + "last stored map"
+    ) {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                _ <- (1 to 3).toList.traverse_(i =>
+                    ledger.applyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
+                )
+                brief <- blockBrief(2)
+                _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
+                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
+                _ <- (1 to 2).toList.traverse_(n =>
+                    blockResult(n).flatMap(br =>
+                        p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
+                    )
+                )
+                // A stack closed at block 1, so its stored map — not the config's initial one — is
+                // the base, and only block 2's diffs are folded on top.
+                _ <- p.put(StoreKey.EvacuationMap(BlockNumber(1)))(config.initialEvacuationMap)
+                r <- JointLedger.State
+                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap)
+                    .attempt
+            yield assert(r.map(_.isDefined) == Right(true))
+        }
+    }
+
+    test("JointLedger.recover refuses to boot when the map at the crash anchor diverges") {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                _ <- (1 to 3).toList.traverse_(i =>
+                    ledger.applyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
+                )
+                brief <- blockBrief(2)
+                _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
+                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
+                _ <- (1 to 2).toList.traverse_(n =>
+                    blockResult(n).flatMap(br =>
+                        p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
+                    )
+                )
+                // The stack-close base disagrees with what the ledger holds, and the blocks folded
+                // on top carry no diffs to reconcile it — so the anchor maps differ.
+                _ <- p.put(StoreKey.EvacuationMap(BlockNumber(1)))(EvacuationMap.empty)
+                r <- JointLedger.State
+                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap)
+                    .attempt
+            yield assert(
+              r.swap.toOption.exists(_.isInstanceOf[RestoreError.EvacuationMapMismatch])
+            )
+        }
+    }
     test("JointLedger.recover throws when the fastBlockMark block's L2 command number is missing") {
         withStore { p =>
             for
@@ -356,7 +537,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 // L2CommandNumber intentionally not written
-                r <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2))).attempt
+                r <- JointLedger.State
+                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap)
+                    .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
         }
     }
@@ -584,6 +767,15 @@ class RecoverSeamsTest extends AnyFunSuite:
           BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
         )
     }
+
+    /** The soft-confirmed half of a block's pair, wrapping the SAME brief the `BlockResult` carries
+      * so `tryPair` joins two halves of one block rather than two unrelated fixtures.
+      */
+    private def softConfirmedOf(br: BlockResult): Block.SoftConfirmed.Next =
+        br.brief match
+            case m: BlockBrief.Minor =>
+                Block.SoftConfirmed.Minor(m, headerMultiSigned = Nil, finalizationRequested = false)
+            case other => fail(s"fixture builds Minor briefs; got $other")
 
     private def blockResult(blockNum: Int): IO[BlockResult] =
         realTimeQuantizedInstant(headConfig.slotConfig).map { now =>

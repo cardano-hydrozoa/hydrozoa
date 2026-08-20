@@ -44,7 +44,7 @@ private object AbstainTxOps {
         FallbackContingency.Section & HasTokenNames & OwnPeerPrivate.Section
 
     object Build {
-        enum Error extends Throwable:
+        enum Error extends RuntimeException:
             case BuildError(wrapped: SomeBuildError)
 
             override def toString: String = this.getMessage

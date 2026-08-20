@@ -62,14 +62,30 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       */
     val nodeStatus: Ref[IO, NodeStatus] = Ref.unsafe[IO, NodeStatus](NodeStatus.Initializing)
 
+    /** Every failure escalates, and the decider is **total**.
+      *
+      * Totality is what the `PartialFunction.fromFunction` wrapper buys: `isDefinedAt` is
+      * unconditionally true, so the supervisor can never see this decider as undefined. A failure
+      * outside a decider's domain is not a handled failure — it surfaces as `emergency stop:
+      * exception in failure handling for …`, which discards the original error and leaves whatever
+      * waits on this subtree waiting forever: a silent hang rather than a loud failure. Stopping at
+      * `case _: Exception` reads as exhaustive and is not, since `Throwable`'s other child is
+      * `Error`, and Scala applies no checked-exception pressure to make a bare `Throwable`
+      * conspicuous.
+      */
     override def supervisorStrategy: SupervisionStrategy[IO] =
-        OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute) {
-            case _: IllegalArgumentException =>
-                Escalate // Normally `Stop` but we can't handle stopped actors yet
-            case _: RuntimeException =>
-                Escalate // Normally `Restart` but our actors can't do that yet
-            case _: Exception => Escalate
-        }
+        OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute)(
+          PartialFunction.fromFunction {
+              case _: IllegalArgumentException =>
+                  Escalate // Normally `Stop` but we can't handle stopped actors yet
+              case _: RuntimeException =>
+                  Escalate // Normally `Restart` but our actors can't do that yet
+              case _: Exception => Escalate
+              // `Error`, and anything extending `Throwable` directly. Keeping this arm last leaves
+              // the intent of the arms above legible for when they can take their real directives.
+              case _ => Escalate
+          }
+        )
 
     override def preStart: IO[Unit] = context.self ! PreStart
 
@@ -119,7 +135,7 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
     ): IO[CoreActors] =
         for {
             blockWeaver <- context.actorOf(
-              BlockWeaver(config, pendingConnections, tracers.blockWeaver, metrics)
+              BlockWeaver(config, pendingConnections, tracers.blockWeaver, metrics, persistence)
             )
             cardanoLiaison <- context.actorOf(
               CardanoLiaison(

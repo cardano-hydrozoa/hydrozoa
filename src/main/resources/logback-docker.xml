@@ -33,6 +33,18 @@
          they are doing — `hydrozoa evacuate` runs both. -->
     <logger name="RuleBasedActor" level="info"/>
     <logger name="CardanoLiaison" level="info"/>
+    <!-- Crash-recovery narration. These routes log under their own top-level names, so under root=warn
+         the boot timeline is invisible: a warm restart that stalls waiting on the remote L2 ledger's
+         restore (it rebuilds its whole log first) shows nothing until it errors. Route them at info so
+         the connect/restore lifecycle (RemoteL2Ledger: Connecting / Connected) and the actor boot
+         (regime managers: Starting / Watching multisig actors) narrate. These fire at boot and on
+         regime transitions, not per block, so info stays bounded to the recovery window — the async
+         appender also sheds info first under load, so a steady-state burst can't be pinned by these.
+         The per-command RemoteL2Ledger Sending / Received stay at debug (below info), so ordinary L2
+         traffic does not flood. -->
+    <logger name="RemoteL2Ledger" level="info"/>
+    <logger name="HeadMultisigRegimeManager" level="info"/>
+    <logger name="CoilMultisigRegimeManager" level="info"/>
     <logger name="com.bloxbean" level="warn"/>
     <logger name="scalus" level="warn"/>
     <logger name="CardanoBackend" level="warn"/>

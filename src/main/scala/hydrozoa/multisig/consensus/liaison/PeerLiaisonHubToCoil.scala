@@ -56,7 +56,7 @@ abstract class PeerLiaisonHubToCoil(
                 shared.get.flatMap(s =>
                     s.coilAckSequencer.fold(
                       IO.raiseError(
-                        java.lang.Error("Hub→coil liaison requires a CoilAckSequencer.")
+                        IllegalStateException("Hub→coil liaison requires a CoilAckSequencer.")
                       )
                     )(seq =>
                         IO.pure(
@@ -160,7 +160,7 @@ abstract class PeerLiaisonHubToCoil(
 
     private def getConnections: IO[PeerLiaisonHubToCoil.Connections] =
         connections.get.flatMap(
-          _.fold(IO.raiseError(java.lang.Error("Hub→coil liaison missing its connections.")))(
+          _.fold(IO.raiseError(IllegalStateException("Hub→coil liaison missing its connections.")))(
             IO.pure
           )
         )

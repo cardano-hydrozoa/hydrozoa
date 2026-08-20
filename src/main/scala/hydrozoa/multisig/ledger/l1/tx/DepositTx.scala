@@ -146,7 +146,7 @@ private object DepositTxOps {
     object Parse {
         type ParseErrorOr[A] = Either[Error, A]
 
-        enum Error extends Throwable {
+        enum Error extends RuntimeException {
             case MetadataParseError(e: MD.ParseError)
             case AlienDeposit(headAddress: ShelleyAddress)
             case L2PayloadHashMismatch(
