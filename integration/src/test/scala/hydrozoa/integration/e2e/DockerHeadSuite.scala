@@ -29,14 +29,18 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.Value
 import scalus.uplc.builtin.ByteString
 
-/** Stand up a whole head in containers on a local Yaci devnet, form it, submit an L2 transaction to
-  * head-0 over HTTP, and assert it reaches every head peer's L2 ledger. Unlike the in-process
-  * `MultiPeerHeadHarness`, this drives the shipped artifacts black-box: the packaged image, `docker
-  * compose`, the mesh, the HTTP API, and L2 consensus across distinct node identities.
+/** Stand up a whole head in containers on a local Yaci devnet and form it, then hand the formed
+  * head to a subclass's [[scenario]]. Unlike the in-process `MultiPeerHeadHarness`, this drives the
+  * shipped artifacts black-box: the packaged image, `docker compose`, the mesh, the HTTP API, and
+  * L2 consensus across distinct node identities.
   *
-  * Subclass it with a [[DockerTopology]] — that is the only thing that varies. See
-  * [[DockerSmokeTest]] for the deployment we ship, and the E2E section of
-  * `docs/spec/integration-stages.md` for where this level sits among the others.
+  * Bringing a head up costs minutes, so everything up to "every head peer reports `/ready`" lives
+  * here and every subclass shares it; what varies is the [[DockerTopology]] it runs on and the
+  * [[scenario]] it then asserts. Subclasses also inherit the L2 traffic helpers ([[sendAda]],
+  * [[awaitPropagation]]) and the container controls ([[killPeer]], [[startPeer]]). See
+  * [[DockerSmokeTest]] for L2 propagation on the deployment we ship, [[DockerRecoveryTest]] for
+  * killing a head peer and recovering it, and the E2E section of `docs/spec/integration-stages.md`
+  * for where this level sits among the others.
   *
   * '''Only head peers are observable.''' `runCoilNode` starts no `HydrozoaServer`, so the HTTP
   * assertions cover head peers alone. Coil peers are still load-bearing: the head cannot initialize
@@ -62,14 +66,14 @@ import scalus.uplc.builtin.ByteString
   *   6. `deploy-scripts-and-g2-setup` — deploy the treasury/dispute validators (+ G2 ladder);
   *   7. `build-head-config` — resolve the ref UTxOs into the shared head config;
   *   8. `docker compose up` — every peer;
-  *   9. wait for `/ready`, submit an L2 tx to head-0, poll the head peers until convergence.
+  *   9. wait for `/ready` on every head peer — after which the subclass's [[scenario]] runs.
   *
   * URL split (the containers and the host reach the same devnet at different addresses): the peers
   * reach it in-mesh at `http://yaci:8080` (written into each `private.json` via the template's
   * `blockfrostApiUrl`), while the host-side generation steps reach it at the devnet's host-mapped
   * port (`localhost:18080`) via `--blockfrost-url`.
   */
-abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
+abstract class DockerHeadSuite(topology: DockerTopology, scenarioName: String) extends AnyFunSuite:
 
     import DockerHeadSuite.*
 
@@ -88,9 +92,13 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
     private val peerServices: List[String] =
         headPeerIndices.map(i => s"head-$i") ++ (0 until CoilCount).map(i => s"coil-$i").toList
 
-    test(
-      s"a head forms on the ${topology.name} topology and an L2 tx reaches every head peer"
-    ) {
+    /** What this suite asserts once the head has formed and every head peer reports `/ready`. The
+      * workspace is the one [[formHead]] scaffolded, so a scenario can read the generated configs
+      * and drive `docker compose` against the running project.
+      */
+    protected def scenario(home: Path, client: Client[IO]): IO[Unit]
+
+    test(s"a head forms on the ${topology.name} topology and $scenarioName") {
         // Prerequisites the `just integration-e2e-docker` recipe guarantees; cancel (not fail) when
         // a stray `testOnly *` reaches this excluded suite without them.
         if !commandSucceeds(Seq("docker", "--version")) then
@@ -109,7 +117,7 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
     private def program: IO[Unit] =
         makeHome.flatMap { home =>
             EmberClientBuilder.default[IO].build.use { client =>
-                runScenario(home, client)
+                (formHead(home, client) *> scenario(home, client))
                     .onError(e =>
                         log(s"scenario failed: ${e.getMessage} — configs kept at $home") *>
                             dumpLogs(home).attempt.void
@@ -119,7 +127,10 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
             }
         }
 
-    private def runScenario(home: Path, client: Client[IO]): IO[Unit] =
+    /** Steps 1-9 of the deployment flow: scaffold the workspace, bring the devnet up, generate the
+      * fleet, deploy the scripts, start every peer, and wait for the head to open on L1.
+      */
+    private def formHead(home: Path, client: Client[IO]): IO[Unit] =
         for {
             _ <- log(s"home=$home image=$image compose=${composeFiles(home).mkString(" + ")}")
             _ <- writePrivateTemplate(home)
@@ -186,49 +197,50 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
             _ <- pollUntil("the head peers to become ready", ReadyTimeout, 5.seconds)(
               allReady(client)
             )
-
-            _ <- submitAndAssertPropagation(home, client)
-            _ <- log("propagation confirmed on both head peers ✓")
         } yield ()
 
-    /** Build the same zero-fee L2 tx `submit-l2-tx` would (spend head-0's opening output, send
-      * [[SendAda]] to head-1), submit it to head-0, then poll both head peers until the resulting
-      * utxo and feed entry appear on each. Loads head-0's wallet/headId/network offline, plus
-      * head-1's wallet for the destination address.
+    // ---- L2 traffic --------------------------------------------------------------------------
+
+    /** Load the two ends of the suite's L2 traffic from the generated workspace: head-0's offline
+      * demo config (wallet, head id, network) and head-1's wallet, whose address every [[sendAda]]
+      * pays. Both read files, so they survive a peer being down.
       */
-    private def submitAndAssertPropagation(home: Path, client: Client[IO]): IO[Unit] =
+    protected def loadL2Wallets(home: Path): IO[L2Wallets] =
         for {
-            demo0 <- DemoConfig.loadOffline(headConfigPath(home), privatePath(home, "head-0"))
-            head1Wallet <- DemoConfig.readWallet(privatePath(home, "head-1"))
-            _ <- runSubmit(demo0, head1Wallet, client)
-        } yield ()
+            sender <- DemoConfig.loadOffline(headConfigPath(home), privatePath(home, "head-0"))
+            recipient <- DemoConfig.readWallet(privatePath(home, "head-1"))
+        } yield L2Wallets(sender, recipient)
 
-    private def runSubmit(
-        demo0: DemoConfig.L2Demo,
-        head1Wallet: PeerWallet,
-        client: Client[IO]
-    ): IO[Unit] =
-        given CardanoNetwork.Section = demo0.cardanoNetwork
-        val head0Address = demo0.wallet.exportVerificationKey.shelleyAddress()
-        val head1Address = head1Wallet.exportVerificationKey.shelleyAddress()
+    /** Build the same zero-fee L2 tx `submit-l2-tx` would — spend head-0's largest L2 output, send
+      * [[SendAda]] to head-1, keep the change — sign it, and submit it to head-0. Returns as soon
+      * as head-0 has assigned a request id; landing it on every peer is [[awaitPropagation]]'s job,
+      * so a scenario can submit while consensus cannot progress.
+      *
+      * The input is re-read from head-0's live utxo set on every call, so repeated sends chain off
+      * the previous one's change.
+      */
+    protected def sendAda(wallets: L2Wallets, client: Client[IO]): IO[SentTransaction] =
+        given CardanoNetwork.Section = wallets.sender.cardanoNetwork
+        val head0Address = wallets.sender.wallet.exportVerificationKey.shelleyAddress()
+        val head1Address = wallets.recipient.exportVerificationKey.shelleyAddress()
         for {
             head0Bech32 <- IO.fromOption(head0Address.toBech32.toOption)(
               RuntimeException("head-0 address is not bech32-renderable")
             )
 
             parsed <- EutxoL2QueryClient.http(client, headUri(0)).utxos(head0Address)
-            selected <- IO.fromOption(parsed.headOption)(
-              RuntimeException(s"head-0 has no opening L2 utxo at $head0Bech32")
+            selected <- IO.fromOption(parsed.maxByOption(_._2.value.coin.value))(
+              RuntimeException(s"head-0 has no spendable L2 utxo at $head0Bech32")
             )
             (input, output) = selected
 
             tx <- IO.fromEither(
               SubmitL2Transaction
-                  .buildTx(demo0.headId, input, output, head1Address, Value.ada(SendAda))
+                  .buildTx(wallets.sender.headId, input, output, head1Address, Value.ada(SendAda))
                   .left
                   .map(e => RuntimeException(s"could not build the L2 tx: $e"))
             )
-            signed = demo0.wallet.signTx(tx)
+            signed = wallets.sender.wallet.signTx(tx)
             txIdHex = signed.id.toHex
             _ <- log(s"submitting L2 tx $txIdHex ($SendAda ADA head-0 → head-1) to head-0…")
             requestId <- SubmissionClient
@@ -238,24 +250,40 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
                     TransactionRequestBody(ByteString.fromArray(signed.toCbor))
                   )
                 )
-            expectedRequest = mkRequestIdView(requestId)
+        } yield SentTransaction(txIdHex, mkRequestIdView(requestId), head1Address)
 
-            _ <- log("polling both head peers for the propagated utxo…")
-            _ <- pollUntil(s"utxo $txIdHex at head-1 on every peer", ConvergeTimeout, 3.seconds)(
-              allPeersShowUtxo(client, head1Address, txIdHex)
-            )
+    /** Poll every head peer until `sent` shows up in both of its L2 views — the utxo it paid to
+      * head-1 and the entry in its `/transactions` feed — or [[ConvergeTimeout]] elapses.
+      */
+    protected def awaitPropagation(client: Client[IO], sent: SentTransaction): IO[Unit] =
+        for {
+            _ <- log(s"polling every head peer for L2 tx ${sent.txIdHex}…")
+            _ <- pollUntil(
+              s"utxo ${sent.txIdHex} at head-1 on every peer",
+              ConvergeTimeout,
+              3.seconds
+            )(allPeersShowUtxo(client, sent.destination, sent.txIdHex))
             _ <- pollUntil("our tx in every peer's /transactions feed", ConvergeTimeout, 3.seconds)(
-              allPeersShowTransaction(client, expectedRequest)
+              allPeersShowTransaction(client, sent.request)
             )
         } yield ()
 
     // ---- HTTP probes -------------------------------------------------------------------------
 
     /** `GET /ready` returns 200 on every HTTP-observable peer (head initialized and active). */
-    private def allReady(client: Client[IO]): IO[Boolean] =
+    protected def allReady(client: Client[IO]): IO[Boolean] =
         headPeerIndices
             .traverse(i => client.get(headUri(i) / "ready")(r => IO.pure(r.status.code == 200)))
             .map(_.forall(identity))
+
+    /** Whether head peer `peer` answers `GET /health` at all — false while its container is down,
+      * so a scenario can tell "killed" from "still serving".
+      */
+    protected def peerResponds(client: Client[IO], peer: Int): IO[Boolean] =
+        client
+            .get(headUri(peer) / "health")(r => IO.pure(r.status.code == 200))
+            .attempt
+            .map(_.getOrElse(false))
 
     /** Every head peer's `GET /l2/cardano-eutxo/utxos/{head-1}` lists a utxo minted by our tx. */
     private def allPeersShowUtxo(
@@ -293,6 +321,45 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
             ()
         }
 
+    // ---- container controls ------------------------------------------------------------------
+
+    /** SIGKILL `service`'s container — an abrupt crash, with no SIGTERM and no chance to flush, so
+      * what the peer left in its RocksDB store is what a real crash would have left.
+      *
+      * `docker compose kill` is a manual stop as far as the daemon is concerned, so the compose
+      * file's `restart: on-failure` policy does *not* resurrect the container and the peer stays
+      * down until [[startPeer]].
+      */
+    protected def killPeer(home: Path, service: String): IO[Unit] =
+        compose(home, "kill", service)
+
+    /** Start `service`'s existing container again. This is a restart, not a re-creation: the same
+      * container comes back on the same named volume, so the peer boots off the store its crash
+      * left behind.
+      */
+    protected def startPeer(home: Path, service: String): IO[Unit] =
+        compose(home, "start", service)
+
+    /** `service`'s container exit code, as the daemon recorded it — 137 (128 + SIGKILL) after a
+      * [[killPeer]], which is how a scenario confirms the peer really died rather than exiting on
+      * its own.
+      */
+    protected def peerExitCode(home: Path, service: String): IO[Int] =
+        for {
+            id <- composeCapture(home, "ps", "-a", "-q", service).flatMap(out =>
+                IO.fromOption(lastNonBlankLine(out))(
+                  RuntimeException(s"docker compose ps found no container for $service")
+                )
+            )
+            raw <- captureProcess(
+              Seq("docker", "inspect", "-f", "{{.State.ExitCode}}", id),
+              extraEnv = Seq.empty
+            )
+            code <- IO.fromOption(lastNonBlankLine(raw).flatMap(_.toIntOption))(
+              RuntimeException(s"could not read $service's exit code from: $raw")
+            )
+        } yield code
+
     // ---- process orchestration ---------------------------------------------------------------
 
     /** Run `scripts/yaci-devnet.sh`, the same entry point the deployment guide documents.
@@ -322,6 +389,10 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
 
     private def compose(home: Path, args: String*): IO[Unit] =
         runProcess(composeCmd(home, args*), cwd = None, extraEnv = composeEnv(home))
+
+    /** [[compose]], but returning the command's stdout instead of only echoing it. */
+    private def composeCapture(home: Path, args: String*): IO[String] =
+        captureProcess(composeCmd(home, args*), composeEnv(home))
 
     /** The head directory's scaffolded `docker-compose.yml` plus the Yaci overlay — the same pair,
       * in the same order, that the deployment guide tells an operator to run, so this suite
@@ -377,6 +448,22 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
                 )
         }
 
+    /** [[runProcess]] that returns stdout. Stderr still goes to the console, so a failing command
+      * reports itself the same way.
+      */
+    private def captureProcess(cmd: Seq[String], extraEnv: Seq[(String, String)]): IO[String] =
+        IO.blocking {
+            val captured = new StringBuilder
+            val logger = ProcessLogger(
+              line => { val _ = captured.append(line).append('\n') },
+              line => println(s"$Tag $line")
+            )
+            val code = Process(cmd, None, extraEnv*).!(logger)
+            if code != 0 then
+                throw RuntimeException(s"command failed (exit $code): ${cmd.mkString(" ")}")
+            captured.toString
+        }
+
     private def runProcessLenient(cmd: Seq[String], extraEnv: Seq[(String, String)]): IO[Unit] =
         IO.blocking {
             val code =
@@ -389,7 +476,7 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
     /** Repeat `check` until it returns true, or raise after `timeout`. Exceptions (a peer not up
       * yet, a connection refused) count as "not ready" and are retried until the deadline.
       */
-    private def pollUntil(what: String, timeout: FiniteDuration, interval: FiniteDuration)(
+    protected def pollUntil(what: String, timeout: FiniteDuration, interval: FiniteDuration)(
         check: IO[Boolean]
     ): IO[Unit] =
         IO.monotonic.flatMap { start =>
@@ -413,7 +500,11 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
             loop
         }
 
-    private def log(msg: String): IO[Unit] = IO.println(s"$Tag $msg")
+    /** Fail the scenario unless `condition` holds, with `message` as the reason. */
+    protected def ensure(condition: Boolean, message: String): IO[Unit] =
+        IO.raiseUnless(condition)(RuntimeException(message))
+
+    protected def log(msg: String): IO[Unit] = IO.println(s"$Tag $msg")
 
     private def makeHome: IO[Path] = IO.blocking(Files.createTempDirectory("hydrozoa-e2e"))
 
@@ -431,6 +522,22 @@ end DockerHeadSuite
 
 object DockerHeadSuite:
 
+    /** The two ends of the L2 traffic a scenario sends: head-0, whose offline demo config carries
+      * the wallet, head id, and network needed to build and sign, and head-1's wallet, whose
+      * address every [[DockerHeadSuite.sendAda]] pays.
+      */
+    private[e2e] final case class L2Wallets(sender: DemoConfig.L2Demo, recipient: PeerWallet)
+
+    /** An L2 transaction a scenario submitted, and everything needed to recognize it afterwards: in
+      * a peer's utxo set (a `txIdHex` output at `destination`) and in its `/transactions` feed (the
+      * `request` head-0 assigned it).
+      */
+    private[e2e] final case class SentTransaction(
+        txIdHex: String,
+        request: RequestIdView,
+        destination: ShelleyAddress
+    )
+
     /** The devnet's host-mapped Blockfrost port (`docker-compose.yaci.yml`). */
     private val HostBlockfrostUrl = "http://localhost:18080/api/v1"
 
@@ -438,7 +545,10 @@ object DockerHeadSuite:
     private val MeshBlockfrostUrl = "http://yaci:8080/api/v1"
 
     private val TopupAda = 100_000L // ADA to head-0 on the devnet
-    private val SendAda = 2L // ADA moved head-0 → head-1 on L2
+    // ADA moved head-0 → head-1 per L2 send. `keygen-fleet` opens each head peer with 5 ADA
+    // (the `l2-cardano-eutxo.json` it writes), and a scenario may send several times off the same
+    // change chain, so this has to leave every change output above min-ADA to the last send.
+    private val SendAda = 1L
     private val RecentTxWindow = 50 // entries pulled from each peer's /transactions feed
 
     // Placeholder Blockfrost key for the keyless devnet — value is ignored (see `cli`).
