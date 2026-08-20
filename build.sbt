@@ -364,10 +364,10 @@ addCommandAlias(
   ";cardanoOnchain/scalafixAll --check ;petri/scalafixAll --check ;core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check"
 )
 
-// Test dependencies.
-// NB (sbt 2): bare (not `ThisBuild /`) for the same reason as `scalacOptions` above — otherwise the
-// framework is registered once per subproject (4×) in the shared ThisBuild scope.
-testFrameworks += new TestFramework("org.scalatest.tools.Framework")
+// No `testFrameworks` entry for ScalaTest: sbt's default list already carries it, as
+// `TestFramework(org.scalatest.tools.Framework, org.scalatest.tools.ScalaTestFramework)`. Adding it
+// again registers a *second* framework that resolves to the same runner, and sbt then runs every
+// suite once per entry — twice.
 
 // Tests are wall-clock/sleep-bound (real System timestamps in the cats-actors), so run more
 // suites concurrently than CPU cores to overlap the waits. sbt's default caps concurrency at the
