@@ -12,6 +12,11 @@ object RemoteL2ScreenerEvent:
       */
     final case class DepositRejected(reason: Option[String]) extends RemoteL2ScreenerEvent
 
+    /** The endpoint screened a transaction and rejected it (its `reason` is surfaced to the user as
+      * the [[hydrozoa.multisig.ledger.l2.L2ScreenError]] message).
+      */
+    final case class TxRejected(reason: Option[String]) extends RemoteL2ScreenerEvent
+
     /** The screening call failed at the transport level (connection refused, timeout, non-2xx,
       * undecodable body). Screening fails open — the request proceeds unscreened, exactly as if no
       * screener were configured — because a screening pass is advisory: the remote ledger re-runs

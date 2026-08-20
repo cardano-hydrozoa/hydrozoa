@@ -4,7 +4,7 @@ import cats.data.EitherT
 import cats.effect.IO
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.l2.{Destination, L2ScreenError, L2Screener}
-import hydrozoa.multisig.ledger.remote.RemoteL2ScreenerEvent.{DepositRejected, ScreenerUnavailable}
+import hydrozoa.multisig.ledger.remote.RemoteL2ScreenerEvent.{DepositRejected, ScreenerUnavailable, TxRejected}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
 import org.http4s.circe.CirceEntityDecoder.*
@@ -25,9 +25,10 @@ import scalus.uplc.builtin.ByteString
   * sidecar outage block the request path the way the mutation transport's retry-forever policy
   * would.
   *
-  * Transactions are not screened remotely yet: the endpoint's tx screen is an always-true stub, so
-  * calling it would spend a round trip per transaction for a guaranteed pass. [[screenTx]] becomes
-  * a real call once the endpoint gains the tx checks.
+  * A transaction ([[screenTx]]) and a deposit ([[screenDeposit]]) are screened the same way — one
+  * POST, the same verdict/transport asymmetry above — differing only in the endpoint and the
+  * request body: a transaction self-authenticates through its own witnesses, so its body is just
+  * the `l2Payload`, with none of the deposit's reference fields.
   */
 final class RemoteL2Screener(
     client: Client[IO],
@@ -37,27 +38,40 @@ final class RemoteL2Screener(
     import RemoteL2Screener.{*, given}
 
     override def screenTx(l2Payload: ByteString): EitherT[IO, L2ScreenError, Unit] =
-        EitherT.rightT[IO, L2ScreenError](())
+        screen(
+          screenerUri / "screen" / "tx",
+          screenTxBody(l2Payload),
+          TxRejected(_),
+          "transaction rejected by the remote screener",
+        )
 
     override def screenDeposit(req: L2Screener.ScreenDeposit): EitherT[IO, L2ScreenError, Unit] =
+        screen(
+          screenerUri / "screen" / "deposit",
+          req.asJson,
+          DepositRejected(_),
+          "deposit rejected by the remote screener",
+        )
+
+    /** POST a screening request and map its verdict: `ok: true` passes, `ok: false` is a rejection
+      * (traced via `rejected`, its reason surfaced as an [[L2ScreenError]]), and any transport
+      * failure fails open — unscreened — as documented on the class.
+      */
+    private def screen(
+        endpoint: Uri,
+        body: io.circe.Json,
+        rejected: Option[String] => RemoteL2ScreenerEvent,
+        defaultReason: String,
+    ): EitherT[IO, L2ScreenError, Unit] =
         EitherT(
           client
-              .expect[ScreenResponse](
-                Http4sRequest[IO](Method.POST, screenerUri / "screen" / "deposit")
-                    .withEntity(req.asJson)
-              )
+              .expect[ScreenResponse](Http4sRequest[IO](Method.POST, endpoint).withEntity(body))
               .flatMap {
                   case ScreenResponse(true, _) => IO.pure(Right(()))
                   case ScreenResponse(false, reason) =>
                       tracer
-                          .traceWith(DepositRejected(reason))
-                          .as(
-                            Left(
-                              L2ScreenError(
-                                reason.getOrElse("deposit rejected by the remote screener")
-                              )
-                            )
-                          )
+                          .traceWith(rejected(reason))
+                          .as(Left(L2ScreenError(reason.getOrElse(defaultReason))))
               }
               .handleErrorWith(cause => tracer.traceWith(ScreenerUnavailable(cause)).as(Right(())))
         )
@@ -106,5 +120,14 @@ object RemoteL2Screener {
               "refundDestination" -> r.refundDestination.asJson,
               "l2Payload" -> summon[io.circe.Encoder[ByteString]].apply(r.l2Payload)
             )
+    }
+
+    /** `POST /screen/tx` body: just the transaction's `l2Payload` (hex), the sole input the
+      * stateless tx screen needs — a transaction self-authenticates through its own witnesses, so
+      * it carries none of the deposit's reference fields. Mirrors the SugarRush `ScreenTxRequest`.
+      */
+    def screenTxBody(l2Payload: ByteString): io.circe.Json = {
+        import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
+        io.circe.Json.obj("l2Payload" -> summon[Encoder[ByteString]].apply(l2Payload))
     }
 }

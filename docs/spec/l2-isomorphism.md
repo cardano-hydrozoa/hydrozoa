@@ -223,13 +223,13 @@ divergence, not a spec change.
 - **Identity isomorphism is not yet byte-identical.** The toggle skips the pin check, but
   `L2Metadata.parse` still requires the label-4937 L2 metadata on every tx, so an unmodified L1 tx
   does not parse. Full identity isomorphism needs a metadata default for pin-less txs.
-- **`any-remote` screening covers deposits only, and only when configured.** With a
-  `remoteScreenerUri` in the node's private config, `RemoteL2Screener` posts each deposit to the
-  remote ledger's stateless screening endpoint (`POST /screen/deposit`) before a RequestId is
+- **`any-remote` screening is active only when configured.** With a `remoteScreenerUri` in the
+  node's private config, `RemoteL2Screener` posts each request to the remote ledger's stateless
+  screening endpoint — a deposit to `POST /screen/deposit`, a transaction to `POST /screen/tx`
+  (which decrypts the payload, parses it, and verifies its COSE signature) — before a RequestId is
   assigned; a rejection surfaces to the user, while a transport failure fails open (the request
   proceeds unscreened — the remote ledger still checks authoritatively at submission). Without the
-  URI, and for transactions in all cases (the endpoint's tx screen is an always-true stub), remote
-  screening remains a passthrough.
+  URI, remote screening remains a passthrough.
 - **`l2Ledger` and `identityIsomorphism` are pinned by the bootstrap tooling** to `cardano-eutxo`
   and `false` (`bootstrap/Bootstrap.scala`, `mkSharedHeadConfig`); surfacing them as bootstrap
   config fields is pending.

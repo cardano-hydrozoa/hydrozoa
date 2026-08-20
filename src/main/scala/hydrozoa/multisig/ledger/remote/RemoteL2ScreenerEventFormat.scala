@@ -13,6 +13,10 @@ object RemoteL2ScreenerEventFormat:
         e match {
             case DepositRejected(reason) =>
                 debug(s"Deposit rejected at screening: ${reason.getOrElse("(no reason given)")}")
+            case TxRejected(reason) =>
+                debug(
+                  s"Transaction rejected at screening: ${reason.getOrElse("(no reason given)")}"
+                )
             case ScreenerUnavailable(cause) =>
                 LogEvent(
                   Level.Warn,

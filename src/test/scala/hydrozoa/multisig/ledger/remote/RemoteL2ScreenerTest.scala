@@ -14,10 +14,12 @@ import scalus.cardano.address.Address
 import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, HashPurpose, TransactionInput, Value}
 import scalus.uplc.builtin.ByteString
 
-/** The screening client's two contracts: the wire shape of `POST /screen/deposit` (pinned against
-  * the golden JSON the SugarRush screener pins on its side,
-  * `screener/src/screen.rs::screen_deposit_request_golden`), and the verdict semantics — `ok:
-  * false` is a rejection, everything that is not a decodable 200 fails open as "unscreened".
+/** The screening client's contracts: the wire shape of `POST /screen/deposit` and `POST /screen/tx`
+  * (pinned against the golden JSON the SugarRush screener pins on its side,
+  * `screener/src/screen.rs::screen_deposit_request_golden` / `screen_tx_request_golden`), and the
+  * verdict semantics — `ok: false` is a rejection, everything that is not a decodable 200 fails
+  * open as "unscreened". Both endpoints share the verdict path, so the transaction cases pin that
+  * `screenTx` calls it the same way rather than re-covering every branch.
   */
 class RemoteL2ScreenerTest extends AnyFunSuite:
 
@@ -57,6 +59,8 @@ class RemoteL2ScreenerTest extends AnyFunSuite:
         assert(screenDeposit.asJson == expected)
     }
 
+    private val okJson = io.circe.Json.obj("ok" -> true.asJson)
+
     private def screenerAgainst(app: HttpApp[IO]): RemoteL2Screener =
         RemoteL2Screener(
           Client.fromHttpApp(app),
@@ -94,10 +98,32 @@ class RemoteL2ScreenerTest extends AnyFunSuite:
         assert(verdictOf(app) == Right(()))
     }
 
-    test("transactions are not screened remotely: no call is made") {
-        var called = false
-        val app = HttpApp[IO] { _ => IO { called = true } *> Ok(io.circe.Json.obj()) }
-        val verdict =
-            screenerAgainst(app).screenTx(ByteString.fromHex("cafebabe")).value.unsafeRunSync()
-        assert(verdict == Right(()) && !called)
+    test("the tx-screen body matches the golden JSON the SugarRush screener pins") {
+        val expected = io.circe.parser.parse("""{"l2Payload": "cafebabe"}""").toOption.get
+        assert(RemoteL2Screener.screenTxBody(ByteString.fromHex("cafebabe")) == expected)
+    }
+
+    private def txVerdictOf(app: HttpApp[IO]): Either[L2ScreenError, Unit] =
+        screenerAgainst(app).screenTx(ByteString.fromHex("cafebabe")).value.unsafeRunSync()
+
+    test("a tx-screen POST hits /screen/tx") {
+        var path = ""
+        val app = HttpApp[IO] { req => IO { path = req.uri.path.toString } *> Ok(okJson) }
+        assert(txVerdictOf(app) == Right(()) && path == "/screen/tx")
+    }
+
+    test("an ok tx verdict passes") {
+        assert(txVerdictOf(HttpApp[IO](_ => Ok(okJson))) == Right(()))
+    }
+
+    test("a tx rejection surfaces its reason as the L2ScreenError message") {
+        val app = HttpApp[IO](_ =>
+            Ok(io.circe.Json.obj("ok" -> false.asJson, "reason" -> "invalid signature".asJson))
+        )
+        assert(txVerdictOf(app) == Left(L2ScreenError("invalid signature")))
+    }
+
+    test("a tx transport failure fails open: unscreened, not rejected") {
+        val app = HttpApp[IO](_ => IO.raiseError(new RuntimeException("connection refused")))
+        assert(txVerdictOf(app) == Right(()))
     }
