@@ -1831,9 +1831,13 @@ three liaisons' outbox recover ([§6](#6-per-actor-recovery-contracts)).
   in-flight slow-side cell completes as replayed/live `HubHardAck` entries arrive —
   assert hard-confirmation still reaches `AllOf(head) ∧ coilQuorum`.
 
-**Testing strategy.** The automated coverage of these scenarios is not yet built: the
-model-based integration suites (stage1 / stage4) do not yet carry a **crash-restart
-action** that kills and reconstructs a peer from its store mid-run, and the
+**Testing strategy.** One black-box scenario is covered end to end:
+`DockerRecoveryTest` (see [`integration-stages.md`](integration-stages.md)) SIGKILLs a
+head peer of the shipped Docker deployment, keeps submitting while it is gone, restarts
+the container on its own volume, and asserts the head re-converges — a whole-node reboot
+against a real store and a real mesh. The rest is not yet built: the model-based
+integration suites (stage1 / stage4) do not yet carry a **crash-restart action** that
+kills and reconstructs a peer from its store mid-run, and the
 **observational-equivalence property** (*for any crash point, recovered committed state
 is observationally equivalent to the no-crash run*) is not yet asserted. The design of
 that coverage: a crash-restart action for **head, coil, and hub** peers asserting the
@@ -1859,7 +1863,9 @@ back, vote, and evacuate, and its write side is fully persisted. Outstanding bey
   loading them once on the rule-based handover ([§5.7](#57-the-recovery-priority-ladder-graceful-degradation))
   is not yet wired (`rulebased/persistence/Persistence.scala` is a stub).
 - **The crash-restart integration action and the observational-equivalence property test
-  are not yet built** ([§9](#9-failure-scenarios-recovery-handles)).
+  are not yet built** ([§9](#9-failure-scenarios-recovery-handles)). The black-box
+  `DockerRecoveryTest` covers a whole-node reboot, but not per-actor crash windows or
+  the equivalence property.
 
 ---
 

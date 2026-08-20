@@ -104,6 +104,14 @@ integration-e2e-docker:
   trap 'just notify "integration-e2e-docker"' EXIT
   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "Docker/publishLocal; stage; integration/testOnly hydrozoa.integration.e2e.DockerSmokeTest"
 
+# Heavy Docker crash-recovery test on the same shipped topology: forms the head, SIGKILLs head-1,
+# keeps submitting, then restarts it on its own store and asserts the head comes back whole. Needs
+# a running Docker; longer than the smoke test. See docs/spec/integration-stages.md.
+integration-e2e-docker-recovery:
+  #!/usr/bin/env bash
+  trap 'just notify "integration-e2e-docker-recovery"' EXIT
+  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "Docker/publishLocal; stage; integration/testOnly hydrozoa.integration.e2e.DockerRecoveryTest"
+
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
 export:
   #!/usr/bin/env bash
