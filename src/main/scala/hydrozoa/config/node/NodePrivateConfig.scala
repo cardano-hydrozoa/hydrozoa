@@ -14,6 +14,7 @@ final case class NodePrivateConfig(
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
     override val blockfrostApiKey: String,
     override val remoteLedgerUri: Option[String],
+    override val remoteScreenerUri: Option[String] = None,
     override val adminUsername: String,
     override val adminPassword: String,
     override val httpHost: String,
@@ -43,6 +44,12 @@ object NodePrivateConfig {
           * `cardano-eutxo` node runs its ledger in-process and omits it.
           */
         def remoteLedgerUri: Option[String] = nodePrivateConfig.remoteLedgerUri
+
+        /** HTTP URI of the remote ledger's screening endpoint (`l2Ledger = any-remote` only).
+          * Optional even then: a node without it screens nothing pre-RequestId (the passthrough
+          * behaviour every remote node had before the endpoint existed).
+          */
+        def remoteScreenerUri: Option[String] = nodePrivateConfig.remoteScreenerUri
 
         def adminUsername: String = nodePrivateConfig.adminUsername
 

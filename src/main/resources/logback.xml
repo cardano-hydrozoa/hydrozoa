@@ -58,6 +58,7 @@
     <logger name="RuleBasedActor" level="trace"/>
     <logger name="Limiter" level="trace"/>
     <logger name="RemoteL2Ledger" level="trace"/>
+    <logger name="RemoteL2Screener" level="trace"/>
     <logger name="HydrozoaHttp" level="trace"/>
     <logger name="CoilPeerWsTransport" level="trace"/>
     <logger name="HubWsTransport" level="trace"/>

@@ -126,3 +126,47 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
               && io.circe.parser.decode[RestoreResponse](json) == Right(response)
         )
     }
+
+    test(
+      "RegisterDeposit encodes to the golden wire form SugarRush pins (register_deposit_golden)"
+    ) {
+        import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+        import hydrozoa.multisig.ledger.block.BlockNumber
+        import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand}
+        import scalus.cardano.address.Address
+        import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, HashPurpose, TransactionInput, Value}
+
+        val refundAddress =
+            "addr1z9ryamhgnuz6lau86sqytte2gz5rlktv2yce05e0h3207qkwuyc0kwgcsnu6hcw94vt9nqevfw8axfnujtn6xsg6eq0q5u2up5"
+        val txIdHex = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+        val command = L2LedgerCommand.RegisterDeposit(
+          requestId = RequestId(HeadPeerNumber(0), 1L),
+          blockNumber = BlockNumber(100),
+          blockCreationStartTime = BigInt(1700000000),
+          depositId = TransactionInput(
+            transactionId =
+                Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(txIdHex)),
+            index = 0
+          ),
+          depositFee = Coin(2_000_000L),
+          depositL2Value = Value(Coin(10_000_000L)),
+          refundDestination = Destination(Address.fromBech32(refundAddress), None),
+          l2Payload = ByteString.fromHex("cafebabe")
+        )
+        val expected = io.circe.parser
+            .parse(
+              s"""{
+                 |  "requestId": 1,
+                 |  "blockNumber": 100,
+                 |  "blockCreationStartTime": 1700000000,
+                 |  "depositId": {"transaction_id": "$txIdHex", "index": 0},
+                 |  "depositFee": 2000000,
+                 |  "depositL2Value": {"assets": [{"asset": {"tag": "Ada"}, "value": 10000000}]},
+                 |  "refundDestination": {"address": "$refundAddress", "datum": null},
+                 |  "l2Payload": "cafebabe"
+                 |}""".stripMargin
+            )
+            .toOption
+            .get
+        assert(command.asJson == expected)
+    }
