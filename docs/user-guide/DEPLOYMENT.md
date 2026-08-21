@@ -201,6 +201,8 @@ period), `nodeOperationMultisigConfig` (rate limits, Cardano polling period),
 `blockfrostApiKey`, `adminUsername`, `adminPassword`, `httpHost`, `httpPort`. `remoteLedgerUri` is
 **optional and unused for the EUTXO ledger** — it is read only on the `any-remote` path, so an
 EUTXO node may omit it.
+`remoteScreenerUri` is read on the same path and only by a head peer, whose `RequestSequencer`
+screens each request before assigning it a RequestId; `keygen-fleet` omits it from coil configs.
 
 ### Generating a head's configuration
 

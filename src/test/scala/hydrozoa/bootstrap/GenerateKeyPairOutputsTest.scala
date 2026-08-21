@@ -112,6 +112,24 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
         }
     }
 
+    test("the screener uri survives a head fill and is dropped from a coil's") {
+        val head = GenerateKeyPair
+            .fillPrivateConfig(template, Role.Head, hex('1'), hex('a'))
+            .fold(e => fail(s"fill failed: $e"), identity)
+        val coil = GenerateKeyPair
+            .fillPrivateConfig(template, Role.Coil, hex('3'), hex('a'))
+            .fold(e => fail(s"fill failed: $e"), identity)
+
+        // The template has to carry it, or the head check passes vacuously.
+        val inTemplate = template.hcursor.downField("remoteScreenerUri").succeeded
+        val inHead = head.hcursor.downField("remoteScreenerUri").succeeded
+        val inCoil = coil.hcursor.downField("remoteScreenerUri").succeeded
+        // Only that field goes: the coil keeps its own ledger uri.
+        val coilKeepsLedgerUri = coil.hcursor.downField("remoteLedgerUri").succeeded
+
+        assert(inTemplate && inHead && !inCoil && coilKeepsLedgerUri)
+    }
+
     test("a coil-filled template decodes into an OwnCoilPeerPrivate identity") {
         given HeadPeers = headPeers
         given CoilPeers = coilPeers
