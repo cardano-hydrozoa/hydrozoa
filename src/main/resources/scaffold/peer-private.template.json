@@ -19,6 +19,7 @@
   },
   "blockfrostApiKey": "preview00000000000000000000000000000000",
   "remoteLedgerUri": "ws://127.0.0.1:3001/ws",
+  "remoteScreenerUri": "http://127.0.0.1:3003",
   "adminUsername": "admin",
   "adminPassword": "welcome",
   "httpHost": "0.0.0.0",

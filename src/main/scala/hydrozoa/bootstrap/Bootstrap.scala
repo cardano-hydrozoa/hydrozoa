@@ -814,7 +814,12 @@ object GenerateKeyPair:
         }
     } yield ()
 
-    /** Pure template edit shared with tests. */
+    /** Pure template edit shared with tests.
+      *
+      * A coil peer drops `remoteScreenerUri`: screening runs in the RequestSequencer, which only
+      * head peers have, so the field would sit in a coil's config describing an endpoint it never
+      * calls.
+      */
     private[bootstrap] def fillPrivateConfig(
         template: Json,
         role: Role,
@@ -831,10 +836,13 @@ object GenerateKeyPair:
         }
         for {
             obj <- template.asObject.toRight("template is not a JSON object")
-        } yield Json.fromJsonObject(
-          obj
-              .add("ownPeerPrivate", Json.obj(walletField -> mkWallet(vKeyHex, sKeyHex)))
-        )
+            withWallet = obj
+                .add("ownPeerPrivate", Json.obj(walletField -> mkWallet(vKeyHex, sKeyHex)))
+            filled = role match {
+                case Role.Head => withWallet
+                case Role.Coil => withWallet.remove("remoteScreenerUri")
+            }
+        } yield Json.fromJsonObject(filled)
     }
 
     private def mkHex(bytes: Array[Byte]): String = bytes.map("%02x".format(_)).mkString

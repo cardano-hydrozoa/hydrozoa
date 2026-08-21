@@ -231,6 +231,8 @@ divergence, not a spec change.
   assigned; a rejection surfaces to the user, while a transport failure fails open (the request
   proceeds unscreened — the remote ledger still checks authoritatively at submission). Without the
   URI, remote screening remains a passthrough.
+  Screening is head-only: it runs in `RequestSequencer`, which coil peers do not have, so
+  `keygen-fleet` writes `remoteScreenerUri` into head private configs and omits it from coils'.
 - **`l2Ledger` and `identityIsomorphism` are pinned by the bootstrap tooling** to `cardano-eutxo`
   and `false` (`bootstrap/Bootstrap.scala`, `mkSharedHeadConfig`); surfacing them as bootstrap
   config fields is pending.
