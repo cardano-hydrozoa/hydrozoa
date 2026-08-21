@@ -56,6 +56,13 @@ object ReplayActor:
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None
     )
 
+    private final case class Env(
+        persistence: Persistence[IO],
+        cardanoBackend: CardanoBackend[IO],
+        targets: Targets,
+        leadsFastBlock: BlockNumber => Boolean
+    )(using val section: CardanoNetwork.Section)
+
     /** Run the boot replay (see the object docstring), for either peer type. Pure over the store +
       * a one-shot L1 read; all effects are mailbox sends to `targets`. The fast side and the slow
       * side are now common to both peer types: the slow-side own-ack journal is the one
@@ -77,13 +84,14 @@ object ReplayActor:
         treasuryAddress: ShelleyAddress,
         leadsFastBlock: BlockNumber => Boolean
     )(using CardanoNetwork.Section): IO[Unit] =
+        given Env = Env(persistence, cardanoBackend, targets, leadsFastBlock)
         val backend = persistence.backend
         for
             markers <- Markers.derive(backend, own)
             // The slow-side own-ack journal is the one `PeerId`-keyed `HardAck` journal — both the
             // acked stack (the StackComposer/aggregator floor) and the in-flight handoff's own acks
             // come from it, for either peer type (§10 Q10).
-            ownAck <- recoverOwnAck(persistence, own, markers.hardConfirmed, markers.hardAcked)
+            ownAck <- recoverOwnAck(own, markers.hardConfirmed, markers.hardAcked)
             (hardAckedStack, inflight) = ownAck
             // Fail-safe (CR6/CR7): refuse to start on an inconsistent store (confirmed > acked).
             _ <- validateInvariants(
@@ -93,11 +101,11 @@ object ReplayActor:
               hardAckedStack
             )
             // 1. First L1 sample → BlockWeaver, so deposit decisions don't wait on the poll tick.
-            _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
+            _ <- seedFirstPollResults(treasuryAddress)
             // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA.
             _ <- inflight.traverse_(targets.slowConsensusActor ! _)
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
-            highWater <- recoverHighWater(persistence, markers.fastBlockMark)
+            highWater <- recoverHighWater(markers.fastBlockMark)
             cursors = ReplayCursors.derive(
               markers,
               peers,
@@ -113,9 +121,7 @@ object ReplayActor:
                   route(
                     _,
                     cursors.blockSpineForLedger.num,
-                    cursors.stackSpineForComposer.num,
-                    targets,
-                    leadsFastBlock
+                    cursors.stackSpineForComposer.num
                   )
                 )
             // 4. (Hub only) re-feed the received-but-unstamped coil-ack gap to CoilAckSequencer:
@@ -124,7 +130,7 @@ object ReplayActor:
             //    will never re-serve. Replaying it through the normal stamp path rebuilds the
             //    HubHardAck spine — the sequencer itself is a thin counter and does not scan.
             //    `coilAckSequencer` is present only on a hub, so this is a no-op off a hub.
-            _ <- targets.coilAckSequencer.traverse_(replayCoilAckGap(persistence, coils, _))
+            _ <- targets.coilAckSequencer.traverse_(replayCoilAckGap(coils, _))
         yield ()
 
     /** Re-feed each coil's received-but-unstamped hard-ack tail to `CoilAckSequencer`. The gap
@@ -134,10 +140,11 @@ object ReplayActor:
       * coil peer — each coil's journal is its own CF and its `CoilStampMark` is its own floor.
       */
     private def replayCoilAckGap(
-        persistence: Persistence[IO],
         coils: List[CoilPeerNumber],
         coilAckSequencer: CoilAckSequencer.Handle
-    )(using CardanoNetwork.Section): IO[Unit] =
+    )(using env: Env): IO[Unit] =
+        import env.persistence
+        given CardanoNetwork.Section = env.section
         persistence.get(StoreKey.CoilStampMark).map(_.getOrElse(Map.empty)).flatMap { marks =>
             coils.traverse_ { coil =>
                 val from = marks.get(coil).fold(HardAckNumber.zero)(_.increment)
@@ -155,18 +162,18 @@ object ReplayActor:
       * `PeerId`-keyed `HardAck` journal, so `own: PeerId` works for both peer types (§10 Q10).
       */
     private def recoverOwnAck(
-        persistence: Persistence[IO],
         own: PeerId,
         hardConfirmed: Option[StackNumber],
         hardAcked: Option[HardAckNumber]
     )(using
-        CardanoNetwork.Section
+        env: Env
     ): IO[(Option[StackNumber], Option[SlowConsensusActor.StackHandoff])] =
+        import env.persistence
         for
             hardAckedStack <- hardAcked.traverse(n =>
                 persistence.getOrFail(JournalKey.HardAck(own, n)).map(_.payload.stackNum)
             )
-            inflight <- reconstructInflightHandoff(persistence, own, hardConfirmed, hardAckedStack)
+            inflight <- reconstructInflightHandoff(own, hardConfirmed, hardAckedStack)
         yield (hardAckedStack, inflight)
 
     /** Boot-time consistency fail-safe (CR6/CR7): a confirmed mark must never exceed its acked mark
@@ -198,15 +205,12 @@ object ReplayActor:
         )
 
     /** Read L1 directly and send BlockWeaver the first [[PollResults]] (§5.5). */
-    private def seedFirstPollResults(
-        cardanoBackend: CardanoBackend[IO],
-        treasuryAddress: ShelleyAddress,
-        blockWeaver: BlockWeaver.Handle
-    ): IO[Unit] =
+    private def seedFirstPollResults(treasuryAddress: ShelleyAddress)(using env: Env): IO[Unit] =
+        import env.{cardanoBackend, targets}
         cardanoBackend.utxosAt(treasuryAddress).flatMap {
             case Left(err) =>
                 IO.raiseError(new RuntimeException(s"ReplayActor L1 sample failed: $err"))
-            case Right(utxos) => blockWeaver ! PollResults(utxos.keySet)
+            case Right(utxos) => targets.blockWeaver ! PollResults(utxos.keySet)
         }
 
     /** Reconstruct the handoff for the in-flight stack — the last own-acked stack, **iff** it is
@@ -217,16 +221,16 @@ object ReplayActor:
       * not reconstructed.
       */
     private def reconstructInflightHandoff(
-        persistence: Persistence[IO],
         own: PeerId,
         hardConfirmed: Option[StackNumber],
         hardAckedStack: Option[StackNumber]
-    )(using CardanoNetwork.Section): IO[Option[SlowConsensusActor.StackHandoff]] =
+    )(using env: Env): IO[Option[SlowConsensusActor.StackHandoff]] =
+        import env.persistence
         hardAckedStack match
             case Some(stackNum) if hardConfirmed.forall(Ordering[StackNumber].lt(_, stackNum)) =>
                 for
                     unsigned <- persistence.getOrFail(StoreKey.UnsignedStack(stackNum))
-                    ownAcks <- ownHardAcksForStack(persistence, own, stackNum)
+                    ownAcks <- ownHardAcksForStack(own, stackNum)
                 yield Some(SlowConsensusActor.StackHandoff(unsigned, ownAcks))
             case _ => IO.pure(None)
 
@@ -234,11 +238,11 @@ object ReplayActor:
       * own-keyed `HardAck` lane scanned and filtered by the ack's `stackNum`. `own: PeerId`, so it
       * serves both peer types.
       */
-    private def ownHardAcksForStack(
-        persistence: Persistence[IO],
-        own: PeerId,
-        stackNum: StackNumber
-    )(using CardanoNetwork.Section): IO[List[HardAck]] =
+    private def ownHardAcksForStack(own: PeerId, stackNum: StackNumber)(using
+        env: Env
+    ): IO[List[HardAck]] =
+        import env.persistence
+        given CardanoNetwork.Section = env.section
         val k = JournalKey.HardAck(own, HardAckNumber.zero)
         JournalScan
             .scan(persistence.backend, k)
@@ -248,15 +252,12 @@ object ReplayActor:
       * floor source, §5.3), or empty for a cold store. Both peer types anchor the request
       * high-water on `max(BlockResult)`.
       */
-    private def recoverHighWater(
-        persistence: Persistence[IO],
-        fastBlockMark: Option[BlockNumber]
-    )(using
-        @scala.annotation.unused section: CardanoNetwork.Section
+    private def recoverHighWater(fastBlockMark: Option[BlockNumber])(using
+        env: Env
     ): IO[Map[HeadPeerNumber, RequestNumber]] =
         fastBlockMark match
             case None    => IO.pure(Map.empty)
-            case Some(b) => persistence.getOrFail(StoreKey.RequestHighWater(b))
+            case Some(b) => env.persistence.getOrFail(StoreKey.RequestHighWater(b))
 
     /** Route one decoded lane entry into the reading actor's mailbox. Journal-agnostic (shared by
       * both peer types in [[replay]]): spines fan out to two roles, sliced by the ledger floor (the
@@ -272,10 +273,10 @@ object ReplayActor:
     private def route(
         entry: RawJournalEntry,
         blockLedgerFloor: BlockNumber,
-        stackComposerFloor: StackNumber,
-        targets: Targets,
-        leadsFastBlock: BlockNumber => Boolean
-    )(using CardanoNetwork.Section): IO[Unit] =
+        stackComposerFloor: StackNumber
+    )(using env: Env): IO[Unit] =
+        import env.{leadsFastBlock, targets}
+        given CardanoNetwork.Section = env.section
         entry.key match
             case k: JournalKey.Request =>
                 targets.blockWeaver ! k.decodeValue(entry.framed).payload

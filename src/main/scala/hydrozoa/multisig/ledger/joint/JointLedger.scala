@@ -53,23 +53,18 @@ final case class JointLedger(
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
-    /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section`); expose it as a
-      * given so the typed `WriteBatch.put` calls in [[persistOwnAckBundle]] pick it up.
-      */
-    private given CardanoNetwork.Section = config
+    private given env: Env = Env(config, l2Ledger, tracer, persistence, metrics)
 
     /** Typed sub-tracers for the polymorphic `BlockHeader.nextHeader*` /
       * `TxTiming.blockCanStayMinor` pure functions. Their events flow through the JL tracer wrapped
       * as `JointLedgerEvent.HeaderEvent` / `JointLedgerEvent.TimingEvent`.
       */
     private val bhTracer: ContraTracer[IO, BlockHeaderEvent] =
-        tracer.contramap(JointLedgerEvent.HeaderEvent.apply)
+        env.tracer.contramap(JointLedgerEvent.HeaderEvent.apply)
     private val tmTracer: ContraTracer[IO, TxTimingEvent] =
-        tracer.contramap(JointLedgerEvent.TimingEvent.apply)
+        env.tracer.contramap(JointLedgerEvent.TimingEvent.apply)
     private val dmTracer: ContraTracer[IO, DepositsMapEvent] =
-        tracer.contramap(JointLedgerEvent.DepositsEvent.apply)
-
-    private val connections = Ref.unsafe[IO, Option[Connections]](None)
+        env.tracer.contramap(JointLedgerEvent.DepositsEvent.apply)
 
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](JointLedger.State.initialize(config))
@@ -109,36 +104,18 @@ final case class JointLedger(
         tracer.traceWith(JointLedgerEvent.L2CommandFailed(message)) *>
             IO.raiseError(new RuntimeException(message))
 
-    private def getConnections: IO[Connections] = for {
-        mConn <- this.connections.get
-        conn <- mConn.fold(
-          IO.raiseError(
-            IllegalStateException(
-              "Joint ledger is missing its connections to other actors."
-            )
-          )
-        )(IO.pure)
-    } yield conn
-
-    private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: HeadMultisigRegimeManager.PendingConnections =>
-            for {
-                _connections <- x.get
-                _ <- connections.set(
-                  Some(
-                    Connections(
-                      fastConsensusActor = _connections.consensusActor,
-                      stackComposer = _connections.stackComposer,
-                      headPeerLiaisons = _connections.headPeerLiaisons,
-                      coilRelay = _connections.coilRelay
-                    )
-                  )
+    private def initializeConnections: IO[Env.Connected] = {
+        val connections: IO[Connections] =
+            HeadMultisigRegimeManager.resolveConnections(pendingConnections)(c =>
+                Connections(
+                  fastConsensusActor = c.consensusActor,
+                  stackComposer = c.stackComposer,
+                  headPeerLiaisons = c.headPeerLiaisons,
+                  coilRelay = c.coilRelay
                 )
-            } yield ()
-        case x: JointLedger.Connections => connections.set(Some(x))
+            )
+        connections.map(summon[Env].connected)
     }
-
-    // TODO: Refactor to use "become" and use different receive functions
 
     /** Get _only_ a [[Producing]] State or throw an exception QUESTION: What type of exception
       * should this be?
@@ -175,11 +152,23 @@ final case class JointLedger(
     override def preStart: IO[Unit] =
         context.self ! Requests.PreStart
 
-    override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction(receiveTotal)
+    override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
+        case Requests.PreStart =>
+            for {
+                // Suspends on the start barrier, so connections are in place before any real
+                // message is processed.
+                given Env.Connected <- initializeConnections
+                _ <- recoverPassiveState
+                _ <- context.become(PartialFunction.fromFunction(receiveConnected))
+            } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
+    }
 
-    private def receiveTotal(req: Requests.Request): IO[Unit] =
+    private def receiveConnected(req: Requests.Request)(using Env.Connected): IO[Unit] =
         req match {
-            case Requests.PreStart       => preStartLocal
+            case Requests.PreStart =>
+                IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
             case e: UserRequestWithId    => applyUserRequestWithId(e)
             case s: StartBlock           => startBlock(s)
             case c: CompleteBlockRegular => completeBlockRegular(c)
@@ -190,9 +179,8 @@ final case class JointLedger(
                 }
         }
 
-    private def preStartLocal: IO[Unit] =
+    private def recoverPassiveState: IO[Unit] =
         for {
-            _ <- initializeConnections
             // On a non-empty store restore the passive `Done` and co-anchor the L2 ledger to the
             // fast anchor. A cold start (empty store) keeps `State.initialize` here, but still
             // co-anchors the ledger at command zero and verifies its initial evacuation map. The
@@ -446,7 +434,7 @@ final case class JointLedger(
     /** Complete a Minor or Major block. */
     private def completeBlockRegular(
         args: CompleteBlockRegular
-    ): IO[Unit] = {
+    )(using Env.Connected): IO[Unit] = {
         import args.*
         unsafeGetProducing.flatMap { p =>
             // Coil peers classify deposit existence from the head peers' soft-confirmed view
@@ -627,7 +615,7 @@ final case class JointLedger(
     // If the produced block is NOT equal to a passed reference block, then:
     //   - Consensus is broken
     //   - Send a panic to the multisig regime manager in a suicide note
-    def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
+    def completeBlockFinal(args: CompleteBlockFinal)(using Env.Connected): IO[Unit] = {
         import args.*
         unsafeGetProducing.flatMap { p =>
             for {
@@ -692,9 +680,9 @@ final case class JointLedger(
         brief: BlockBrief.Next,
         localFinalization: LocalFinalizationTrigger,
         blockResult: BlockResult
-    ): IO[Unit] =
+    )(using env: Env.Connected): IO[Unit] =
+        val conn = env.connections
         for {
-            conn <- getConnections
             // The block's brief is produced here (this peer's own when leading, or a reproduction
             // when following) — close the lead/replay lifecycle clock.
             _ <- IO(metrics.onBlockProduced((brief.blockNum: Int).toLong, brief.requests.size))
@@ -932,6 +920,24 @@ object JointLedger {
     type Handle = ActorRef[IO, Requests.Request]
 
     type Config = HeadConfig.Section & OwnPeerPrivate.Section
+
+    private final case class Env(
+        config: Config,
+        l2Ledger: L2Ledger[IO],
+        tracer: ContraTracer[IO, JointLedgerEvent],
+        persistence: Persistence[IO],
+        metrics: PeerMetrics
+    ) extends CardanoNetwork.Section {
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+    }
+
+    private object Env {
+
+        final class Connected(env: Env, val connections: Connections) {
+            export env.*
+        }
+    }
 
     final case class Connections(
         fastConsensusActor: FastConsensusActor.Handle,
