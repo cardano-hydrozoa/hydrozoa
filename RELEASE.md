@@ -93,8 +93,14 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    git push origin vX.Y.Z
    ```
 
-6. **Watch the release workflow** (Actions → Release). It publishes three tags:
-   `ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z`, `:X.Y`, and `:latest`.
+6. **Watch the release workflow** (Actions → Release). It publishes three tags —
+   `ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z`, `:X.Y`, and `:latest` — each a multi-arch manifest,
+   and then appends a **Container image** section to the GitHub release notes with the pull command
+   and the digest.
+
+   That last step needs the release to exist. Create it (from the tag, with the generated changelog)
+   before or shortly after pushing the tag; if the workflow runs first it logs that it skipped, and
+   re-running it links the image. It never appends twice.
 
 7. **Verify** the published image:
 
@@ -125,8 +131,11 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
   — without it `git describe` only considers annotated tags and falls back to an older one. The
   release version proper is the `hydrozoa X.Y.Z` line (from `build.sbt`), so this is provenance
   detail, not a mismatch.
-- **Architecture.** The image is currently linux/amd64 only. Multi-arch (adding linux/arm64 via
-  buildx) is a future improvement — it needs the native deps (blst-java, rocksdbjni) verified on
-  arm64 first.
+- **Architecture.** The image is a multi-arch manifest covering **linux/amd64** and
+  **linux/arm64**. No separate build is needed for arm64: the staged context is JVM bytecode, the
+  base image (`eclipse-temurin:25-jre`) is multi-arch, and both native dependencies ship aarch64
+  objects inside the same jars — `blst-java` as `supranational/blst/Linux/aarch64/libblst.so`,
+  `rocksdbjni` as `librocksdbjni-linux-aarch64.so`. The generated Dockerfile's only `RUN` steps are
+  `chmod` and `useradd` over 168 files, so QEMU emulation costs seconds rather than a rebuild.
 - **No pre-release automation.** Only `v*` tags publish. Ordinary `main` pushes and PRs run checks
   only (`.github/workflows/ci.yml`).
