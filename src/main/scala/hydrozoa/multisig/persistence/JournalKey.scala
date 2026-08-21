@@ -7,6 +7,7 @@ import hydrozoa.multisig.consensus.transport.Codecs.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.persistence.codec.RequestRecordCodec
 import java.nio.ByteBuffer
 
 /** A full addressable entry key in the persistence layer — a [[JournalId]] paired with the
@@ -67,10 +68,16 @@ object JournalKey:
         def journalId: JournalId = JournalId.StackSpine
         def encode: Array[Byte] = intBytes(num)
 
-    /** Request satellite (per author): the assigned user request, keyed by `(peer, requestNum)`. */
+    /** Request satellite (per author): the assigned user request, keyed by `(peer, requestNum)`.
+      *
+      * The only journal whose payload is not the circe wire form: it stores the canonical protobuf
+      * record declared in `proto/request_record.proto`, because this lane is written on the
+      * admission hot path and read by the L2 ledger process in another language.
+      */
     final case class Request(peer: HeadPeerNumber, num: RequestNumber) extends JournalKey:
         type Value = JournalValue[UserRequestWithId]
-        given codec: StoreCodec[Value] = StoreCodec.journalValue[UserRequestWithId]
+        given codec: StoreCodec[Value] =
+            StoreCodec.journalFramed(RequestRecordCodec.encode, RequestRecordCodec.decode)
         def journalId: JournalId = JournalId.Request(peer)
         def encode: Array[Byte] = longBytes(num)
 

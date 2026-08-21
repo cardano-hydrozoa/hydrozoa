@@ -130,6 +130,13 @@ lazy val core: Project = (project in file("."))
     .enablePlugins(JavaAppPackaging, DockerPlugin, BuildInfoPlugin)
     .dependsOn(cardanoOnchain)
     .settings(
+      // Generate the Request journal's record from `proto/request_record.proto` into src_managed.
+      // sbt-protoc's default protoc (3.21.7) is dynamically linked and will not start in a lean
+      // container; 3.25.8 ships self-contained. Everything here resolves from Maven like any other
+      // dependency — nothing is added to the flake.
+      PB.protocVersion := "3.25.8",
+      Compile / PB.protoSources := Seq(baseDirectory.value / "proto"),
+      Compile / PB.targets := Seq(scalapb.gen() -> (Compile / sourceManaged).value / "scalapb"),
       Compile / mainClass := Some("hydrozoa.app.Main"),
       // Name the packaged launcher `hydrozoa`, and generate only the dispatcher's script (not
       // forwarder scripts for every other discovered main); every command is a `hydrozoa <sub>`.
@@ -258,6 +265,8 @@ lazy val core: Project = (project in file("."))
         "com.monovore" %% "decline-effect" % "2.6.2",
         // RocksDB (persistence layer)
         "org.rocksdb" % "rocksdbjni" % "9.7.3",
+        // ScalaPB runtime, for the code generated from `proto/`. Pulls protobuf-java itself.
+        "com.thesamet.scalapb" %% "scalapb-runtime" % "1.0.0-alpha.6",
       ),
       libraryDependencies ++= Seq(
         "org.typelevel" %% "spire-laws" % "0.18.0" % Test,

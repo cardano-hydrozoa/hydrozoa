@@ -443,7 +443,15 @@ object RemoteL2Ledger {
         config: Config,
         tracer: ContraTracer[IO, RemoteL2LedgerEvent],
         requestTimeout: FiniteDuration = 5.seconds,
-        restoreTimeout: FiniteDuration = 10.minutes,
+        // A remote ledger answers a Restore by replaying its **whole** event log — there is no
+        // snapshot — so this bound has to exceed a full rebuild, and a rebuild grows linearly with
+        // the head's lifetime. Measured 2026-08-20 on the production box: ~8 minutes over ~42M
+        // events, growing ~2-3 minutes per day at that traffic. The old 10-minute default was
+        // therefore about two minutes from expiring, and an expiry here is terminal: `restoreTo`
+        // is deliberately not retried (a retry restarts the rebuild), and every boot calls it, so
+        // the node simply fails to start. Raised to leave room while the log keeps growing;
+        // the real fix is a ledger snapshot, which makes the rebuild bounded instead of linear.
+        restoreTimeout: FiniteDuration = 60.minutes,
         initialBackoff: FiniteDuration = 1.second,
         maxBackoff: FiniteDuration = 30.seconds,
     ): Resource[IO, RemoteL2Ledger] =

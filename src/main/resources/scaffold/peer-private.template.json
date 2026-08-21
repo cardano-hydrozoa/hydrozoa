@@ -10,11 +10,11 @@
   },
   "nodeOperationMultisigConfig": {
     "cardanoLiaisonPollingPeriod": 20000,
-    "peerLiaisonMaxRequestsPerBatch": 42,
+    "peerLiaisonMaxRequestsPerBatch": 500,
     "peerLiaisonResendInterval": 5000,
     "rateLimits": {
-      "softBlockMinPeriod": 250,
-      "hardStackMinPeriod": 180000
+      "softBlockMinPeriod": 100,
+      "hardStackMinPeriod": 30000
     }
   },
   "blockfrostApiKey": "preview00000000000000000000000000000000",
