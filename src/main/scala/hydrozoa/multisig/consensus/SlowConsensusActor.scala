@@ -64,13 +64,8 @@ final case class SlowConsensusActor(
 ) extends Actor[IO, SlowConsensusActor.Request] {
     import SlowConsensusActor.*
 
-    /** `config` is a `CardanoNetwork.Section` transitively; expose it as a given so the typed
-      * `WriteBatch.put` / `Persistence.write` calls used by [[persistHardConfirmation]] pick it up
-      * implicitly.
-      */
-    private given CardanoNetwork.Section = config
+    private given env: Env = Env(config, persistence, tracer, metrics)
 
-    private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val stateRef = Ref.unsafe[IO, State](State.initial)
 
     private lazy val allHeadPeers: Set[PeerId] =
@@ -110,7 +105,9 @@ final case class SlowConsensusActor(
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
-                _ <- initializeConnections
+                // Suspends on the start barrier, so connections are in scope before any real
+                // message is processed.
+                given Env.Connected <- initializeConnections
                 // This actor's base: the highest stack it hard-confirmed. Without it
                 // `lastConfirmed` stays `None`, the surplus guard in `handleRemoteHardAck` is
                 // inert, and replayed remote acks for confirmed stacks are `bufferOrphan`ed rather
@@ -119,12 +116,24 @@ final case class SlowConsensusActor(
                 // retain every remote ack the head ever produced, on every restart.
                 hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
                 _ <- stateRef.update(_.withLastConfirmed(hardConfirmed))
+                _ <- context.become(reactive)
             } yield ()
-        case h: StackHandoff =>
-            handleStackHandoff(h)
-        case h: HardAck =>
-            handleRemoteHardAck(h)
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
     }
+
+    /** The post-barrier handler: `connections` are resolved, so this and every method it calls run
+      * `using Env.Connected`.
+      */
+    private def reactive(using Env.Connected): Receive[IO, Request] =
+        PartialFunction.fromFunction {
+            case PreStart =>
+                IO.raiseError(RuntimeException("Unexpected PreStart after connections resolved"))
+            case h: StackHandoff =>
+                handleStackHandoff(h)
+            case h: HardAck =>
+                handleRemoteHardAck(h)
+        }
 
     // ===================================
     // Handoff (own acks) — create the cell, broadcast round-1 / sole, replay orphans
@@ -135,7 +144,7 @@ final case class SlowConsensusActor(
       *   - `Regular` with an unlock ([[PartitionEffects.unlock]] `Some`) ⇒ 2-phase.
       *   - `Regular` with no unlock (all-`Minor`) ⇒ sole / 1-phase.
       */
-    private def handleStackHandoff(h: StackHandoff): IO[Unit] =
+    private def handleStackHandoff(h: StackHandoff)(using Env.Connected): IO[Unit] =
         val stackNum = h.unsigned.stackNum
         val ownPeer: PeerId = config.ownPeerId
 
@@ -192,7 +201,7 @@ final case class SlowConsensusActor(
         unsigned: Stack.Unsigned,
         ownR1: (HardAck, HardAck.Payload.Round1),
         ownR2: HardAck
-    ): IO[Unit] = for {
+    )(using Env.Connected): IO[Unit] = for {
         _ <- ackVerifier.verify2PhaseRound1(unsigned, ownPeer, ownR1._2)
         ownR2p <- round2PayloadOf(ownR2)
         _ <- ackVerifier.verify2PhaseRound2(unsigned, ownPeer, ownR2p)
@@ -219,7 +228,7 @@ final case class SlowConsensusActor(
         ownPeer: PeerId,
         unsigned: Stack.Unsigned,
         ownSole: (HardAck, HardAck.SolePayload)
-    ): IO[Unit] = for {
+    )(using Env.Connected): IO[Unit] = for {
         _ <- ackVerifier.verifySole(unsigned, ownPeer, ownSole._2)
         _ <- putCell(
           stackNum,
@@ -240,7 +249,7 @@ final case class SlowConsensusActor(
     // Remote acks
     // ===================================
 
-    private def handleRemoteHardAck(h: HardAck): IO[Unit] =
+    private def handleRemoteHardAck(h: HardAck)(using Env.Connected): IO[Unit] =
         if h.peerId == config.ownPeerId then
             // Our own hard-ack echoed back on the `HubHardAckLane`: a hub re-publishes a coil
             // peer's acks to every coil peer it serves, the author included (filtering would
@@ -326,25 +335,28 @@ final case class SlowConsensusActor(
     // Advancement: round-1 → round-2 release, and completion
     // ===================================
 
-    private def tryAdvance(stackNum: StackNumber): IO[Unit] = stateRef.get.flatMap { s =>
-        s.cells.get(stackNum) match {
-            case Some(c: Cell.WaitingRound1) if isSaturated(c.round1.keySet) =>
-                completeRound1(stackNum, c)
-            // The two rounds are independent — they sign different txs (round-1 effects vs the
-            // round-2 unlock), each validated on its own against the threshold script. Round 2
-            // completes once the round-2 set is saturated by itself; round 1 is already saturated
-            // (we only reach WaitingRound2 after completeRound1). Each round's coil quorum is chosen
-            // independently, so a peer that signed round 1 cannot withhold round 2 to block the
-            // stack while other coil peers satisfy the round-2 quorum.
-            case Some(c: Cell.WaitingRound2) if isSaturated(c.round2.keySet) =>
-                completeStack(stackNum, c)
-            case Some(c: Cell.WaitingSole) if isSaturated(c.sole.keySet) =>
-                completeStack(stackNum, c)
-            case _ => IO.unit
+    private def tryAdvance(stackNum: StackNumber)(using Env.Connected): IO[Unit] =
+        stateRef.get.flatMap { s =>
+            s.cells.get(stackNum) match {
+                case Some(c: Cell.WaitingRound1) if isSaturated(c.round1.keySet) =>
+                    completeRound1(stackNum, c)
+                // The two rounds are independent — they sign different txs (round-1 effects vs the
+                // round-2 unlock), each validated on its own against the threshold script. Round 2
+                // completes once the round-2 set is saturated by itself; round 1 is already saturated
+                // (we only reach WaitingRound2 after completeRound1). Each round's coil quorum is chosen
+                // independently, so a peer that signed round 1 cannot withhold round 2 to block the
+                // stack while other coil peers satisfy the round-2 quorum.
+                case Some(c: Cell.WaitingRound2) if isSaturated(c.round2.keySet) =>
+                    completeStack(stackNum, c)
+                case Some(c: Cell.WaitingSole) if isSaturated(c.sole.keySet) =>
+                    completeStack(stackNum, c)
+                case _ => IO.unit
+            }
         }
-    }
 
-    private def completeRound1(stackNum: StackNumber, c: Cell.WaitingRound1): IO[Unit] = for {
+    private def completeRound1(stackNum: StackNumber, c: Cell.WaitingRound1)(using
+        Env.Connected
+    ): IO[Unit] = for {
         _ <- tracer.traceWith(SlowConsensusActorEvent.Round1Confirmed(stackNum))
         ownPeer = config.ownPeerId
         ownR2Payload <- round2PayloadOf(c.ownRound2)
@@ -370,36 +382,38 @@ final case class SlowConsensusActor(
     private def completeStack(
         stackNum: StackNumber,
         cell: Cell.WaitingRound2 | Cell.WaitingSole
-    ): IO[Unit] = for {
-        conn <- getConnections
+    )(using env: Env.Connected): IO[Unit] = {
+        import env.connections
         // Pick each round's signer set independently and restrict the cell to it, so a round's txs
-        // carry exactly that round's quorum (head peers + `coilQuorum` coil peers) — the round-1
-        // and round-2 coil subsets need not coincide.
-        selection = selectSigners(cell)
-        (restricted, txSigners, _) = selection
-        vkeys <- txSigners
-            .traverse(p => ackVerifier.resolvePeerVKey(p).map(p -> _))
-            .map(_.toMap)
-        wmap = ackAggregator.aggregateTxSignatures(restricted, vkeys)
-        // Align SEC sig slots to ALL peers (heads ++ all coils, sorted), not the selected quorum:
-        // the `restricted` cell yields a sig only for a selected signer, so non-selected coils fall
-        // through to `None` at their own index — which is what the dispute script's positional
-        // coil-signature check requires.
-        evac = ackAggregator.collectSecSignatures(restricted, allSecPeers)
-        signed <- ackAggregator.attachWitnesses(restricted.unsigned, wmap, evac)
-        hardConfirmed = Stack.HardConfirmed(restricted.unsigned.brief, signed)
-        _ <- persistHardConfirmation(stackNum, restricted.unsigned.brief, signed)
-        _ <- conn.cardanoLiaison ! hardConfirmed
-        _ <- conn.stackComposer ! hardConfirmed
-        _ <- stateRef.update(_.dropCell(stackNum))
-        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
-        // Peer stats (docs/spec/peer-stats-endpoint.md): count the stack and the blocks it absorbed.
-        blocksAbsorbed = (hardConfirmed.brief.lastBlockNum: Int) -
-            (hardConfirmed.brief.firstBlockNum: Int) + 1
-        _ <- IO.realTime.flatMap(t =>
-            IO(metrics.onStackConfirmed(stackNum, blocksAbsorbed, t.toMillis))
-        )
-    } yield ()
+        // carry exactly that round's quorum (head peers + `coilQuorum` coil peers) — the round-1 and
+        // round-2 coil subsets need not coincide.
+        val (restricted, txSigners, _) = selectSigners(cell)
+        for {
+            vkeys <- txSigners
+                .traverse(p => ackVerifier.resolvePeerVKey(p).map(p -> _))
+                .map(_.toMap)
+            wmap = ackAggregator.aggregateTxSignatures(restricted, vkeys)
+            // Align SEC sig slots to ALL peers (heads ++ all coils, sorted), not the selected
+            // quorum: the `restricted` cell yields a sig only for a selected signer, so non-selected
+            // coils fall through to `None` at their own index — which is what the dispute script's
+            // positional coil-signature check requires.
+            evac = ackAggregator.collectSecSignatures(restricted, allSecPeers)
+            signed <- ackAggregator.attachWitnesses(restricted.unsigned, wmap, evac)
+            hardConfirmed = Stack.HardConfirmed(restricted.unsigned.brief, signed)
+            _ <- persistHardConfirmation(stackNum, restricted.unsigned.brief, signed)
+            _ <- connections.cardanoLiaison ! hardConfirmed
+            _ <- connections.stackComposer ! hardConfirmed
+            _ <- stateRef.update(_.dropCell(stackNum))
+            _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
+            // Peer stats (docs/spec/peer-stats-endpoint.md): count the stack and the blocks it
+            // absorbed.
+            blocksAbsorbed = (hardConfirmed.brief.lastBlockNum: Int) -
+                (hardConfirmed.brief.firstBlockNum: Int) + 1
+            _ <- IO.realTime.flatMap(t =>
+                IO(metrics.onStackConfirmed(stackNum, blocksAbsorbed, t.toMillis))
+            )
+        } yield ()
+    }
 
     /** Persist the full multisigned `HardConfirmation` record for the just-confirmed stack — the §6
       * SCA contract write, and the **R10 evacuation floor** the rule-based regime later reads on
@@ -474,12 +488,12 @@ final case class SlowConsensusActor(
 
     // Broadcast our own hard-ack to the head-peer mesh (on a head peer) or up to the hub (on a coil
     // peer), and (on a hub) to CoilRelay so our coil peers receive it.
-    private def broadcast(ack: HardAck): IO[Unit] =
-        getConnections.flatMap { conn =>
-            (conn.headPeerLiaisons ! ack).parallel >>
-                conn.coilUplink.traverse_(_ ! ack) >>
-                conn.coilRelay.traverse_(_ ! ack)
-        }
+    private def broadcast(ack: HardAck)(using env: Env.Connected): IO[Unit] = {
+        import env.connections
+        (connections.headPeerLiaisons ! ack).parallel >>
+            connections.coilUplink.traverse_(_ ! ack) >>
+            connections.coilRelay.traverse_(_ ! ack)
+    }
 
     private def putCell(stackNum: StackNumber, cell: Cell): IO[Unit] =
         stateRef.update(s => s.copy(cells = s.cells.updated(stackNum, cell)))
@@ -498,32 +512,20 @@ final case class SlowConsensusActor(
         _ <- orphans.traverse_(applyRemote)
     } yield ()
 
-    private def getConnections: IO[Connections] = for {
-        mConn <- connections.get
-        conn <- mConn.liftTo[IO](
-          IllegalStateException("SlowConsensusActor is missing its connections to other actors.")
-        )
-    } yield conn
-
-    private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: HeadMultisigRegimeManager.PendingConnections =>
-            for {
-                c <- x.get
-                _ <- connections.set(
-                  Some(
-                    Connections(
-                      // Stack.HardConfirmed fan-out to StackComposer goes via the rate limiter
-                      // on the SlowConsensusActor → StackComposer lane.
-                      stackComposer = c.stackComposerLimiter,
-                      cardanoLiaison = c.cardanoLiaison,
-                      headPeerLiaisons = c.headPeerLiaisons,
-                      coilUplink = c.coilUplink,
-                      coilRelay = c.coilRelay
-                    )
-                  )
+    private def initializeConnections: IO[Env.Connected] = {
+        val connections: IO[Connections] =
+            HeadMultisigRegimeManager.resolveConnections(pendingConnections)(c =>
+                Connections(
+                  // Stack.HardConfirmed fan-out to StackComposer goes via the rate limiter
+                  // on the SlowConsensusActor → StackComposer lane.
+                  stackComposer = c.stackComposerLimiter,
+                  cardanoLiaison = c.cardanoLiaison,
+                  headPeerLiaisons = c.headPeerLiaisons,
+                  coilUplink = c.coilUplink,
+                  coilRelay = c.coilRelay
                 )
-            } yield ()
-        case x: SlowConsensusActor.Connections => connections.set(Some(x))
+            )
+        connections.map(env.connected)
     }
 }
 
@@ -532,6 +534,23 @@ object SlowConsensusActor {
     type Handle = ActorRef[IO, Request]
 
     type Config = HeadConfig.Section & OwnPeerPublic.Section
+
+    private final case class Env(
+        config: Config,
+        persistence: Persistence[IO],
+        tracer: ContraTracer[IO, SlowConsensusActorEvent],
+        metrics: PeerMetrics
+    ) extends CardanoNetwork.Section {
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+    }
+
+    private object Env {
+
+        final class Connected(env: Env, val connections: Connections) {
+            export env.*
+        }
+    }
 
     final case class Connections(
         stackComposer: StackComposer.Handle,

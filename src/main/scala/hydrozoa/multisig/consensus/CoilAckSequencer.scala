@@ -50,53 +50,34 @@ trait CoilAckSequencer(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | CoilAckSequencer.Connections,
     tracer: ContraTracer[IO, CoilAckSequencerEvent]
 ) extends Actor[IO, Request] {
-    private val connections = Ref.unsafe[IO, Option[CoilAckSequencer.Connections]](None)
     private val state = State()
 
-    // `config` is a `CardanoNetwork.Section`; expose it as a given so the `WriteBatch.put` codecs
-    // in `persistStamp` pick it up.
-    private given CardanoNetwork.Section = config
+    private given env: Env = Env(config, persistence, tracer)
 
     // The sequencer runs on a hub, so its own id is the hub each stamped ack is scoped to.
-    private val hubPeerNum: HeadPeerNumber = config.ownPeerId match {
-        case PeerId.Head(n) => n
-        case PeerId.Coil(_) =>
-            throw new IllegalStateException("CoilAckSequencer runs only on a hub head peer")
-    }
-
-    private def getConnections: IO[Connections] = for {
-        mConn <- this.connections.get
-        conn <- mConn.fold(
-          IO.raiseError(
-            IllegalStateException("Coil ack sequencer is missing its connections to other actors.")
-          )
-        )(IO.pure)
-    } yield conn
-
-    private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: HeadMultisigRegimeManager.PendingConnections =>
-            x.get.flatMap(c =>
-                connections.set(
-                  Some(Connections(liaisons = c.headPeerLiaisons, coilRelay = c.coilRelay))
-                )
-            )
-        case x: CoilAckSequencer.Connections => connections.set(Some(x))
-    }
+    private val hubPeerNum: HeadPeerNumber =
+        env.config.ownPeerId.expectHead("CoilAckSequencer runs only on a hub head peer")
 
     override def preStart: IO[Unit] = context.self ! CoilAckSequencer.PreStart
 
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
-
-    private def receiveTotal(req: Request): IO[Unit] = req match {
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case CoilAckSequencer.PreStart =>
-            // Restore the counter + per-coil-peer marks, then wire connections. The received-but-
+            // Wire connections, then restore the counter + per-coil-peer marks. The received-but-
             // unstamped coil-ack gap is re-fed by the ReplayActor through the HardAck path below
             // (using CoilStampMark as the floor), so the sequencer itself does not scan.
             for {
+                given Env.Connected <- initializeConnections
                 recovered <- CoilAckSequencer.recover(persistence, hubPeerNum)
                 _ <- state.seed(recovered)
-                _ <- initializeConnections
+                _ <- context.become(PartialFunction.fromFunction(react))
             } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
+    }
+
+    private def react(req: Request)(using Env.Connected): IO[Unit] = req match {
+        case CoilAckSequencer.PreStart =>
+            IO.raiseError(RuntimeException("Unexpected second PreStart after connections wired"))
         case ack: HardAck =>
             ack.peerId match {
                 case PeerId.Head(_) =>
@@ -109,12 +90,21 @@ trait CoilAckSequencer(
             }
     }
 
+    private def initializeConnections: IO[Env.Connected] =
+        HeadMultisigRegimeManager
+            .resolveConnections(pendingConnections)(c =>
+                Connections(liaisons = c.headPeerLiaisons, coilRelay = c.coilRelay)
+            )
+            .map(env.connected)
+
     /** Stamp one coil ack: assign the next `seqNum`, persist the `HardAckWithId` + the bumped
       * per-coil-peer mark in one atomic batch (CR4), advance the in-memory state, and return the
       * stamped ack for fan-out. A crash before [[fanOut]] is safe — the head mesh re-pulls the
       * durable `HubHardAck`.
       */
-    private def stamp(coilNum: CoilPeerNumber, ack: HardAck): IO[HardAckWithId] =
+    private def stamp(coilNum: CoilPeerNumber, ack: HardAck)(using
+        env: Env.Connected
+    ): IO[HardAckWithId] =
         for {
             seq <- state.nextSeq
             marks <- state.marks
@@ -122,7 +112,7 @@ trait CoilAckSequencer(
             hubAck = HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack)
             _ <- persistStamp(seq, hubAck, newMarks)
             _ <- state.commit(seq, newMarks)
-            _ <- tracer.traceWith(SequencedCoilAck(coilNum, ack.hardAckNum, seq))
+            _ <- env.tracer.traceWith(SequencedCoilAck(coilNum, ack.hardAckNum, seq))
         } yield hubAck
 
     /** Persist a newly-sequenced relay ack to this hub's own `HubHardAck` journal **and** the
@@ -133,9 +123,9 @@ trait CoilAckSequencer(
         seq: HubHardAckNumber,
         hubAck: HardAckWithId,
         newMarks: Map[CoilPeerNumber, HardAckNumber]
-    ): IO[Unit] =
-        persistence.arrivalStamp.flatMap(stamp =>
-            persistence.write(
+    )(using env: Env.Connected): IO[Unit] =
+        env.persistence.arrivalStamp.flatMap(stamp =>
+            env.persistence.write(
               WriteBatch.start
                   .put(JournalKey.HubHardAck(hubPeerNum, seq))(JournalValue(stamp, hubAck))
                   .put(StoreKey.CoilStampMark)(newMarks)
@@ -143,10 +133,9 @@ trait CoilAckSequencer(
         )
 
     /** Fan a stamped relay ack out to the head-peer mesh and (on a hub) the coil relay. */
-    private def fanOut(hubAck: HardAckWithId): IO[Unit] =
-        getConnections.flatMap(conn =>
-            (conn.liaisons ! hubAck).parallel >> conn.coilRelay.traverse_(_ ! hubAck)
-        )
+    private def fanOut(hubAck: HardAckWithId)(using env: Env.Connected): IO[Unit] =
+        (env.connections.liaisons ! hubAck).parallel >>
+            env.connections.coilRelay.traverse_(_ ! hubAck)
 
     private final class State {
         private val nextSeqRef = Ref.unsafe[IO, HubHardAckNumber](HubHardAckNumber.zero)
@@ -178,6 +167,22 @@ object CoilAckSequencer {
     // `& CardanoNetwork.Section`: the `WriteBatch.put` codecs in `persistStamp` need it (same
     // shape as `RequestSequencer.Config`).
     type Config = OwnPeerPublic.Section & CardanoNetwork.Section
+
+    private final case class Env(
+        config: Config,
+        persistence: Persistence[IO],
+        tracer: ContraTracer[IO, CoilAckSequencerEvent]
+    ) extends CardanoNetwork.Section {
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+    }
+
+    private object Env {
+
+        final class Connected(env: Env, val connections: Connections) {
+            export env.*
+        }
+    }
 
     /** The sequencer's recoverable state: the next sequence number to assign and the per-coil-peer
       * stamped-high-water marks, derived from this hub's own `HubHardAck` journal and the

@@ -105,13 +105,9 @@ trait HeadMultisigRegimeManager(
                         )
                     )
 
-            ownHeadNum = config.ownPeerId match {
-                case PeerId.Head(n) => n
-                case PeerId.Coil(_) =>
-                    throw new IllegalStateException(
-                      "HeadMultisigRegimeManager runs only on head peers"
-                    )
-            }
+            ownHeadNum = config.ownPeerId.expectHead(
+              "HeadMultisigRegimeManager runs only on head peers"
+            )
 
             // Register local liaisons and spawn one RemotePeerProxy per remote head peer.
             remoteHeadProxies <- {
@@ -345,6 +341,24 @@ object HeadMultisigRegimeManager {
     )
 
     type PendingConnections = Deferred[IO, Connections]
+
+    /** Resolve an actor's start-barrier: await the shared regime [[Connections]] and project them
+      * into the actor's own `C` via `project`, or use a directly-supplied `C` (test wiring) as-is.
+      */
+    def resolveConnections[C](pending: PendingConnections | C)(project: Connections => C): IO[C] =
+        // `@unchecked`: only the `Deferred` class is tested at runtime (its type args erase); no
+        // actor `Connections` is ever a `Deferred`, so the barrier and direct arms stay disjoint.
+        pending match
+            case shared: PendingConnections @unchecked => shared.get.map(project)
+            case direct                                => IO.pure(direct.asInstanceOf[C])
+
+    /** As [[resolveConnections]], but with an effectful projection (e.g. one that can fail). */
+    def resolveConnectionsF[C](pending: PendingConnections | C)(
+        project: Connections => IO[C]
+    ): IO[C] =
+        pending match
+            case shared: PendingConnections @unchecked => shared.get.flatMap(project)
+            case direct                                => IO.pure(direct.asInstanceOf[C])
 
     def resource(
         config: NodeConfig,
