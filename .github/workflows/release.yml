@@ -85,14 +85,19 @@ jobs:
             exit 0
           fi
           v="${VERSION#v}"
-          printf '%s\n\n%s\n' "$body" "## Container image
-
-\`\`\`
-docker pull ghcr.io/cardano-hydrozoa/hydrozoa:${v}
-\`\`\`
-
-Also tagged \`${v%.*}\` and \`latest\`. Platforms: \`linux/amd64\`, \`linux/arm64\`.
-
-Digest: \`${DIGEST}\`" > /tmp/body.md
+          # Every line stays inside the `run:` block scalar — a line at column 0
+          # would end the scalar and leave the workflow file unparseable. The
+          # fences and the code spans are literal backticks, so each printf
+          # format string is single-quoted.
+          fence='```'
+          {
+            printf '%s\n\n' "$body"
+            printf '## Container image\n\n'
+            printf '%s\n' "$fence"
+            printf 'docker pull ghcr.io/cardano-hydrozoa/hydrozoa:%s\n' "$v"
+            printf '%s\n\n' "$fence"
+            printf 'Also tagged `%s` and `latest`. Platforms: `linux/amd64`, `linux/arm64`.\n\n' "${v%.*}"
+            printf 'Digest: `%s`\n' "$DIGEST"
+          } > /tmp/body.md
           gh release edit "$VERSION" --notes-file /tmp/body.md
           echo "linked ghcr.io/cardano-hydrozoa/hydrozoa:${v} from the $VERSION release notes"
