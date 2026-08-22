@@ -1,10 +1,11 @@
 package hydrozoa.rulebased.evacuator
 
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.addrKeyHash
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
-import scalus.cardano.ledger.{ExUnits, ProtocolParams}
+import scalus.cardano.ledger.{Coin, ExUnits, ProtocolParams}
 
 /** Checks the batch planner against the ex-unit costs of `Evacuate` transactions that actually
   * landed on preview, and against real protocol parameters.
@@ -27,6 +28,15 @@ class BatchPlannerTest extends AnyFunSuite {
             .cardanoProtocolParams
 
     private val maxTxSteps: Long = params.maxTxExecutionUnits.steps.toLong
+
+    private val env2 =
+        MultiNodeConfig.generateWithCoil().pureApply(Gen.Parameters.default, Seed(0L))
+    private given hydrozoa.config.head.network.CardanoNetwork.Section = env2.headConfig
+    private val payTo: scalus.cardano.address.ShelleyPaymentPart =
+        scalus.cardano.address.ShelleyPaymentPart.Key(
+          env2.nodePrivateConfigs.head._2.ownWallet.exportVerificationKey.addrKeyHash
+        )
+    private val network: scalus.cardano.address.Network = env2.headConfig.network
 
     private def withTxSteps(steps: Long): ProtocolParams =
         params.copy(maxTxExecutionUnits =
@@ -72,6 +82,42 @@ class BatchPlannerTest extends AnyFunSuite {
           BatchPlanner.maxBatchSize(available = 10_000, params = roomy) == BatchPlanner.ladderMax
         )
         assert(BatchPlanner.ladderMax == 64)
+    }
+
+    test("a map of plain entries earns the full batch; fat entries are charged for") {
+        // The two shapes measured. A map we hold is a fact, so sizing against its own entries
+        // recovers the payout that a blanket worst-case allowance gives away — while a map of fat
+        // entries is still charged honestly rather than overshooting into a rejected build.
+        val plain = SyntheticMap(100, payTo, network, Coin.ada(2))
+            .fold(v => fail(s"map did not build: $v"), identity)
+
+        val plainK = BatchPlanner.maxBatchSizeFor(plain, params)
+        val blindK = BatchPlanner.maxBatchSize(plain.size, params)
+
+        val _ = assert(plainK == 14, s"a plain-entry map should fit 14 payouts, got $plainK")
+        val _ = assert(
+          blindK == 13,
+          s"the unmeasured path should stay conservative at 13, got $blindK"
+        )
+        // And the measured batch must genuinely fit at its own entries' rate.
+        val dearest = plain.evacuationMap.values.map(_.outputSize).max
+        val cost = BatchPlanner.fixedSteps + BatchPlanner.stepsPerPayoutOfSize(dearest) * plainK
+        assert(cost <= maxTxSteps, s"a batch of $plainK costs $cost against $maxTxSteps")
+    }
+
+    test("cost per payout grows with entry size, and never dips below the fitted rate") {
+        val fitted = BatchPlanner.stepsPerPayoutOfSize(BatchPlanner.fittedEntryBytes)
+        val _ = assert(fitted == BatchPlanner.stepsPerPayout)
+        // Below the measured size the line is not extrapolated downward — guessing low is the
+        // direction that costs a rejected build.
+        val _ = assert(BatchPlanner.stepsPerPayoutOfSize(10) == BatchPlanner.stepsPerPayout)
+        // The ~775-byte inline-datum fixture measured 611.5M per payout; the size model should
+        // land near it rather than merely above it.
+        val fat = BatchPlanner.stepsPerPayoutOfSize(775)
+        assert(
+          math.abs(fat - 611_451_363L).toDouble / 611_451_363L < 0.02,
+          s"size model gives $fat for a 775-byte entry, measured 611,451,363"
+        )
     }
 
     test("a limit too small for even one payout still yields a batch of one") {

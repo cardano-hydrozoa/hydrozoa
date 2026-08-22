@@ -41,12 +41,26 @@ object BatchPlanner {
       */
     val stepsPerPayout: Long = 585_696_440L
 
-    /** Head-room for entry shapes costlier than the fitted one.
+    /** The entry size the fitted rate was measured at: an enterprise output holding only ada, whose
+      * raw CBOR is 39 bytes. The demo stand's map is made of these.
+      */
+    val fittedEntryBytes: Int = 39
+
+    /** Marginal cost of one more byte of payout, above [[fittedEntryBytes]].
       *
-      * Sized from the widest per-payout spread measured (4.4%, plain versus inline-datum outputs)
-      * plus a little slack, since the map a real head hands us is not ours to choose. A batch that
-      * fits at this allowance and would not without it is one payout smaller — cheap next to
-      * discovering the overshoot at evaluation time.
+      * An entry is hashed through `serialiseData` then `blake2b_224`, and both are charged on size:
+      * `serialiseData` on the Data memory usage (slope 213,312, and a byte contributes about an
+      * eighth of a unit) and `blake2b_224` on the byte length (slope 8,310). That predicts ~34,974
+      * steps per byte, which reproduces the one independent measurement to hand — a fixture whose
+      * entries carry a ~775-byte inline datum charged 611.5M per payout against the 585.7M of a
+      * 39-byte entry.
+      */
+    val stepsPerEntryByte: Long = 34_974L
+
+    /** Head-room for the model's own error, used when the batch is sized without measuring the map.
+      *
+      * Covers the widest per-payout spread seen between entry shapes (4.4%) plus slack. Sizing
+      * against a measured map does not need it — see [[maxBatchSizeFor]].
       */
     val shapeAllowance: Double = 0.06
 
@@ -98,6 +112,40 @@ object BatchPlanner {
       */
     def predictedStepsPlainShape(k: Int): Long = fixedSteps + stepsPerPayout * k
 
+    /** Marginal cost of one payout whose raw CBOR is `entryBytes` long.
+      *
+      * Below the fitted size this returns the fitted rate rather than extrapolating downward: the
+      * line was measured at 39 bytes and there is no evidence it stays linear beneath that, and
+      * guessing low is the direction that costs a rejected build.
+      */
+    def stepsPerPayoutOfSize(entryBytes: Int): Long =
+        stepsPerPayout + stepsPerEntryByte * math.max(0, entryBytes - fittedEntryBytes)
+
+    /** The batch size for a map we can measure, rather than one we must guess at.
+      *
+      * The outstanding set is in hand whenever a batch is chosen, so its costliest entry is a fact,
+      * not a risk to be padded against. Sizing on that measured worst case is both safer than
+      * [[maxBatchSize]] — it cannot be surprised by an entry fatter than the allowance anticipated
+      * — and less wasteful, since a map of small entries is no longer charged for datums it does
+      * not carry.
+      */
+    def maxBatchSizeFor(
+        outstanding: EvacuationMap,
+        params: ProtocolParams,
+        safetyMargin: Double = 0.02
+    ): Int = {
+        if outstanding.isEmpty then 1
+        else {
+            val dearestEntry = outstanding.evacuationMap.values.map(_.outputSize).max
+            val perPayout = stepsPerPayoutOfSize(dearestEntry)
+            val maxTxSteps = params.maxTxExecutionUnits.steps.toLong
+            val budget = (maxTxSteps * (1.0 - safetyMargin)).toLong - fixedSteps
+            val fits = if budget <= 0 then 0L else budget / perPayout
+            val capped = fits.min(outstanding.size.toLong).min(ladderMax.toLong)
+            math.max(1, capped.toInt)
+        }
+    }
+
     /** How many of our txs the chain will accept per block — the ceiling no client-side cleverness
       * can raise, since the block ex-unit limit is shared by every transaction in it.
       *
@@ -108,6 +156,15 @@ object BatchPlanner {
     def txsPerBlock(k: Int, params: ProtocolParams): Long =
         params.maxBlockExecutionUnits.steps.toLong / predictedSteps(k)
 
+    /** As [[txsPerBlock]], but costing the batch at the rate this map's own entries earn. */
+    def txsPerBlockOfSize(k: Int, outstanding: EvacuationMap, params: ProtocolParams): Long = {
+        val dearest =
+            if outstanding.isEmpty then fittedEntryBytes
+            else outstanding.evacuationMap.values.map(_.outputSize).max
+        val cost = fixedSteps + stepsPerPayoutOfSize(dearest) * k
+        params.maxBlockExecutionUnits.steps.toLong / math.max(1L, cost)
+    }
+
     /** The next batch to evacuate: the first `k` entries in map order.
       *
       * Order is the map's own — ascending by evacuation key — which keeps the batch a contiguous
@@ -116,7 +173,7 @@ object BatchPlanner {
       * far have we got".
       */
     def nextBatch(outstanding: EvacuationMap, params: ProtocolParams): EvacuationMap = {
-        val k = maxBatchSize(outstanding.size, params)
+        val k = maxBatchSizeFor(outstanding, params)
         EvacuationMap(outstanding.evacuationMap.take(k))
     }
 }

@@ -6,7 +6,7 @@ import com.monovore.decline.{Command, Opts}
 import hydrozoa.BuildInfo
 import hydrozoa.app.cli.{Scaffold, SubmitDeposit, SubmitL2Transaction}
 import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles, KeygenFleet, Migrate, PrintHeadZeroAddress}
-import hydrozoa.rulebased.evacuator.DeploySyntheticTreasury
+import hydrozoa.rulebased.evacuator.{DeploySyntheticTreasury, RunEvacuator}
 
 /** The `hydrozoa` command-line entry point: a single dispatcher over every deployment and runtime
   * command. Each subcommand is defined next to its logic and surfaced here as a `Command` value:
@@ -56,6 +56,7 @@ object Main
           SubmitL2Transaction.command,
           Migrate.command,
           DeploySyntheticTreasury.command,
+          RunEvacuator.command,
           Scaffold.command,
           versionCommand
         )

@@ -68,15 +68,21 @@ class EvacuationPlanTest extends AnyFunSuite {
         val steps = EvacuationPlan.plan(outstanding, params).toList
         val maxSteps = params.maxTxExecutionUnits.steps.toLong
 
+        // Cost the batch at the rate its own entries earn, which is how it was sized: this map is
+        // plain 10-ada outputs, and charging it the datum-bearing rate would assert against a
+        // transaction nobody is going to build.
+        val dearestEntry = outstanding.evacuationMap.values.map(_.outputSize).max
+        val perPayout = BatchPlanner.stepsPerPayoutOfSize(dearestEntry)
         steps.foreach { s =>
+            val cost = BatchPlanner.fixedSteps + perPayout * s.batchSize
             val _ = assert(
-              BatchPlanner.predictedSteps(s.batchSize) <= maxSteps,
-              s"step ${s.index} of ${s.batchSize} exceeds the per-tx limit"
+              cost <= maxSteps,
+              s"step ${s.index} of ${s.batchSize} exceeds the per-tx limit at $cost"
             )
         }
         // A short batch anywhere but the tail means the planner is leaving room unused on a
         // transaction it has already paid the fixed cost for.
-        val k = BatchPlanner.maxBatchSize(outstanding.size, params)
+        val k = BatchPlanner.maxBatchSizeFor(outstanding, params)
         assert(steps.init.forall(_.batchSize == k), "a non-final batch is under-filled")
     }
 

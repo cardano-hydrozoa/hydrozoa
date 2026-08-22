@@ -56,7 +56,7 @@ object EvacuationPlan {
 
     /** How many transactions the outstanding set needs, without materialising the batches. */
     def txCount(outstanding: EvacuationMap, params: ProtocolParams): Int = {
-        val k = BatchPlanner.maxBatchSize(outstanding.size, params)
+        val k = BatchPlanner.maxBatchSizeFor(outstanding, params)
         math.ceil(outstanding.size.toDouble / k).toInt
     }
 
@@ -67,7 +67,7 @@ object EvacuationPlan {
       * Worth computing up front so a run that hits it is recognised as finished rather than slow.
       */
     def minimumBlocks(outstanding: EvacuationMap, params: ProtocolParams): Long = {
-        val k = BatchPlanner.maxBatchSize(outstanding.size, params)
+        val k = BatchPlanner.maxBatchSizeFor(outstanding, params)
         val perBlock = math.max(1L, BatchPlanner.txsPerBlock(k, params))
         math.ceil(txCount(outstanding, params).toDouble / perBlock).toLong
     }
