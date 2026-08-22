@@ -128,13 +128,13 @@ final case class EvacuationMap(
     /** The evac map, where we threw away the "KeepRaw"
       */
     // Its a silly name, but we use the term "value" too much
-    val cooked: TreeMap[EvacuationKey, TransactionOutput] =
+    lazy val cooked: TreeMap[EvacuationKey, TransactionOutput] =
         evacuationMap.map((i, obligation) => (i, obligation.utxo.value))
     val outputs: Iterable[Payout.Obligation] = evacuationMap.values
 
     /** The outputs of the evac map, where we threw away the "KeepRaw"
       */
-    val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.utxo.value)
+    lazy val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.utxo.value)
 
     lazy val kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
 
