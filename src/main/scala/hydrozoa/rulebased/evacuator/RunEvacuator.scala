@@ -93,8 +93,7 @@ object RunEvacuator {
             mapPathOpt,
             anchorOpt,
             limitOpt,
-            commitOpt,
-            consolidateOpt
+            commitOpt
           )
               .mapN(run)
         )
@@ -163,8 +162,7 @@ object RunEvacuator {
         mapPath: Path,
         anchor: String,
         maxTxs: Option[Int],
-        commit: Boolean,
-        consolidate: Boolean
+        commit: Boolean
     ): IO[ExitCode] =
         for {
             loaded <- loadConfig(headConfigPath, privateConfigPath)
@@ -177,8 +175,7 @@ object RunEvacuator {
                   mapPath,
                   TransactionHash.fromHex(anchor),
                   maxTxs,
-                  commit,
-                  consolidate
+                  commit
                 )
             }
         } yield exit
@@ -189,8 +186,7 @@ object RunEvacuator {
         mapPath: Path,
         anchorTx: TransactionHash,
         maxTxs: Option[Int],
-        commit: Boolean,
-        consolidate: Boolean
+        commit: Boolean
     )(using HeadConfig.Bootstrap.Section): IO[ExitCode] = {
         val params = config.headConfig.cardanoProtocolParams
         val wallet = config.wallet
@@ -304,7 +300,6 @@ object RunEvacuator {
                                   feePerTx,
                                   config,
                                   backend,
-                                  consolidate,
                                   commit
                                 )
                     } yield c
@@ -317,11 +312,13 @@ object RunEvacuator {
         } yield exit
     }
 
-    /** Gather the wallet into one collateral utxo, or explain why the run cannot start.
+    /** Gather the wallet into one collateral utxo.
       *
-      * Refusing is the default because consolidating moves the operator's funds. The message names
-      * how many transactions the wallet can actually fund, so the shortfall is actionable rather
-      * than merely fatal.
+      * This is not offered as a choice. Pointing an evacuator at a wallet is an instruction to
+      * drain the treasury with it, and a wallet that holds the ada but in the wrong shape is a
+      * detail of that wallet, not a decision for whoever launched the run — which by then may be
+      * the rule-based regime itself, with nobody to ask. The only unrecoverable case is a wallet
+      * that does not hold enough ada at all, and that still stops the run.
       */
     private def fundChain(
         walletUtxos: Utxos,
@@ -331,60 +328,53 @@ object RunEvacuator {
         feePerTx: Coin,
         config: EvacuatorConfig,
         backend: CardanoBackend[IO],
-        consolidate: Boolean,
         commit: Boolean
     ): IO[CollateralUtxo] = {
         val fundable = WalletFunding.fundableTxs(have, feePerTx)
         val shortfall =
             f"collateral holds ${have.value / 1e6}%.6f ada, enough for $fundable of the planned " +
                 f"transactions; the chain needs ${needed.value / 1e6}%.6f ada in a SINGLE utxo"
+        val selection = WalletFunding.select(walletUtxos, needed)
 
-        if !consolidate then
-            IO.raiseError(
-              RuntimeException(s"$shortfall. Re-run with --consolidate to gather the wallet first")
+        for {
+            _ <- log.info(shortfall)
+            _ <- IO.raiseWhen(selection.ada.value < needed.value)(
+              RuntimeException(
+                f"the whole wallet holds only ${selection.ada.value / 1e6}%.6f ada across " +
+                    s"${selection.utxos.size} utxos — it cannot fund this chain at all"
+              )
             )
-        else {
-            val selection = WalletFunding.select(walletUtxos, needed)
-            for {
-                _ <- log.info(shortfall)
-                _ <- IO.raiseWhen(selection.ada.value < needed.value)(
-                  RuntimeException(
-                    f"the whole wallet holds only ${selection.ada.value / 1e6}%.6f ada across " +
-                        s"${selection.utxos.size} utxos — it cannot fund this chain at all"
-                  )
-                )
-                _ <- log.info(
-                  f"consolidating ${selection.utxos.size} utxos into one " +
-                      f"(${selection.ada.value / 1e6}%.6f ada" +
-                      (if selection.hasTokens then ", tokens to a separate output)" else ")")
-                )
-                params <- backend.fetchLatestParams.flatMap(
-                  IO.fromEither(_).adaptError(e => RuntimeException(s"protocol params: $e"))
-                )
-                tx <- IO.fromEither(
-                  WalletFunding.consolidationTx(selection, walletAddress, params)(using
-                    config.headConfig
-                  )
-                )
-                signed = config.wallet.signTx(tx)
-                collateral <- IO.fromEither(WalletFunding.collateralOf(signed))
-                _ <-
-                    if !commit then log.info(s"consolidation built (not submitted): ${signed.id}")
-                    else
-                        for {
-                            _ <- log.info(s"submitting consolidation ${signed.id}")
-                            r <- backend.submitTx(RawTx(signed))
-                            _ <- IO.fromEither(
-                              r.left.map(e => RuntimeException(s"consolidation submit failed: $e"))
-                            )
-                            // Wait for it before starting the chain. The chain could spend it
-                            // unconfirmed — it spends its own unconfirmed outputs throughout — but
-                            // this one is the ROOT: if it were dropped, every transaction built on
-                            // it dies. One block is cheap against a run measured in half-hours.
-                            _ <- awaitUtxo(backend, walletAddress, collateral.input)
-                        } yield ()
-            } yield collateral
-        }
+            _ <- log.info(
+              f"consolidating ${selection.utxos.size} utxos into one " +
+                  f"(${selection.ada.value / 1e6}%.6f ada" +
+                  (if selection.hasTokens then ", tokens to a separate output)" else ")")
+            )
+            params <- backend.fetchLatestParams.flatMap(
+              IO.fromEither(_).adaptError(e => RuntimeException(s"protocol params: $e"))
+            )
+            tx <- IO.fromEither(
+              WalletFunding.consolidationTx(selection, walletAddress, params)(using
+                config.headConfig
+              )
+            )
+            signed = config.wallet.signTx(tx)
+            collateral <- IO.fromEither(WalletFunding.collateralOf(signed))
+            _ <-
+                if !commit then log.info(s"consolidation built (not submitted): ${signed.id}")
+                else
+                    for {
+                        _ <- log.info(s"submitting consolidation ${signed.id}")
+                        r <- backend.submitTx(RawTx(signed))
+                        _ <- IO.fromEither(
+                          r.left.map(e => RuntimeException(s"consolidation submit failed: $e"))
+                        )
+                        // Wait for it before starting the chain. The chain could spend it
+                        // unconfirmed — it spends its own unconfirmed outputs throughout — but
+                        // this one is the ROOT: if it were dropped, every transaction built on
+                        // it dies. One block is cheap against a run measured in half-hours.
+                        _ <- awaitUtxo(backend, walletAddress, collateral.input)
+                    } yield ()
+        } yield collateral
     }
 
     /** Poll until a utxo we just created is visible on chain, so nothing is built on a transaction
