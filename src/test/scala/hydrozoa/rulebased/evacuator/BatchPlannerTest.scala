@@ -41,7 +41,7 @@ class BatchPlannerTest extends AnyFunSuite {
 
     test("the fitted model reproduces the ex-unit cost of transactions that landed") {
         landed.foreach { case (k, actualSteps) =>
-            val predicted = BatchPlanner.predictedSteps(k)
+            val predicted = BatchPlanner.predictedStepsPlainShape(k)
             val relativeError = math.abs(predicted - actualSteps).toDouble / actualSteps
             val _ = assert(
               relativeError < 0.005,
