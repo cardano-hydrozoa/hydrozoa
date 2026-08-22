@@ -22,6 +22,8 @@ import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryUtxo}
 import io.circe.parser.decode
 import java.nio.file.{Files, Path}
+import scala.concurrent.duration.*
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 
 /** Drains a rule-based treasury as fast as the chain will take it.
@@ -68,12 +70,32 @@ object RunEvacuator {
     private val commitOpt: Opts[Boolean] =
         Opts.flag("commit", "Actually submit; without it, build and report only").orFalse
 
+    /** Consolidating moves the operator's own funds, so it is opt-in rather than something an
+      * evacuation quietly does on their behalf. Without it an under-funded wallet is reported and
+      * the run refuses to start.
+      */
+    private val consolidateOpt: Opts[Boolean] =
+        Opts
+            .flag(
+              "consolidate",
+              "If the wallet cannot fund the chain, gather it into one utxo first"
+            )
+            .orFalse
+
     lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "run-evacuator",
           header = "Drain a rule-based treasury, submitting a chain of Evacuate transactions"
         )(
-          (headConfigPathArg, privateConfigPathArg, mapPathOpt, anchorOpt, limitOpt, commitOpt)
+          (
+            headConfigPathArg,
+            privateConfigPathArg,
+            mapPathOpt,
+            anchorOpt,
+            limitOpt,
+            commitOpt,
+            consolidateOpt
+          )
               .mapN(run)
         )
 
@@ -118,8 +140,7 @@ object RunEvacuator {
                     CardanoBackendBlockfrost(
                       Left(n),
                       apiKey,
-                      tracer =
-                          Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+                      tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
                     )
                 case c: CardanoNetwork.Custom =>
                     IO.raiseError(
@@ -142,14 +163,23 @@ object RunEvacuator {
         mapPath: Path,
         anchor: String,
         maxTxs: Option[Int],
-        commit: Boolean
+        commit: Boolean,
+        consolidate: Boolean
     ): IO[ExitCode] =
         for {
             loaded <- loadConfig(headConfigPath, privateConfigPath)
             (config, backend) = loaded
             exit <- {
                 given HeadConfig.Bootstrap.Section = config.headConfig
-                drive(config, backend, mapPath, TransactionHash.fromHex(anchor), maxTxs, commit)
+                drive(
+                  config,
+                  backend,
+                  mapPath,
+                  TransactionHash.fromHex(anchor),
+                  maxTxs,
+                  commit,
+                  consolidate
+                )
             }
         } yield exit
 
@@ -159,7 +189,8 @@ object RunEvacuator {
         mapPath: Path,
         anchorTx: TransactionHash,
         maxTxs: Option[Int],
-        commit: Boolean
+        commit: Boolean,
+        consolidate: Boolean
     )(using HeadConfig.Bootstrap.Section): IO[ExitCode] = {
         val params = config.headConfig.cardanoProtocolParams
         val wallet = config.wallet
@@ -243,12 +274,138 @@ object RunEvacuator {
               s"plan: ${plan.size} transactions, ${plan.headOption.fold(0)(_.batchSize)} payouts each"
             )
 
+            // Preflight. The chain is funded by ONE utxo, not by a balance, so build the first
+            // transaction for real and read its actual fee rather than estimating from protocol
+            // parameters — every transaction in the chain is near-identical, so it predicts the
+            // rest to well under a percent.
+            funded <- plan.headOption match {
+                case None => IO.pure(collateral)
+                case Some(first) =>
+                    for {
+                        probe <- IO.fromEither(
+                          buildStep(first, treasury, collateral, regime, config)
+                        )
+                        feePerTx = probe.tx.body.value.fee
+                        needed = WalletFunding.required(feePerTx, plan.size)
+                        have = collateral.collateralOutput.coin
+                        _ <- log.info(
+                          f"funding: ${plan.size} txs at ${feePerTx.value / 1e6}%.6f ada each " +
+                              f"needs ${needed.value / 1e6}%.6f ada in one utxo; " +
+                              f"collateral holds ${have.value / 1e6}%.6f"
+                        )
+                        c <-
+                            if have.value >= needed.value then IO.pure(collateral)
+                            else
+                                fundChain(
+                                  walletUtxos,
+                                  walletAddress,
+                                  needed,
+                                  have,
+                                  feePerTx,
+                                  config,
+                                  backend,
+                                  consolidate,
+                                  commit
+                                )
+                    } yield c
+            }
+
             exit <-
                 if !commit then
                     log.info("not submitting; pass --commit to run it").as(ExitCode.Success)
-                else submitChain(plan, treasury, collateral, regime, config, backend)
+                else submitChain(plan, treasury, funded, regime, config, backend)
         } yield exit
     }
+
+    /** Gather the wallet into one collateral utxo, or explain why the run cannot start.
+      *
+      * Refusing is the default because consolidating moves the operator's funds. The message names
+      * how many transactions the wallet can actually fund, so the shortfall is actionable rather
+      * than merely fatal.
+      */
+    private def fundChain(
+        walletUtxos: Utxos,
+        walletAddress: ShelleyAddress,
+        needed: Coin,
+        have: Coin,
+        feePerTx: Coin,
+        config: EvacuatorConfig,
+        backend: CardanoBackend[IO],
+        consolidate: Boolean,
+        commit: Boolean
+    ): IO[CollateralUtxo] = {
+        val fundable = WalletFunding.fundableTxs(have, feePerTx)
+        val shortfall =
+            f"collateral holds ${have.value / 1e6}%.6f ada, enough for $fundable of the planned " +
+                f"transactions; the chain needs ${needed.value / 1e6}%.6f ada in a SINGLE utxo"
+
+        if !consolidate then
+            IO.raiseError(
+              RuntimeException(s"$shortfall. Re-run with --consolidate to gather the wallet first")
+            )
+        else {
+            val selection = WalletFunding.select(walletUtxos, needed)
+            for {
+                _ <- log.info(shortfall)
+                _ <- IO.raiseWhen(selection.ada.value < needed.value)(
+                  RuntimeException(
+                    f"the whole wallet holds only ${selection.ada.value / 1e6}%.6f ada across " +
+                        s"${selection.utxos.size} utxos — it cannot fund this chain at all"
+                  )
+                )
+                _ <- log.info(
+                  f"consolidating ${selection.utxos.size} utxos into one " +
+                      f"(${selection.ada.value / 1e6}%.6f ada" +
+                      (if selection.hasTokens then ", tokens to a separate output)" else ")")
+                )
+                params <- backend.fetchLatestParams.flatMap(
+                  IO.fromEither(_).adaptError(e => RuntimeException(s"protocol params: $e"))
+                )
+                tx <- IO.fromEither(
+                  WalletFunding.consolidationTx(selection, walletAddress, params)(using
+                    config.headConfig
+                  )
+                )
+                signed = config.wallet.signTx(tx)
+                collateral <- IO.fromEither(WalletFunding.collateralOf(signed))
+                _ <-
+                    if !commit then log.info(s"consolidation built (not submitted): ${signed.id}")
+                    else
+                        for {
+                            _ <- log.info(s"submitting consolidation ${signed.id}")
+                            r <- backend.submitTx(RawTx(signed))
+                            _ <- IO.fromEither(
+                              r.left.map(e => RuntimeException(s"consolidation submit failed: $e"))
+                            )
+                            // Wait for it before starting the chain. The chain could spend it
+                            // unconfirmed — it spends its own unconfirmed outputs throughout — but
+                            // this one is the ROOT: if it were dropped, every transaction built on
+                            // it dies. One block is cheap against a run measured in half-hours.
+                            _ <- awaitUtxo(backend, walletAddress, collateral.input)
+                        } yield ()
+            } yield collateral
+        }
+    }
+
+    /** Poll until a utxo we just created is visible on chain, so nothing is built on a transaction
+      * that never landed.
+      */
+    private def awaitUtxo(
+        backend: CardanoBackend[IO],
+        address: ShelleyAddress,
+        input: TransactionInput,
+        attempts: Int = 30
+    ): IO[Unit] =
+        if attempts <= 0 then
+            IO.raiseError(RuntimeException(s"consolidation utxo $input never appeared on chain"))
+        else
+            backend
+                .utxosAt(address)
+                .flatMap(IO.fromEither(_).adaptError(e => RuntimeException(s"wallet: $e")))
+                .flatMap { utxos =>
+                    if utxos.contains(input) then log.info(s"consolidation confirmed: $input")
+                    else IO.sleep(20.seconds) *> awaitUtxo(backend, address, input, attempts - 1)
+                }
 
     /** The commitment the treasury currently advertises — what any reconstruction must reproduce.
       */
@@ -281,21 +438,7 @@ object RunEvacuator {
         ): IO[Int] = remaining match {
             case Nil => IO.pure(submitted)
             case s :: rest =>
-                val allRemaining =
-                    EvacuationMap(s.batch.evacuationMap ++ s.remainingAfter.evacuationMap)
-                IO.fromEither(
-                  EvacuationTx
-                      .Build(
-                        inputTreasuryUtxo = treasury,
-                        regimeUtxo = regime,
-                        evacuateesToTryNext = s.batch,
-                        allRemainingEvacuatees = allRemaining,
-                        collateralUtxo = collateral
-                      )
-                      .result(using config)
-                      .left
-                      .map(e => RuntimeException(s"build failed at step ${s.index}: $e"))
-                ).flatMap { evac =>
+                IO.fromEither(buildStep(s, treasury, collateral, regime, config)).flatMap { evac =>
                     val signed = wallet.signTx(evac.tx)
                     for {
                         result <- backend.submitTx(RawTx(signed))
@@ -332,4 +475,27 @@ object RunEvacuator {
             log.info(s"submitted $n transactions").as(ExitCode.Success)
         }
     }
+
+    /** Build one step of the chain. Shared so the preflight prices a REAL transaction — the same
+      * one that will be submitted — rather than a reconstruction of it.
+      */
+    private def buildStep(
+        s: EvacuationPlan.Step,
+        treasury: RuleBasedTreasuryUtxo,
+        collateral: CollateralUtxo,
+        regime: RuleBasedRegimeUtxo,
+        config: EvacuatorConfig
+    ): Either[Throwable, EvacuationTx] =
+        EvacuationTx
+            .Build(
+              inputTreasuryUtxo = treasury,
+              regimeUtxo = regime,
+              evacuateesToTryNext = s.batch,
+              allRemainingEvacuatees =
+                  EvacuationMap(s.batch.evacuationMap ++ s.remainingAfter.evacuationMap),
+              collateralUtxo = collateral
+            )
+            .result(using config)
+            .left
+            .map(e => RuntimeException(s"build failed at step ${s.index}: $e"))
 }
