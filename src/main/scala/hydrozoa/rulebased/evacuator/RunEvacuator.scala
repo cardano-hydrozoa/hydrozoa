@@ -70,18 +70,6 @@ object RunEvacuator {
     private val commitOpt: Opts[Boolean] =
         Opts.flag("commit", "Actually submit; without it, build and report only").orFalse
 
-    /** Consolidating moves the operator's own funds, so it is opt-in rather than something an
-      * evacuation quietly does on their behalf. Without it an under-funded wallet is reported and
-      * the run refuses to start.
-      */
-    private val consolidateOpt: Opts[Boolean] =
-        Opts
-            .flag(
-              "consolidate",
-              "If the wallet cannot fund the chain, gather it into one utxo first"
-            )
-            .orFalse
-
     lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "run-evacuator",
