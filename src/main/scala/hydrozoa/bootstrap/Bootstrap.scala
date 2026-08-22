@@ -30,10 +30,15 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
-import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
+import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
+import hydrozoa.multisig.ledger.joint.EvacuationMapInstances.given
+import hydrozoa.multisig.ledger.joint.given
+import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json, parser}
@@ -47,7 +52,7 @@ import scala.collection.immutable.SortedMap
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, PlutusScriptEvaluator, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, PlutusScriptEvaluator, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -195,7 +200,15 @@ object Bootstrap:
       * reference (the seed utxo's tx id + a per-entry index) once the seed is resolved. (A datum
       * field can be added here later; the opening distribution does not need one.)
       */
-    final case class L2Output(address: Address, value: Value) {
+    final case class L2Output(
+        address: Address,
+        value: Value,
+        // SUGAR-RUSH LOCAL PATCH (2026-08-19): optional explicit evacuation-map
+        // key, so the opening state can mirror an `any-remote` L2 ledger's
+        // genesis (keyed by account hash) instead of synthetic eutxo refs.
+        // Remove once build-head-config grows a real any-remote mode.
+        evacuationKey: Option[EvacuationKey] = None
+    ) {
         def toTransactionOutput: TransactionOutput =
             TransactionOutput.Babbage(address, value, None, None)
     }
@@ -208,7 +221,8 @@ object Bootstrap:
                     DecodingFailure(s"invalid bech32 address: ${e.getMessage}", c.history)
                 )
                 value <- c.downField("value").as[Value]
-            } yield L2Output(address, value)
+                evacuationKey <- c.downField("evacuationKey").as[Option[EvacuationKey]]
+            } yield L2Output(address, value, evacuationKey)
         }
 
         given Encoder[L2Output] = Encoder.instance { o =>
@@ -475,12 +489,29 @@ object Bootstrap:
         // seed's raw tx id would be unsafe: `(seedTxId, i)` could collide with a real on-chain output
         // of the seed's own transaction, or with the seed utxo itself.
         genesisTxId = L2Genesis.mkGenesisId(seedUtxo.input)
-        initialUtxos: Utxos = bootstrapConfig.initialL2State.zipWithIndex.map { case (out, i) =>
-            TransactionInput(genesisTxId, i) -> out.toTransactionOutput
-        }.toMap
-        evacMap <- IO.fromEither(
-          initialUtxos.toEvacuationMap(cardanoNetwork).left.map(e => RuntimeException(e.toString))
+        // SUGAR-RUSH LOCAL PATCH (2026-08-19): entries may carry an explicit
+        // `evacuationKey` (see L2Output); those keep it, the rest keep the
+        // synthetic eutxo-ref convention above. Obligation construction --
+        // including min-ada validation -- is unchanged.
+        evacEntries <- IO.fromEither(
+          bootstrapConfig.initialL2State.zipWithIndex
+              .traverse { case (out, i) =>
+                  Payout
+                      .Obligation(
+                        scalus.cardano.ledger.KeepRaw(out.toTransactionOutput),
+                        cardanoNetwork
+                      )
+                      .map { o =>
+                          val key = out.evacuationKey.getOrElse(
+                            TransactionInput(genesisTxId, i).toEvacuationKey
+                          )
+                          key -> o
+                      }
+              }
+              .left
+              .map(e => RuntimeException(e.toString))
         )
+        evacMap = EvacuationMap(scala.collection.immutable.TreeMap.from(evacEntries))
 
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
