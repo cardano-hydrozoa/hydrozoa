@@ -13,6 +13,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
+import hydrozoa.multisig.consensus.liaison.PeerLiaisonHubToCoil.*
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CoilAckSequencer, SlowConsensusActor, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
@@ -43,33 +44,7 @@ abstract class PeerLiaisonHubToCoil(
     persistence: Persistence[IO]
 ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
 
-    // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
-    // codec in `persistInbound` picks it up.
-    private given CardanoNetwork.Section = config
-
-    /** Resolve connections — projected from the shared regime `Connections` (remote coil handle
-      * from the in-process `remoteCoilLiaisons` map) or supplied directly.
-      */
-    private def resolveConnections: IO[PeerLiaisonHubToCoil.Connections] =
-        pendingConnections match {
-            case shared: HeadMultisigRegimeManager.PendingConnections =>
-                shared.get.flatMap(s =>
-                    s.coilAckSequencer.fold(
-                      IO.raiseError(
-                        IllegalStateException("Hub→coil liaison requires a CoilAckSequencer.")
-                      )
-                    )(seq =>
-                        IO.pure(
-                          PeerLiaisonHubToCoil.Connections(
-                            slowConsensusActor = s.slowConsensusActor,
-                            coilAckSequencer = seq,
-                            remote = s.remoteCoilLiaisons(coil)
-                          )
-                        )
-                    )
-                )
-            case own: PeerLiaisonHubToCoil.Connections => IO.pure(own)
-        }
+    private given env: Env = Env(config, tracer, persistence)
 
     private val headPeerNums: List[HeadPeerNumber] = config.headPeerNums.toList
     private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
@@ -151,19 +126,9 @@ abstract class PeerLiaisonHubToCoil(
           _.increment
         )
 
-    // ---- Connections ----------------------------------------------------------------------------
-    private val connections = Ref.unsafe[IO, Option[PeerLiaisonHubToCoil.Connections]](None)
-
     // Handle to the resend-timer fiber ([[startResendTimer]]); cancelled in [[postStop]] so it
     // doesn't outlive the actor.
     private val resendFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
-
-    private def getConnections: IO[PeerLiaisonHubToCoil.Connections] =
-        connections.get.flatMap(
-          _.fold(IO.raiseError(IllegalStateException("Hub→coil liaison missing its connections.")))(
-            IO.pure
-          )
-        )
 
     // ---- Serve half (population) ----------------------------------------------------------------
     private def serve(get: Population.Get): IO[Server.Served[Population.New]] =
@@ -231,11 +196,6 @@ abstract class PeerLiaisonHubToCoil(
                         )
         }
 
-    private val server =
-        new Server[Population.Get, Population.New]("Population.Get", serve)(n =>
-            getConnections.flatMap(_.remote ! n)
-        )
-
     /** Route an artifact relayed to this hub onto its outbox lane, keyed by embedded author. */
     private def appendArtifact(
         artifact: BlockBrief.Next | StackBrief | UserRequestWithId | SoftAck | HardAck |
@@ -295,31 +255,38 @@ abstract class PeerLiaisonHubToCoil(
     /** The coil peer's own hard-ack → the hub's quorum (`SlowConsensusActor`) and
       * `CoilAckSequencer` (which re-sequences it onto this hub's `HubHardAckLane`).
       */
-    private def dispatch(own: OwnHardAck.New): IO[Unit] =
-        getConnections.flatMap { conn =>
-            own.hardAck.traverse_(ack =>
-                (conn.slowConsensusActor ! ack) >> (conn.coilAckSequencer ! ack)
-            )
-        }
-
-    private val puller = new Puller[OwnHardAck.Get, OwnHardAck.New](
-      initialGet = initialGet,
-      buildGet = buildGet,
-      accept = accept,
-      dispatch = dispatch,
-      numberOfBatchRequest = _.batchNum,
-      numberOfBatch = _.batchNum,
-      tracer = tracer
-    )(g => getConnections.flatMap(_.remote ! g))
+    private def dispatch(own: OwnHardAck.New)(using env: Env.Connected): IO[Unit] =
+        own.hardAck.traverse_(ack =>
+            (env.connections.slowConsensusActor ! ack) >> (env.connections.coilAckSequencer ! ack)
+        )
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, HubToCoilRequest] =
-        PartialFunction.fromFunction(receiveTotal)
+    override def receive: Receive[IO, HubToCoilRequest] = PartialFunction.fromFunction {
+        case PreStart =>
+            for {
+                // Suspends on the start barrier, so connections are in place before any real
+                // message is processed.
+                given Env.Connected <- initializeConnections
+                // The Server / Puller carry per-link `Ref` state, so build each exactly once here
+                // (their send closures capture `connections`) and reuse across every message.
+                serverP = mkServer
+                pullerP = mkPuller
+                _ <- restoreAndStart(pullerP)
+                _ <- context.become(
+                  PartialFunction.fromFunction(receiveConnected(serverP, pullerP))
+                )
+            } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
+    }
 
-    private def receiveTotal(req: HubToCoilRequest): IO[Unit] = req match {
-        case PreStart            => preStartLocal
+    private def receiveConnected(
+        server: Server[Population.Get, Population.New],
+        puller: Puller[OwnHardAck.Get, OwnHardAck.New]
+    )(req: HubToCoilRequest): IO[Unit] = req match {
+        case PreStart            => IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
         case ResendCurrent       => puller.resend
         case get: Population.Get => server.handleGet(get)
         case own: OwnHardAck.New => puller.handleReply(own)
@@ -327,6 +294,45 @@ abstract class PeerLiaisonHubToCoil(
             _: HardAck | _: HardAckWithId) =>
             appendArtifact(artifact) >> server.afterAppend
     }
+
+    private def initializeConnections: IO[Env.Connected] = {
+        val connections: IO[PeerLiaisonHubToCoil.Connections] =
+            HeadMultisigRegimeManager.resolveConnectionsF(pendingConnections)(s =>
+                s.coilAckSequencer.fold(
+                  IO.raiseError(
+                    IllegalStateException("Hub→coil liaison requires a CoilAckSequencer.")
+                  )
+                )(seq =>
+                    IO.pure(
+                      PeerLiaisonHubToCoil.Connections(
+                        slowConsensusActor = s.slowConsensusActor,
+                        coilAckSequencer = seq,
+                        remote = s.remoteCoilLiaisons(coil)
+                      )
+                    )
+                )
+            )
+        connections.map(summon[Env].connected)
+    }
+
+    // ---- Composed halves ------------------------------------------------------------------------
+    // The Server / Puller carry per-link `Ref` state, so each is built exactly once (in `PreStart`,
+    // after the barrier); their send / dispatch closures capture the resolved `connections`.
+    private def mkServer(using env: Env.Connected): Server[Population.Get, Population.New] =
+        new Server[Population.Get, Population.New]("Population.Get", serve)(n =>
+            env.connections.remote ! n
+        )
+
+    private def mkPuller(using env: Env.Connected): Puller[OwnHardAck.Get, OwnHardAck.New] =
+        new Puller[OwnHardAck.Get, OwnHardAck.New](
+          initialGet = initialGet,
+          buildGet = buildGet,
+          accept = accept,
+          dispatch = dispatch,
+          numberOfBatchRequest = _.batchNum,
+          numberOfBatch = _.batchNum,
+          tracer = tracer
+        )(g => env.connections.remote ! g)
 
     /** Restore each population outbox lane's high-water from its backing journal, leaving the
       * queues empty. The Server half answers the coil peer's `Population.Get` by hot-loading older
@@ -364,11 +370,11 @@ abstract class PeerLiaisonHubToCoil(
                 .flatMap(ownHardAckLane.restoreCursor)
         } yield ()
 
-    private def preStartLocal: IO[Unit] =
+    private def restoreAndStart(
+        puller: Puller[OwnHardAck.Get, OwnHardAck.New]
+    )(using env: Env.Connected): IO[Unit] =
         for {
-            c <- resolveConnections
-            _ <- connections.set(Some(c))
-            _ <- tracer.traceWith(PeerLiaisonEvent.Started)
+            _ <- env.tracer.traceWith(PeerLiaisonEvent.Started)
             // Restore each lane's high-water; the Server half hot-loads older population entries
             // from the store on the coil peer's Population.Get, and live CoilRelay production
             // re-appends the tail. An empty store leaves every lane cold.
@@ -416,5 +422,21 @@ object PeerLiaisonHubToCoil {
         coilAckSequencer: CoilAckSequencer.Handle,
         remote: LiaisonProtocol.CoilToHubHandle
     )
+
+    private final case class Env(
+        config: Config,
+        tracer: ContraTracer[IO, PeerLiaisonEvent],
+        persistence: Persistence[IO]
+    ) extends CardanoNetwork.Section {
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+    }
+
+    private object Env {
+
+        final class Connected(env: Env, val connections: Connections) {
+            export env.*
+        }
+    }
 
 }

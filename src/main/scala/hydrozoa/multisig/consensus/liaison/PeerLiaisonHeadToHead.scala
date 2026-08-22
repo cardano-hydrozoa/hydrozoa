@@ -41,10 +41,9 @@ abstract class PeerLiaisonHeadToHead(
     persistence: Persistence[IO],
     metrics: PeerMetrics
 ) extends Actor[IO, LiaisonProtocol.HeadToHeadRequest] {
+    import PeerLiaisonHeadToHead.{Connections, Env}
 
-    // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
-    // codecs in `persistInbound` pick it up.
-    private given CardanoNetwork.Section = config
+    private given env: Env = Env(config, tracer, persistence, metrics)
 
     // The mesh liaison runs only on head peers; the satellite backings are keyed by this head peer
     // number.
@@ -65,20 +64,16 @@ abstract class PeerLiaisonHeadToHead(
       * (the remote handle from the in-process `remoteHeadLiaisons` map) or supplied directly.
       */
     private def resolveConnections: IO[PeerLiaisonHeadToHead.Connections] =
-        pendingConnections match {
-            case shared: HeadMultisigRegimeManager.PendingConnections =>
-                shared.get.map(s =>
-                    PeerLiaisonHeadToHead.Connections(
-                      blockWeaver = s.blockWeaver,
-                      consensusActor = s.consensusActor,
-                      stackComposer = s.stackComposer,
-                      slowConsensusActor = s.slowConsensusActor,
-                      remote = s.remoteHeadLiaisons(remoteHead.peerNum),
-                      coilRelay = s.coilRelay
-                    )
-                )
-            case own: PeerLiaisonHeadToHead.Connections => IO.pure(own)
-        }
+        HeadMultisigRegimeManager.resolveConnections(pendingConnections)(s =>
+            PeerLiaisonHeadToHead.Connections(
+              blockWeaver = s.blockWeaver,
+              consensusActor = s.consensusActor,
+              stackComposer = s.stackComposer,
+              slowConsensusActor = s.slowConsensusActor,
+              remote = s.remoteHeadLiaisons(remoteHead.peerNum),
+              coilRelay = s.coilRelay
+            )
+        )
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
     // Each outbound side is backed by the journal this peer's own production lives in, so a reply
@@ -150,21 +145,9 @@ abstract class PeerLiaisonHeadToHead(
     private val confirmedRemoteRequestHighWater =
         Ref.unsafe[IO, RequestNumber](RequestNumber.zero)
 
-    // ---- Connections ----------------------------------------------------------------------------
-    private val connections = Ref.unsafe[IO, Option[PeerLiaisonHeadToHead.Connections]](None)
-
     // Handle to the resend-timer fiber ([[startResendTimer]]); cancelled in [[postStop]] so it
     // doesn't outlive the actor.
     private val resendFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
-
-    private def getConnections: IO[PeerLiaisonHeadToHead.Connections] =
-        connections.get.flatMap(
-          _.fold(
-            IO.raiseError(IllegalStateException("Head↔head liaison missing its connections."))
-          )(
-            IO.pure
-          )
-        )
 
     // ---- Pull half (the remote head peer's production) ------------------------------------------
     private val initialGet: Mesh.Get = Mesh.Get(
@@ -262,56 +245,59 @@ abstract class PeerLiaisonHeadToHead(
             IO.whenA(full.size > 0)(persistence.write(full))
         }
 
-    private def dispatch(m: Mesh.New): IO[Unit] =
-        getConnections.flatMap { conn =>
-            for {
-                _ <- m.block.traverse_(conn.blockWeaver ! _)
-                _ <- m.stack.traverse_(conn.stackComposer ! _)
-                _ <- m.requests.traverse_(conn.blockWeaver ! _)
-                // Peer stats (docs/spec/peer-stats-endpoint.md): count requests ingested from this
-                // remote head peer.
-                _ <- IO.whenA(m.requests.nonEmpty)(
-                  IO(metrics.onPeerRequests(remoteHead.peerNum.convert, m.requests.size))
-                )
-                _ <- m.softAck.traverse_(conn.consensusActor ! _)
-                _ <- m.headHardAck.traverse_(conn.slowConsensusActor ! _)
-                _ <- m.hubHardAck.traverse_(hc => conn.slowConsensusActor ! hc.ack)
-                // On a hub, forward this remote head peer's per-author artifacts (requests, acks) to
-                // CoilRelay so its coil peers hear the full population. Block and stack briefs are
-                // deliberately NOT forwarded here: those relay lanes are contiguous and must have a
-                // single ordered feeder — the hub's own JointLedger (blocks) / StackComposer
-                // (stacks), which relay every brief, own-led and remote-led alike, in spine order.
-                // Forwarding briefs from here too put a second feeder on those lanes and raced its
-                // sends into the relay mailbox — the t3 AppendOutOfOrder hang (see CoilRelay's
-                // ordering note). The per-author lanes below are keyed by author, so each already
-                // has exactly one feeder and is safe.
-                _ <- conn.coilRelay.traverse_ { cr =>
-                    m.requests.traverse_(cr ! _) >>
-                        m.softAck.traverse_(cr ! _) >>
-                        m.headHardAck.traverse_(cr ! _) >>
-                        m.hubHardAck.traverse_(cr ! _)
-                }
-            } yield ()
-        }
+    private def dispatch(m: Mesh.New, connections: Connections)(using env: Env): IO[Unit] =
+        for {
+            _ <- m.block.traverse_(connections.blockWeaver ! _)
+            _ <- m.stack.traverse_(connections.stackComposer ! _)
+            _ <- m.requests.traverse_(connections.blockWeaver ! _)
+            // Peer stats (docs/spec/peer-stats-endpoint.md): count requests ingested from this
+            // remote head peer.
+            _ <- IO.whenA(m.requests.nonEmpty)(
+              IO(env.metrics.onPeerRequests(remoteHead.peerNum.convert, m.requests.size))
+            )
+            _ <- m.softAck.traverse_(connections.consensusActor ! _)
+            _ <- m.headHardAck.traverse_(connections.slowConsensusActor ! _)
+            _ <- m.hubHardAck.traverse_(hc => connections.slowConsensusActor ! hc.ack)
+            // On a hub, forward this remote head peer's per-author artifacts (requests, acks) to
+            // CoilRelay so its coil peers hear the full population. Block and stack briefs are
+            // deliberately NOT forwarded here: those relay lanes are contiguous and must have a
+            // single ordered feeder — the hub's own JointLedger (blocks) / StackComposer
+            // (stacks), which relay every brief, own-led and remote-led alike, in spine order.
+            // Forwarding briefs from here too put a second feeder on those lanes and raced its
+            // sends into the relay mailbox — the t3 AppendOutOfOrder hang (see CoilRelay's
+            // ordering note). The per-author lanes below are keyed by author, so each already
+            // has exactly one feeder and is safe.
+            _ <- connections.coilRelay.traverse_ { cr =>
+                m.requests.traverse_(cr ! _) >>
+                    m.softAck.traverse_(cr ! _) >>
+                    m.headHardAck.traverse_(cr ! _) >>
+                    m.hubHardAck.traverse_(cr ! _)
+            }
+        } yield ()
 
-    private val puller = new Puller[Mesh.Get, Mesh.New](
-      initialGet = initialGet,
-      buildGet = buildGet,
-      accept = accept,
-      dispatch = dispatch,
-      numberOfBatchRequest = _.batchNum,
-      numberOfBatch = _.batchNum,
-      tracer = tracer,
-      describeGet = g =>
-          s"req=${g.request} reqCeil=${g.requestCeiling} sAck=${g.softAck} " +
-              s"blk=${g.block} stk=${g.stack} hAck=${g.headHardAck}",
-      describeBatch = m =>
-          s"req=${m.requests.size} sAck=${if m.softAck.isDefined then 1 else 0} " +
-              s"blk=${if m.block.isDefined then 1 else 0} stk=${
-                      if m.stack.isDefined then 1 else 0
-                  } " +
-              s"hAck=${if m.headHardAck.isDefined then 1 else 0}"
-    )(g => getConnections.flatMap(_.remote ! g))
+    /** The pull-half engine, bound to the post-barrier `connections` (its send target). Built once
+      * in [[initializeConnections]] and carried on [[Env.Connected]] so every reactive method
+      * reaches the same stateful instance.
+      */
+    private def mkPuller(connections: Connections): Puller[Mesh.Get, Mesh.New] =
+        new Puller[Mesh.Get, Mesh.New](
+          initialGet = initialGet,
+          buildGet = buildGet,
+          accept = accept,
+          dispatch = dispatch(_, connections),
+          numberOfBatchRequest = _.batchNum,
+          numberOfBatch = _.batchNum,
+          tracer = env.tracer,
+          describeGet = g =>
+              s"req=${g.request} reqCeil=${g.requestCeiling} sAck=${g.softAck} " +
+                  s"blk=${g.block} stk=${g.stack} hAck=${g.headHardAck}",
+          describeBatch = m =>
+              s"req=${m.requests.size} sAck=${if m.softAck.isDefined then 1 else 0} " +
+                  s"blk=${if m.block.isDefined then 1 else 0} stk=${
+                          if m.stack.isDefined then 1 else 0
+                      } " +
+                  s"hAck=${if m.headHardAck.isDefined then 1 else 0}"
+        )(connections.remote ! _)
 
     // ---- Serve half (our own production) --------------------------------------------------------
     private def serve(get: Mesh.Get): IO[Server.Served[Mesh.New]] =
@@ -353,8 +339,11 @@ abstract class PeerLiaisonHeadToHead(
                         )
         }
 
-    private val server =
-        new Server[Mesh.Get, Mesh.New]("Mesh.Get", serve)(n => getConnections.flatMap(_.remote ! n))
+    /** The serve-half engine, bound to the post-barrier `connections` (its send target). Built once
+      * in [[initializeConnections]] and carried on [[Env.Connected]].
+      */
+    private def mkServer(connections: Connections): Server[Mesh.Get, Mesh.New] =
+        new Server[Mesh.Get, Mesh.New]("Mesh.Get", serve)(connections.remote ! _)
 
     /** Append our own production (single-author = us) onto the matching outbox lane. */
     private def appendArtifact(
@@ -423,33 +412,44 @@ abstract class PeerLiaisonHeadToHead(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, HeadToHeadRequest] =
-        PartialFunction.fromFunction(receiveTotal)
-
-    private def receiveTotal(req: HeadToHeadRequest): IO[Unit] = req match {
-        case PreStart                   => preStartLocal
-        case ResendCurrent              => puller.resend
-        case get: Mesh.Get              => server.handleGet(get)
-        case m: Mesh.New                => puller.handleReply(m)
-        case hw: SoftConfirmedHighWater =>
-            // Advance the remote head peer's confirmed request high-water (merge by max); the pull
-            // ceiling reads it. A block that carries no request from this remote leaves it unchanged.
-            hw.highWater
-                .get(remoteHead.peerNum)
-                .traverse_(rn =>
-                    confirmedRemoteRequestHighWater
-                        .update(cur => Ordering[RequestNumber].max(cur, rn))
-                )
-        case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId | _: SoftAck |
-            _: HardAck | _: HardAckWithId) =>
-            appendArtifact(artifact) >> server.afterAppend
+    override def receive: Receive[IO, HeadToHeadRequest] = PartialFunction.fromFunction {
+        case PreStart =>
+            for {
+                // Suspends on the start barrier, so connections are in place before any real
+                // message is processed.
+                given Env.Connected <- initializeConnections
+                _ <- context.become(PartialFunction.fromFunction(receiveConnected))
+            } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
     }
 
-    private def preStartLocal: IO[Unit] =
+    private def receiveConnected(req: HeadToHeadRequest)(using env: Env.Connected): IO[Unit] =
+        req match {
+            case PreStart                   => IO.raiseError(RuntimeException("Duplicate PreStart"))
+            case ResendCurrent              => env.puller.resend
+            case get: Mesh.Get              => env.server.handleGet(get)
+            case m: Mesh.New                => env.puller.handleReply(m)
+            case hw: SoftConfirmedHighWater =>
+                // Advance the remote head peer's confirmed request high-water (merge by max); the
+                // pull ceiling reads it. A block carrying no request from this remote leaves it
+                // unchanged.
+                hw.highWater
+                    .get(remoteHead.peerNum)
+                    .traverse_(rn =>
+                        confirmedRemoteRequestHighWater
+                            .update(cur => Ordering[RequestNumber].max(cur, rn))
+                    )
+            case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId |
+                _: SoftAck | _: HardAck | _: HardAckWithId) =>
+                appendArtifact(artifact) >> env.server.afterAppend
+        }
+
+    private def initializeConnections: IO[Env.Connected] =
         for {
-            c <- resolveConnections
-            _ <- connections.set(Some(c))
-            _ <- tracer.traceWith(PeerLiaisonEvent.Started)
+            connections <- resolveConnections
+            connected = env.connected(connections, mkPuller(connections), mkServer(connections))
+            _ <- env.tracer.traceWith(PeerLiaisonEvent.Started)
             // Restore each lane's own-produced high-water; the Server half hot-loads older entries
             // from the store on the remote's Mesh.Get, and replay / live production re-appends the
             // tail. An empty store leaves every lane cold.
@@ -461,9 +461,9 @@ abstract class PeerLiaisonHeadToHead(
             // ceiling optimistically after a restart; the next real soft-confirmation re-tightens it.
             reqCursor <- requestLane.cursor
             _ <- confirmedRemoteRequestHighWater.set(reqCursor.previousOrZero)
-            _ <- puller.start
+            _ <- connected.puller.start
             _ <- startResendTimer
-        } yield ()
+        } yield connected
 
     private def startResendTimer: IO[Unit] =
         (IO.sleep(
@@ -504,6 +504,32 @@ object PeerLiaisonHeadToHead {
             BlockConfig.Section
 
     type Handle = ActorRef[IO, LiaisonProtocol.HeadToHeadRequest]
+
+    private final case class Env(
+        config: Config,
+        tracer: ContraTracer[IO, PeerLiaisonEvent],
+        persistence: Persistence[IO],
+        metrics: PeerMetrics
+    ) extends CardanoNetwork.Section {
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(
+            connections: Connections,
+            puller: Puller[Mesh.Get, Mesh.New],
+            server: Server[Mesh.Get, Mesh.New]
+        ): Env.Connected = Env.Connected(this, connections, puller, server)
+    }
+
+    private object Env {
+
+        final class Connected(
+            env: Env,
+            val connections: Connections,
+            val puller: Puller[Mesh.Get, Mesh.New],
+            val server: Server[Mesh.Get, Mesh.New]
+        ) {
+            export env.*
+        }
+    }
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
