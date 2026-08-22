@@ -64,12 +64,19 @@ class CardanoBackendBlockfrost private (
     private val transactionService = backendService.getTransactionService
     private val assetService = backendService.getAssetService
 
+    /** `IO.blocking`: a synchronous Blockfrost round trip — see [[paginate]] for why that matters.
+      * The call also has to be suspended rather than passed to `EitherT.fromEither`, whose argument
+      * is strict: evaluating it eagerly would run the request when `resolve` is called instead of
+      * when the returned `IO` is run.
+      */
     override def resolve(input: Input): IO[Either[Error, Option[ledger.Utxo]]] =
         (for {
-            res <- EitherT.fromEither[IO](
-              Try(
-                utxoService.getTxOutput(input.transactionId.toHex, input.index)
-              ).toEither.left.map(e => Error.ErrorResolving(input, e.getMessage))
+            res <- EitherT(
+              IO.blocking(
+                Try(
+                  utxoService.getTxOutput(input.transactionId.toHex, input.index)
+                ).toEither.left.map(e => Error.ErrorResolving(input, e.getMessage))
+              )
             )
             mbUtxo <- res match {
                 // Resolution "successful", but no utxo found
