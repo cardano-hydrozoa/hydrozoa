@@ -56,11 +56,19 @@ class CardanoBackendBlockfrost private (
 
     private val httpClient: HttpClient = HttpClient.newHttpClient()
 
+    // BloxBean's get*Service builds a fresh Retrofit + OkHttpClient (its own
+    // connection pool and dispatcher threads) on every call — and pagination
+    // calls it once per page. Cache one instance per service.
+    private val utxoService = backendService.getUtxoService
+    private val scriptService = backendService.getScriptService
+    private val transactionService = backendService.getTransactionService
+    private val assetService = backendService.getAssetService
+
     override def resolve(input: Input): IO[Either[Error, Option[ledger.Utxo]]] =
         (for {
             res <- EitherT.fromEither[IO](
               Try(
-                backendService.getUtxoService.getTxOutput(input.transactionId.toHex, input.index)
+                utxoService.getTxOutput(input.transactionId.toHex, input.index)
               ).toEither.left.map(e => Error.ErrorResolving(input, e.getMessage))
             )
             mbUtxo <- res match {
@@ -82,7 +90,7 @@ class CardanoBackendBlockfrost private (
 
     override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, Utxos]] =
         paginate(page =>
-            backendService.getUtxoService
+            utxoService
                 .getUtxos(address.toBech32.get, pageSize, page, OrderEnum.asc)
         ).map(_.map(convertUtxosWithoutScripts))
 
@@ -92,7 +100,7 @@ class CardanoBackendBlockfrost private (
     ): IO[Either[CardanoBackend.Error, Utxos]] = {
         val unit = s"${asset._1.toHex}${asset._2.bytes.toHex}"
         paginate(page =>
-            backendService.getUtxoService
+            utxoService
                 .getUtxos(address.toBech32.get, unit, pageSize, page, OrderEnum.asc)
         ).map(_.map(convertUtxosWithoutScripts))
     }
@@ -209,7 +217,7 @@ class CardanoBackendBlockfrost private (
     ): Either[CardanoBackend.Error, scalus.cardano.ledger.Script] = {
 
         lazy val nativeResult: Either[String, scalus.cardano.ledger.Script] =
-            Try(backendService.getScriptService.getNativeScript(scriptHash)).toEither.left
+            Try(scriptService.getNativeScript(scriptHash)).toEither.left
                 .map(ex => s"Exception fetching native script $scriptHash: ${ex.getMessage}")
                 .flatMap { res =>
                     if res.isSuccessful then
@@ -221,7 +229,7 @@ class CardanoBackendBlockfrost private (
                 }
 
         lazy val plutusResult: Either[String, scalus.cardano.ledger.Script] =
-            Try(backendService.getScriptService.getPlutusScript(scriptHash)).toEither.left
+            Try(scriptService.getPlutusScript(scriptHash)).toEither.left
                 .map(ex => s"Exception fetching Plutus script $scriptHash: ${ex.getMessage}")
                 .flatMap { res =>
                     if res.isSuccessful then
@@ -366,7 +374,7 @@ class CardanoBackendBlockfrost private (
         txHash: TransactionHash
     ): IO[Either[CardanoBackend.Error, Boolean]] =
         IO.blocking {
-            val result = backendService.getTransactionService.getTransaction(txHash.toHex)
+            val result = transactionService.getTransaction(txHash.toHex)
             if result.isSuccessful then {
                 Right(true)
             } else {
@@ -394,7 +402,7 @@ class CardanoBackendBlockfrost private (
             txIds <- EitherT(
               paginate(
                 apiCall = page =>
-                    backendService.getAssetService.getTransactions(
+                    assetService.getTransactions(
                       unit,
                       pageSize,
                       page,
@@ -516,7 +524,7 @@ class CardanoBackendBlockfrost private (
     }
 
     private def txUtxos(txHash: TransactionHash): IO[Either[CardanoBackend.Error, TxContentUtxo]] =
-        IO.delay(backendService.getTransactionService.getTransactionUtxos(txHash.toHex))
+        IO.delay(transactionService.getTransactionUtxos(txHash.toHex))
             .map(res =>
                 if res.isSuccessful then Right(res.getValue)
                 else
@@ -595,7 +603,7 @@ class CardanoBackendBlockfrost private (
         txHash: TransactionHash,
         inputIx: Int
     ): IO[Either[CardanoBackend.Error, TxContentRedeemers]] =
-        IO.delay(backendService.getTransactionService.getTransactionRedeemers(txHash.toHex))
+        IO.delay(transactionService.getTransactionRedeemers(txHash.toHex))
             .map(res =>
                 if res.isSuccessful
                 then
@@ -623,7 +631,7 @@ class CardanoBackendBlockfrost private (
         redeemerHash: String
     ): IO[Either[CardanoBackend.Error, ScriptDatumCbor]] =
         IO.delay(
-          backendService.getScriptService
+          scriptService
               .getScriptDatumCbor(redeemerHash)
         ).map(res =>
             if res.isSuccessful then Right(res.getValue)
@@ -648,7 +656,7 @@ class CardanoBackendBlockfrost private (
       */
     override def submitTx(etx: EnrichedTx[?]): IO[Either[CardanoBackend.Error, Unit]] =
         IO.blocking {
-            val result = backendService.getTransactionService.submitTransaction(etx.tx.toCbor)
+            val result = transactionService.submitTransaction(etx.tx.toCbor)
             if result.isSuccessful
             then Right(())
             else Left(Unexpected(result.getResponse))
