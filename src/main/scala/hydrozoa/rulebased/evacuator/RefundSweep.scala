@@ -7,6 +7,7 @@ import cats.syntax.contravariant.*
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.NodeConfig
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerWallet
@@ -278,10 +279,15 @@ object RefundSweep {
                 )
 
                 val built = for {
-                    ctx <- TransactionBuilder
+                    ctx0 <- TransactionBuilder
                         .build(config.network, steps)
                         .left
                         .map(e => RuntimeException(s"build failed at batch $i: $e"))
+                    // Balancing prices the transaction it can see, and the multisig's signatures
+                    // are not on it yet — so without declaring them the fee is short by exactly
+                    // their bytes and the ledger rejects it as FeeTooSmallUTxO. Only the count
+                    // matters here: these are placeholder hashes for sizing, not signers.
+                    ctx = ctx0.addExpectedSigners(script.numSigners)
                     balanced <- ctx
                         .balanceContext(
                           diffHandler = Change.changeOutputDiffHandler(
