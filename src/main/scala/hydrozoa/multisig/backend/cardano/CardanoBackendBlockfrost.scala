@@ -26,8 +26,9 @@ import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger
 import scalus.cardano.ledger.*
-import scalus.cardano.node.BlockfrostProvider
+import scalus.cardano.node.{BlockfrostProvider, BlockfrostProviderPlatform}
 import scalus.uplc.builtin.{ByteString, Data}
+import sttp.client4.Backend
 
 /** Cardano backend to use with Blockfrost-compatible API. Currently, uses both BloxBeans's
   * [[BackendServive]] and Scalus' [[BlockfrostProvider]] for protocol parameters handle.
@@ -693,8 +694,8 @@ object CardanoBackendBlockfrost:
         tracer: ContraTracer[IO, CardanoBackendEvent]
     ): CardanoBackendBlockfrost = {
         // 1. BloxBean service
-        val baseUrl = network.fold(_.baseUrl, _._2)
-        // NB: Bloxbean requires the trailing slash
+        // Strip any trailing slash so we never emit `…/api/v1//path`; Bloxbean wants exactly one.
+        val baseUrl = network.fold(_.baseUrl, _._2).stripSuffix("/")
         val backendService = BFBackendService(s"$baseUrl/", apiKey)
 
         // 2. Scalus blockfrost provider
@@ -711,11 +712,17 @@ object CardanoBackendBlockfrost:
 
                     }
                 case Right(custom, customBaseUrl) =>
-                    BlockfrostProvider.create(
-                      apiKey = apiKey,
-                      baseUrl = customBaseUrl,
-                      network = custom.network,
-                      slotConfig = custom.cardanoInfo.slotConfig
+                    // Reuse the already-resolved CardanoInfo (params + network + slot config) instead
+                    // of re-fetching params via `create`, so the backend cannot diverge from the
+                    // CardanoInfo pinned into the head-config, and one HTTP round-trip is saved.
+                    given Backend[Future] = BlockfrostProviderPlatform.defaultBackend
+                    Future.successful(
+                      new BlockfrostProvider(
+                        apiKey,
+                        customBaseUrl.stripSuffix("/"),
+                        5,
+                        custom.cardanoInfo
+                      )
                     )
             }
 
@@ -736,6 +743,55 @@ object CardanoBackendBlockfrost:
         tracer: ContraTracer[IO, CardanoBackendEvent]
     ): IO[CardanoBackendBlockfrost] =
         IO.delay(apply_(network, apiKey, pageSize, tracer))
+
+    /** Build a backend for a [[CardanoNetwork]] directly: a standard network derives its own
+      * Blockfrost URL; a `Custom` one uses `blockfrostApiUrl` (failing if it is absent). Folds the
+      * network→selector resolution so callers need not thread the internal `Either` selector.
+      */
+    def apply(
+        network: CardanoNetwork,
+        blockfrostApiUrl: Option[URL],
+        apiKey: ApiKey,
+        tracer: ContraTracer[IO, CardanoBackendEvent]
+    ): IO[CardanoBackendBlockfrost] =
+        networkSelector(network, blockfrostApiUrl).flatMap(selector =>
+            apply(selector, apiKey, tracer = tracer)
+        )
+
+    /** Resolve a [[CardanoNetwork]] + optional `blockfrostApiUrl` into the selector [[apply]]
+      * expects. A standard network with no URL uses its own public Blockfrost endpoint; a standard
+      * network *with* a URL is served from that private endpoint while keeping its baked-in
+      * `CardanoInfo` (modeled as a `Custom` over the standard `CardanoInfo`, so params/slot/magic
+      * are never re-fetched). A `Custom` network requires a URL and fails without one.
+      */
+    private[cardano] def networkSelector(
+        network: CardanoNetwork,
+        blockfrostApiUrl: Option[URL]
+    ): IO[Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)]] =
+        network match {
+            case standard: StandardCardanoNetwork =>
+                blockfrostApiUrl match {
+                    case None      => IO.pure(Left(standard))
+                    case Some(url) =>
+                        // A standard chain served by a private Blockfrost endpoint: keep the
+                        // baked-in CardanoInfo (correct params/slot/magic — never fetched) but send
+                        // queries and submissions to `url`.
+                        val custom: CardanoNetwork.Custom =
+                            CardanoNetwork.Custom(standard.cardanoInfo, standard.protocolMagic)
+                        IO.pure(Right((custom, url)))
+                }
+            case custom: CardanoNetwork.Custom =>
+                blockfrostApiUrl match {
+                    case Some(url) => IO.pure(Right((custom, url)))
+                    case None =>
+                        IO.raiseError(
+                          IllegalStateException(
+                            "a Custom cardanoNetwork requires blockfrostApiUrl in the peer's " +
+                                "private config"
+                          )
+                        )
+                }
+        }
 
     extension (self: StandardCardanoNetwork)
         def baseUrl: URL = self match {

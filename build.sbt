@@ -333,20 +333,29 @@ lazy val integration: Project = (project in file("integration"))
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
-      // Yaci suites require Docker / a running Yaci DevKit instance, and the Preview suite requires
-      // a live public testnet + a funded master wallet; exclude both from the default test run.
-      // Run explicitly, e.g.: integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci
-      // NB: using * with testOnly still respects the excluded tests
-      Test / testOptions += Tests.Exclude(
-        Seq(
-          "hydrozoa.integration.stage1.Stage1PropertiesYaci",
-          "hydrozoa.integration.yaci.YaciDevnetSmokeTest",
-          "hydrozoa.integration.yaci.YaciSetupProbe",
-          "hydrozoa.integration.yaci.YaciMultiPeerProbe",
-          "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci",
-          "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
-        )
-      ),
+      // Heavy suites needing external infra (a running Yaci DevKit instance; a live public testnet
+      // + a funded master wallet; Docker + the built image), excluded from the default test run.
+      // sbt's Tests.Exclude filters a suite out even when it is named explicitly by
+      // `testOnly <FQN>`, so the exclusion is lifted when HYDROZOA_INCLUDE_HEAVY_TESTS=1 is set —
+      // that is how the `just` recipes run one by FQN, e.g.:
+      //   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly …Stage1PropertiesYaci"
+      //   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly …DockerSmokeTest"
+      Test / testOptions ++=
+          (if (sys.env.get("HYDROZOA_INCLUDE_HEAVY_TESTS").contains("1")) Seq.empty
+           else
+               Seq(
+                 Tests.Exclude(
+                   Seq(
+                     "hydrozoa.integration.stage1.Stage1PropertiesYaci",
+                     "hydrozoa.integration.yaci.YaciDevnetSmokeTest",
+                     "hydrozoa.integration.yaci.YaciSetupProbe",
+                     "hydrozoa.integration.yaci.YaciMultiPeerProbe",
+                     "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci",
+                     "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic",
+                     "hydrozoa.integration.e2e.DockerSmokeTest"
+                   )
+                 )
+               )),
       // ScalaCheck tuning for the default integration run: 10 cases per property (ScalaCheck's
       // own default is 100) and drop the "(extended)" properties, which are a naming convention
       // nothing else enforces. Together they are the difference between ~25 minutes and hours.

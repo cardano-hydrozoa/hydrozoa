@@ -3,7 +3,7 @@ package hydrozoa.multisig.backend.cardano
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.contravariant.*
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import io.github.cdimascio.dotenv.Dotenv
@@ -52,6 +52,41 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
           "addr_test1wzwt96zke3clae92z22gevxdk52a7hsgvx8r56vxcakxqxgt6edm4"
         )
         .asInstanceOf[ShelleyAddress]
+
+    // ---- endpoint selection (no network access) ----------------------------------------------
+
+    test("a standard network with no endpoint uses its own public Blockfrost") {
+        val selector =
+            CardanoBackendBlockfrost.networkSelector(CardanoNetwork.Preprod, None).unsafeRunSync()
+        assert(selector == Left(CardanoNetwork.Preprod))
+    }
+
+    test("a standard network served privately keeps its baked-in CardanoInfo") {
+        // The chain and the endpoint are independent: pointing preprod at a self-hosted
+        // Blockfrost-compatible backend must not re-derive its parameters or slot config — only
+        // the baked-in CardanoInfo has preprod's Byron-aware slot geometry.
+        val url = "https://bf.internal/api/v1"
+        val selector =
+            CardanoBackendBlockfrost
+                .networkSelector(CardanoNetwork.Preprod, Some(url))
+                .unsafeRunSync()
+        selector match {
+            case Right((custom, selectedUrl)) =>
+                assert(
+                  custom.cardanoInfo == CardanoNetwork.Preprod.cardanoInfo &&
+                      custom.protocolMagic == CardanoNetwork.Preprod.protocolMagic &&
+                      selectedUrl == url
+                )
+            case Left(other) => fail(s"expected the private endpoint to be selected, got $other")
+        }
+    }
+
+    test("a custom network without an endpoint is rejected") {
+        val custom = CardanoNetwork.Custom(CardanoInfo.preview, protocolMagic = 42L)
+        val result =
+            Try(CardanoBackendBlockfrost.networkSelector(custom, None).unsafeRunSync()).toEither
+        assert(result.isLeft, "a custom chain has no public Blockfrost to fall back to")
+    }
 
     test("Error gracefully when key and network mismatch", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
@@ -105,7 +140,17 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Fetch some utxos, multi-page", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key, 1, tracer)
+                backend <- CardanoBackendBlockfrost(
+                  Left[
+                    StandardCardanoNetwork,
+                    (CardanoNetwork.Custom, CardanoBackendBlockfrost.URL)
+                  ](
+                    CardanoNetwork.Preview
+                  ),
+                  key,
+                  1,
+                  tracer
+                )
                 utxoSet <- backend.utxosAt(testAddress)
             } yield utxoSet
         )

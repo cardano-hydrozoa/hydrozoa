@@ -23,8 +23,9 @@
 >   it survives a restart (crash recovery and evacuation read it); `just head-reset` wipes it
 >   for a fresh head. `head-config.json` still embeds real utxos + wall-clock anchors, so it cannot be
 >   reused — a fresh head needs a rebuilt config.
-> - **Public testnet (Preview / Preprod) via Blockfrost only** — a trusted third party between
->   every node and L1.
+> - **Testnets only (Preview / Preprod, or a local devnet)**, and the L1 backend is always a
+>   Blockfrost-compatible endpoint — a trusted third party between every node and the chain, whether
+>   that is public blockfrost.io or one you host yourself (§4).
 
 Deploys a multi-party Hydrozoa head running the **built-in EUTXO L2 ledger** (`l2Ledger =
 cardano-eutxo`): the ledger runs in-process inside every node, so a node is a single container —
@@ -94,8 +95,10 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
 | 4001 | hydrozoa mesh WS server: `/head` (mesh), `/hub` (hub→coil) | other head peers; hubbed coil peers | `webSocketAddress` in the shared head config — **bind address == dialed address** |
 
 Head-mesh dialing convention: lower-numbered peer dials higher (`docs/spec/coil-network.md` §4.3).
-Coil peers dial out only; they need no inbound port at all. Every node also needs outbound HTTPS
-to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
+Coil peers dial out only; they need no inbound port at all. Every node also needs outbound access to
+its L1 backend: public blockfrost.io over HTTPS (`blockfrostApiKey` in `peer-private.json`), or
+whatever `blockfrostApiUrl` names instead (§4) — which for a local devnet is a container on this
+same `mesh` network.
 
 ---
 
@@ -185,6 +188,26 @@ whichever matches the build you made.
 
 ## 4. Configuration
 
+### Which L1 the head talks to
+
+A deployment makes **two independent choices**: which *chain*, and which *endpoint* serves it. Both
+are recorded once, by `keygen-fleet`, into `bootstrap/defaults.json`:
+
+| Chain | Endpoint | How you say it | Params + slot config come from |
+|---|---|---|---|
+| Standard (preview / preprod / mainnet) | public blockfrost.io | the template's `blockfrostApiKey` prefix, or an explicit `cardanoNetwork` | baked into the image |
+| Standard | a private Blockfrost-compatible endpoint (self-hosted, Blockfrost Platform, …) | as above, **plus** `blockfrostApiUrl` in the template | baked into the image |
+| Non-standard (a devnet, any private chain) | necessarily a private endpoint | `--cardano-network-file`, written by `hydrozoa discover-network` | that file |
+| Standard | *discovered* from the endpoint | — | **rejected** |
+
+Rows 2 and 3 need no Blockfrost account, and neither is a special case: a private endpoint is a
+supported deployment in its own right. Row 3 is also the local-devnet path — see the prologue below.
+
+The last row is refused deliberately. Mainnet and preprod are Byron-prefixed, so deriving their slot
+config from a running node would place slot zero off by the whole Byron era and every L1 validity
+interval would be wrong. Name such a chain instead and keep its baked-in description; the error
+names the exact `cardanoNetwork:` line to set.
+
 Everything a node reads comes from two files:
 
 **(a) Shared `head-config.json`** — identical on every node. It embeds
@@ -234,6 +257,52 @@ pipeline turns operator-authored files into the two runtime files each node need
    distribute head-config.json (shared) + each node's private.json  →  run the nodes (§5)
 ```
 
+### Prologue — a local Yaci devnet (optional)
+
+*Skip this if you are deploying against a public testnet; the steps that follow are the same either
+way, apart from the **On a devnet** notes they carry.*
+
+For local development and testing, run the head against a local
+[Yaci DevKit](https://devkit.yaci.xyz/) devnet — no Blockfrost account, no faucet, hermetic and
+repeatable. This is row 3 of the table above: a chain with no baked-in description, so you describe
+it once and pass the description to `keygen-fleet`.
+
+`scripts/yaci-devnet.sh` owns every devnet-specific step, and the Docker smoke-test calls the same
+script — so these commands stay exercised rather than drifting from what the suite runs.
+
+Unlike the rest of this guide, the devnet path **needs this repo checked out** (the script and the
+compose overlay live here, not in the published image) and a staged launcher for the `network`
+command — so run `just stage` first (§3). The generation steps themselves still work either way.
+The head directory must already be scaffolded (`just scaffold`, §3): the devnet joins the same
+`mesh` the deployment file declares, so the script composes that file plus the overlay.
+
+```bash
+export COMPOSE_PROJECT_NAME=hydrozoa-local   # keeps a devnet run apart from a public-testnet one
+export HYDROZOA_REPO=$PWD                    # this checkout — §5 composes the overlay from it
+
+just yaci-devnet up                          # create a devnet, wait until both its APIs answer
+just yaci-devnet network head/network.json   # write its chain description
+```
+
+The devnet is added to the head directory's `docker-compose.yml` by the `docker-compose.yaci.yml`
+overlay — composed *on top of* it, never instead of it, so what you run locally is the deployment
+the shipped file describes. Drop the overlay and the same peers run against Blockfrost.
+
+**URL split — the containers and the host reach the same devnet at different addresses:**
+
+| Who | Blockfrost-compatible API | Admin API (topup) |
+|---|---|---|
+| **peers** (in-mesh) | `http://yaci:8080/api/v1` | — |
+| **host** (the generation steps below) | `http://localhost:18080/api/v1` | `http://localhost:10000/local-cluster/api` |
+
+So the template carries the **in-mesh** URL, which every `private.json` inherits, while the
+host-side `deploy-scripts-and-g2-setup` and `build-head-config` are handed the **host** URL with
+`--blockfrost-url`, overriding it for that one command:
+
+```bash
+export YACI_HOST_URL=http://localhost:18080/api/v1
+```
+
 ### Step 1 — Edit the template
 
 Set `blockfrostApiKey` in `$HYDROZOA_HOME/template/peer-private.template.json.local` — i.e.
@@ -248,6 +317,19 @@ local `just` run (scaffolded in §2; Nix users create it with `just scaffold`).
   network for everything downstream: the `cardanoNetwork` seeded into `defaults.json` and the
   target of `deploy-scripts-and-g2-setup`.
 
+- **Private endpoint** — to serve any of these chains from your own Blockfrost-compatible endpoint
+  instead of public blockfrost.io (row 2 of the table), add `blockfrostApiUrl`. The chain stays
+  whatever the key prefix or `cardanoNetwork` says; only the endpoint moves.
+
+> **On a devnet:** there is no Blockfrost account. Leave the placeholder `blockfrostApiKey` as it
+> is — a keyless endpoint ignores it — and set the **in-mesh** URL, which every peer inherits:
+>
+> ```json
+> "blockfrostApiUrl": "http://yaci:8080/api/v1",
+> ```
+>
+> The chain itself comes from `--cardano-network-file` in Step 2, not from this file.
+
 The template is read at generation time — regenerating means fresh keys, so re-funding.
 
 ### Step 2 — Generate keys, roster, and defaults
@@ -258,8 +340,19 @@ just keygen-fleet 2 4 2            # local; → head/demo/ (custom dir: HYDROZOA
 ```
 
 One command generates a key pair per peer (registered in the roster, with a filled private config),
-then the shared `defaults.json` + `l2-cardano-eutxo.json`; the network comes from the template's
-Blockfrost-key prefix. Output layout:
+then the shared `defaults.json` + `l2-cardano-eutxo.json`; the network comes from the template, as
+the table above describes.
+
+> **On a devnet:** pass the chain description the prologue wrote — it outranks both the key prefix
+> and any `cardanoNetwork` name, and is the only way to name a chain Hydrozoa has no baked-in
+> description for:
+>
+> ```bash
+> hydrozoa keygen-fleet 2 4 2 --cardano-network-file head/network.json          # Docker
+> just keygen-fleet 2 4 2 --cardano-network-file head/network.json              # local
+> ```
+
+Output layout:
 
 ```
 $HYDROZOA_HOME/                    # Docker: your scaffold dir; local just: head/demo/
@@ -313,6 +406,14 @@ just head-zero-address       # local
 The funding must cover equity + the whole head's fallback contingency + the opening L2 value +
 tx fee; step 5 logs the exact lovelace required and fails with the shortfall if underfunded.
 
+> **On a devnet:** there is no faucet — the admin API mints the funds instead. This returns only
+> once the store has indexed them, which Step 4 needs (it reads head-0's UTxOs exactly once and
+> fails outright against an address that still looks empty):
+>
+> ```bash
+> just yaci-devnet topup "$(just head-zero-address)" 100000
+> ```
+
 ### Step 4 — Deploy the reference scripts
 
 > **You can likely skip this.** With no `bootstrap/ref-utxos.json`, `build-head-config` falls back
@@ -326,6 +427,16 @@ hydrozoa deploy-scripts-and-g2-setup   # Docker
 just deploy-scripts-and-g2-setup        # local
 # -> $HYDROZOA_HOME/bootstrap/ref-utxos.json (funded by head-0's wallet under the head dir)
 ```
+
+> **On a devnet you cannot skip this** — there is no baked-in default for a chain that did not
+> exist when the image was built — and it runs host-side, so point it at the host URL:
+>
+> ```bash
+> hydrozoa deploy-scripts-and-g2-setup --blockfrost-url "$YACI_HOST_URL"           # Docker
+> just deploy-scripts-and-g2-setup "" --blockfrost-url "$YACI_HOST_URL"            # local
+> ```
+>
+> (`LADDER_REFS` comes first in the `just` recipe, hence the empty argument.)
 
 The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators — and
 the G2 setup ladder — as **reference UTxOs** at startup. This target deploys the currently
@@ -351,6 +462,14 @@ the balance) and the protocol parameters via Blockfrost, then pre-builds the ini
 into the config (each node derives the fallback tx from it when reading the config). The
 Blockfrost key comes from the `.local` template (step 1); the build fails fast if the key's
 network does not match the bootstrap config's `cardanoNetwork`.
+
+> **On a devnet:** same host-side override, so the build reaches the devnet at its host-mapped port
+> while the peers keep the in-mesh URL:
+>
+> ```bash
+> hydrozoa build-head-config --blockfrost-url "$YACI_HOST_URL"           # Docker
+> just build-head-config --blockfrost-url "$YACI_HOST_URL"               # local
+> ```
 
 At this point every node has its two files, and the composition (§5) mounts
 `head-config/head-config.json` + that node's `private/<peer>/private.json`.
@@ -392,6 +511,18 @@ Default — pull the published image and run the scaffolded head:
 ```bash
 just head-up          # pulls ghcr.io/cardano-hydrozoa/hydrozoa:latest on first run
 ```
+
+**On a devnet** — compose the overlay alongside the scaffolded file, which starts the peers next to
+the devnet already running from the prologue (`COMPOSE_PROJECT_NAME` keeps the pair together). The
+overlay lives in the repo, the deployment file in the head directory, so run this from the latter:
+
+```bash
+cd "$HYDROZOA_HOME"
+docker compose -f docker-compose.yml -f "$HYDROZOA_REPO/docker-compose.yaci.yml" up -d
+```
+
+Tear the whole thing down with the same file pair plus `down -v`. To replace just the chain and keep
+the peers, `just yaci-devnet down` removes only the devnet and its state.
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
 
@@ -577,7 +708,8 @@ curl -u admin:welcome -X POST http://localhost:8080/api/admin/finalize
 ```
 
 The finalization tx pays the L2 state and equity back out on L1 (watch the network's explorer,
-e.g. `preview.cexplorer.io` / `preprod.cexplorer.io`).
+e.g. `preview.cexplorer.io` / `preprod.cexplorer.io`; a devnet has none, so query its store API —
+`http://localhost:18080/api/v1/addresses/<addr>/utxos`).
 Then `just head-down`. Leftover change at head peer 0's own L1 address (not head-locked) can
 be swept with its single key at any time.
 

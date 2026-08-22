@@ -4,7 +4,7 @@ import cats.effect.{ExitCode, IO}
 import com.monovore.decline.effect.CommandIOApp
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.BuildInfo
-import hydrozoa.app.cli.{Scaffold, SubmitDeposit, SubmitL2Transaction}
+import hydrozoa.app.cli.{DiscoverNetwork, Scaffold, SubmitDeposit, SubmitL2Transaction}
 import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles, KeygenFleet, Migrate, PrintHeadZeroAddress}
 
 /** The `hydrozoa` command-line entry point: a single dispatcher over every deployment and runtime
@@ -49,6 +49,7 @@ object Main
           GenerateKeyPair.command,
           InitBootstrapFiles.command,
           PrintHeadZeroAddress.command,
+          DiscoverNetwork.command,
           DeployScriptsAndG2Setup.command,
           BuildHeadConfig.command,
           SubmitDeposit.command,

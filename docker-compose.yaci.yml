@@ -1,0 +1,56 @@
+# Overlay that adds a local Yaci DevKit devnet as the head's L1, for local development and the
+# Docker smoke-test. Compose it *on top of* the docker-compose.yml scaffolded into the head
+# directory — never instead of it, so what runs locally is the same deployment the shipped file
+# describes. From the head directory, with this repo checked out at $HYDROZOA_REPO:
+#
+#   docker compose -p hydrozoa-local -f docker-compose.yml \
+#       -f "$HYDROZOA_REPO/docker-compose.yaci.yml" up -d
+#
+# The `-p` project name keeps a local devnet run from colliding with a `docker compose up` against
+# a public testnet. Nothing in the scaffolded docker-compose.yml mentions Yaci; drop this file and
+# the same peers run against Blockfrost.
+#
+# Bring-up is *not* a plain `up`: the peers need an L1 that already exists, and the devnet's slot
+# config is only known once it is running. So this service is started on its own first, the devnet
+# is created inside it, and only then — once its resolved network is in the bootstrap config — are
+# the peers started. See docs/user-guide/DEPLOYMENT.md.
+#
+# Port split — the containers and the host reach the same devnet at different addresses:
+#   in-mesh (peers)              http://yaci:8080/api/v1
+#   host (CLI generation steps)  http://localhost:18080/api/v1   (8080-8081 belong to head-0/1)
+#                                http://localhost:10000/local-cluster/api   (admin: topup, devnet info)
+
+services:
+  yaci:
+    # The pinned, validated tag. The container boots idle (`sleep infinity`); the devnet itself is
+    # created by driving yaci-cli into it, which the bring-up prologue does.
+    #
+    # The tag must create the devnet at **protocol major version 11** or higher: the treasury and
+    # dispute validators are PlutusV3 scripts using batch-6 builtins, which only become available at
+    # PV11 — at PV10 they are ill-formed, and `deploy-scripts-and-g2-setup` fails when the node
+    # rejects the reference script in its output. This is the first DevKit line to reach PV11 (it
+    # runs cardano-node 11.0.1 and defaults `protocolMajorVer` to 11), so it is a floor, not a
+    # preference.
+    image: bloxbean/yaci-cli:0.12.0-beta5
+    entrypoint: [sleep, infinity]
+    # `create-node` only starts yaci-store — the Blockfrost-compatible API on 8080 — when the store
+    # is enabled. The full DevKit sets these in its own config; this bare yaci-cli container must
+    # set them itself, and the exec'd create-node inherits them. Without this the node runs but
+    # nothing serves /api/v1, so neither the host-side CLI steps nor the peers have an L1.
+    #
+    # `NODEMODE` picks how the chain is bootstrapped. `companion` — Yano lays down the first blocks,
+    # then the Haskell node takes over and serves the rest of the run — is required, not a tuning
+    # choice: only the Yano bootstrap installs the PV11 Plutus cost models. Under the default
+    # `haskell-only` the devnet deadlocks, because at PV11 the genesis PlutusV2 cost model has too
+    # few parameters for the ledger to accept, so the live parameters carry no PlutusV2 entry at
+    # all — and yaci-cli reads that entry unconditionally when it builds any transaction. Both the
+    # governance proposal that would install the correct cost models and every `topup` then die on
+    # the same NullPointerException, so the devnet can neither repair itself nor fund an address.
+    environment:
+      yaci_store_enabled: "true"
+      yaci_store_mode: native
+      NODEMODE: companion
+    ports:
+      - "18080:8080" # store / Blockfrost-compatible API
+      - "10000:10000" # local-cluster / admin API
+    networks: [mesh]

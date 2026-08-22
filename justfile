@@ -79,7 +79,7 @@ integration:
 integration-yaci:
   #!/usr/bin/env bash
   trap 'just notify "integration-yaci"' EXIT
-  sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
+  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
 
 # Yaci suites that spin up their own devnet via Testcontainers (require Docker).
 # Bypasses the build.sbt Tests.Exclude that keeps these out of `just integration`.
@@ -95,6 +95,14 @@ integration-yaci-docker:
   trap 'just notify "integration-yaci-docker"' EXIT
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
+
+# Heavy Docker smoke-test on the shipped topology — 2 head + 4 coil peers against a local Yaci
+# devnet: builds the image, stages the launcher, then runs the CI-excluded DockerSmokeTest. Needs a
+# running Docker; minutes-long. See the E2E section of docs/spec/integration-stages.md.
+integration-e2e-docker:
+  #!/usr/bin/env bash
+  trap 'just notify "integration-e2e-docker"' EXIT
+  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "Docker/publishLocal; stage; integration/testOnly hydrozoa.integration.e2e.DockerSmokeTest"
 
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
 export:
@@ -206,15 +214,17 @@ _require-launcher:
 scaffold: _require-launcher
   {{hydrozoa}} scaffold {{HYDROZOA_HOME}}
 
+# Extra ARGS go straight to the launcher — e.g. `--cardano-network-file` for a chain with no
+# baked-in description.
 # Generate a whole head's keys + configs into $HYDROZOA_HOME (default head/demo):
 #   $HYDROZOA_HOME/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}
 #   $HYDROZOA_HOME/private/{head,coil}-N/private.json
 # Coil peers are hubbed round-robin across the head peers. Next: `just head-zero-address` and fund
 # it, edit bootstrap/l2-cardano-eutxo.json, run `just deploy-scripts-and-g2-setup`, then
 # `just build-head-config`.
-keygen-fleet HEADS COILS QUORUM: _require-launcher
+keygen-fleet HEADS COILS QUORUM *ARGS: _require-launcher
   #!/usr/bin/env bash
-  {{hydrozoa}} keygen-fleet {{HEADS}} {{COILS}} {{QUORUM}} --home {{HYDROZOA_HOME}}
+  {{hydrozoa}} keygen-fleet {{HEADS}} {{COILS}} {{QUORUM}} --home {{HYDROZOA_HOME}} {{ARGS}}
 
 # Print head peer 0's L1 funding address (derived from the roster + defaults on demand — no
 # address files to go stale).
@@ -222,12 +232,14 @@ head-zero-address: _require-launcher
   #!/usr/bin/env bash
   {{hydrozoa}} head-zero-address --home {{HYDROZOA_HOME}}
 
+# Extra ARGS go straight to the launcher — e.g. `--blockfrost-url` to reach a devnet at its
+# host-mapped port. LADDER_REFS comes first, so pass "" for it when adding ARGS.
 # Deploy the treasury + dispute validators (and, unless reused, the G2 setup ladder), funded by
 # head peer 0's wallet under $HYDROZOA_HOME (change returns to it). The network is derived from the Blockfrost
 # key (read from the .local template, else $BLOCKFROST_API_KEY). Writes $HYDROZOA_HOME/bootstrap/ref-utxos.json
 # for build-head-config. Pass LADDER_REFS (an existing ref-utxos.json) to reuse the already-deployed
 # ladder and redeploy only the validators.
-deploy-scripts-and-g2-setup LADDER_REFS="": _require-launcher
+deploy-scripts-and-g2-setup LADDER_REFS="" *ARGS: _require-launcher
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "deploy-scripts-and-g2-setup"' EXIT
@@ -237,13 +249,15 @@ deploy-scripts-and-g2-setup LADDER_REFS="": _require-launcher
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
   args=(--home {{HYDROZOA_HOME}} --blockfrost-key "$key")
   if [ -n "{{LADDER_REFS}}" ]; then args+=(--ladder-refs {{LADDER_REFS}}); fi
-  {{hydrozoa}} deploy-scripts-and-g2-setup "${args[@]}"
+  {{hydrozoa}} deploy-scripts-and-g2-setup "${args[@]}" {{ARGS}}
 
+# Extra ARGS go straight to the launcher — e.g. `--blockfrost-url` to reach a devnet at its
+# host-mapped port.
 # Build the shared head-config.json from $HYDROZOA_HOME's bootstrap files (roster, defaults, l2-cardano-eutxo,
 # ref-utxos), writing $HYDROZOA_HOME/head-config/head-config.json. Reads the Blockfrost key from the .local
 # template (else $BLOCKFROST_API_KEY); head peer 0's address must be funded on the target network
 # first (the tool logs the exact lovelace required and fails with the shortfall if not).
-build-head-config: _require-launcher
+build-head-config *ARGS: _require-launcher
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "build-head-config"' EXIT
@@ -251,7 +265,13 @@ build-head-config: _require-launcher
   key="${BLOCKFROST_API_KEY:-}"
   if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
-  {{hydrozoa}} build-head-config --home {{HYDROZOA_HOME}} --blockfrost-key "$key"
+  {{hydrozoa}} build-head-config --home {{HYDROZOA_HOME}} --blockfrost-key "$key" {{ARGS}}
+
+# Drive a local Yaci DevKit devnet as the head's L1 (dev/testing — no Blockfrost key, no funded
+# testnet wallet). Commands: `up`, `network [OUT]`, `topup ADDRESS [ADA]`, `down`; run without
+# arguments for the full usage. The Docker smoke-test calls the same script.
+yaci-devnet *ARGS:
+  scripts/yaci-devnet.sh {{ARGS}}
 
 # Run a head node in the foreground from a generated head-config + a peer's private config.
 serve HEAD_CONFIG PRIVATE_CONFIG: _require-launcher

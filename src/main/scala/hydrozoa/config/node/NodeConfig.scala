@@ -7,8 +7,8 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.coil.CoilPeers.coilPeersDecoder
-import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
-import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.CardanoNetwork.cardanoNetworkDecoder
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.peers.HeadPeers.headPeersDecoder
 import hydrozoa.config.node.NodePrivateConfig.given
@@ -88,14 +88,10 @@ object NodeConfig {
             cardanoBackend <- backendOverride match {
                 case Some(b) => EitherT.pure[IO, ScriptReferenceUtxos.Error | io.circe.Error](b)
                 case None =>
-                    val blockfrostNetwork = network match {
-                        case n: StandardCardanoNetwork => Left(n)
-                        // TODO: need a blockfrost url here
-                        case custom: Custom => Right((custom, ??? : CardanoBackendBlockfrost.URL))
-                    }
                     EitherT.liftF(
                       CardanoBackendBlockfrost(
-                        blockfrostNetwork,
+                        network,
+                        privateConfig.blockfrostApiUrl,
                         privateConfig.blockfrostApiKey,
                         tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
                       )
@@ -122,6 +118,7 @@ object NodeConfig {
         adminPassword: String,
         httpHost: String,
         httpPort: String,
+        blockfrostApiUrl: Option[String] = None,
     ): Option[NodeConfig] = for {
         ownHeadPeerPrivate <- OwnHeadPeerPrivate(ownHeadWallet, headConfig.headPeers)
         nodePrivateConfig = NodePrivateConfig(
@@ -135,6 +132,7 @@ object NodeConfig {
           adminPassword,
           httpHost,
           httpPort,
+          blockfrostApiUrl,
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 
@@ -154,6 +152,7 @@ object NodeConfig {
         adminPassword: String,
         httpHost: String,
         httpPort: String,
+        blockfrostApiUrl: Option[String] = None,
     ): Option[NodeConfig] = for {
         ownCoilPeerPrivate <- OwnCoilPeerPrivate(ownCoilWallet, headConfig.coilPeers)
         nodePrivateConfig = NodePrivateConfig(
@@ -167,6 +166,7 @@ object NodeConfig {
           adminPassword,
           httpHost,
           httpPort,
+          blockfrostApiUrl,
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 

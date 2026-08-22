@@ -19,6 +19,7 @@ final case class NodePrivateConfig(
     override val adminPassword: String,
     override val httpHost: String,
     override val httpPort: String,
+    override val blockfrostApiUrl: Option[String] = None,
 ) extends NodePrivateConfig.Section {
     override transparent inline def nodePrivateConfig: NodePrivateConfig = this
 }
@@ -58,6 +59,13 @@ object NodePrivateConfig {
         def httpHost: String = nodePrivateConfig.httpHost
 
         def httpPort: String = nodePrivateConfig.httpPort
+
+        /** Blockfrost-compatible endpoint serving this node's `cardanoNetwork`. Optional for the
+          * standard networks, which derive their public URL from the network itself, and set when a
+          * private endpoint serves one of them; required for a `Custom` chain, which has no public
+          * endpoint to fall back on.
+          */
+        def blockfrostApiUrl: Option[String] = nodePrivateConfig.blockfrostApiUrl
     }
 
     given nodePrivateConfigEncoder: Encoder[NodePrivateConfig] =

@@ -187,6 +187,21 @@ object MultiNodeConfig {
           testM = testM
         )
 
+    /** Run a [[MultiNodeConfigTestM]] against a config generated from a caller-provided
+      * [[TestPeersSpec]] — e.g. one pinned to a `Custom` network — for which [[runDefault]]'s
+      * hardcoded (Preprod) spec won't do.
+      */
+    def runWithSpec[A](spec: TestPeersSpec)(testM: MultiNodeConfigTestM[A])(using
+        toProp: A => Prop,
+        ioRuntime: IORuntime
+    ): Prop =
+        run(
+          resource = PropertyM
+              .pick[IO, MultiNodeConfig](generate(spec)())
+              .map(Resource.pure[IO, MultiNodeConfig](_)),
+          testM = testM
+        )
+
     def generateDefault: Gen[MultiNodeConfig] = generate(TestPeersSpec.default)()
 
     def generate(spec: TestPeersSpec)(
@@ -284,6 +299,7 @@ object MultiNodeConfig {
                           adminPassword = "welcome",
                           httpHost = "0.0.0.0",
                           httpPort = "8080",
+                          blockfrostApiUrl = None,
                         )
                     )
                   )

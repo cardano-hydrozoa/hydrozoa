@@ -6,7 +6,7 @@ import cats.syntax.all.*
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.bootstrap.Bootstrap
 import hydrozoa.config.ScriptReferenceUtxos.given
-import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
@@ -44,9 +44,9 @@ import scalus.uplc.builtin.ByteString
   *
   * Reference UTxOs at the burn address can never be spent, so one deployment serves every head on
   * the network until the compiled scripts change (a hash mismatch at config-build or node start
-  * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`, and
-  * the target network is derived from the key's network prefix (`preview…` / `preprod…` /
-  * `mainnet…`).
+  * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`; the
+  * target network is read from `defaults.json` (what keygen-fleet recorded — the same source
+  * build-head-config uses), with `--blockfrost-url` as a host-side override.
   */
 object DeployScriptsAndG2Setup:
 
@@ -81,6 +81,13 @@ object DeployScriptsAndG2Setup:
         ).map(Path.of(_))
             .orNone
 
+    private val blockfrostUrlOpt: Opts[Option[String]] =
+        Opts.option[String](
+          "blockfrost-url",
+          "Host-side Blockfrost-compatible API base URL override (e.g. an in-mesh backend's " +
+              "host-mapped port); overrides the blockfrostApiUrl recorded in defaults.json"
+        ).orNone
+
     /** The `deploy-scripts-and-g2-setup` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
         Command(
@@ -89,23 +96,32 @@ object DeployScriptsAndG2Setup:
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
-        (Bootstrap.homeOpt, walletOpt, blockfrostKeyOpt, ladderRefsOpt).mapN(
-          (home, walletOverride, mbKey, ladder) =>
-              deployScriptsAndG2Setup(
-                walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
-                mbKey,
-                Bootstrap.defaultPrivateTemplate(home),
-                ladder,
-                Bootstrap.HomeLayout.refUtxos(home)
-              )
+        (
+          Bootstrap.homeOpt,
+          walletOpt,
+          blockfrostKeyOpt,
+          ladderRefsOpt,
+          blockfrostUrlOpt
+        ).mapN((home, walletOverride, mbKey, ladder, blockfrostUrl) =>
+            deployScriptsAndG2Setup(
+              walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
+              Bootstrap.HomeLayout.bootstrapDir(home).resolve(Bootstrap.BootstrapDir.defaults),
+              mbKey,
+              Bootstrap.defaultPrivateTemplate(home),
+              ladder,
+              Bootstrap.HomeLayout.refUtxos(home),
+              blockfrostUrl
+            )
         )
 
     private def deployScriptsAndG2Setup(
         walletPath: Path,
+        defaultsPath: Path,
         mbBlockfrostKey: Option[String],
         template: Path,
         ladderRefsPath: Option[Path],
-        outPath: Path
+        outPath: Path,
+        blockfrostUrlOverride: Option[String]
     ): IO[ExitCode] =
         for {
             // No --blockfrost-key / $BLOCKFROST_API_KEY → fall back to the key set in the template.
@@ -115,31 +131,55 @@ object DeployScriptsAndG2Setup:
                     s"$template"
               ) *> Bootstrap.blockfrostKeyFrom(template)
             )(IO.pure)
-            cardanoNetwork <- IO.fromEither[StandardCardanoNetwork](
-              networkOfBlockfrostKey(blockfrostKey)
+            // The target network is what keygen-fleet recorded in defaults.json — the same source
+            // build-head-config reads — so the two never diverge. --blockfrost-url is a host-side
+            // override (e.g. an in-mesh backend's host-mapped port); the key only authenticates the
+            // backend.
+            bootstrapNetwork <- Bootstrap.readBootstrapNetwork(defaultsPath)
+            cardanoNetwork = bootstrapNetwork.cardanoNetwork
+            blockfrostApiUrl = blockfrostUrlOverride.orElse(bootstrapNetwork.blockfrostApiUrl)
+            // Fail fast on a key/network mismatch (a stale $BLOCKFROST_API_KEY) before the expensive
+            // on-chain deployment — skipped for a private endpoint, as build-head-config does.
+            _ <- IO.raiseWhen(
+              blockfrostApiUrl.isEmpty && !Bootstrap
+                  .keyMatchesNetwork(blockfrostKey, cardanoNetwork)
+            )(
+              RuntimeException(
+                s"the Blockfrost key does not match the target network ($cardanoNetwork) — stale " +
+                    "$BLOCKFROST_API_KEY export?"
+              )
             )
             exit <- {
                 given CardanoNetwork.Section = cardanoNetwork
-                deployOn(cardanoNetwork, walletPath, blockfrostKey, ladderRefsPath, outPath)
+                deployOn(
+                  cardanoNetwork,
+                  blockfrostApiUrl,
+                  walletPath,
+                  blockfrostKey,
+                  ladderRefsPath,
+                  outPath
+                )
             }
         } yield exit
 
     private def deployOn(
-        cardanoNetwork: StandardCardanoNetwork,
+        cardanoNetwork: CardanoNetwork,
+        blockfrostApiUrl: Option[String],
         walletPath: Path,
         blockfrostKey: String,
         ladderRefsPath: Option[Path],
         outPath: Path
     )(using CardanoNetwork.Section): IO[ExitCode] = {
         for {
-            _ <- log.info(s"Target network (from the Blockfrost key): $cardanoNetwork")
+            _ <- log.info(s"Target network: $cardanoNetwork")
 
             wallet <- readWallet(walletPath)
 
             reusedLadderInputs <- ladderRefsPath.traverse(readLadderInputs)
 
             backend <- CardanoBackendBlockfrost(
-              Left(cardanoNetwork),
+              cardanoNetwork,
+              blockfrostApiUrl,
               blockfrostKey,
               tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
@@ -268,19 +308,6 @@ object DeployScriptsAndG2Setup:
           disputeResolutionScriptInput = disputeTx.deployedUtxos.head,
           setupLadderInputs = ladderInputs
         )
-
-    /** Derive the target network from the Blockfrost key's network prefix. */
-    private def networkOfBlockfrostKey(key: String): Either[Throwable, StandardCardanoNetwork] =
-        if key.startsWith("preview") then Right(CardanoNetwork.Preview)
-        else if key.startsWith("preprod") then Right(CardanoNetwork.Preprod)
-        else if key.startsWith("mainnet") then Right(CardanoNetwork.Mainnet)
-        else
-            Left(
-              RuntimeException(
-                "cannot derive the network from the Blockfrost key: expected a preview…/preprod…/" +
-                    "mainnet… project key"
-              )
-            )
 
     /** The cexplorer host for the target network. */
     private def explorerHost(using network: CardanoNetwork.Section): String =

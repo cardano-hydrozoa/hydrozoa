@@ -274,6 +274,22 @@ The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a fe
 
 ---
 
+## E2E: Docker smoke-test on the shipped topology (CI-excluded)
+
+`integration/src/test/scala/hydrozoa/integration/e2e/DockerSmokeTest.scala` is a black-box level outside the `ModelBasedSuite` framework. It stands up the `docker-compose.yml` that `hydrozoa scaffold` writes — **2 head + 4 coil peers** — on a local **Yaci** devnet, forms a head through the packaged image and the real WS mesh + Ember HTTP API, submits an L2 transaction to head-0 over HTTP, and asserts it reaches both head peers' L2 ledgers. It's the one test that covers the documented deployment path end to end (`docker compose`, the image, real sockets, the custom-network config flow); the stages only reach `HydrozoaRoutes` in-process.
+
+- **Shipped topology, not a lookalike.** It runs `keygen-fleet 2 4 2` against the scaffolded `docker-compose.yml` + `docker-compose.yaci.yml` overlay — the pair docs/user-guide/DEPLOYMENT.md hands an operator — so a failure is a failure of the documented path. The peer count lives in two places (the `keygen-fleet` args and the compose services); keep them in sync.
+- **Only head peers are asserted on.** Coil peers run no `HydrozoaServer`, but they are load-bearing — the head can't initialize without `coilQuorum` of them signing — so a broken coil surfaces as a `/ready` timeout, not a silent pass.
+- **Bring-up goes through `scripts/yaci-devnet.sh`** (`up`/`network`/`topup`, the script docs/user-guide/DEPLOYMENT.md documents); the rest shells out to the staged `hydrozoa` launcher and `docker compose`, with `SubmissionClient`/`EutxoL2QueryClient` for submit + polling. Container logs are dumped on failure.
+- **Devnet requirements** (pinned in `docker-compose.yaci.yml`): protocol major version ≥ 11 and `companion` node mode — the validators are ill-formed below PV11, and the default mode can't install the PV11 cost models. Missing either fails in `deploy-scripts-and-g2-setup`.
+- **CI-excluded** (minutes-long; needs Docker + Yaci + the built image): its FQN is in `Tests.Exclude(...)` in `build.sbt`, like `Stage1PropertiesYaci`. A stray `testOnly *` that reaches it without Docker or the launcher **cancels** (stays green), not fails.
+
+```bash
+just integration-e2e-docker   # builds the image, stages the launcher, runs the suite
+```
+
+---
+
 ## Choosing Where to Add a Test
 
 | Goal                                                                          | Stage     |
@@ -286,6 +302,7 @@ The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a fe
 | Cross-peer codec / framing / batch-cursor regression                            | Stage 4 (WebSocket mode) |
 | L2 ledger correctness under reordering                                         | Stage 4   |
 | L1-side fee / validity-interval / treasury-rotation regression                  | Stage 1 (Yaci/Blockfrost) |
+| Black-box propagation across the packaged image + `docker compose` + HTTP API   | E2E (Docker, CI-excluded) |
 
 A scenario that needs **both** real L1 and slow-cycle multi-peer consensus does not yet have a home — that's the "stage 4 against Yaci" path. The harness already supports the swap (`CardanoBackend[IO]` is the only L1 dependency); only `propEffectsLanded`'s `(attempts, sleep)` budget needs widening.
 
