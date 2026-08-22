@@ -5,7 +5,7 @@ import com.monovore.decline.effect.CommandIOApp
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.BuildInfo
 import hydrozoa.app.cli.{Scaffold, SubmitDeposit, SubmitL2Transaction}
-import hydrozoa.rulebased.evacuator.RefundSweep
+import hydrozoa.rulebased.evacuator.{RefundSweep, ResidueSweep}
 import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles, KeygenFleet, Migrate, PrintHeadZeroAddress}
 
 /** The `hydrozoa` command-line entry point: a single dispatcher over every deployment and runtime
@@ -57,6 +57,7 @@ object Main
           Migrate.command,
           Scaffold.command,
           RefundSweep.command,
+          ResidueSweep.command,
           versionCommand
         )
 
