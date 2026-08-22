@@ -4,12 +4,16 @@ import cats.effect.{ExitCode, IO}
 import cats.syntax.apply.*
 import cats.syntax.contravariant.*
 import com.monovore.decline.{Command, Opts}
+import hydrozoa.app.cli.DemoConfig
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.node.NodeConfig
+import hydrozoa.config.head.network.CardanoNetwork.cardanoNetworkDecoder
+import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
-import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
+import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.joint.EvacuationMap.evacuationMapDecoder
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l1.tx.RawTx
@@ -73,6 +77,65 @@ object RunEvacuator {
               .mapN(run)
         )
 
+    /** Everything the evacuator needs: the head's public parameters, the evacuation operation
+      * settings, and a wallet to pay fees and collateral with.
+      *
+      * Deliberately avoids [[hydrozoa.config.node.NodeConfig.load]], which refuses any wallet whose
+      * verification key is not among the head's configured peers. Evacuation is permissionless —
+      * the validator authorises an `Evacuate` on the payouts it makes, not on who signs it — so the
+      * party draining a dead head is typically not a peer of it, and must not be required to hold a
+      * peer's key to act.
+      */
+    private final case class EvacuatorConfig(
+        headConfig: HeadConfig,
+        override val nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
+        wallet: PeerWallet
+    ) extends HeadConfig.Bootstrap.Section,
+          NodeOperationEvacuationConfig.Section {
+        override def headConfigBootstrap: HeadConfig.Bootstrap = headConfig.headConfigBootstrap
+    }
+
+    private def loadConfig(
+        headConfigPath: Path,
+        privateConfigPath: Path
+    ): IO[(EvacuatorConfig, CardanoBackend[IO])] =
+        for {
+            headStr <- IO.blocking(Files.readString(headConfigPath))
+            headJson <- IO.fromEither(io.circe.parser.parse(headStr))
+            privStr <- IO.blocking(Files.readString(privateConfigPath))
+            privJson <- IO.fromEither(io.circe.parser.parse(privStr))
+
+            network <- IO.fromEither(
+              headJson.hcursor.get[CardanoNetwork]("cardanoNetwork")(using cardanoNetworkDecoder)
+            )
+            apiKey <- IO.fromEither(privJson.hcursor.get[String]("blockfrostApiKey"))
+            evacuationConfig <- IO.fromEither(
+              privJson.hcursor.get[NodeOperationEvacuationConfig]("nodeOperationEvacuationConfig")
+            )
+
+            backend <- network match {
+                case n: StandardCardanoNetwork =>
+                    CardanoBackendBlockfrost(
+                      Left(n),
+                      apiKey,
+                      tracer =
+                          Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+                    )
+                case c: CardanoNetwork.Custom =>
+                    IO.raiseError(
+                      RuntimeException(s"custom network $c needs an explicit Blockfrost URL")
+                    )
+            }
+
+            headConfig <- HeadConfig
+                .fromJson(headStr, backend)
+                .foldF(
+                  err => IO.raiseError(RuntimeException(s"head config: $err")),
+                  IO.pure
+                )
+            wallet <- DemoConfig.readWallet(privateConfigPath)
+        } yield (EvacuatorConfig(headConfig, evacuationConfig, wallet), backend)
+
     def run(
         headConfigPath: Path,
         privateConfigPath: Path,
@@ -82,31 +145,31 @@ object RunEvacuator {
         commit: Boolean
     ): IO[ExitCode] =
         for {
-            loaded <- NodeConfig.load(headConfigPath, privateConfigPath, None)
-            (nodeConfig, backend) = loaded
+            loaded <- loadConfig(headConfigPath, privateConfigPath)
+            (config, backend) = loaded
             exit <- {
-                given HeadConfig.Bootstrap.Section = nodeConfig.headConfig
-                drive(nodeConfig, backend, mapPath, TransactionHash.fromHex(anchor), maxTxs, commit)
+                given HeadConfig.Bootstrap.Section = config.headConfig
+                drive(config, backend, mapPath, TransactionHash.fromHex(anchor), maxTxs, commit)
             }
         } yield exit
 
     private def drive(
-        nodeConfig: NodeConfig,
+        config: EvacuatorConfig,
         backend: CardanoBackend[IO],
         mapPath: Path,
         anchorTx: TransactionHash,
         maxTxs: Option[Int],
         commit: Boolean
     )(using HeadConfig.Bootstrap.Section): IO[ExitCode] = {
-        val params = nodeConfig.headConfig.cardanoProtocolParams
-        val wallet = nodeConfig.ownWallet
+        val params = config.headConfig.cardanoProtocolParams
+        val wallet = config.wallet
         val walletAddress =
-            wallet.exportVerificationKey.shelleyAddress()(using nodeConfig.headConfig)
-        val treasuryAddress = nodeConfig.headConfig.ruleBasedTreasuryAddress
+            wallet.exportVerificationKey.shelleyAddress()(using config.headConfig)
+        val treasuryAddress = config.headConfig.ruleBasedTreasuryAddress
         val beacon =
             (
-              nodeConfig.headConfig.headMultisigScript.policyId,
-              nodeConfig.headConfig.headTokenNames.treasuryTokenName
+              config.headConfig.headMultisigScript.policyId,
+              config.headConfig.headTokenNames.treasuryTokenName
             )
 
         for {
@@ -150,10 +213,10 @@ object RunEvacuator {
             // the head multisig address. Reading it from config would assume a head that ran.
             regimeUtxos <- backend
                 .utxosAt(
-                  nodeConfig.headConfig.headMultisigAddress,
+                  config.headConfig.headMultisigAddress,
                   (
-                    nodeConfig.headConfig.headMultisigScript.policyId,
-                    nodeConfig.headConfig.headTokenNames.regimeWitnessTokenName
+                    config.headConfig.headMultisigScript.policyId,
+                    config.headConfig.headTokenNames.regimeWitnessTokenName
                   )
                 )
                 .flatMap(IO.fromEither(_).adaptError(e => RuntimeException(s"regime: $e")))
@@ -183,7 +246,7 @@ object RunEvacuator {
             exit <-
                 if !commit then
                     log.info("not submitting; pass --commit to run it").as(ExitCode.Success)
-                else submitChain(plan, treasury, collateral, regime, nodeConfig, backend)
+                else submitChain(plan, treasury, collateral, regime, config, backend)
         } yield exit
     }
 
@@ -205,10 +268,10 @@ object RunEvacuator {
         treasury0: RuleBasedTreasuryUtxo,
         collateral0: CollateralUtxo,
         regime: RuleBasedRegimeUtxo,
-        nodeConfig: NodeConfig,
+        config: EvacuatorConfig,
         backend: CardanoBackend[IO]
-    )(using HeadConfig.Bootstrap.Section): IO[ExitCode] = {
-        val wallet = nodeConfig.ownWallet
+    ): IO[ExitCode] = {
+        val wallet = config.wallet
 
         def step(
             remaining: List[EvacuationPlan.Step],
@@ -229,7 +292,7 @@ object RunEvacuator {
                         allRemainingEvacuatees = allRemaining,
                         collateralUtxo = collateral
                       )
-                      .result(using nodeConfig)
+                      .result(using config)
                       .left
                       .map(e => RuntimeException(s"build failed at step ${s.index}: $e"))
                 ).flatMap { evac =>
