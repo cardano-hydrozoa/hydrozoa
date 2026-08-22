@@ -14,7 +14,7 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult, BlockType, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
@@ -221,7 +221,7 @@ final case class StackComposer(
       * `lastClosedBlockNum + 1` into a new stack.
       */
     private def tryCloseAsLeader(s: State, nextStackNum: StackNumber): IO[Unit] =
-        s.longestReadyPrefix match {
+        s.longestReadyPrefix(config.maxMajorBlocksPerStack.convert) match {
             case Nil => IO.unit
             case prefix =>
                 for {
@@ -428,6 +428,23 @@ final case class StackComposer(
                             // (2) not caught up — benign; wait for more BlockResults /
                             // SoftConfirmeds. tryProgress re-fires on the next event.
                             IO.unit
+                        case Some(slice)
+                            if countMajors(slice) > config.maxMajorBlocksPerStack.convert =>
+                            // (1b) divergence — the leader closed on more Majors than the
+                            // head-agreed cap allows. Same class of break as a structurally
+                            // inconsistent range: this peer would derive a stack the cap forbids.
+                            tracer.traceWith(
+                              StackComposerEvent.MajorCapExceeded(
+                                nextStackNum,
+                                countMajors(slice),
+                                config.maxMajorBlocksPerStack.convert
+                              )
+                            ) >> panic(
+                              s"Stack $nextStackNum covers ${countMajors(slice)} major blocks," +
+                                  s" over the agreed cap of ${config.maxMajorBlocksPerStack.convert};" +
+                                  " consensus is broken."
+                            ) >> context.self.stop
+
                         case Some(slice) =>
                             // (3) covered — accept exactly the brief's range.
                             for {
@@ -831,6 +848,41 @@ object StackComposer {
         softConfirmed: Block.SoftConfirmed
     )
 
+    /** How many Major blocks a run of ready blocks covers — the count a stack is capped on, and the
+      * one a follower checks an inbound brief's range against.
+      */
+    private[consensus] def countMajors(blocks: List[ReadyBlock]): Int =
+        blocks.count(isMajor)
+
+    /** The longest prefix of `blocks` covering at most `maxMajors` Majors, cutting *before* the
+      * Major that would exceed it so the last included Major keeps its trailing Minors.
+      */
+    private[consensus] def takeUpToMajors(
+        blocks: List[ReadyBlock],
+        maxMajors: Int
+    ): List[ReadyBlock] = {
+        @tailrec
+        def loop(
+            remaining: List[ReadyBlock],
+            majors: Int,
+            acc: List[ReadyBlock]
+        ): List[ReadyBlock] =
+            remaining match {
+                case Nil => acc.reverse
+                case rb :: rest =>
+                    if isMajor(rb) then
+                        if majors == maxMajors then acc.reverse
+                        else loop(rest, majors + 1, rb :: acc)
+                    else loop(rest, majors, rb :: acc)
+            }
+        loop(blocks, 0, Nil)
+    }
+
+    private def isMajor(rb: ReadyBlock): Boolean = rb.result.brief match {
+        case _: BlockType.Major => true
+        case _                  => false
+    }
+
     /** The product of composing a stack from a prefix of paired blocks: the [[Stack.Unsigned]] to
       * hand to consensus, the rotated treasury + evacuation map the close advanced to, and the
       * [[StackPartition]] layout. The partitions are carried so the prefix is partitioned **once**
@@ -903,15 +955,25 @@ object StackComposer {
                 case _ => this
             }
 
-        /** Longest contiguous run of ready blocks starting at `lastClosedBlockNum + 1`. */
-        def longestReadyPrefix: List[ReadyBlock] = {
+        /** Longest contiguous run of ready blocks starting at `lastClosedBlockNum + 1`, truncated
+          * before the `maxMajors + 1`-th Major so one stack never carries more than `maxMajors`
+          * Major partitions.
+          *
+          * The cut lands *on* the next Major, so the last included Major keeps the Minor blocks
+          * trailing it — the partition it heads stays whole, and the remainder opens the following
+          * stack with a leading Minor run, which [[StackPartition.partition]] accepts.
+          *
+          * `maxMajors` is positive, so the first Major always fits and a truncated prefix is never
+          * empty.
+          */
+        def longestReadyPrefix(maxMajors: Int): List[ReadyBlock] = {
             @tailrec
             def loop(n: BlockNumber, acc: List[ReadyBlock]): List[ReadyBlock] =
                 ready.get(n) match {
                     case Some(rb) => loop(n.increment, rb :: acc)
                     case None     => acc.reverse
                 }
-            loop(lastClosedBlockNum.increment, Nil)
+            takeUpToMajors(loop(lastClosedBlockNum.increment, Nil), maxMajors)
         }
 
         /** The exact paired blocks for the inclusive range `[first, last]`, or `None` if any block

@@ -26,5 +26,10 @@ object StackComposerEventFormat:
                   s"Follower stack $sn structural divergence: leader brief [$lFirst..$lLast] but expected to start at $expected",
                   "stackNum" -> s"${sn: Int}"
                 )
+            case MajorCapExceeded(sn, majors, cap) =>
+                warn(
+                  s"Follower stack $sn covers $majors major blocks, over the agreed cap of $cap",
+                  "stackNum" -> s"${sn: Int}"
+                )
         }
     }

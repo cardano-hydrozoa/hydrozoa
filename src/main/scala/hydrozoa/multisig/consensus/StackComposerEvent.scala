@@ -38,3 +38,10 @@ object StackComposerEvent:
         leaderLast: BlockNumber,
         expectedFirst: BlockNumber
     ) extends StackComposerEvent
+
+    /** A leader closed a stack covering more Major blocks than the head-agreed cap allows. */
+    final case class MajorCapExceeded(
+        stackNum: StackNumber,
+        majors: Int,
+        cap: Int
+    ) extends StackComposerEvent

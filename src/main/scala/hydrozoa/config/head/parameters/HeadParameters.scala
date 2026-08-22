@@ -3,11 +3,13 @@ package hydrozoa.config.head.parameters
 import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
+import hydrozoa.config.head.multisig.stack.StackConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
+import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
 import scalus.cardano.ledger.Hash32
 
@@ -20,6 +22,7 @@ final case class HeadParameters(
     override val disputeResolutionConfig: DisputeResolutionConfig,
     override val settlementConfig: SettlementConfig,
     override val blockConfig: BlockConfig,
+    override val stackConfig: StackConfig,
     // QUESTION: (from Peter to Ilia): I don't think we need to pin the coil quorum here, do we?
     //   It will be in the multisig native script; the hash will change if the peers don't agree.
     override val coilQuorum: Int,
@@ -34,15 +37,22 @@ object HeadParameters {
 
     given headParametersEncoder: Encoder[HeadParameters] = deriveEncoder[HeadParameters]
 
+    /** Injects [[StackConfig.default]] when `stackConfig` is absent, so a head config produced
+      * before that section existed still decodes rather than failing on the missing field.
+      */
     given headParametersDecoder(using CardanoNetwork.Section): Decoder[HeadParameters] =
-        deriveDecoder[HeadParameters]
+        deriveDecoder[HeadParameters].prepare { c =>
+            if c.downField("stackConfig").succeeded then c
+            else c.withFocus(_.mapObject(_.add("stackConfig", StackConfig.default.asJson)))
+        }
 
     trait Section
         extends TxTiming.Section,
           FallbackContingency.Section,
           DisputeResolutionConfig.Section,
           SettlementConfig.Section,
-          BlockConfig.Section {
+          BlockConfig.Section,
+          StackConfig.Section {
         def headParameters: HeadParameters
 
         /** A black-box, L2-specific blake2b-256 hash of the L2 parameters that the peers agree upon
@@ -78,5 +88,8 @@ object HeadParameters {
 
         def blockConfig: BlockConfig =
             headParameters.blockConfig
+
+        def stackConfig: StackConfig =
+            headParameters.stackConfig
     }
 }
