@@ -243,7 +243,11 @@ deploy-scripts-and-g2-setup LADDER_REFS="": _require-launcher
 # ref-utxos), writing $HYDROZOA_HOME/head-config/head-config.json. Reads the Blockfrost key from the .local
 # template (else $BLOCKFROST_API_KEY); head peer 0's address must be funded on the target network
 # first (the tool logs the exact lovelace required and fails with the shortfall if not).
-build-head-config: _require-launcher
+#
+# L2_LEDGER is required and explicit — `cardano-eutxo` runs the built-in ledger in-process, while
+# `any-remote` points the head at a remote L2 ledger and additionally reads the map that ledger
+# exported into bootstrap/initial-evacuation-map.json, using it verbatim.
+build-head-config L2_LEDGER: _require-launcher
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "build-head-config"' EXIT
@@ -251,7 +255,7 @@ build-head-config: _require-launcher
   key="${BLOCKFROST_API_KEY:-}"
   if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
-  {{hydrozoa}} build-head-config --home {{HYDROZOA_HOME}} --blockfrost-key "$key"
+  {{hydrozoa}} build-head-config --home {{HYDROZOA_HOME}} --blockfrost-key "$key" --l2-ledger {{L2_LEDGER}}
 
 # Run a head node in the foreground from a generated head-config + a peer's private config.
 serve HEAD_CONFIG PRIVATE_CONFIG: _require-launcher

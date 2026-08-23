@@ -32,6 +32,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
+import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
@@ -249,6 +250,12 @@ object Bootstrap:
         val roster = "roster.json"
         val defaults = "defaults.json"
         val l2CardanoEutxo = "l2-cardano-eutxo.json"
+
+        /** The opening evacuation map a remote L2 ledger exports, consumed verbatim under
+          * `--l2-ledger any-remote`. Absent for the built-in EUTXO ledger, which projects its map
+          * from `l2-cardano-eutxo.json` instead.
+          */
+        val initialEvacuationMap = "initial-evacuation-map.json"
         val refUtxos = "ref-utxos.json"
     }
 
@@ -324,7 +331,9 @@ object Bootstrap:
       */
     def mkSharedHeadConfig(cardanoNetwork: CardanoNetwork, backend: CardanoBackend[IO])(
         bootstrapConfig: BootstrapConfig,
-        scriptReferenceUtxos: ScriptReferenceUtxos
+        scriptReferenceUtxos: ScriptReferenceUtxos,
+        l2Ledger: L2LedgerKind,
+        mbInitialEvacuationMap: Option[EvacuationMap]
     ): IO[HeadConfig] = for {
         blockCreationStartTime <- bootstrapConfig.blockZeroStartTime.fold(
           realTimeQuantizedInstant(cardanoNetwork.slotConfig).map(BlockCreationStartTime(_))
@@ -341,16 +350,18 @@ object Bootstrap:
           // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
           // a zero hash rather than empty bytes (which fail the length check).
           l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
-          // The demo build targets the built-in EUTXO ledger. TODO: surface via a --l2-ledger flag.
-          l2Ledger = L2LedgerKind.CardanoEutxo,
+          l2Ledger = l2Ledger,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
           identityIsomorphism = false,
         )
 
-        // The opening L2 state's total value is what the treasury must back on L1 (the initial L2
-        // value). The evacuation map itself is built later, once the seed utxo — the source of the
-        // synthetic key ids — is resolved.
-        initialL2Value = Value.combine(bootstrapConfig.initialL2State.map(_.value))
+        // The opening L2 state.s total value is what the treasury must back on L1 (the initial L2
+        // value). A remote ledger supplies its own opening map, so its total is authoritative there;
+        // for the built-in EUTXO ledger the map is projected from `initialL2State` further down,
+        // once the seed utxo — the source of the synthetic key ids — is resolved.
+        initialL2Value = mbInitialEvacuationMap.fold(
+          Value.combine(bootstrapConfig.initialL2State.map(_.value))
+        )(_.totalValue)
 
         // Equity comes from the config (per head peer). Its total is what the treasury backs beyond
         // the L2 value; the per-peer split is recorded but the init tx consumes only the sum.
@@ -478,9 +489,11 @@ object Bootstrap:
         initialUtxos: Utxos = bootstrapConfig.initialL2State.zipWithIndex.map { case (out, i) =>
             TransactionInput(genesisTxId, i) -> out.toTransactionOutput
         }.toMap
-        evacMap <- IO.fromEither(
-          initialUtxos.toEvacuationMap(cardanoNetwork).left.map(e => RuntimeException(e.toString))
-        )
+        evacMap <- mbInitialEvacuationMap.fold(
+          IO.fromEither(
+            initialUtxos.toEvacuationMap(cardanoNetwork).left.map(e => RuntimeException(e.toString))
+          )
+        )(IO.pure)
 
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
@@ -1064,6 +1077,20 @@ object BuildHeadConfig:
           Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
         ).orNone
 
+    /** Which L2 ledger the head runs. Required and explicit: the two differ in trust model, and a
+      * head built for the wrong one starts its in-process EUTXO ledger and never speaks to the
+      * remote ledger at all — a silent misconfiguration that only shows up at runtime.
+      */
+    private val l2LedgerOpt: Opts[L2LedgerKind] =
+        Opts.option[String](
+          "l2-ledger",
+          "Which L2 ledger the head runs: cardano-eutxo | any-remote (required)"
+        ).mapValidated { s =>
+            Decoder[L2LedgerKind]
+                .decodeJson(Json.fromString(s))
+                .fold(e => Validated.invalidNel(e.getMessage), Validated.validNel)
+        }
+
     /** The `build-head-config` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
         Command(
@@ -1072,20 +1099,48 @@ object BuildHeadConfig:
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
-        (Bootstrap.homeOpt, blockfrostKeyOpt).mapN((home, mbKey) =>
+        (Bootstrap.homeOpt, blockfrostKeyOpt, l2LedgerOpt).mapN((home, mbKey, l2Ledger) =>
             buildHeadConfig(
               Bootstrap.HomeLayout.bootstrapDir(home),
               mbKey,
               Bootstrap.defaultPrivateTemplate(home),
-              Bootstrap.HomeLayout.headConfig(home)
+              Bootstrap.HomeLayout.headConfig(home),
+              l2Ledger
             )
         )
+
+    /** Read the opening evacuation map a remote L2 ledger exported into the bootstrap directory.
+      * Used **verbatim**: the remote ledger owns its opening state, so this build projects nothing
+      * and validates nothing beyond the map's own decoder — the peers' agreement on it is checked
+      * by the ledger's own boot-time digest.
+      */
+    private def readInitialEvacuationMap(
+        bootstrapDir: Path,
+        network: CardanoNetwork
+    ): IO[EvacuationMap] = {
+        val path = bootstrapDir.resolve(Bootstrap.BootstrapDir.initialEvacuationMap)
+        for {
+            exists <- IO.blocking(Files.exists(path))
+            _ <- IO.raiseUnless(exists)(
+              RuntimeException(
+                s"--l2-ledger any-remote requires $path — export the opening evacuation map " +
+                    "from the remote L2 ledger and place it there"
+              )
+            )
+            str <- IO.blocking(Files.readString(path))
+            map <- {
+                given CardanoNetwork.Section = network
+                IO.fromEither(parser.decode[EvacuationMap](str))
+            }
+        } yield map
+    }
 
     private def buildHeadConfig(
         bootstrapDir: Path,
         mbBlockfrostKey: Option[String],
         template: Path,
-        outPath: Path
+        outPath: Path,
+        l2Ledger: L2LedgerKind
     ): IO[ExitCode] =
         for {
             // No --blockfrost-key / $BLOCKFROST_API_KEY → fall back to the key set in the template.
@@ -1138,9 +1193,18 @@ object BuildHeadConfig:
                         )
                     )
             }
+            // A remote ledger's opening map comes from the ledger itself; the built-in EUTXO ledger
+            // projects its own from `l2-cardano-eutxo.json` inside mkSharedHeadConfig.
+            mbInitialEvacuationMap <- l2Ledger match {
+                case L2LedgerKind.CardanoEutxo => IO.pure(None)
+                case L2LedgerKind.AnyRemote =>
+                    readInitialEvacuationMap(bootstrapDir, cardanoNetwork).map(Some(_))
+            }
             headConfig <- Bootstrap.mkSharedHeadConfig(cardanoNetwork, backend)(
               bootstrapConfig,
-              scriptReferenceUtxos
+              scriptReferenceUtxos,
+              l2Ledger,
+              mbInitialEvacuationMap
             )
             _ <- IO.blocking {
                 Option(outPath.getParent).foreach(Files.createDirectories(_))

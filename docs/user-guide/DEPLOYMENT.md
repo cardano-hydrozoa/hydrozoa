@@ -341,9 +341,14 @@ the ladder never changes.
 ### Step 5 — Build the shared head config
 
 ```bash
-hydrozoa build-head-config   # Docker; reads $HYDROZOA_HOME/bootstrap/, writes $HYDROZOA_HOME/head-config/head-config.json
-just build-head-config       # local
+hydrozoa build-head-config --l2-ledger cardano-eutxo   # Docker; reads $HYDROZOA_HOME/bootstrap/, writes $HYDROZOA_HOME/head-config/head-config.json
+just build-head-config cardano-eutxo                   # local
 ```
+
+`--l2-ledger` is required and has no default. `cardano-eutxo` is the ledger this guide deploys:
+every node runs the built-in EUTXO ledger in-process, and the head's opening evacuation map is
+projected from `bootstrap/l2-cardano-eutxo.json`. The other value, `any-remote`, points the head
+at a separate L2 ledger and is out of scope here.
 
 The build assembles the bootstrap directory's four files (roster, defaults, opening L2 state,
 script refs) and talks to L1: it fetches head peer 0's UTxOs (to select funding inputs and verify
@@ -452,7 +457,7 @@ So the restart cycle is:
 just head-down
 # re-fund head peer 0 if the previous head consumed the funding — `just head-zero-address`
 # prints the address; check it in the network's explorer
-just build-head-config
+just build-head-config cardano-eutxo
 just head-up           # right after the build — the config is freshest now
 ```
 
