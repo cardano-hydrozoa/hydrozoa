@@ -127,6 +127,7 @@ reference / `AtomicReference` publishes it to readers.
 | mempool size | gauge | requests held in the `BlockWeaver` mempool, not yet packed into a block |
 | leader mempool drain | gauge | requests the last lead pulled from the mempool into its block |
 | sequencer headroom | gauge | how many more requests the sequencer will admit before shedding load — the free space in its `backpressureCoefficient * maxRequestsPerBlock` window (the window itself is derivable from config, so only the live headroom is reported) |
+| head equity | gauge | the head's equity beyond its L2 liabilities, in lovelace — the treasury utxo's own `equity` field, one side of `treasury.value == evacuation map total + equity + beacon` |
 
 ## Instrumentation points
 
@@ -141,6 +142,7 @@ Three call sites, all on paths that already exist — no new plumbing:
 | block-lifecycle timings | **starts** in `BlockWeaver` (via `Connections.metrics`): `onLeadStart` on entering `Leader.ProcessingReadyRequests`, `onReplayStart` on entering `Follower.ProcessingReadyRequests`. **Close**: `JointLedger.handleBlock` calls `onBlockProduced(blockNum, requests)` where the brief is produced (own when leading, a reproduction when following) — this closes lead/replay *and* opens the soft-consensus clock; `FastConsensusActor.completeCell` then calls `onBlockConfirmed(blockNum, isMajor, events)` (merged with the block counters), which closes soft-consensus. `PeerMetrics` matches a produced block to whichever start (lead vs replay) the local peer opened, so the close site needs no lead/replay flag. |
 | mempool size / leader mempool drain | `BlockWeaver.Leader.ProcessingReadyRequests` — `onLeaderMempoolDrain(extracted)` and `onMempoolSize(surviving)` right after the leader extracts its block from the mempool; `onMempoolSize` also on `storeRequest`. |
 | sequencer headroom | `RequestSequencer` — `onSequencerHeadroom(headroom)` at PreStart, after each admit/reject, and on `SoftConfirmedHighWater` (which frees headroom). |
+| head equity | `StackComposer` — `onEquity(treasury.equity)` after `recoverOrBootstrap` (the recovered or initialization treasury, so the gauge is populated from boot) and after each `afterClose` on both the leader and follower paths, the points where the tracked treasury rotates. |
 
 Because `completeCell` / `completeStack` are the *only* places a soft-confirmed block / hard-confirmed
 stack is produced, those stats need exactly one line each and can never drift from reality.
