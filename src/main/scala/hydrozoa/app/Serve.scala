@@ -226,6 +226,53 @@ object Serve {
       * `None` and mounts no L2-query endpoints. The EUTXO ledger owns its own RocksDB persistence,
       * separate from the consensus store.
       */
+    /** Where this node's peer websocket server listens.
+      *
+      * Normally that is the address the shared head config advertises for this peer, so there is
+      * one source of truth and no way for the two to drift. The override exists for the case where
+      * they genuinely differ: with a TLS-terminating proxy in front, peers dial a public name that
+      * resolves to the proxy, and no host can bind that name. The node then advertises the public
+      * address to the head and listens wherever the proxy can reach it.
+      *
+      * Each half overrides independently -- moving the local port while keeping the advertised one
+      * is a normal thing to want, and requiring both would make that awkward.
+      */
+    private[hydrozoa] def peerBindAddress(
+        peerBindHost: Option[String],
+        peerBindPort: Option[String],
+        advertised: Uri,
+        ownHeadNum: HeadPeerNumber
+    ): (Host, Port) = {
+        val host = peerBindHost match {
+            case Some(h) =>
+                Host.fromString(h)
+                    .getOrElse(throw IllegalArgumentException(s"peerBindHost is not a host: $h"))
+            case None =>
+                advertised.host
+                    .flatMap(h => Host.fromString(h.value))
+                    .getOrElse(
+                      throw IllegalArgumentException(
+                        s"own head peer $ownHeadNum webSocketAddress has no valid host: $advertised"
+                      )
+                    )
+        }
+        val port = peerBindPort match {
+            case Some(p) =>
+                p.toIntOption
+                    .flatMap(Port.fromInt)
+                    .getOrElse(throw IllegalArgumentException(s"peerBindPort is not a port: $p"))
+            case None =>
+                advertised.port
+                    .flatMap(Port.fromInt)
+                    .getOrElse(
+                      throw IllegalArgumentException(
+                        s"own head peer $ownHeadNum webSocketAddress has no valid port: $advertised"
+                      )
+                    )
+        }
+        (host, port)
+    }
+
     private def mkL2Ledger(
         nodeConfig: NodeConfig,
         dataDir: Path,
@@ -312,6 +359,11 @@ object Serve {
         // The inter-peer transport server binds where the shared head config advertises this peer,
         // so bind address == the address other peers dial (single source of truth). The user-facing
         // HTTP server uses the private httpHost/httpPort instead.
+        //
+        // The two come apart whenever something terminates the connection in front of this node --
+        // a TLS proxy demanding a client certificate, say. Then peers dial a public name this host
+        // cannot bind, and `peerBindHost`/`peerBindPort` in the node's private config say where to
+        // listen instead. Advertised address stays shared and agreed; bind address stays local.
         val ownWsAddress = nodeConfig.headConfig.headPeers.headPeerData
             .lookup(ownHeadNum)
             .map(_.webSocketAddress)
@@ -320,20 +372,12 @@ object Serve {
                 s"no webSocketAddress configured for own head peer $ownHeadNum"
               )
             )
-        val bindHost = ownWsAddress.host
-            .flatMap(h => Host.fromString(h.value))
-            .getOrElse(
-              throw new IllegalArgumentException(
-                s"own head peer $ownHeadNum webSocketAddress has no valid host: $ownWsAddress"
-              )
-            )
-        val bindPort = ownWsAddress.port
-            .flatMap(Port.fromInt)
-            .getOrElse(
-              throw new IllegalArgumentException(
-                s"own head peer $ownHeadNum webSocketAddress has no valid port: $ownWsAddress"
-              )
-            )
+        val (bindHost, bindPort) = peerBindAddress(
+          nodeConfig.peerBindHost,
+          nodeConfig.peerBindPort,
+          ownWsAddress,
+          ownHeadNum
+        )
         val remoteHeadUris: Map[HeadPeerId, Uri] = nodeConfig.headPeerIds
             .filterNot(_.peerNum == ownHeadNum)
             .toList

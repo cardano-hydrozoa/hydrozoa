@@ -19,6 +19,8 @@ final case class NodePrivateConfig(
     override val adminPassword: String,
     override val httpHost: String,
     override val httpPort: String,
+    override val peerBindHost: Option[String] = None,
+    override val peerBindPort: Option[String] = None,
 ) extends NodePrivateConfig.Section {
     override transparent inline def nodePrivateConfig: NodePrivateConfig = this
 }
@@ -58,6 +60,27 @@ object NodePrivateConfig {
         def httpHost: String = nodePrivateConfig.httpHost
 
         def httpPort: String = nodePrivateConfig.httpPort
+
+        /** Where this node's peer websocket server actually binds, when that is not where other
+          * peers reach it.
+          *
+          * A peer's `webSocketAddress` in the shared head config is the address the rest of the
+          * head dials, so every peer must agree on it. It is also, by default, the address this
+          * node binds. Those coincide on a flat network and stop coinciding the moment anything
+          * sits in front: behind a TLS-terminating proxy the head is dialed at
+          * `wss://head.example:4001` but must listen on a private interface the proxy can reach,
+          * and `head.example` is not an address this host can bind at all.
+          *
+          * Being per-node private config is the point: the bind address is this machine's business,
+          * and putting it in the shared config would force every peer to agree on a detail none of
+          * them can observe.
+          */
+        def peerBindHost: Option[String] = nodePrivateConfig.peerBindHost
+
+        /** Port counterpart to [[peerBindHost]]; see there. Settable independently, so a node can
+          * keep the advertised port and move only the local one.
+          */
+        def peerBindPort: Option[String] = nodePrivateConfig.peerBindPort
     }
 
     given nodePrivateConfigEncoder: Encoder[NodePrivateConfig] =
