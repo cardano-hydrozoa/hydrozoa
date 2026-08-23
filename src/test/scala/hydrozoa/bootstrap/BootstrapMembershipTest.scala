@@ -84,6 +84,33 @@ class BootstrapMembershipTest extends AnyFunSuite {
         )
     }
 
+    test("the written defaults carry stackConfig, so a fresh scaffold pins the major cap") {
+        val network = CardanoNetwork.Preview
+        given CardanoNetwork.Section = network
+        val written = mkPreviewDefaults(coilQuorum = 0).asJson
+        val cap = written.hcursor
+            .downField("headParams")
+            .downField("stackConfig")
+            .get[Int]("maxMajorBlocksPerStack")
+        assert(cap == Right(StackConfig.default.maxMajorBlocksPerStack.convert))
+    }
+
+    test("a defaults.json written before stackConfig existed still decodes, to the default") {
+        val network = CardanoNetwork.Preview
+        given CardanoNetwork.Section = network
+        // An operator's bootstrap directory outlives the head it first built, so a new head-parameter
+        // section must not turn an existing `defaults.json` into a decode failure.
+        val old = mkPreviewDefaults(coilQuorum = 0).asJson.hcursor
+            .downField("headParams")
+            .withFocus(_.mapObject(_.remove("stackConfig")))
+            .top
+            .getOrElse(fail("could not rebuild the defaults JSON"))
+        val decoded = old
+            .as[Bootstrap.BootstrapDefaults]
+            .fold(e => fail(s"an older defaults.json must still decode, but: $e"), identity)
+        assert(decoded.headParams.stackConfig == StackConfig.default)
+    }
+
     test(
       "readBootstrapDir assembles the four bootstrap files into a BootstrapConfig"
     ) {

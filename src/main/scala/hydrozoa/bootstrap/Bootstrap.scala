@@ -166,8 +166,17 @@ object Bootstrap:
 
     object BootstrapHeadParams {
         given Encoder[BootstrapHeadParams] = deriveEncoder[BootstrapHeadParams]
+
+        /** Injects [[StackConfig.default]] when `stackConfig` is absent, so a `defaults.json`
+          * written before that section existed still builds. An operator's bootstrap directory
+          * outlives the head it first built — it is edited and re-run across releases — so a new
+          * head-parameter section must not turn an existing one into a decode failure.
+          */
         given (using CardanoNetwork.Section): Decoder[BootstrapHeadParams] =
-            deriveDecoder[BootstrapHeadParams]
+            deriveDecoder[BootstrapHeadParams].prepare { c =>
+                if c.downField("stackConfig").succeeded then c
+                else c.withFocus(_.mapObject(_.add("stackConfig", StackConfig.default.asJson)))
+            }
     }
 
     /** Assembly-time defaults (`defaults.json`): everything the head needs that is neither peer
