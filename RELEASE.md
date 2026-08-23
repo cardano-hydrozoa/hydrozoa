@@ -27,7 +27,7 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    as `version := "X.Y.Z"` and in prose:
 
    ```bash
-   grep -rn "0\.1\.9" --include=* . | grep -vE "^\./(target|\.git|head)/"
+   grep -rn "0\.1\.10" --include=* . | grep -vE "^\./(target|\.git|head)/"
    ```
 
    Not bumped: `HydrozoaRoutes.apiVersion` + `docs/openapi*.yaml` (the API-contract version,
