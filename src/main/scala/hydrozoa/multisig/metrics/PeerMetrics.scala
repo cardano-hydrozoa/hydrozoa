@@ -69,6 +69,7 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
     private val mempool = new AtomicLong(0)
     private val leaderMempoolDrain = new AtomicLong(0)
     private val seqHeadroom = new AtomicLong(0)
+    private val equityLovelace = new AtomicLong(0)
 
     // ---- derived rates (written only by the sampler fiber) ----
     private val rolling = new AtomicReference[Rolling](Rolling.empty(remotePeerNums))
@@ -145,6 +146,14 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
     def onSequencerHeadroom(headroom: Long): Unit =
         seqHeadroom.set(math.max(0L, headroom))
 
+    /** The equity the head holds beyond its L2 liabilities, in lovelace — the treasury utxo's own
+      * `equity` field, one side of the double-entry identity `treasury.value == evacuation map
+      * total + equity + beacon`. Reported by [[hydrozoa.multisig.consensus.StackComposer]] from the
+      * initialization treasury at boot and from the rotated treasury on every stack close, so it is
+      * the equity as of the last stack this peer closed.
+      */
+    def onEquity(lovelace: Long): Unit = equityLovelace.set(lovelace)
+
     private def startClock(m: TrieMap[Long, Long], blockNum: Long): Unit =
         m.update(blockNum, now())
         // Defensive: a block that never closes (crash) would leak a start entry; cap the in-flight
@@ -198,7 +207,8 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
           ),
           mempoolSize = mempool.get(),
           leaderMempoolDrain = leaderMempoolDrain.get(),
-          sequencerHeadroom = seqHeadroom.get()
+          sequencerHeadroom = seqHeadroom.get(),
+          equityLovelace = equityLovelace.get()
         )
 
     /** The 1 Hz sampler: feeds every rate's EWMAs from the cumulative counters, then publishes one
@@ -394,5 +404,6 @@ final case class PeerStats(
     blockTimings: BlockTimingSet,
     mempoolSize: Long,
     leaderMempoolDrain: Long,
-    sequencerHeadroom: Long
+    sequencerHeadroom: Long,
+    equityLovelace: Long
 )

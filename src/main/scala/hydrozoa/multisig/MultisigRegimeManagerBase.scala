@@ -172,7 +172,13 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
               )
             )
             stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracers.stackComposer, persistence)
+              StackComposer(
+                config,
+                pendingConnections,
+                tracers.stackComposer,
+                persistence,
+                metrics
+              )
             )
             slowConsensusActor <- context.actorOf(
               SlowConsensusActor(

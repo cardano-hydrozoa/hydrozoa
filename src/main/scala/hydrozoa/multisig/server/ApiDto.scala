@@ -247,7 +247,11 @@ object ApiDto {
         blockTimings: BlockTimingSetView,
         mempoolSize: Long,
         leaderMempoolDrain: Long,
-        sequencerHeadroom: Long
+        sequencerHeadroom: Long,
+        /** The head's equity beyond its L2 liabilities, in lovelace, as of the last stack this peer
+          * closed. One side of `treasury.value == evacuation map total + equity + beacon`.
+          */
+        equityLovelace: Long
     )
     given Codec[PeerStatsView] = deriveCodec
 
@@ -295,7 +299,8 @@ object ApiDto {
           ),
           mempoolSize = s.mempoolSize,
           leaderMempoolDrain = s.leaderMempoolDrain,
-          sequencerHeadroom = s.sequencerHeadroom
+          sequencerHeadroom = s.sequencerHeadroom,
+          equityLovelace = s.equityLovelace
         )
 
     /** `{ "status": "success", "message": ... }` — the finalize-trigger body. */
