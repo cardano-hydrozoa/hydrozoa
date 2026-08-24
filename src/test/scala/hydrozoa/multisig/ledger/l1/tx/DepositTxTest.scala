@@ -128,12 +128,8 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
             } yield (index, fee, l2PayloadHash)
 
             Prop.forAll(gen)((idx, fee, l2PayloadHash) =>
-                val aux: AuxiliaryData.Metadata =
-                    AuxiliaryData.Metadata(
-                      MD.Deposit(idx, fee, l2PayloadHash)
-                          .asAuxData(config.headId)
-                          .getMetadata
-                    )
+                val aux: AuxiliaryData =
+                    MD.Deposit(idx, fee, l2PayloadHash).asAuxData(config.headId)
                 val expectedX = MD.Deposit(idx, fee, l2PayloadHash)
 
                 MD.Deposit.parse(aux) match {
