@@ -27,6 +27,7 @@
     <logger name="Limiter" level="warn"/>
     <logger name="Persistence" level="warn"/>
     <logger name="CoilPeerWsTransport" level="warn"/>
+    <logger name="PeerTransport" level="warn"/>
     <logger name="HubWsTransport" level="warn"/>
     <logger name="CoilAckSequencer" level="warn"/>
     <logger name="HydrozoaHttp" level="warn"/>

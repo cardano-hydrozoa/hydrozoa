@@ -22,7 +22,13 @@ object PeerTransportEventFormat:
             case DialerConnected(remote, uri) =>
                 info(s"dialer: connected to remote=${remote.peerNum: Int} at $uri")
             case DialerFailed(remote, cause) =>
-                warn(s"dialer to remote=${remote.peerNum: Int} failed: ${cause.getMessage}")
+                // Class as well as message: getMessage is null for most connection exceptions.
+                warn(
+                  s"dialer to remote=${remote.peerNum: Int} failed: " +
+                      s"${cause.getClass.getSimpleName}: ${cause.getMessage}"
+                )
+            case DialerDisconnected(remote, uri) =>
+                warn(s"dialer: disconnected from remote=${remote.peerNum: Int} at $uri; redialing")
             case DialerStopped(remote, uri) =>
                 info(s"dialer: stopped for remote=${remote.peerNum: Int} at $uri")
             case ClientDecodeError(remote, cause) =>

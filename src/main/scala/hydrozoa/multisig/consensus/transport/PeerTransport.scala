@@ -105,8 +105,6 @@ final class WsPeerTransport private (
     /** Long-running dialer for a single remote. Attempts to reconnect forever with a 1-second
       * delay. Outbox is preserved across reconnects.
       */
-    // FIXME: The comment previously read "attempts to reconnect with an exponential backoff", but this wasn't
-    //   reflected in the code. I'm leaving the old behavior until someone can say which is correct.
     private def dialerLoop(
         client: WSClient[IO],
         remote: HeadPeerId,
@@ -114,15 +112,19 @@ final class WsPeerTransport private (
     ): IO[Nothing] = {
         val request = WSRequest(uri)
 
+        // Low-level `connect`, not `connectHighLevel`: the dialer needs to see the remote's
+        // keep-alive Ping to know the link is alive (see WsDuplex).
         def once: IO[Unit] =
-            client.connectHighLevel(request).use { conn =>
+            client.connect(request).use { conn =>
                 val helloLine = HeadFrame.encode(HeadFrame.Hello(ownPeerId.peerNum))
                 tracer.traceWith(DialerConnected(remote, uri)) >>
                     conn.send(WSFrame.Text(helloLine)) >>
                     WsDuplex.run(conn, outboxes(remote), onLine(remote))
             }
 
-        val attempt: IO[Unit] = once.handleErrorWith(e => tracer.traceWith(DialerFailed(remote, e)))
+        val attempt: IO[Unit] =
+            (once >> tracer.traceWith(DialerDisconnected(remote, uri)))
+                .handleErrorWith(e => tracer.traceWith(DialerFailed(remote, e)))
 
         (attempt >> IO.sleep(1.second)).foreverM
     }
