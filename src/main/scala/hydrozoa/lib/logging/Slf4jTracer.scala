@@ -1,6 +1,8 @@
 package hydrozoa.lib.logging
 
 import cats.effect.IO
+import org.typelevel.log4cats.Logger // scalafix:ok DisableSyntax
+import org.typelevel.log4cats.slf4j.Slf4jLogger // scalafix:ok DisableSyntax
 
 enum Level:
     case Trace, Debug, Info, Warn, Error
@@ -63,7 +65,7 @@ object Slf4jTracer:
       * per-component tracers with `Slf4jTracer.sink.contramap(MyEventFormat.humanFormat(...))`.
       */
     val sink: ContraTracer[IO, LogEvent] = ContraTracer.emit((ev: LogEvent) =>
-        val lg = Logging.loggerIO(ev.routingKey.getOrElse("hydrozoa"))
+        val lg = loggerIO(ev.routingKey.getOrElse("hydrozoa"))
         val msg = renderMsg(ev)
         ev.level match
             case Level.Trace => lg.trace(msg)
@@ -72,6 +74,11 @@ object Slf4jTracer:
             case Level.Warn  => lg.warn(msg)
             case Level.Error => ev.cause.fold(lg.error(msg))(lg.error(_)(msg))
     )
+
+    /** The one SLF4J bridge in the codebase. Everything else logs through a `ContraTracer` and
+      * reaches SLF4J via [[sink]]; the `DisableSyntax` rule in `.scalafix.conf` keeps it that way.
+      */
+    private def loggerIO(name: String): Logger[IO] = Slf4jLogger.getLoggerFromName[IO](name)
 
     private def renderMsg(ev: LogEvent): String =
         val prefix =
