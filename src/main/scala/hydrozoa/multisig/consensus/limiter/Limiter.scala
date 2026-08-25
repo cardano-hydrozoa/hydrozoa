@@ -48,7 +48,7 @@ final case class Limiter[Msg](
                     _ <-
                         if waitMs > 0 then
                             tracer.traceWith(
-                              LimiterEvent.HoldingMsg(msg.getClass.getSimpleName, waitMs)
+                              LimiterEvent.HoldingMsg(msg.getClass, waitMs)
                             ) >> IO.sleep(waitMs.millis)
                         else IO.unit
                     _ <- downstream ! msg

@@ -224,7 +224,7 @@ final case class RuleBasedActor(
                 case Left(e) => raiseError(e)
             }
             _ <- traceRight(
-              RuleBasedActorEvent.Treasury.Found(treasuryUtxo.treasuryOutput.value.toString)
+              RuleBasedActorEvent.Treasury.Found(treasuryUtxo.treasuryOutput.value)
             )
             _ <- traceRight(RuleBasedActorEvent.Treasury.Parsing)
             _ <- treasuryUtxo.treasuryOutput.datum match {
@@ -346,7 +346,7 @@ final case class RuleBasedActor(
             _ <- tracer.traceWith(
               RuleBasedActorEvent.Evacuation.CandidateMaps(
                 s"$latest",
-                candidateEvacMaps.keySet.map(k => s"$k").toList
+                candidateEvacMaps.keySet
               )
             )
         } yield EvacuationInputs(candidateEvacMaps, fallbackTxHash)
@@ -408,7 +408,7 @@ final case class RuleBasedActor(
             ): IO[Either[StackNumber, TransactionHash]] =
                 tracer
                     .traceWith(
-                      RuleBasedActorEvent.Evacuation.EvacuationAnchor(label, s"$txId")
+                      RuleBasedActorEvent.Evacuation.EvacuationAnchor(label, txId)
                     )
                     .as(Right(txId))
             persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
@@ -948,7 +948,7 @@ final case class RuleBasedActor(
                 // past withdrawals; the original resolution-time map is committed by the oldest
                 // treasury tx's output datum, which is what `candidateEvacMaps` is keyed by.
                 _ <- EitherT.right[Error.RecoverableErrors](
-                  tracer.traceWith(RuleBasedActorEvent.Evacuation.ResolvedKzg(s"$resolutionKzg"))
+                  tracer.traceWith(RuleBasedActorEvent.Evacuation.ResolvedKzg(resolutionKzg))
                 )
                 evacuationMapAtResolution <- lookupMap(resolutionKzg, inputs.candidateEvacMaps)
 

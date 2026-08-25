@@ -8,4 +8,4 @@ sealed trait LimiterEvent
 object LimiterEvent:
     case object Started extends LimiterEvent
 
-    final case class HoldingMsg(msgType: String, holdMs: Long) extends LimiterEvent
+    final case class HoldingMsg(msgClass: Class[?], holdMs: Long) extends LimiterEvent
