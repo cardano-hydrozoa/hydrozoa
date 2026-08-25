@@ -439,6 +439,51 @@ object CardanoLiaison:
 
     case object PreStart
 
+    // ===================================
+    // Actions
+    // ===================================
+
+    /** The set of effects the actor may want to execute against L1. Lives here (not in the trait
+      * body) so [[CardanoLiaisonEvent.ActionsDispatched]] can carry it raw and the format renders
+      * it.
+      */
+    sealed trait Action
+    sealed trait DirectAction extends Action
+
+    // TODO: narrow these element types beyond `EnrichedTx[?]` — the construction sites already
+    // carry concrete subtypes:
+    //   - FallbackToRuleBased.tx        => FallbackTx
+    //   - PushForwardMultisig.txs       => Seq[SettlementTx | FinalizationTx | RolloutTx]
+    //   - Rollout.txs                   => Seq[RolloutTx]
+    //   - InitializeHead.txs            => Seq[HappyPathEffect]
+    // Tightening these makes the `.tx` strip at the construction sites a compile error rather
+    // than a code-review catch (the "throwing away useful information too early" pattern that
+    // motivated this refactor).
+    object Action {
+
+        /** Switching into the rule-based regime. */
+        final case class FallbackToRuleBased(tx: FallbackTx) extends DirectAction
+
+        /** Pushing the existing state in the multisig regime forward. */
+        final case class PushForwardMultisig(txs: Seq[EnrichedTx[?]]) extends DirectAction
+
+        /** Finalizing a rollout sequence. */
+        final case class Rollout(txs: Seq[EnrichedTx[?]]) extends DirectAction
+
+        /** Represents noop action that may occur when the current time falls into the silence
+          * period - the gap between a treasury's two disjoint validity windows, when the
+          * settlement/finalization tx already expired but the fallback is not valid yet.
+          */
+        final case class SilencePeriodNoop(
+            currentTime: QuantizedInstant,
+            happyPathTxTtl: QuantizedInstant,
+            fallbackValidityStart: FallbackTxStartTime
+        ) extends DirectAction {}
+
+        /** Like [[PushForwardMultisig]] but starting from the initialization tx. */
+        final case class InitializeHead(txs: Seq[EnrichedTx[?]]) extends Action
+    }
+
 end CardanoLiaison
 
 trait CardanoLiaison(
@@ -560,7 +605,7 @@ trait CardanoLiaison(
             _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsLearned)
             newState <- stateRef.updateAndGet(State.applyInitialEffects(_, eff))
             _ <- advanceNodeStatus(nodeStatusOf(newState.targetState))
-            _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsState(newState.prettyDump))
+            _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsState(newState))
         } yield ()
 
     /** Learn a hard-confirmed stack's L1 effects into the submission state machine.
@@ -640,15 +685,15 @@ trait CardanoLiaison(
                     case v: DisjointWindowViolation =>
                         tracer.traceWith(
                           CardanoLiaisonEvent.DisjointWindowViolation(
-                            v.treasuryUtxo.toString,
-                            v.happyPathTtl.toString,
-                            v.fallbackValidityStart.toString
+                            v.treasuryUtxo,
+                            v.happyPathTtl,
+                            v.fallbackValidityStart
                           )
                         )
                 }
                 _ <- stateRef.set(newState)
                 _ <- advanceNodeStatus(nodeStatusOf(newState.targetState))
-                _ <- tracer.traceWith(CardanoLiaisonEvent.StackEffectsState(newState.prettyDump))
+                _ <- tracer.traceWith(CardanoLiaisonEvent.StackEffectsState(newState))
             } yield ()
         }
     }
@@ -699,11 +744,7 @@ trait CardanoLiaison(
                     currentTime <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
 
                     _ <- tracer.traceWith(
-                      CardanoLiaisonEvent.CurrentL1State(
-                        currentTime.toString,
-                        utxoIds.mkString(","),
-                        state.prettyDump
-                      )
+                      CardanoLiaisonEvent.CurrentL1State(currentTime, utxoIds, state)
                     )
 
                     // (i.e. those that are directly caused by effect inputs in L1 response).
@@ -740,7 +781,7 @@ trait CardanoLiaison(
                             )
                         tracer.traceWith(
                           CardanoLiaisonEvent.ActionsDispatched(
-                            actionsToSubmit.map(_.msg).toList,
+                            actionsToSubmit.toList,
                             hasFallback
                           )
                         )
@@ -797,14 +838,14 @@ trait CardanoLiaison(
                     // action above.
                     tracer.traceWith(
                       CardanoLiaisonEvent
-                          .TargetUtxoStatus(targetTreasuryUtxoId.toString, found = true)
+                          .TargetUtxoStatus(targetTreasuryUtxoId, found = true)
                     ) >> IO.pure(Seq.empty)
                 else
                     // The treasury is gone: either we fell into the rule-based regime, or an L1
                     // rollback took it. Steps (3)/(4) tell those apart.
                     tracer.traceWith(
                       CardanoLiaisonEvent
-                          .TargetUtxoStatus(targetTreasuryUtxoId.toString, found = false)
+                          .TargetUtxoStatus(targetTreasuryUtxoId, found = false)
                     ) >> handoffOrResubmit(state, currentTime)
 
             case TargetState.Finalized(finalizationTxHash) =>
@@ -818,13 +859,13 @@ trait CardanoLiaison(
                     case Right(true) =>
                         tracer.traceWith(
                           CardanoLiaisonEvent
-                              .FinalizationTxStatus(finalizationTxHash.toString, "known")
+                              .FinalizationTxStatus(finalizationTxHash, isKnown = true)
                         ) >> IO.pure(Seq.empty)
                     // Not on L1 — possible rollback of the finalization; fall to steps (3)/(4).
                     case Right(false) =>
                         tracer.traceWith(
                           CardanoLiaisonEvent
-                              .FinalizationTxStatus(finalizationTxHash.toString, "not known")
+                              .FinalizationTxStatus(finalizationTxHash, isKnown = false)
                         ) >> handoffOrResubmit(state, currentTime)
                 }
         }
@@ -884,20 +925,20 @@ trait CardanoLiaison(
                     case Right(true) =>
                         // Head is established — leave recovery to the direct-action path.
                         tracer.traceWith(
-                          CardanoLiaisonEvent.InitTxStatus(initTx.tx.id.toString, "known")
+                          CardanoLiaisonEvent.InitTxStatus(initTx.tx.id, isKnown = true)
                         ) >> IO.pure(Seq.empty)
                     case Right(false) =>
                         val initEnd = initTx.initializationTxEndTime.convert
                         if currentTime < initEnd then
                             tracer.traceWith(
-                              CardanoLiaisonEvent.InitTxStatus(initTx.tx.id.toString, "not known")
+                              CardanoLiaisonEvent.InitTxStatus(initTx.tx.id, isKnown = false)
                             ) >> IO.pure(
                               Seq(Action.InitializeHead(state.happyPathEffects.values.toSeq))
                             )
                         else
                             tracer.traceWith(
                               CardanoLiaisonEvent
-                                  .InitWindowElapsed(currentTime.toString, initEnd.toString)
+                                  .InitWindowElapsed(currentTime, initEnd)
                             ) >> IO.pure(Seq.empty)
                 }
             case _ =>
@@ -918,48 +959,6 @@ trait CardanoLiaison(
             )
             .map(_.map(_.keySet.headOption))
 
-    // ===================================
-    // Actions
-    // ===================================
-
-    /** The set of effects the actor may want to execute against L1. */
-    sealed trait Action
-    sealed trait DirectAction extends Action
-
-    // TODO: narrow these element types beyond `EnrichedTx[?]` — the construction sites already
-    // carry concrete subtypes:
-    //   - FallbackToRuleBased.tx        => FallbackTx
-    //   - PushForwardMultisig.txs       => Seq[SettlementTx | FinalizationTx | RolloutTx]
-    //   - Rollout.txs                   => Seq[RolloutTx]
-    //   - InitializeHead.txs            => Seq[HappyPathEffect]
-    // Tightening these makes the `.tx` strip at the construction sites a compile error rather
-    // than a code-review catch (the "throwing away useful information too early" pattern that
-    // motivated this refactor). HappyPathEffect would need to be promoted out of the trait body.
-    object Action {
-
-        /** Switching into the rule-based regime. */
-        final case class FallbackToRuleBased(tx: FallbackTx) extends DirectAction
-
-        /** Pushing the existing state in the multisig regime forward. */
-        final case class PushForwardMultisig(txs: Seq[EnrichedTx[?]]) extends DirectAction
-
-        /** Finalizing a rollout sequence. */
-        final case class Rollout(txs: Seq[EnrichedTx[?]]) extends DirectAction
-
-        /** Represents noop action that may occur when the current time falls into the silence
-          * period - the gap between a treasury's two disjoint validity windows, when the
-          * settlement/finalization tx already expired but the fallback is not valid yet.
-          */
-        final case class SilencePeriodNoop(
-            currentTime: QuantizedInstant,
-            happyPathTxTtl: QuantizedInstant,
-            fallbackValidityStart: FallbackTxStartTime
-        ) extends DirectAction {}
-
-        /** Like [[PushForwardMultisig]] but starting from the initialization tx. */
-        final case class InitializeHead(txs: Seq[EnrichedTx[?]]) extends Action
-    }
-
     private def actionTxs(action: Action): Seq[EnrichedTx[?]] = action match {
         case Action.FallbackToRuleBased(tx)    => Seq(tx)
         case Action.PushForwardMultisig(txs)   => txs
@@ -967,18 +966,6 @@ trait CardanoLiaison(
         case Action.SilencePeriodNoop(_, _, _) => Seq.empty
         case Action.InitializeHead(txs)        => txs
     }
-
-    extension (action: Action)
-
-        private def msg: String =
-            import Action.*
-            action match {
-                case FallbackToRuleBased(tx)         => s"FallbackToRuleBased (${tx.tx.id})"
-                case PushForwardMultisig(txs)        => s"PushForwardMultisig (${txs.map(_.tx.id)}"
-                case Rollout(txs)                    => s"Rollout (${txs.map(_.tx.id)}"
-                case sp @ SilencePeriodNoop(_, _, _) => s"$sp"
-                case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.tx.id)}"
-            }
 
     /** A polled utxo classified as a due direct-action trigger, so [[mkDirectAction]] is total over
       * well-formed inputs. [[triggerFor]] owns the malformed combinations: a utxo that is neither
