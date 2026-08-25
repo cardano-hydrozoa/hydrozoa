@@ -7,7 +7,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
+import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
@@ -663,7 +663,7 @@ class HydrozoaRoutes(
                         tracer.traceWith(JsonDecodeError(path, error)) *> IO.raiseError(error)
                     case Right(request) => IO.pure(request)
                 }
-                _ <- tracer.traceWith(RequestDecoded(path, userRequest.toString))
+                _ <- tracer.traceWith(HydrozoaRoutes.decodedEvent(path, userRequest))
                 result <- (requestSequencer ?: userRequest).flatMap {
                     case Right(id) =>
                         IO.pure(Right(ApiDto.mkRequestAcceptedResponse(id)))
@@ -947,6 +947,18 @@ class HydrozoaRoutes(
 }
 
 object HydrozoaRoutes {
+
+    /** Describe a decoded request without rendering it: its kind and its payload size, both read
+      * off fields that are already there. Never call `toString` on a request here — see
+      * [[HydrozoaHttpEvent.RequestDecoded]] for what that costs.
+      */
+    private[server] def decodedEvent(path: String, request: UserRequest): RequestDecoded =
+        request match
+            case UserRequest.DepositRequest(body) =>
+                RequestDecoded(path, "Deposit", body.l1Payload.size + body.l2Payload.size)
+            case UserRequest.TransactionRequest(body) =>
+                RequestDecoded(path, "Transaction", body.l2Payload.size)
+
     val apiTitle: String = "Hydrozoa node API"
     val l2ApiTitle: String = "Hydrozoa EUTXO L2 ledger API"
     val apiVersion: String = "0.1.0"

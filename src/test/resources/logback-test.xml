@@ -29,6 +29,8 @@
     <logger name="CoilPeerWsTransport" level="warn"/>
     <logger name="HubWsTransport" level="warn"/>
     <logger name="CoilAckSequencer" level="warn"/>
+    <!-- The only record of why a supervised actor failed; never quiet it. -->
+    <logger name="Supervision" level="error"/>
     <logger name="HydrozoaHttp" level="warn"/>
     <logger name="RemoteL2Ledger" level="warn"/>
     <logger name="RemoteL2Screener" level="warn"/>
