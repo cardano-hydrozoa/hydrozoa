@@ -11,9 +11,11 @@ object SlowConsensusActorEventFormat:
         val ev = LogEvent.From.forPeer("SlowConsensusActor", peerNum)
         import ev.*
         e match {
-            case StackHandedOff(sn, phase) =>
+            case StackHandedOff(sn, twoPhase) =>
                 info(
-                  s"stack $sn handed off ($phase); broadcasting own acks",
+                  s"stack $sn handed off (${
+                          if twoPhase then "2-phase" else "sole"
+                      }); broadcasting own acks",
                   "stackNum" -> s"${sn: Int}"
                 )
             case Round1Confirmed(sn) =>

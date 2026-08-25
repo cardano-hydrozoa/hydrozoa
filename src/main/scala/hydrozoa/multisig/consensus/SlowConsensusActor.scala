@@ -205,7 +205,7 @@ final case class SlowConsensusActor(
             round2Stash = Map.empty
           )
         )
-        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, "2-phase"))
+        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, twoPhase = true))
         _ <- broadcast(ownR1._1)
         _ <- replayOrphans(stackNum)
         _ <- tryAdvance(stackNum)
@@ -225,7 +225,7 @@ final case class SlowConsensusActor(
           stackNum,
           Cell.WaitingSole(unsigned = unsigned, sole = Map(ownPeer -> ownSole._2))
         )
-        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, "sole"))
+        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, twoPhase = false))
         _ <- broadcast(ownSole._1)
         _ <- replayOrphans(stackNum)
         _ <- tryAdvance(stackNum)

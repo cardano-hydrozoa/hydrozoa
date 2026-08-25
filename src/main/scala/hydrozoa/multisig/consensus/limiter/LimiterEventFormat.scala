@@ -11,7 +11,8 @@ object LimiterEventFormat:
         val ev = LogEvent.From(Map.empty, s"Limiter.$label")
         import ev.*
         e match {
-            case Started           => debug(s"Limiter[$label] started.")
-            case HoldingMsg(t, ms) => debug(s"Limiter[$label] holding $t for ${ms}ms")
+            case Started => debug(s"Limiter[$label] started.")
+            case HoldingMsg(t, ms) =>
+                debug(s"Limiter[$label] holding ${t.getSimpleName} for ${ms}ms")
         }
     }

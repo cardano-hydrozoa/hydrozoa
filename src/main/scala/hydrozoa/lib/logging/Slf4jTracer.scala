@@ -48,12 +48,16 @@ object LogEvent {
       * Extra context pairs passed as varargs are merged with the base [[ctx]].
       */
     final class From(val ctx: Map[String, String], val routingKey: Option[String]):
+        // `msg` is by-name and lives in the deferred `Rendered`, so the message — the expensive
+        // vector, where any domain `toString` sits — is not built unless the level is enabled. The
+        // `extra` context is evaluated eagerly, but it only ever carries cheap primitives
+        // (block/stack numbers, request ids); deferring it too would buy nothing.
         private def helper(
             loggingLevel: Level,
             msg: => String,
             extra: (String, String)*
         ): LogEvent =
-            LogEvent(loggingLevel, msg, ctx ++ extra, routingKey = routingKey)
+            LogEventTyped(loggingLevel, routingKey, deferred(msg, ctx ++ extra))
 
         def trace(msg: => String, extra: (String, String)*): LogEvent =
             helper(Level.Trace, msg, extra*)
