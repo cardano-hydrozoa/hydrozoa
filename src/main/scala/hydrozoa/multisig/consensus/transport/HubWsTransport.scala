@@ -62,7 +62,7 @@ final class HubWsTransport private (
                     case None    => tracer.traceWith(NoOutboxForCoil(coil))
                 }
             case None =>
-                tracer.traceWith(DroppingNonWireRequest(coil, request.toString))
+                tracer.traceWith(DroppingNonWireRequest(coil, request))
         }
 
     private def dispatchInbound(coil: CoilPeerNumber, payload: CoilFrame.Wire): IO[Unit] =
@@ -76,7 +76,7 @@ final class HubWsTransport private (
                     }
                 }
             case other =>
-                tracer.traceWith(UnexpectedInboundWire(coil, other.toString))
+                tracer.traceWith(UnexpectedInboundWire(coil, other))
         }
 
     private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] =
