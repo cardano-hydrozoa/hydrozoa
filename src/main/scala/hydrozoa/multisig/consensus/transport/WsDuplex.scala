@@ -3,7 +3,10 @@ package hydrozoa.multisig.consensus.transport
 import cats.data.Chain
 import cats.effect.IO
 import cats.effect.std.Queue
+import cats.syntax.applicative.*
+import cats.syntax.apply.*
 import fs2.Stream
+import java.util.concurrent.TimeoutException
 import org.http4s.client.websocket.{WSConnection, WSFrame}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
@@ -51,49 +54,73 @@ object WsDuplex {
         outbox: Queue[IO, String],
         onLine: String => IO[Unit],
         readIdleTimeout: FiniteDuration = defaultReadIdleTimeout
-    ): IO[Unit] = {
-        val writer: IO[Unit] =
-            Stream
-                .fromQueueUnterminated(outbox)
-                .evalMap(line => conn.send(WSFrame.Text(line)))
-                .compile
-                .drain
+    ): IO[Unit] =
+        IO.monotonic.flatMap(now => IO.ref(now)).flatMap { lastFrameAt =>
+            val writer: IO[Unit] =
+                Stream
+                    .fromQueueUnterminated(outbox)
+                    .evalMap(line => conn.send(WSFrame.Text(line)))
+                    .compile
+                    .drain
 
-        // `receive` yields None once the receiving side is closed, ending the stream and so the
-        // race. The deadline rides on each read: any frame — including the peer's keep-alive
-        // `Ping` — resets it, so it measures silence rather than idleness.
-        val reader: IO[Unit] =
-            Stream
-                .repeatEval(conn.receive.timeout(readIdleTimeout))
-                .unNoneTerminate
-                // The accumulator carries pending `Text` fragments; only a `last` frame flushes it.
-                .evalMapAccumulate(Chain.empty[String]) { (partial, frame) =>
-                    frame match {
-                        case WSFrame.Ping(data) => conn.send(WSFrame.Pong(data)).as((partial, ()))
-                        // Echo the peer's close, as the high-level connection did; the next
-                        // `receive` then yields None and the stream ends.
-                        // `.attempt`: if the peer dropped TCP rather than just the WS half, echoing
-                        // fails — and a clean close would then be reported as a DialerFailed,
-                        // undoing the very distinction this logging draws.
-                        case close: WSFrame.Close => conn.send(close).attempt.as((partial, ()))
-                        case WSFrame.Text(text, true) =>
-                            onLine((partial :+ text).toList.mkString).as((Chain.empty[String], ()))
-                        case WSFrame.Text(text, false) =>
-                            val next = partial :+ text
-                            IO.raiseWhen(next.size > maxTextFragments)(
-                              new IllegalStateException(
-                                s"peer sent over $maxTextFragments Text fragments without a final" +
-                                    " frame; abandoning the connection"
-                              )
-                            ).as((next, ()))
-                        // Pong (our own keep-alive answered) and Binary: both protocols are
-                        // text-only, and either still counts as evidence the peer is alive.
-                        case _ => IO.pure((partial, ()))
+            // `receive` yields None once the receiving side is closed, ending the stream and so the
+            // race.
+            //
+            // The deadline is NOT a `timeout` on `receive`: `JdkWSClient.receive` is
+            // `request(1) *> queue.take`, so cancelling it leaks one unit of demand — the JDK delivers
+            // a frame nobody consumes into an unbounded queue, and every expiry compounds it until the
+            // process runs out of heap. Instead the reader stamps the arrival of each frame and a
+            // watchdog races it, so nothing is ever cancelled mid-read.
+            val reader: IO[Unit] =
+                Stream
+                    .repeatEval(conn.receive)
+                    .unNoneTerminate
+                    .evalTap(_ => IO.monotonic.flatMap(t => lastFrameAt.set(t)))
+                    // The accumulator carries pending `Text` fragments; only a `last` frame flushes it.
+                    .evalMapAccumulate(Chain.empty[String]) { (partial, frame) =>
+                        frame match {
+                            case WSFrame.Ping(data) =>
+                                conn.send(WSFrame.Pong(data)).as((partial, ()))
+                            // Echo the peer's close, as the high-level connection did; the next
+                            // `receive` then yields None and the stream ends.
+                            // `.attempt`: if the peer dropped TCP rather than just the WS half, echoing
+                            // fails — and a clean close would then be reported as a DialerFailed,
+                            // undoing the very distinction this logging draws.
+                            case close: WSFrame.Close => conn.send(close).attempt.as((partial, ()))
+                            case WSFrame.Text(text, true) =>
+                                onLine((partial :+ text).toList.mkString).as(
+                                  (Chain.empty[String], ())
+                                )
+                            case WSFrame.Text(text, false) =>
+                                val next = partial :+ text
+                                IO.raiseWhen(next.size > maxTextFragments)(
+                                  new IllegalStateException(
+                                    s"peer sent over $maxTextFragments Text fragments without a final" +
+                                        " frame; abandoning the connection"
+                                  )
+                                ).as((next, ()))
+                            // Pong (our own keep-alive answered) and Binary: both protocols are
+                            // text-only, and either still counts as evidence the peer is alive.
+                            case _ => IO.pure((partial, ()))
+                        }
                     }
-                }
-                .compile
-                .drain
+                    .compile
+                    .drain
 
-        IO.race(writer, reader).void
-    }
+            // Fails the connection once nothing has arrived for `readIdleTimeout`. Polls rather than
+            // sleeping the full window so the check is bounded by a third of it, and never touches the
+            // read path.
+            val watchdog: IO[Unit] = {
+                val tick = readIdleTimeout / 3
+                def loop: IO[Unit] =
+                    IO.sleep(tick) >> (IO.monotonic, lastFrameAt.get).flatMapN { (now, last) =>
+                        IO.raiseError(
+                          new TimeoutException(s"no WS frame for $readIdleTimeout")
+                        ).whenA(now - last >= readIdleTimeout) >> loop
+                    }
+                loop
+            }
+
+            IO.race(writer, IO.race(reader, watchdog)).void
+        }
 }
