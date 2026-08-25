@@ -15,7 +15,7 @@ import hydrozoa.config.node.NodePrivateConfig.given
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.{OwnCoilPeerPrivate, OwnHeadPeerPrivate}
-import hydrozoa.lib.logging.{Logging, Slf4jTracer}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, warn}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.PeerId.isCoil
 import hydrozoa.multisig.consensus.peer.PeerWallet
@@ -50,7 +50,8 @@ final case class NodeConfig private (
 
 object NodeConfig {
 
-    private val log = Logging.loggerIO("hydrozoa")
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa"))
 
     def fromJson(
         headConfigStr: String,
