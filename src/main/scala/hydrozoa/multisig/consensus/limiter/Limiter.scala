@@ -158,9 +158,8 @@ final case class Limiter[Msg](
     ): IO[Limiter.State[Msg]] =
         if st.holdStartedMs.isDefined then IO.pure(st)
         else
-            val name = t.getClass.getSimpleName
             for {
-                _ <- tracer.traceWith(LimiterEvent.HoldingMsg(name, waitMs))
+                _ <- tracer.traceWith(LimiterEvent.HoldingMsg(t.getClass, waitMs))
                 _ <- if gate.isEmpty then IO.unit else IO(metrics.foreach(_.onBlockGateHold()))
                 now <- IO.monotonic.map(_.toMillis)
                 updated <- stateRef.updateAndGet(_.copy(holdStartedMs = Some(now)))
