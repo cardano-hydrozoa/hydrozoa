@@ -1,6 +1,7 @@
 package hydrozoa.multisig.consensus
 
 import hydrozoa.lib.logging.LogEvent
+import hydrozoa.multisig.consensus.CardanoLiaison.{DisjointWindowViolation as _, *}
 import hydrozoa.multisig.consensus.CardanoLiaisonEvent.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 
@@ -17,22 +18,24 @@ object CardanoLiaisonEventFormat:
                 info(s"received Stack.HardConfirmed for stack $stackNum")
             case InitialStackEffectsLearned =>
                 info("initial stack effects learned; overriding unsigned init tx + fallback")
-            case InitialStackEffectsState(dump) =>
-                trace(s"state after initial-stack effects: $dump")
+            case InitialStackEffectsState(state) =>
+                trace(s"state after initial-stack effects: ${state.prettyDump}")
             case MinorOnlyStackReceived =>
                 info("minor-only stack: no backbone L1 effects to submit; nothing to do")
             case StackEffectsLearned(settlements, fallbacks, rollouts, hasFinalization) =>
                 info(
                   s"stack effects learned: ${settlements}s ${fallbacks}fb ${rollouts}ro finalization=$hasFinalization"
                 )
-            case StackEffectsState(dump) =>
-                trace(s"state after stack effects: $dump")
+            case StackEffectsState(state) =>
+                trace(s"state after stack effects: ${state.prettyDump}")
             case RunEffectsStarted =>
                 trace("entering `runEffects`")
             case L1StateQueryError(err) =>
                 error(s"error when getting Cardano L1 state: $err")
-            case CurrentL1State(time, utxoIds, dump) =>
-                trace(s"current time=$time utxoIds=$utxoIds state=$dump")
+            case CurrentL1State(time, utxoIds, state) =>
+                trace(
+                  s"current time=$time utxoIds=${utxoIds.mkString(",")} state=${state.prettyDump}"
+                )
             case CriticalError(msg) =>
                 error(s"Critical error: $msg")
             case NoDirectActions =>
@@ -48,7 +51,9 @@ object CardanoLiaisonEventFormat:
                       " happy path — regenerate head-config or widen the init window"
                 )
             case FinalizationTxStatus(hash, isKnown) =>
-                trace(s"finalizationTx: hash=$hash known=$isKnown")
+                trace(
+                  s"finalizationTx: hash=$hash known=${if isKnown then "known" else "not known"}"
+                )
             case FinalizationTxQueryError(err) =>
                 error(s"error when getting finalization tx info: $err")
             case DisjointWindowViolation(treasuryUtxo, happyPathTtl, fallbackValidityStart) =>
@@ -58,13 +63,14 @@ object CardanoLiaisonEventFormat:
                       " timing; stopping the liaison"
                 )
             case InitTxStatus(hash, isKnown) =>
-                trace(s"initTx: hash=$hash known=$isKnown")
+                trace(s"initTx: hash=$hash known=${if isKnown then "known" else "not known"}")
             case InitTxQueryError(err) =>
                 error(s"error when getting init tx info: $err")
             case RuleBasedTreasuryQueryError(err) =>
                 error(s"error when probing the rule-based treasury: $err")
-            case ActionsDispatched(msgs, hasFallback) =>
-                val text = "Liaison's actions:" + msgs.map(m => s"\n\t- $m").mkString
+            case ActionsDispatched(actions, hasFallback) =>
+                val text =
+                    "Liaison's actions:" + actions.map(a => s"\n\t- ${actionMsg(a)}").mkString
                 if hasFallback then warn(text) else info(text)
             case FallbackToRuleBasedDispatched(txId) =>
                 warn(s"FallbackToRuleBased dispatched: $txId — head entering rule-based regime")
@@ -74,3 +80,15 @@ object CardanoLiaisonEventFormat:
                 trace(s"Submission errors (generally ignored): $count")
         }
     }
+
+    /** Render one [[CardanoLiaison.Action]] for logging — relocated from the actor so the event can
+      * carry raw actions and this runs only when the level is enabled.
+      */
+    private def actionMsg(action: Action): String =
+        import Action.*
+        action match
+            case FallbackToRuleBased(tx)         => s"FallbackToRuleBased (${tx.tx.id})"
+            case PushForwardMultisig(txs)        => s"PushForwardMultisig (${txs.map(_.tx.id)}"
+            case Rollout(txs)                    => s"Rollout (${txs.map(_.tx.id)}"
+            case sp @ SilencePeriodNoop(_, _, _) => s"$sp"
+            case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.tx.id)}"
