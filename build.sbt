@@ -230,6 +230,9 @@ lazy val core: Project = (project in file("."))
         // Logging
         "ch.qos.logback" % "logback-classic" % "1.5.18",
         "org.typelevel" %% "log4cats-slf4j" % "2.7.1",
+        // scribe: PoC backend behind ContraTracer (spike — see design/logging-scribe.md).
+        "com.outr" %% "scribe" % "3.19.0",
+        "com.outr" %% "scribe-cats" % "3.19.0",
         // Used for input/output
         "org.scala-lang" %% "toolkit" % "0.7.0",
         // cats

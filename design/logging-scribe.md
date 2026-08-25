@@ -1,6 +1,41 @@
 # Spike: replace SLF4J + Logback + log4cats with scribe
 
-**Status:** decision spike (go/no-go). **Recommendation: GO to a PoC**, gated on one load test.
+**Status:** decision spike, PoC run. **Recommendation: HOLD** — the level-API win is real and proven,
+but a measured load test found scribe's built-in async handle drops ~99.9% of a burst (a ~1000 ev/s
+drain ceiling). Adopt scribe only with a **custom async handle** (or if prod log volume is provably low).
+
+## PoC results (measured, this repo)
+
+Two artifacts landed to validate criteria 1 and 2 concretely (not just on paper):
+- `lib/logging/ScribeTracer.scala` — a drop-in `ContraTracer[IO, LogEvent]` sink on scribe. **Compiles
+  and works; the level gate reimplements via `scribe.Logger.get(name).includes(level)` with zero
+  `org.slf4j`.** ✅ Criterion 1 (the decisive one) proven in-repo.
+- `src/test/.../ScribeLoadTest.scala` (ignored by default) — 64 CE fibers × 20 000 `trace` emits =
+  1.28M events through `ScribeTracer.sink` with `AsynchronousLogHandle(maxBuffer = 8192, DropNew)` and a
+  counting no-op writer (measures the queue, not disk).
+
+Measured (idiomatic-CE harness, no nested `unsafeRunSync`):
+
+| metric | value |
+|---|---|
+| events produced | 1 280 000 |
+| **events drained/written** | **~1 090** |
+| **drops** | **~99.9%** |
+| producer throughput | ~829 000 ev/s (producers are *not* blocked in aggregate) |
+| worst single-emit | ~43 ms (likely a GC pause under the 1.28M-object burst, not a scribe block) |
+
+**Interpretation.** scribe's `AsynchronousLogHandle` is a single daemon thread sleep-polling a
+`ConcurrentLinkedQueue` (`sleep(1ms)` busy / `sleep(10ms)` idle), giving a **~1000 ev/s drain ceiling**.
+Under a burst the 8192 buffer fills in ~10ms and `DropNew` then drops essentially everything. Logback's
+`AsyncAppender` (disruptor-style) sustains 100k+/s, so it drops far less at the same load. This is a
+**real gap on the exact "consensus-rate trace" scenario** the async path exists for — not a harness
+artifact (confirmed across two harness variants).
+
+Nuance: both back-ends *intentionally* drop under overload (that's `neverBlock`/`DropNew`); the
+difference is the rate at which they saturate. At low volume (info/warn/error, moderate debug) scribe
+is fine; the ceiling only bites high-frequency `trace`/`debug` bursts. A **synchronous** scribe handle
+(for the lossless `hydrozoa.trace` JSONL) has no drain thread and no drop — same trade as Logback's sync
+`TRACE_FILE`.
 
 ## Context
 
@@ -15,6 +50,33 @@ a per-trace `org.slf4j.LoggerFactory.getLogger(name).isXEnabled` to gate on leve
 cats-effect module. Replacing the backend would drop `logback-classic`, `log4cats-slf4j`, and
 `org.slf4j` from the tracer while keeping the exact `ContraTracer` surface.
 
+## scribe does not replace `ContraTracer` — it's a backend leaf
+
+`ContraTracer[F, A]` and scribe live at different layers, and the migration only touches the lower one:
+
+- **`ContraTracer` is a typed-event bus** — a contravariant functor over *domain* events with
+  `contramap` (adapt the event type), a `Semigroup`/`Monoid` (`|+|`, fan-out to N consumers), and the
+  arrow-laziness. Its currency is a typed `MyEvent`, not a log line.
+- **scribe is a logging backend** — its currency is a `LogRecord` (level + rendered message + MDC),
+  written to console/file. It is one **leaf sink** (`ContraTracer[IO, LogEvent]`).
+
+So scribe replaces **only `Slf4jTracer.sink`**; everything above it is untouched. This matters for two
+things the team relies on:
+
+- **Test event-bus.** Tests do `ContraTracer[IO, XEvent](e => ref.update(e :: _))` and compose
+  `slf4jLeg |+| capture`, asserting on the typed event's *fields*. scribe can't do this — by the time
+  anything reaches it the event is a rendered `LogRecord` and the domain fields are gone. This lives in
+  `ContraTracer` and is unaffected by swapping the sink (the capture leg is a different leaf).
+- **Future telemetry / multiple sinks.** scribe's multiple handlers are multiple *outputs of one log
+  record*; `ContraTracer`'s `|+|` is multiple consumers of one *typed event*, each extracting what it
+  needs. A metrics sink is just another leaf: `ContraTracer[IO, BlockEvent](e => counters.record(e.blockNum))`,
+  fanned in with `|+|` — exactly what `ContraTracer`'s own doc cites ("metrics/telemetry by changing the
+  `emit` effect ... combine ... via the semi-group instance").
+
+**Conclusion:** keep `ContraTracer` as the bus permanently; adopt scribe as the log leaf. The migration
+carries zero risk to the test event-bus or a future telemetry/multi-sink story, because those never
+depended on the logging backend.
+
 ## Go/no-go findings (verified against scribe 3.19.0 source)
 
 1. **Level introspection with no `org.slf4j` — the decisive criterion: GO.**
@@ -25,14 +87,13 @@ cats-effect module. Replacing the backend would drop `logback-classic`, `log4cat
    cats-effect module: `"com.outr" %% "scribe-cats" % "3.19.0"` (returns `F[Unit]` via `Sync`).
    Note: `log4cats-scribe` is a dead end (Scala 2.12 / scribe 2.7.1 only) — use `scribe-cats` directly.
 
-2. **Async fairness — GO on paper, MUST be PoC-measured (the gate).**
-   scribe's `AsynchronousLogHandle(maxBuffer = 1000, overflow = Overflow.DropNew | DropOld | Block | Error)`
-   is the analogue of Logback `AsyncAppender neverBlock=true`. `Overflow.DropNew` = the literal
-   never-block-drop-incoming behaviour; `maxBuffer` bounds memory (match today's 8192). **Risk:** the
-   queue is a single sleep-polling daemon thread over a `ConcurrentLinkedQueue` (`sleep(1ms)` busy /
-   `sleep(10ms)` idle) — structurally different from Logback's appender. Throughput/latency under a
-   consensus-rate burst is unknown and is the one place the "consensus fibers must not stall"
-   invariant lives.
+2. **Async fairness — NO-GO on the built-in handle (measured — see PoC results above).**
+   `AsynchronousLogHandle(maxBuffer, Overflow.DropNew)` is the API analogue of Logback
+   `AsyncAppender neverBlock=true`, but its single sleep-polling drain thread caps at **~1000 ev/s** and
+   dropped ~99.9% of the burst. This is the gate, and scribe's built-in async fails it for the
+   high-volume trace path. **Mitigation required:** a custom `LogHandle` (scribe lets you supply one)
+   that batch-drains without the per-item sleep — i.e. we'd write the async plumbing scribe doesn't,
+   which is exactly what Logback already gives us. Sync handles (lossless trace file) are unaffected.
 
 3. **Custom Mermaid layout — GO, straightforward.**
    `Formatter { def format(record: LogRecord): LogOutput }` + a `Writer` (`FileWriter` with a path
@@ -80,14 +141,16 @@ private def isEnabled(name: String, level: Level): IO[Boolean] = IO {
 `From.ctx` could later move into scribe MDC (`$mdc` formatter) instead of the manual `renderMsg`
 prefix — a refinement, not needed for parity.
 
-## What a PoC must prove (in priority order)
+## Validation status
 
-1. **Async drainer under consensus load (the go/no-go gate).** Burst `trace` from many simulated
-   consensus fibers on the CE compute pool; measure p99 of the emit `IO` (must stay bounded, never
-   block the producing fiber), confirm clean drops at `maxBuffer` (`Overflow.DropNew`) with no
-   unbounded growth/GC pressure, and that the single drainer keeps up or drops gracefully. Consider a
-   dedicated async handle per hot logger vs. a shared one.
-2. **Third-party SLF4J floods.** `com.bloxbean`, `scalus`, `org.testcontainers`, dockerjava, scalacheck
+1. **Level API, no `org.slf4j` — DONE, PASS.** `ScribeTracer` compiles and gates via
+   `Logger.includes`; see PoC results.
+2. **Async drainer under consensus load — DONE, FAIL.** Measured ~99.9% drops / ~1000 ev/s ceiling;
+   see PoC results. Blocks a naive migration.
+
+Remaining, only if scribe is pursued with a custom async handle:
+
+3. **Third-party SLF4J floods.** `com.bloxbean`, `scalus`, `org.testcontainers`, dockerjava, scalacheck
    log through SLF4J and are muted today via logback levels. Dropping Logback needs `scribe-slf4j`
    (the SLF4J→scribe facade) so they route into scribe, then `Logger("com.bloxbean").withMinimumLevel(Warn)`.
    PoC must confirm the bridge captures and gates them, else the noise returns.
