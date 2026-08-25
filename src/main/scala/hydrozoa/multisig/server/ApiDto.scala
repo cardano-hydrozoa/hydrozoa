@@ -237,6 +237,18 @@ object ApiDto {
     given Codec[BlockTimingSetView] = deriveCodec
     given Schema[BlockTimingSetView] = Schema.derived
 
+    /** What the StackComposer is doing and for how long. Every non-deriving path through
+      * `tryProgress` returns silently, so without this a composer blocked on a peer and one with
+      * nothing to do look identical.
+      */
+    final case class ComposerStatsView(
+        phase: String,
+        secondsInPhase: Long,
+        partitionsDone: Long,
+        partitionsTotal: Long
+    )
+    given Codec[ComposerStatsView] = deriveCodec
+
     /** The full peer-stats body. */
     final case class PeerStatsView(
         uptimeSeconds: Long,
@@ -251,7 +263,8 @@ object ApiDto {
         /** The head's equity beyond its L2 liabilities, in lovelace, as of the last stack this peer
           * closed. One side of `treasury.value == evacuation map total + equity + beacon`.
           */
-        equityLovelace: Long
+        equityLovelace: Long,
+        composer: ComposerStatsView
     )
     given Codec[PeerStatsView] = deriveCodec
 
@@ -300,7 +313,13 @@ object ApiDto {
           mempoolSize = s.mempoolSize,
           leaderMempoolDrain = s.leaderMempoolDrain,
           sequencerHeadroom = s.sequencerHeadroom,
-          equityLovelace = s.equityLovelace
+          equityLovelace = s.equityLovelace,
+          composer = ComposerStatsView(
+            phase = s.composer.phase.toString,
+            secondsInPhase = s.composer.secondsInPhase,
+            partitionsDone = s.composer.partitionsDone,
+            partitionsTotal = s.composer.partitionsTotal
+          )
         )
 
     /** `{ "status": "success", "message": ... }` — the finalize-trigger body. */
