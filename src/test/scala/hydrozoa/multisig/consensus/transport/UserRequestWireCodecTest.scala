@@ -46,7 +46,7 @@ class UserRequestWireCodecTest extends AnyFunSuite {
     test("the protobuf form round-trips through the same decoder the mesh uses") {
         cases.foreach { (name, request) =>
             val wire = Codecs.userRequestProtobufEncoder(request)
-            assert(wire.isString, s"$name did not encode to a JSON string")
+            val _ = assert(wire.isString, s"$name did not encode to a JSON string")
             assert(
               Decoder[UserRequestWithId].decodeJson(wire) == Right(request),
               s"protobuf round trip changed $name"

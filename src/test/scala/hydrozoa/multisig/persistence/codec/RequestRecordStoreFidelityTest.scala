@@ -36,7 +36,7 @@ class RequestRecordStoreFidelityTest extends AnyFunSuite {
     private val stampBytes = 12
 
     test("every Request record in a real store survives a decode/encode round trip") {
-        assume(Files.isDirectory(storePath), s"no store at $storePath")
+        val _ = assume(Files.isDirectory(storePath), s"no store at $storePath")
         RocksDB.loadLibrary()
 
         val names = RocksDB
@@ -47,7 +47,7 @@ class RequestRecordStoreFidelityTest extends AnyFunSuite {
         // which share the prefix and hold something else entirely; a looser filter reads those as
         // malformed records and reports a codec failure that is really a test bug.
         val requestCfs = names.filter(n => new String(n, "UTF-8").startsWith("Request:"))
-        assume(requestCfs.nonEmpty, s"no Request column family in $storePath")
+        val _ = assume(requestCfs.nonEmpty, s"no Request column family in $storePath")
 
         val descriptors = new JArrayList[ColumnFamilyDescriptor]()
         names.foreach(n => descriptors.add(new ColumnFamilyDescriptor(n)))
@@ -97,7 +97,7 @@ class RequestRecordStoreFidelityTest extends AnyFunSuite {
                   s"mismatched=$mismatched undecodable=$undecodable"
             )
             // The control: a run that checked nothing would pass every assertion below.
-            assert(checked > 0, s"no Request records found in $storePath")
+            val _ = assert(checked > 0, s"no Request records found in $storePath")
             assert(
               mismatched == 0 && undecodable == 0,
               s"$mismatched of $checked records re-encoded differently and $undecodable did not " +
