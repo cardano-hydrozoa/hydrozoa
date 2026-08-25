@@ -42,12 +42,12 @@ class KzgCommitmentStoreFidelityTest extends AnyFunSuite {
     }
 
     test("every evacuation map in a real store commits to the same point both ways") {
-        assume(Files.isDirectory(storePath), s"no store at $storePath")
+        val _ = assume(Files.isDirectory(storePath), s"no store at $storePath")
         RocksDB.loadLibrary()
 
         val names = RocksDB.listColumnFamilies(new Options(), storePath.toString).asScala.toList
         val target = names.find(n => new String(n, "UTF-8") == "EvacuationMap")
-        assume(target.isDefined, s"no EvacuationMap column family in $storePath")
+        val _ = assume(target.isDefined, s"no EvacuationMap column family in $storePath")
 
         val descriptors = new JArrayList[ColumnFamilyDescriptor]()
         names.foreach(n => descriptors.add(new ColumnFamilyDescriptor(n)))
@@ -77,7 +77,7 @@ class KzgCommitmentStoreFidelityTest extends AnyFunSuite {
                     val map: JointEvacuationMap = codec.decode(it.value())
                     val scalars = map.scalars
                     val n = scalars.length.toInt
-                    sizes.updateWith(n)(c => Some(c.getOrElse(0) + 1))
+                    val _ = sizes.updateWith(n)(c => Some(c.getOrElse(0) + 1))
                     if KzgCommitment.calculateKzgCommitment(scalars) != Schoolbook.commitment(
                           scalars
                         )
@@ -96,7 +96,7 @@ class KzgCommitmentStoreFidelityTest extends AnyFunSuite {
                   s"setSizes=${sizes.map((n, c) => s"$n:$c").mkString(" ")}"
             )
             // The control: a run that decoded nothing would satisfy the equality assertion below.
-            assert(checked > 0, s"no evacuation maps found in $storePath")
+            val _ = assert(checked > 0, s"no evacuation maps found in $storePath")
             assert(
               disagreed == 0,
               s"$disagreed of $checked maps committed to a different point: " +
