@@ -34,6 +34,18 @@ object WsDuplex {
       */
     val defaultReadIdleTimeout: FiniteDuration = 30.seconds
 
+    /** Fail the connection once this many `Text` fragments accumulate without a `last = true`.
+      *
+      * Defragmentation buffers until the peer marks the final frame, so a peer that never does
+      * grows the accumulator without bound. `connectHighLevel` had the same exposure, but this is
+      * our code now. Failing fits the same logic as the read deadline — the dialer redials, and a
+      * bounded reconnect beats an unbounded heap.
+      *
+      * Generous on purpose: the liaison protocols send one line per frame, so exceeding this means
+      * the peer is misbehaving, not that a message is merely large.
+      */
+    val maxTextFragments: Int = 1024
+
     def run(
         conn: WSConnection[IO],
         outbox: Queue[IO, String],
@@ -60,10 +72,20 @@ object WsDuplex {
                         case WSFrame.Ping(data) => conn.send(WSFrame.Pong(data)).as((partial, ()))
                         // Echo the peer's close, as the high-level connection did; the next
                         // `receive` then yields None and the stream ends.
-                        case close: WSFrame.Close => conn.send(close).as((partial, ()))
+                        // `.attempt`: if the peer dropped TCP rather than just the WS half, echoing
+                        // fails — and a clean close would then be reported as a DialerFailed,
+                        // undoing the very distinction this logging draws.
+                        case close: WSFrame.Close => conn.send(close).attempt.as((partial, ()))
                         case WSFrame.Text(text, true) =>
                             onLine((partial :+ text).toList.mkString).as((Chain.empty[String], ()))
-                        case WSFrame.Text(text, false) => IO.pure((partial :+ text, ()))
+                        case WSFrame.Text(text, false) =>
+                            val next = partial :+ text
+                            IO.raiseWhen(next.size > maxTextFragments)(
+                              new IllegalStateException(
+                                s"peer sent over $maxTextFragments Text fragments without a final" +
+                                    " frame; abandoning the connection"
+                              )
+                            ).as((next, ()))
                         // Pong (our own keep-alive answered) and Binary: both protocols are
                         // text-only, and either still counts as evidence the peer is alive.
                         case _ => IO.pure((partial, ()))
