@@ -1,6 +1,8 @@
 package hydrozoa.multisig.metrics
 
 import cats.effect.IO
+import cats.effect.unsafe.IORuntime
+import java.lang.management.ManagementFactory
 import java.util.concurrent.atomic.{AtomicLong, AtomicReference, LongAdder}
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.*
@@ -232,6 +234,7 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
           leaderMempoolDrain = leaderMempoolDrain.get(),
           sequencerHeadroom = seqHeadroom.get(),
           equityLovelace = equityLovelace.get(),
+          runtime = PeerMetrics.runtimeSnapshot(),
           composer = ComposerStats(
             phase = composerPhase.get(),
             secondsInPhase = math.max(0L, (nowMillis - composerPhaseSince.get()) / 1000),
@@ -297,6 +300,50 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
 
 object PeerMetrics:
     private val Taus: Vector[Double] = Vector(60.0, 300.0, 900.0) // 1m / 5m / 15m
+
+    /** Read the whole-process resource gauges. Cheap enough for the 1 Hz sampler: counter reads,
+      * one `MemoryMXBean` poll, and one attribute read for the fd count.
+      *
+      * Deliberately tolerant. `workStealingThreadPool` is `None` on a non-WSTP compute pool (the
+      * test harnesses), the fd count is an `OperatingSystemMXBean` attribute that exists on Linux
+      * and not everywhere, and none of this is worth failing a stats request over — so anything
+      * unavailable reports as -1 rather than throwing.
+      */
+    def runtimeSnapshot(): RuntimeStats =
+        val heap = ManagementFactory.getMemoryMXBean.getHeapMemoryUsage
+        val wstp = IORuntime.global.metrics.workStealingThreadPool
+        RuntimeStats(
+          fibersSuspended = wstp.map(_.suspendedFiberCount()).getOrElse(-1L),
+          fibersQueuedLocal = wstp.map(_.localQueueFiberCount()).getOrElse(-1L),
+          workerThreads = wstp.map(_.workerThreadCount()).getOrElse(-1),
+          workersActive = wstp.map(_.activeThreadCount()).getOrElse(-1),
+          workersSearching = wstp.map(_.searchingThreadCount()).getOrElse(-1),
+          workersBlocked = wstp.map(_.blockedWorkerThreadCount()).getOrElse(-1),
+          timersOutstanding = wstp
+              .map(_.workerThreads.map(_.timerHeap.timersOutstandingCount().toLong).sum)
+              .getOrElse(-1L),
+          timersExecuted = wstp
+              .map(_.workerThreads.map(_.timerHeap.totalTimersExecutedCount()).sum)
+              .getOrElse(-1L),
+          liveThreads = ManagementFactory.getThreadMXBean.getThreadCount,
+          heapUsedBytes = heap.getUsed,
+          heapCommittedBytes = heap.getCommitted,
+          openFileDescriptors = openFdCount()
+        )
+
+    /** Open file descriptors, or -1 where the platform does not expose them. Socket exhaustion
+      * presents as a box that has stopped responding, with nothing in the process reporting why.
+      */
+    private def openFdCount(): Long =
+        try
+            ManagementFactory.getPlatformMBeanServer
+                .getAttribute(
+                  new javax.management.ObjectName("java.lang:type=OperatingSystem"),
+                  "OpenFileDescriptorCount"
+                )
+                .asInstanceOf[java.lang.Long]
+                .longValue()
+        catch case _: Throwable => -1L
 
     /** Upper bound on in-flight (unclosed) block clocks before we assume a leak and reset. */
     private val InFlightCap = 8192
@@ -435,7 +482,43 @@ final case class PeerStats(
     leaderMempoolDrain: Long,
     sequencerHeadroom: Long,
     equityLovelace: Long,
-    composer: ComposerStats
+    composer: ComposerStats,
+    runtime: RuntimeStats
+)
+
+/** Whole-process resource use, for answering one question about a run: is the resource curve
+  * proportional to work IN FLIGHT, or to HISTORY?
+  *
+  * The discriminator is a slope against the right denominator, so these have to be read against the
+  * cumulative counters already in [[PeerStats]] (`blocks`, `stacks`, `localAccepted`) and against a
+  * deliberate load step-down: an in-flight-sized resource plateaus at constant load and comes back
+  * DOWN when load drops; a history-sized one tracks the cumulative counter and does not.
+  *
+  * ⛔ Every axis here is a CONCURRENCY axis. A peer can hold all of them at their idle floor while
+  * carrying a large backlog of unabsorbed deposits, unconfirmed blocks and queued resubmissions, so
+  * these do not answer "has the node drained?" — only "is it running work right now?"
+  *
+  * `fibersSuspended` is a fiber census, not a fiber dump: `kill -USR1` costs seconds and megabytes,
+  * this is two counter reads. `workersSearching` and `timersExecuted` are the cats-effect
+  * scheduler-seizure signature — in that state `workersSearching` stays non-zero while
+  * `timersExecuted` stops advancing, and the runtime cannot self-report it, because its own
+  * starvation checker is an `IO.sleep` that fires once and then goes silent. All of these are read
+  * from a plain snapshot rather than from a fiber, so a scraper outside the process still gets them
+  * when the runtime is seized.
+  */
+final case class RuntimeStats(
+    fibersSuspended: Long,
+    fibersQueuedLocal: Long,
+    workerThreads: Int,
+    workersActive: Int,
+    workersSearching: Int,
+    workersBlocked: Int,
+    timersOutstanding: Long,
+    timersExecuted: Long,
+    liveThreads: Int,
+    heapUsedBytes: Long,
+    heapCommittedBytes: Long,
+    openFileDescriptors: Long
 )
 
 /** What the [[hydrozoa.multisig.consensus.StackComposer]] is doing, and for how long.

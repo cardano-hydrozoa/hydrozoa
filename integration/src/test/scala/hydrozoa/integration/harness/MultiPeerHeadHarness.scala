@@ -1568,6 +1568,9 @@ object MultiPeerHeadHarness:
                   0L,
                   nodeConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
                 )
+                // A real node runs the 1 Hz sampler for the whole life of the process
+                // (`Serve.scala`); without it the runtime gauges read their initial values.
+                _ <- metrics.sampler().background
                 mrm <- HeadMultisigRegimeManager.resource(
                   nodeConfig,
                   cardanoBackend,
@@ -1642,6 +1645,9 @@ object MultiPeerHeadHarness:
                   0L,
                   coilConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
                 )
+                // A coil runs the 1 Hz sampler too, and for the same reason: without it the
+                // runtime gauges never leave their initial values.
+                _ <- metrics.sampler().background
                 mrm <- CoilMultisigRegimeManager.resource(
                   coilConfig,
                   cardanoBackend,
