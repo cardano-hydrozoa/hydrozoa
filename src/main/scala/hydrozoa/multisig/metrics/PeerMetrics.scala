@@ -73,6 +73,16 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
     private val seqHeadroom = new AtomicLong(0)
     private val equityLovelace = new AtomicLong(0)
 
+    // ---- block-rate gate (written by the block lane's Limiter) ----
+    // Observability only. The limiter acts on the multiplier in its own actor state; these are a
+    // write-only copy so the stats endpoints can show what the gate is doing. Nothing in the
+    // control path reads them back.
+    private val gateMultiplierMilli = new AtomicLong(1000)
+    private val gateBacklog = new AtomicLong(0)
+    private val gateResidualMilli = new AtomicLong(0)
+    private val gateHolds = new AtomicLong(0)
+    private val gateDrains = new AtomicLong(0)
+
     // ---- stack-composer phase (see StackComposerPhase) ----
     private val composerPhase = new AtomicReference[StackComposerPhase](StackComposerPhase.Deriving)
     private val composerPhaseSince = new AtomicLong(startedAtMillis)
@@ -166,6 +176,19 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
       * clock, so `secondsInPhase` measures how long the composer has been stuck in it — the whole
       * point of the gauge, and `tryProgress` re-evaluates on every inbound event.
       */
+    /** One throttled message released; `backlog` is the running count since the last drain. */
+    def onBlockGateRelease(backlog: Long): Unit = gateBacklog.set(backlog)
+
+    /** A hold began (once per hold, not once per slice). */
+    def onBlockGateHold(): Unit = { val _ = gateHolds.incrementAndGet() }
+
+    /** The gate re-derived its multiplier at the end of a downstream cycle. */
+    def onBlockGateUpdate(backlogAtDrain: Long, residual: Double, multiplier: Double): Unit =
+        gateBacklog.set(backlogAtDrain)
+        gateResidualMilli.set(math.round(residual * 1000.0))
+        gateMultiplierMilli.set(math.round(multiplier * 1000.0))
+        val _ = gateDrains.incrementAndGet()
+
     def onComposerPhase(phase: StackComposerPhase, nowMillis: Long): Unit =
         if composerPhase.getAndSet(phase) != phase then composerPhaseSince.set(nowMillis)
 
@@ -235,6 +258,13 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
           sequencerHeadroom = seqHeadroom.get(),
           equityLovelace = equityLovelace.get(),
           runtime = PeerMetrics.runtimeSnapshot(),
+          blockGate = BlockGateStats(
+            multiplier = gateMultiplierMilli.get() / 1000.0,
+            backlog = gateBacklog.get(),
+            residual = gateResidualMilli.get() / 1000.0,
+            holds = gateHolds.get(),
+            drains = gateDrains.get()
+          ),
           composer = ComposerStats(
             phase = composerPhase.get(),
             secondsInPhase = math.max(0L, (nowMillis - composerPhaseSince.get()) / 1000),
@@ -483,7 +513,23 @@ final case class PeerStats(
     sequencerHeadroom: Long,
     equityLovelace: Long,
     composer: ComposerStats,
-    runtime: RuntimeStats
+    runtime: RuntimeStats,
+    blockGate: BlockGateStats
+)
+
+/** What the block lane's rate limiter is doing, so a deploy can be checked with one request rather
+  * than by log-diving at a level the node does not run at.
+  *
+  * `multiplier` 1.0 means the backlog gate is fully open and the lane is paced only by the
+  * configured period — the expected steady state. Below 1.0 the composer is behind and the lane is
+  * being slowed; the effective period is `softBlockMinPeriod / multiplier`.
+  */
+final case class BlockGateStats(
+    multiplier: Double,
+    backlog: Long,
+    residual: Double,
+    holds: Long,
+    drains: Long
 )
 
 /** Whole-process resource use, for answering one question about a run: is the resource curve

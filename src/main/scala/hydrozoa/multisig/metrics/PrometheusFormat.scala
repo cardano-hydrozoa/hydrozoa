@@ -216,6 +216,37 @@ object PrometheusFormat:
           s.runtime.openFileDescriptors
         )
 
+        // ---- block-rate limiter ----
+        gaugeD(
+          "hydrozoa_block_gate_multiplier",
+          "Block-lane rate multiplier. 1 means the downstream-backlog gate is fully open and " +
+              "block production is paced only by softBlockMinPeriod; below 1 the stack composer " +
+              "is behind and the effective period is softBlockMinPeriod divided by this.",
+          s.blockGate.multiplier
+        )
+        gauge(
+          "hydrozoa_block_gate_backlog",
+          "Soft-confirmed blocks released since the last hard confirmation.",
+          s.blockGate.backlog
+        )
+        gaugeD(
+          "hydrozoa_block_gate_residual",
+          "Per-stack-cycle backlog, filtered over several cycles. The multiplier is derived from " +
+              "this rather than from instantaneous depth, which is dominated by cycle phase.",
+          s.blockGate.residual
+        )
+        counter(
+          "hydrozoa_block_gate_holds_total",
+          "Holds begun by the block limiter. Rising means the shaper is binding.",
+          s.blockGate.holds
+        )
+        counter(
+          "hydrozoa_block_gate_drains_total",
+          "Headroom signals received (one per hard confirmation). Flat while blocks are being " +
+              "produced means the gate has stopped being reopened.",
+          s.blockGate.drains
+        )
+
         b.toString
 
     private def rate(name: String, help: String, r: RateView, b: StringBuilder): Unit =

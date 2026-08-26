@@ -13,5 +13,11 @@ object LimiterEventFormat:
         e match {
             case Started           => debug(s"Limiter[$label] started.")
             case HoldingMsg(t, ms) => debug(s"Limiter[$label] holding $t for ${ms}ms")
+            case GateUpdated(backlog, residual, m) =>
+                debug(
+                  f"Limiter[$label] gate: backlog=$backlog residual=$residual%.1f multiplier=$m%.3f"
+                )
+            case QueueDepthUnexpected(n) =>
+                warn(s"Limiter[$label] has $n throttled messages queued; expected at most 1.")
         }
     }
