@@ -56,7 +56,7 @@ trait CoilAckSequencer(
 
     // The sequencer runs on a hub, so its own id is the hub each stamped ack is scoped to.
     private val hubPeerNum: HeadPeerNumber =
-        env.config.ownPeerId.expectHead("CoilAckSequencer runs only on a hub head peer")
+        config.ownPeerId.expectHead("CoilAckSequencer runs only on a hub head peer")
 
     override def preStart: IO[Unit] = context.self ! CoilAckSequencer.PreStart
 
@@ -112,7 +112,7 @@ trait CoilAckSequencer(
             hubAck = HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack)
             _ <- persistStamp(seq, hubAck, newMarks)
             _ <- state.commit(seq, newMarks)
-            _ <- env.tracer.traceWith(SequencedCoilAck(coilNum, ack.hardAckNum, seq))
+            _ <- tracer.traceWith(SequencedCoilAck(coilNum, ack.hardAckNum, seq))
         } yield hubAck
 
     /** Persist a newly-sequenced relay ack to this hub's own `HubHardAck` journal **and** the

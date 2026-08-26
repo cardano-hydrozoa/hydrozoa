@@ -60,11 +60,11 @@ final case class JointLedger(
       * as `JointLedgerEvent.HeaderEvent` / `JointLedgerEvent.TimingEvent`.
       */
     private val bhTracer: ContraTracer[IO, BlockHeaderEvent] =
-        env.tracer.contramap(JointLedgerEvent.HeaderEvent.apply)
+        tracer.contramap(JointLedgerEvent.HeaderEvent.apply)
     private val tmTracer: ContraTracer[IO, TxTimingEvent] =
-        env.tracer.contramap(JointLedgerEvent.TimingEvent.apply)
+        tracer.contramap(JointLedgerEvent.TimingEvent.apply)
     private val dmTracer: ContraTracer[IO, DepositsMapEvent] =
-        env.tracer.contramap(JointLedgerEvent.DepositsEvent.apply)
+        tracer.contramap(JointLedgerEvent.DepositsEvent.apply)
 
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](JointLedger.State.initialize(config))

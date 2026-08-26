@@ -220,13 +220,13 @@ class FastConsensusActor(
         withCell(brief.blockNum)(_.acceptBrief(brief))
 
     private def handleAck(ack: SoftAck)(using env: Env.Connected): IO[Unit] = {
-        val isOwn = env.config.ownPeerId == PeerId.Head(ack.peerNum)
+        val isOwn = config.ownPeerId == PeerId.Head(ack.peerNum)
         for {
-            _ <- env.tracer.traceWith(
+            _ <- tracer.traceWith(
               FastConsensusActorEvent.AckReceived(ack.blockNum, ack.peerNum, "soft", isOwn)
             )
             // Validate peer
-            vk <- env.config
+            vk <- config
                 .headPeerVKey(ack.peerNum)
                 .liftTo[IO](CollectingError.UnexpectedPeer(ack.peerNum))
             _ <- withCell(ack.blockNum)(_.acceptAck(ack, vk))
@@ -240,7 +240,7 @@ class FastConsensusActor(
       * block's cell. See the [[FastConsensusActor]] class-level doc for postponed-ack semantics.
       */
     private def scheduleOwnAck(ack: SoftAck)(using env: Env.Connected): IO[Unit] = for {
-        _ <- IO.raiseWhen(env.config.ownPeerId != PeerId.Head(ack.peerNum))(
+        _ <- IO.raiseWhen(config.ownPeerId != PeerId.Head(ack.peerNum))(
           Error.AlienAckAnnouncement
         )
         state <- stateRef.get
@@ -276,7 +276,7 @@ class FastConsensusActor(
         cell = state.cells.getOrElse(blockNum, ConsensusCell.fresh(blockNum))
         updated <- IO.fromEither(f(cell))
         _ <- stateRef.update(s => s.copy(cells = s.cells.updated(blockNum, updated)))
-        _ <- IO.whenA(updated.isSaturated(env.config.headPeerVKeys.iterator.toSet))(
+        _ <- IO.whenA(updated.isSaturated(config.headPeerVKeys.iterator.toSet))(
           completeCell(updated)
         )
     } yield ()
@@ -300,7 +300,7 @@ class FastConsensusActor(
                 case _: BlockBrief.Major => "major"
                 case _: BlockBrief.Final => "final"
             }
-            _ <- env.tracer.traceWith(
+            _ <- tracer.traceWith(
               FastConsensusActorEvent.BlockSoftConfirmed(
                 confirmed.blockNum,
                 confirmedBlockType,
@@ -314,7 +314,7 @@ class FastConsensusActor(
                 case _: BlockBrief.Minor => false
                 case _                   => true
             _ <- IO(
-              env.metrics.onBlockConfirmed(
+              metrics.onBlockConfirmed(
                 (confirmed.blockNum: Int).toLong,
                 isMajorBlock,
                 brief.requests.size
@@ -326,8 +326,8 @@ class FastConsensusActor(
             // the subsumed soft-acks (no compaction on confirmation). The value carries this node's
             // local confirmation moment as an arrival stamp — a wall-clock instant is derived on
             // read via the per-generation zero-time anchor, so none is stored.
-            stamp <- env.persistence.arrivalStamp
-            _ <- env.persistence.write(
+            stamp <- persistence.arrivalStamp
+            _ <- persistence.write(
               WriteBatch.start.put(StoreKey.SoftConfirmation(confirmed.blockNum))(
                 Timestamped(stamp, confirmed)
               )

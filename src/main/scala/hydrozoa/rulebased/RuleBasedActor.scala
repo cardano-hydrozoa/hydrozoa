@@ -68,8 +68,6 @@ final case class RuleBasedActor(
 )(using config: Config)
     extends Actor[IO, RuleBasedActor.Requests.Request] {
 
-    private given env: Env = Env(config, persistence, cardanoBackend, tracer)
-
     // Handle to the self-tick fiber ([[startTickTimer]]); cancelled in [[postStop]] so it doesn't
     // outlive the actor.
     private val tickFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
@@ -81,11 +79,11 @@ final case class RuleBasedActor(
         def utxosAtDispute: EitherT[IO, Error.RecoverableErrors, Utxos] =
             traced(
               before = RuleBasedActorEvent.Dispute.Querying,
-              action = env.cardanoBackend.utxosAt(
-                address = HydrozoaBlueprint.mkDisputeAddress(env.config.cardanoInfo.network),
+              action = cardanoBackend.utxosAt(
+                address = HydrozoaBlueprint.mkDisputeAddress(config.cardanoInfo.network),
                 asset = (
-                  env.config.headMultisigScript.policyId,
-                  env.config.headTokenNames.voteTokenName
+                  config.headMultisigScript.policyId,
+                  config.headTokenNames.voteTokenName
                 )
               ),
               onError = RuleBasedActorEvent.Backend.ErrorDisputeUtxos(_)
@@ -94,11 +92,11 @@ final case class RuleBasedActor(
         def utxosAtTreasury: EitherT[IO, Error.RecoverableErrors, Utxos] =
             traced(
               before = RuleBasedActorEvent.Treasury.Querying,
-              action = env.cardanoBackend.utxosAt(
-                address = HydrozoaBlueprint.mkTreasuryAddress(env.config.cardanoInfo.network),
+              action = cardanoBackend.utxosAt(
+                address = HydrozoaBlueprint.mkTreasuryAddress(config.cardanoInfo.network),
                 asset = (
-                  env.config.headMultisigScript.policyId,
-                  env.config.headTokenNames.treasuryTokenName
+                  config.headMultisigScript.policyId,
+                  config.headTokenNames.treasuryTokenName
                 )
               ),
               onError = RuleBasedActorEvent.Backend.ErrorTreasuryUtxos(_)
@@ -107,11 +105,11 @@ final case class RuleBasedActor(
         def utxosAtRegime: EitherT[IO, Error.RecoverableErrors, Utxos] =
             traced(
               before = RuleBasedActorEvent.Regime.Querying,
-              action = env.cardanoBackend.utxosAt(
-                address = env.config.headMultisigAddress,
+              action = cardanoBackend.utxosAt(
+                address = config.headMultisigAddress,
                 asset = (
-                  env.config.headMultisigScript.policyId,
-                  env.config.headTokenNames.regimeWitnessTokenName
+                  config.headMultisigScript.policyId,
+                  config.headTokenNames.regimeWitnessTokenName
                 )
               ),
               onError = RuleBasedActorEvent.Backend.ErrorRegimeUtxos(_)
@@ -120,14 +118,14 @@ final case class RuleBasedActor(
         def utxosAtPeer(addr: ShelleyAddress): EitherT[IO, Error.RecoverableErrors, Utxos] =
             traced(
               before = RuleBasedActorEvent.Collateral.Querying(addr),
-              action = env.cardanoBackend.utxosAt(addr),
+              action = cardanoBackend.utxosAt(addr),
               onError = RuleBasedActorEvent.Backend.ErrorPeerUtxos(_)
             )
 
         def utxosAtFee(addr: ShelleyAddress): EitherT[IO, Error.RecoverableErrors, Utxos] =
             traced(
               before = RuleBasedActorEvent.Fee.Querying(addr),
-              action = env.cardanoBackend.utxosAt(addr),
+              action = cardanoBackend.utxosAt(addr),
               onError = RuleBasedActorEvent.Backend.ErrorFeeUtxos(_)
             )
 
@@ -135,10 +133,10 @@ final case class RuleBasedActor(
             after: TransactionHash
         ): EitherT[IO, Error.RecoverableErrors, List[CardanoBackend.ContinuingTx]] =
             run(
-              env.cardanoBackend.lastContinuingTxs(
+              cardanoBackend.lastContinuingTxs(
                 asset = (
-                  env.config.headMultisigScript.policyId,
-                  env.config.headTokenNames.treasuryTokenName
+                  config.headMultisigScript.policyId,
+                  config.headTokenNames.treasuryTokenName
                 ),
                 after = after
               ),
@@ -146,7 +144,7 @@ final case class RuleBasedActor(
             )
 
         def submit(etx: EnrichedTx[?]): EitherT[IO, Error.RecoverableErrors, Unit] =
-            run(env.cardanoBackend.submitTx(etx), RuleBasedActorEvent.Backend.ErrorSubmittingTx(_))
+            run(cardanoBackend.submitTx(etx), RuleBasedActorEvent.Backend.ErrorSubmittingTx(_))
 
         /** Emit `before` (a "Querying" event), then run + wrap error per [[run]]. */
         private def traced[A](
@@ -154,7 +152,7 @@ final case class RuleBasedActor(
             action: IO[Either[CardanoBackend.Error, A]],
             onError: CardanoBackend.Error => RuleBasedActorEvent
         ): EitherT[IO, Error.RecoverableErrors, A] =
-            EitherT.right[Error.RecoverableErrors](env.tracer.traceWith(before)) >>
+            EitherT.right[Error.RecoverableErrors](tracer.traceWith(before)) >>
                 run(action, onError)
 
         private def run[A](
@@ -162,21 +160,21 @@ final case class RuleBasedActor(
             errorEvent: CardanoBackend.Error => RuleBasedActorEvent
         ): EitherT[IO, Error.RecoverableErrors, A] =
             EitherT(action)
-                .leftSemiflatTap(e => env.tracer.traceWith(errorEvent(e)))
+                .leftSemiflatTap(e => tracer.traceWith(errorEvent(e)))
                 .leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
     }
 
     /** Tracing helpers that fold the tracer's emit into the EitherT pipeline. */
     private object Trace {
         def traceRight(event: RuleBasedActorEvent): EitherT[IO, Error.RecoverableErrors, Unit] =
-            EitherT.right(env.tracer.traceWith(event))
+            EitherT.right(tracer.traceWith(event))
 
         /** Emit `event`, then short-circuit the pipeline with the recoverable `err`. */
         def traceLeft[A](
             event: RuleBasedActorEvent,
             err: Error.RecoverableErrors
         ): EitherT[IO, Error.RecoverableErrors, A] =
-            EitherT.left[A](env.tracer.traceWith(event) >> IO.pure(err))
+            EitherT.left[A](tracer.traceWith(event) >> IO.pure(err))
     }
     import Trace.*
 
@@ -210,7 +208,7 @@ final case class RuleBasedActor(
     ): EitherT[IO, Error.RecoverableErrors, Unit] = {
         for {
             _ <- traceRight(RuleBasedActorEvent.Tx.Submitting(tx))
-            res <- Backend.submit(env.config.ownWallet.signTx(tx))
+            res <- Backend.submit(config.ownWallet.signTx(tx))
             _ <- traceRight(RuleBasedActorEvent.Tx.SubmitSuccess(tx))
         } yield res
     }
@@ -290,7 +288,7 @@ final case class RuleBasedActor(
                 // `nHeadPeers` slots are the head peers (AllOf, always Some); the rest are the coil
                 // peers in sorted order — exactly the sparse `coilMultisig` the dispute-resolution
                 // script verifies position for position, so pass the coil tail through unchanged.
-                val (head, coil) = multiSec.headerMultiSigned.splitAt(env.config.nHeadPeers.convert)
+                val (head, coil) = multiSec.headerMultiSigned.splitAt(config.nHeadPeers.convert)
                 DisputeAction.Vote(
                   sec = RuleBasedActor.toOnchain(multiSec.commitment),
                   signatures = head.flatten,
@@ -309,7 +307,7 @@ final case class RuleBasedActor(
         versionMajor: BigInt
     ): IO[List[StandaloneEvacuationCommitment.MultiSigned]] =
         for {
-            markers <- Markers.derive(env.persistence.backend, env.config.ownPeerId)
+            markers <- Markers.derive(persistence.backend, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
@@ -317,7 +315,7 @@ final case class RuleBasedActor(
               (StackNumber, List[StandaloneEvacuationCommitment.MultiSigned]),
               List[StandaloneEvacuationCommitment.MultiSigned]
             ]((latest, Nil)) { case (stack, acc) =>
-                env.persistence
+                persistence
                     .get(StoreKey.HardConfirmation(stack))
                     .map(_.map(_.payload))
                     .flatMap {
@@ -349,13 +347,13 @@ final case class RuleBasedActor(
       */
     private[rulebased] def loadEvacuationInputs(versionMajor: BigInt): IO[EvacuationInputs] =
         for {
-            markers <- Markers.derive(env.persistence.backend, env.config.ownPeerId)
+            markers <- Markers.derive(persistence.backend, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
             candidateEvacMaps <- loadCandidateEvacMaps(versionMajor)
             fallbackTxHash <- loadFallbackAnchor(latest)
-            _ <- env.tracer.traceWith(
+            _ <- tracer.traceWith(
               RuleBasedActorEvent.Evacuation.CandidateMaps(
                 s"$latest",
                 candidateEvacMaps.keySet.map(k => s"$k").toList
@@ -394,7 +392,7 @@ final case class RuleBasedActor(
                     )
                     .map(map => multiSec.commitment.kzgCommitment -> map)
             }
-            _ <- env.tracer.traceWith(
+            _ <- tracer.traceWith(
               RuleBasedActorEvent.Evacuation.CandidateMapSources(
                 defaultMapBlock = s"base of settled major $versionMajor",
                 defaultKzg = s"$defaultKzg",
@@ -423,7 +421,7 @@ final case class RuleBasedActor(
                       RuleBasedActorEvent.Evacuation.EvacuationAnchor(label, s"$txId")
                     )
                     .as(Right(txId))
-            env.persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
+            persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
                 case None =>
                     IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
                 case Some(i: StackEffects.HardConfirmed.Initial) =>
@@ -450,11 +448,11 @@ final case class RuleBasedActor(
     private def defaultVoteMap(versionMajor: BigInt): IO[(KzgCommitment, EvacuationMap)] =
         if versionMajor == 0 then
             IO.pure(
-              env.config.initialEvacuationMap.kzgCommitment -> env.config.initialEvacuationMap
+              config.initialEvacuationMap.kzgCommitment -> config.initialEvacuationMap
             )
         else
             for {
-                markers <- Markers.derive(env.persistence.backend, env.config.ownPeerId)
+                markers <- Markers.derive(persistence.backend, config.ownPeerId)
                 latest <- markers.hardConfirmed.liftTo[IO](
                   MissingState("no hard-confirmed stack on disk")
                 )
@@ -522,7 +520,7 @@ final case class RuleBasedActor(
             treasuryUtxo: RuleBasedTreasuryUtxo,
             regimeUtxo: RuleBasedRegimeUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
-            env.config.ownPeerId match {
+            config.ownPeerId match {
                 case PeerId.Head(_) => handleHead(treasuryUtxo, regimeUtxo)
                 case PeerId.Coil(_) => handleCoil(treasuryUtxo, regimeUtxo)
             }
@@ -725,7 +723,7 @@ final case class RuleBasedActor(
 
         /** Find an ada-only collateral utxo at the own peer's address. */
         def getCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
-            val peerAddr = env.config.ownWallet.exportVerificationKey.shelleyAddress()
+            val peerAddr = config.ownWallet.exportVerificationKey.shelleyAddress()
             collateralAt(Backend.utxosAtPeer(peerAddr), peerAddr)
         }
 
@@ -834,7 +832,7 @@ final case class RuleBasedActor(
                         raiseError(Error.ParseError.Treasury.WrappedTreasuryParseError(e))
                 }
                 now <- EitherT.right[Error.RecoverableErrors](
-                  realTimeQuantizedInstant(env.config.slotConfig)
+                  realTimeQuantizedInstant(config.slotConfig)
                 )
             } yield now.toSlot.slot > deadline.slot
 
@@ -950,7 +948,7 @@ final case class RuleBasedActor(
                 // empty list into a silent `NoTreasuryFound` recoverable, so without this an
                 // evacuation stalled waiting for the resolution tx to surface is invisible.
                 _ <- EitherT.right[Error.RecoverableErrors](
-                  env.tracer.traceWith(
+                  tracer.traceWith(
                     RuleBasedActorEvent.Evacuation.ContinuingTreasuryTxs(treasuryTxs.size)
                   )
                 )
@@ -962,7 +960,7 @@ final case class RuleBasedActor(
                 // past withdrawals; the original resolution-time map is committed by the oldest
                 // treasury tx's output datum, which is what `candidateEvacMaps` is keyed by.
                 _ <- EitherT.right[Error.RecoverableErrors](
-                  env.tracer.traceWith(
+                  tracer.traceWith(
                     RuleBasedActorEvent.Evacuation.ResolvedKzg(s"$resolutionKzg")
                   )
                 )
@@ -1070,7 +1068,7 @@ final case class RuleBasedActor(
           * and signs every tx with the peer's consensus key).
           */
         def getEvacuationCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
-            val walletAddress = env.config.ownWallet.exportVerificationKey.shelleyAddress()
+            val walletAddress = config.ownWallet.exportVerificationKey.shelleyAddress()
             collateralAt(Backend.utxosAtFee(walletAddress), walletAddress)
         }
     }
@@ -1125,7 +1123,7 @@ final case class RuleBasedActor(
         // this catches the logical recoverables (e.g. `NoTreasuryFound`) that don't.
         et.value.flatTap {
             case Left(e) =>
-                env.tracer.traceWith(RuleBasedActorEvent.Tick.RecoverableRetry(e.toString))
+                tracer.traceWith(RuleBasedActorEvent.Tick.RecoverableRetry(e.toString))
             case Right(_) => IO.unit
         }
     }
@@ -1150,7 +1148,7 @@ final case class RuleBasedActor(
     // fiber orphans (two poll loops, one uncancellable). Cancel the existing fiber before replacing
     // it — or confirm cats-actors' restart path always runs `postStop` first, and note that here.
     private def startTickTimer: IO[Unit] =
-        (IO.sleep(env.config.evacuationBotPollingPeriod) >> (context.self ! Tick)).foreverM.start
+        (IO.sleep(config.evacuationBotPollingPeriod) >> (context.self ! Tick)).foreverM.start
             .flatMap(fib => tickFiber.set(Some(fib)))
 
     /** Cancel the self-tick fiber so it stops pinging `self` once the actor has stopped, instead of
@@ -1182,7 +1180,7 @@ final case class RuleBasedActor(
         } yield parsed
 
     private def getDisputeUtxos: EitherT[IO, Error.RecoverableErrors, DisputeUtxos] = {
-        val ownPkhHash = env.config.ownWallet.exportVerificationKey.pubKeyHash.hash
+        val ownPkhHash = config.ownWallet.exportVerificationKey.pubKeyHash.hash
         for {
             parsed <- parseDisputeUtxos
             ownAwaiting = parsed.collectFirst {
@@ -1263,13 +1261,6 @@ object RuleBasedActor {
         NodeOperationEvacuationConfig.Section & CardanoNetwork.Section & HeadPeers.Section &
         HasTokenNames & ScriptReferenceUtxos.Section & OwnPeerPublic.Section &
         HeadConfig.Bootstrap.Section
-
-    private final case class Env(
-        config: Config,
-        persistence: Persistence[IO],
-        cardanoBackend: CardanoBackend[IO],
-        tracer: ContraTracer[IO, RuleBasedActorEvent]
-    )
 
     /** What action this peer's [[RuleBasedActor]] should take when it observes its own
       * `AwaitingVote` vote utxo on L1.

@@ -284,7 +284,7 @@ abstract class PeerLiaisonHeadToHead(
           dispatch = dispatch(_, connections),
           numberOfBatchRequest = _.batchNum,
           numberOfBatch = _.batchNum,
-          tracer = env.tracer,
+          tracer = tracer,
           describeGet = g =>
               s"req=${g.request} reqCeil=${g.requestCeiling} sAck=${g.softAck} " +
                   s"blk=${g.block} stk=${g.stack} hAck=${g.headHardAck}",
@@ -446,7 +446,7 @@ abstract class PeerLiaisonHeadToHead(
         for {
             connections <- resolveConnections
             connected = env.connected(connections, mkPuller(connections), mkServer(connections))
-            _ <- env.tracer.traceWith(PeerLiaisonEvent.Started)
+            _ <- tracer.traceWith(PeerLiaisonEvent.Started)
             // Restore each lane's own-produced high-water; the Server half hot-loads older entries
             // from the store on the remote's Mesh.Get, and replay / live production re-appends the
             // tail. An empty store leaves every lane cold.

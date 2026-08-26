@@ -44,10 +44,10 @@ abstract class PeerLiaisonCoilToHub(
 
     // The coil→hub uplink runs only on a coil peer; its own-hard-ack outbox is keyed by this number.
     private val ownCoilPeerNumber: CoilPeerNumber =
-        env.config.ownPeerId.expectCoil("PeerLiaisonCoilToHub runs only on a coil peer")
+        config.ownPeerId.expectCoil("PeerLiaisonCoilToHub runs only on a coil peer")
 
-    private val headPeerNums: List[HeadPeerNumber] = env.config.headPeerNums.toList
-    private val hubNums: List[HeadPeerNumber] = env.config.coilPeers.hubHeadPeerNumbers
+    private val headPeerNums: List[HeadPeerNumber] = config.headPeerNums.toList
+    private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
 
     // ---- Lanes ----------------------------------------------------------------------------------
     // Inbound population (pulled from the hub): block + stack spines are contiguous (the hub relays
@@ -100,7 +100,7 @@ abstract class PeerLiaisonCoilToHub(
     // it missed during our crash); preStart restores only the high-water, replay re-appends the
     // in-flight tail.
     private val ownHardAckBacking =
-        LaneOutgoingBacking.hardAck(env.persistence.backend, PeerId.Coil(ownCoilPeerNumber))
+        LaneOutgoingBacking.hardAck(persistence.backend, PeerId.Coil(ownCoilPeerNumber))
     private val ownHardAckLane =
         LaneOutbound.contiguous[HardAck, HardAckNumber](
           _.hardAckNum,
@@ -200,7 +200,7 @@ abstract class PeerLiaisonCoilToHub(
       * keyed by its author. An empty batch is a no-op.
       */
     private def persistInbound(pop: Population.New): IO[Unit] =
-        env.persistence.arrivalStamp.flatMap { stamp =>
+        persistence.arrivalStamp.flatMap { stamp =>
             def lv[P](payload: P): JournalValue[P] = JournalValue(stamp, payload)
             val spinePuts: List[WriteBatch => WriteBatch] =
                 List(
@@ -233,7 +233,7 @@ abstract class PeerLiaisonCoilToHub(
             val full =
                 (spinePuts ++ requestPuts ++ softAckPuts ++ headHardAckPuts ++ coilHardAckPuts)
                     .foldLeft(WriteBatch.start)((wb, put) => put(wb))
-            IO.whenA(full.size > 0)(env.persistence.write(full))
+            IO.whenA(full.size > 0)(persistence.write(full))
         }
 
     /** Route a verified population reply to the local consensus actors. */
@@ -277,7 +277,7 @@ abstract class PeerLiaisonCoilToHub(
               dispatch = pop => dispatch(pop),
               numberOfBatchRequest = _.batchNum,
               numberOfBatch = _.batchNum,
-              tracer = env.tracer
+              tracer = tracer
             )(g => env.connections.remote ! g)
 
         val server: Server[OwnHardAck.Get, OwnHardAck.New] =
@@ -317,7 +317,7 @@ abstract class PeerLiaisonCoilToHub(
 
     private def preStartLocal(engines: Engines): IO[Unit] =
         for {
-            _ <- env.tracer.traceWith(PeerLiaisonEvent.Started)
+            _ <- tracer.traceWith(PeerLiaisonEvent.Started)
             // Restore only the own-hard-ack high-water; the lane serves older acks from the own
             // coil HardAck journal on demand (the Server half answers the hub's OwnHardAck.Get) and
             // replay re-appends the in-flight tail. An empty store leaves the lane cold.
@@ -337,7 +337,7 @@ abstract class PeerLiaisonCoilToHub(
       * initial cursor.
       */
     private def restoreInboundCursors: IO[Unit] =
-        val backend = env.persistence.backend
+        val backend = persistence.backend
         for {
             _ <- LaneIncomingCursors.block(backend).flatMap(blockLane.restoreCursor)
             _ <- LaneIncomingCursors.stack(backend).flatMap(stackLane.restoreCursor)
@@ -357,7 +357,7 @@ abstract class PeerLiaisonCoilToHub(
 
     private def startResendTimer: IO[Unit] =
         (IO.sleep(
-          env.config.peerLiaisonResendInterval
+          config.peerLiaisonResendInterval
         ) >> (context.self ! ResendCurrent)).foreverM.start
             .flatMap(fib => resendFiber.set(Some(fib)))
 
