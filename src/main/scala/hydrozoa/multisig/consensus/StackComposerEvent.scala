@@ -44,6 +44,17 @@ object StackComposerEvent:
       */
     final case class SingleFlightGateClosed(stackNum: StackNumber) extends StackComposerEvent
 
+    /** The single-flight gate was opened from PERSISTENCE rather than from a delivered
+      * `Stack.HardConfirmed`: the composer had been waiting past `HardConfirmReconcileAfterMs` and
+      * the durable hard-confirmation marker had already advanced past the stack it was waiting on.
+      * One of these means a message was lost — the node kept going, but the lane that lost it is
+      * worth looking at.
+      */
+    final case class HardConfirmationReconciled(
+        awaited: StackNumber,
+        persisted: StackNumber
+    ) extends StackComposerEvent
+
     /** Follower detected a structural inconsistency between the leader's brief and the local
       * single-flight position — unrecoverable; node will panic.
       */

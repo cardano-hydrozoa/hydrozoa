@@ -31,6 +31,13 @@ object StackComposerEventFormat:
                   s"single-flight gate CLOSED on stack $sn; awaiting its hard confirmation",
                   "stackNum" -> s"${sn: Int}"
                 )
+            case HardConfirmationReconciled(awaited, persisted) =>
+                warn(
+                  s"single-flight gate OPEN by reconciliation: awaited stack $awaited, " +
+                      s"persisted hard confirmation is $persisted — the HardConfirmed message " +
+                      s"for $awaited never arrived",
+                  "stackNum" -> s"${awaited: Int}"
+                )
             case StructuralDivergence(sn, lFirst, lLast, expected) =>
                 warn(
                   s"Follower stack $sn structural divergence: leader brief [$lFirst..$lLast] but expected to start at $expected",

@@ -23,6 +23,7 @@ import hydrozoa.multisig.metrics.{PeerMetrics, StackComposerPhase}
 import hydrozoa.multisig.persistence.recovery.{BlockResultScan, SoftConfirmationScan}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 import scala.annotation.tailrec
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.ledger.{TransactionHash, Value}
 
 /** Stack composer.
@@ -51,7 +52,12 @@ final case class StackComposer(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | StackComposer.Connections,
     tracer: ContraTracer[IO, StackComposerEvent],
     persistence: Persistence[IO],
-    metrics: PeerMetrics
+    metrics: PeerMetrics,
+    /** How long to wait for a `Stack.HardConfirmed` before re-deriving the single-flight gate from
+      * persistence. Injectable so tests need not wait it out; see
+      * [[StackComposer.HardConfirmReconcileAfter]].
+      */
+    hardConfirmReconcileAfter: FiniteDuration = StackComposer.HardConfirmReconcileAfter
 ) extends Actor[IO, StackComposer.Request] {
     import StackComposer.*
 
@@ -65,6 +71,11 @@ final case class StackComposer(
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
     val state: Ref[IO, State] = Ref.unsafe[IO, State](State.initial(config))
+
+    /** Wall-clock millis at which the composer started waiting for a hard confirmation, or `None`
+      * when it is not waiting. Read by [[reconcileHardConfirmedFromPersistence]].
+      */
+    private val hardConfirmWaitSinceMs = Ref.unsafe[IO, Option[Long]](None)
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! PreStart
@@ -227,10 +238,55 @@ final case class StackComposer(
     private def tryProgress: IO[Unit] = state.get.flatMap { s =>
         val nextStackNum = s.lastClosedStackNum.increment
         if !s.previousStackHardConfirmed then
-            reportPhase(StackComposerPhase.WaitingForPreviousHardConfirmation)
-        else if config.canLeadSlow(nextStackNum) then tryCloseAsLeader(s, nextStackNum)
-        else tryCloseAsFollower(s, nextStackNum)
+            reportPhase(StackComposerPhase.WaitingForPreviousHardConfirmation) >>
+                reconcileHardConfirmedFromPersistence(s)
+        else
+            hardConfirmWaitSinceMs.set(None) >>
+                (if config.canLeadSlow(nextStackNum) then tryCloseAsLeader(s, nextStackNum)
+                 else tryCloseAsFollower(s, nextStackNum))
     }
+
+    /** Open the single-flight gate from durable state when the `Stack.HardConfirmed` message that
+      * should have opened it never arrived.
+      *
+      * Without this the gate is opened by exactly one message, with no timeout and no retry, so a
+      * single lost delivery stalls the head until it is restarted — a restart recovers only because
+      * [[State.recover]] recomputes the flag from the persisted marker instead of waiting. This
+      * does the same thing without the restart.
+      *
+      * Two properties matter:
+      *
+      *   - It is driven by [[tryProgress]], which runs on every inbound message, so it needs no
+      *     timer. That is deliberate: the failures that can lose a message include ones that also
+      *     stop timers firing, and a timeout armed on the same runtime would die with them.
+      *   - Firing early is harmless. If the persisted marker has not advanced there is nothing to
+      *     do, and the check is a `lastKey` point read. So the threshold only has to sit above
+      *     normal hold times; it does not have to be tuned.
+      */
+    private def reconcileHardConfirmedFromPersistence(s: State): IO[Unit] =
+        IO.realTime.map(_.toMillis).flatMap { nowMs =>
+            hardConfirmWaitSinceMs.get.flatMap {
+                case None => hardConfirmWaitSinceMs.set(Some(nowMs))
+                case Some(since) if nowMs - since < hardConfirmReconcileAfter.toMillis =>
+                    IO.unit
+                case Some(_) =>
+                    // Re-arm first, so a persisted marker that has not advanced costs one point
+                    // read per interval rather than one per inbound message.
+                    hardConfirmWaitSinceMs.set(Some(nowMs)) >>
+                        Markers.recoverHardConfirmed(persistence.backend).flatMap {
+                            case Some(persisted)
+                                if Ordering[StackNumber].gteq(persisted, s.lastClosedStackNum) =>
+                                tracer.traceWith(
+                                  StackComposerEvent.HardConfirmationReconciled(
+                                    s.lastClosedStackNum,
+                                    persisted
+                                  )
+                                ) >> state.update(_.withPreviousStackHardConfirmed(persisted)) >>
+                                    hardConfirmWaitSinceMs.set(None) >> tryProgress
+                            case _ => IO.unit
+                        }
+            }
+        }
 
     /** Publish the composer's phase for `GET /head/stats`. Re-reporting the same phase leaves its
       * clock running, so `secondsInPhase` reads as time stuck rather than time since the last event
@@ -823,6 +879,13 @@ final case class StackComposer(
 
 object StackComposer {
     type Handle = ActorRef[IO, Request]
+
+    /** How long the composer waits for a `Stack.HardConfirmed` before it stops trusting the
+      * delivery path and re-derives the gate from persistence. Well above any legitimate hold
+      * (`hardStackMinPeriod` defaults to 30 s), and firing early is a no-op — see
+      * `reconcileHardConfirmedFromPersistence`.
+      */
+    val HardConfirmReconcileAfter: FiniteDuration = 2.minutes
 
     type Config = HeadConfig.Section & OwnPeerPrivate.Section
 
