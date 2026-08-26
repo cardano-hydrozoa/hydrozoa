@@ -164,6 +164,25 @@ Remaining, before a full migration:
    `integration-tests.log`) against current Logback output; verify `additivity=false` / sync-vs-async
    choices reproduce.
 
+## Parked follow-up: the `squelchUnlessM` gate duplicates the backend's own gating
+
+Benchmarks on the log4cats sink (JMH, `-prof gc`) showed the level-gate is a targeted win — it drops
+a disabled × expensive-render emit from ~1314 to ~818 B/op (the wasted-`toHex`-on-a-disabled-trace
+path behind the OOM) — but adds ~480 B/op on the *enabled* path. Most of that is the `Eval`/`Rendered`
+deferral wrapping (inherent to deferred render), but ~100–150 B/op is the gate itself: `squelchUnlessM`
+runs a per-emit `isEnabled` IO and `Either` routing, then the sink forces the render and hands it to
+log4cats, whose `contextLog` is literally `F.delay(if (isEnabledUnsafe()) logging())` — i.e. log4cats
+*already* checks the level and only forces its by-name message when enabled. So the ContraTracer gate
+duplicates the backend's own lazy gating (a double level-check on the enabled path).
+
+**This carries into scribe unchanged:** `ScribeTracer.sink` has the same shape — force `ev.render.value`
+eagerly, then `.squelchUnlessM(includes)`. During the migration, decide deliberately: either drop
+`squelchUnlessM` and hand the render to scribe inside its by-name `trace` call (lean on scribe's own
+gating — smaller, backend-coupled), or keep the gate as an intentional *backend-agnostic* laziness
+guarantee (holds even for a leaf whose log call isn't lazy) and accept the ~100–150 B/op. Not a
+blocker either way; parked so it isn't re-discovered. The benchmark itself was a throwaway spike and
+was not committed.
+
 ## Files
 
 - `lib/logging/Slf4jTracer.scala` — the sole backend touch point to replace (→ `ScribeTracer`).
