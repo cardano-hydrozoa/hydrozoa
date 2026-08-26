@@ -11,11 +11,7 @@
   "nodeOperationMultisigConfig": {
     "cardanoLiaisonPollingPeriod": 20000,
     "peerLiaisonMaxRequestsPerBatch": 500,
-    "peerLiaisonResendInterval": 5000,
-    "rateLimits": {
-      "softBlockMinPeriod": 100,
-      "hardStackMinPeriod": 30000
-    }
+    "peerLiaisonResendInterval": 5000
   },
   "blockfrostApiKey": "preview00000000000000000000000000000000",
   "remoteLedgerUri": "ws://127.0.0.1:3001/ws",

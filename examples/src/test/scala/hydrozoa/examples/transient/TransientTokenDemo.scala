@@ -9,10 +9,10 @@ import hydrozoa.config.head.InitParamsType.Constant
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.parameters.{RateLimits, generateHeadParameters}
 import hydrozoa.config.head.{HeadConfig, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, RateLimits, generateNodeOperationMultisigConfig}
+import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, generateNodeOperationMultisigConfig}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.integration.harness.{MultiPeerHeadHarness, Signal}
@@ -116,14 +116,11 @@ object TransientTokenDemo extends Properties("Transient token demo") {
         txs: DemoTxs
     )
 
-    // Narrow the rate limits (as stage4 does) so stack/block propagation isn't paced against the
-    // production defaults while the demo runs on the real clock.
     private def genNodeOperationMultisig(
         headConfig: HeadConfig
     ): Gen[NodeOperationMultisigConfig] =
         generateNodeOperationMultisigConfig(
-          maxPollingPeriod = headConfig.maxCardanoLiaisonPollingPeriod,
-          rateLimits = RateLimits(softBlockMinPeriod = 5.seconds, hardStackMinPeriod = 2.seconds)
+          maxPollingPeriod = headConfig.maxCardanoLiaisonPollingPeriod
         )
 
     /** The [[L2Metadata]] head-label metadata for an L2 transaction: the headId pin, the L1-bound
@@ -297,7 +294,11 @@ object TransientTokenDemo extends Properties("Transient token demo") {
         )
 
         for {
-            headParams <- generateHeadParameters().run(testPeers)
+            // Narrow the rate limits (as stage4 does) so stack/block propagation isn't paced
+            // against the production defaults while the demo runs on the real clock.
+            headParams <- generateHeadParameters(
+              rateLimits = RateLimits(softBlockMinPeriod = 5.seconds, hardStackMinPeriod = 2.seconds)
+            ).run(testPeers)
 
             fc = headParams.fallbackContingency
             totalContingency = Coin(

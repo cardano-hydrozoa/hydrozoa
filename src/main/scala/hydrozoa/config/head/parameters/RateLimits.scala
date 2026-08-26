@@ -1,4 +1,4 @@
-package hydrozoa.config.node.operation.multisig
+package hydrozoa.config.head.parameters
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given
 import io.circe.*
@@ -15,6 +15,10 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
   * behind any currently-held message (strict FIFO).
   *
   * The defaults below are non-zero: these lanes are limited unless a config overrides them.
+  *
+  * Head-agreed, not per-node: both knobs gate consensus cadence, so peers running different values
+  * produce different blocks. They live in [[HeadParameters]] and are covered by `headParamsHash`
+  * (design/head-params-hash.md).
   */
 final case class RateLimits(
     override val softBlockMinPeriod: FiniteDuration,

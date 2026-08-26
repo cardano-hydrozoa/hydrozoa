@@ -16,7 +16,7 @@ import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
+import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind, RateLimits}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
@@ -160,13 +160,39 @@ object Bootstrap:
         disputeResolutionConfig: DisputeResolutionConfig,
         settlementConfig: SettlementConfig,
         blockConfig: BlockConfig,
+        rateLimits: RateLimits,
         coilQuorum: Int
     )
 
     object BootstrapHeadParams {
         given Encoder[BootstrapHeadParams] = deriveEncoder[BootstrapHeadParams]
+
+        /** Hand-written for the same reason as [[HeadParameters.headParametersDecoder]]: a
+          * `defaults.json` written before `rateLimits` joined this cluster still decodes,
+          * defaulting to [[RateLimits.default]].
+          */
         given (using CardanoNetwork.Section): Decoder[BootstrapHeadParams] =
-            deriveDecoder[BootstrapHeadParams]
+            Decoder.instance { c =>
+                for {
+                    txTiming <- c.get[TxTiming]("txTiming")
+                    fallbackContingency <- c.get[FallbackContingency]("fallbackContingency")
+                    disputeResolutionConfig <- c.get[DisputeResolutionConfig](
+                      "disputeResolutionConfig"
+                    )
+                    settlementConfig <- c.get[SettlementConfig]("settlementConfig")
+                    blockConfig <- c.get[BlockConfig]("blockConfig")
+                    rateLimits <- c.getOrElse[RateLimits]("rateLimits")(RateLimits.default)
+                    coilQuorum <- c.get[Int]("coilQuorum")
+                } yield BootstrapHeadParams(
+                  txTiming = txTiming,
+                  fallbackContingency = fallbackContingency,
+                  disputeResolutionConfig = disputeResolutionConfig,
+                  settlementConfig = settlementConfig,
+                  blockConfig = blockConfig,
+                  rateLimits = rateLimits,
+                  coilQuorum = coilQuorum
+                )
+            }
     }
 
     /** Assembly-time defaults (`defaults.json`): everything the head needs that is neither peer
@@ -346,9 +372,13 @@ object Bootstrap:
           disputeResolutionConfig = bhp.disputeResolutionConfig,
           settlementConfig = bhp.settlementConfig,
           blockConfig = bhp.blockConfig,
+          rateLimits = bhp.rateLimits,
           coilQuorum = bhp.coilQuorum,
           // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
           // a zero hash rather than empty bytes (which fail the length check).
+          // TODO: per design/head-params-hash.md every backend reports this through the same
+          //  `L2Ledger` contract — a digest over the ledger's own parameters, never over its
+          //  state. A zero hash makes every head agree on nothing.
           l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
           l2Ledger = l2Ledger,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
@@ -1293,6 +1323,7 @@ object InitBootstrapFiles:
               disputeResolutionConfig = DisputeResolutionConfig.default(network.slotConfig),
               settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
               blockConfig = BlockConfig(PositiveInt.unsafeApply(1000)),
+              rateLimits = RateLimits.default,
               coilQuorum = coilQuorum
             )
             // Demo equity: head peer 0 funds the whole head, the rest contribute zero and co-sign.

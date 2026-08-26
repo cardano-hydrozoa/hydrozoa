@@ -19,6 +19,9 @@ def generateHeadParameters(
         generateDisputeResolutionConfig,
     generateSettlementConfig: Gen[SettlementConfig] = generateSettlementConfig,
     generateBlockConfig: Gen[BlockConfig] = generateBlockConfig,
+    // A plain value, deliberately not a Gen: an extra draw here shifts every seeded fixture
+    // downstream and breaks unrelated suites.
+    rateLimits: RateLimits = RateLimits.default,
     generateL2ParamsHash: Gen[Hash32] = Arbitrary.arbitrary[Hash32],
     generateL2Ledger: Gen[L2LedgerKind] = Gen.const(L2LedgerKind.CardanoEutxo),
     // Default identity-isomorphism ON (headId pin NOT enforced) so generated L2 txs, which carry no
@@ -40,6 +43,7 @@ def generateHeadParameters(
       disputeResolutionConfig = disputeResolutionConfig,
       settlementConfig = settlementConfig,
       blockConfig = blockConfig,
+      rateLimits = rateLimits,
       // TODO: Generate
       coilQuorum = 0,
       l2ParamsHash = l2ParamsHash,

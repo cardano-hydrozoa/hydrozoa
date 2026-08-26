@@ -9,14 +9,13 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 final case class NodeOperationMultisigConfig(
     override val cardanoLiaisonPollingPeriod: FiniteDuration,
     override val peerLiaisonMaxRequestsPerBatch: PositiveInt,
-    override val peerLiaisonResendInterval: FiniteDuration,
-    override val rateLimits: RateLimits
+    override val peerLiaisonResendInterval: FiniteDuration
 ) extends NodeOperationMultisigConfig.Section {
     override transparent inline def nodeOperationMultisigConfig: NodeOperationMultisigConfig = this
 }
 
 object NodeOperationMultisigConfig {
-    trait Section extends RateLimits.Section {
+    trait Section {
         def nodeOperationMultisigConfig: NodeOperationMultisigConfig
 
         def cardanoLiaisonPollingPeriod: FiniteDuration =
@@ -31,15 +30,12 @@ object NodeOperationMultisigConfig {
           */
         def peerLiaisonResendInterval: FiniteDuration =
             nodeOperationMultisigConfig.peerLiaisonResendInterval
-
-        override def rateLimits: RateLimits = nodeOperationMultisigConfig.rateLimits
     }
 
     lazy val default: NodeOperationMultisigConfig = NodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = 10.seconds,
       peerLiaisonMaxRequestsPerBatch = PositiveInt.unsafeApply(500),
-      peerLiaisonResendInterval = 5.seconds,
-      rateLimits = RateLimits.default
+      peerLiaisonResendInterval = 5.seconds
     )
 
     given Encoder[NodeOperationMultisigConfig] = deriveEncoder[NodeOperationMultisigConfig]

@@ -34,9 +34,14 @@ trait LimiterTimestamp {
 }
 ```
 
-`RateLimits` (`config/node/operation/multisig/RateLimits.scala`) holds the per-lane minimum
-periods (`softBlockMinPeriod`, `hardStackMinPeriod`, …). It is part of
-`NodeOperationMultisigConfig`, so every actor that already takes that config can read the knobs.
+`RateLimits` (`config/head/parameters/RateLimits.scala`) holds the per-lane minimum periods
+(`softBlockMinPeriod`, `hardStackMinPeriod`, …). It is part of `HeadParameters`, so every actor
+that already takes the head config can read the knobs.
+
+The knobs are **head-agreed, not per-node**: both gate consensus cadence, so peers running
+different values produce different blocks. `headParamsHash` covers them
+(`design/head-params-hash.md`), and the initialization transaction's treasury datum pins that
+hash — a peer whose rate limits differ cannot sign block zero.
 
 ## How it is wired today
 

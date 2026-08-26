@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.stack
 
-import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.config.head.parameters.RateLimits
 import hydrozoa.multisig.consensus.limiter.LimiterTimestamp
 import java.time.Instant
 import scala.concurrent.duration.FiniteDuration
