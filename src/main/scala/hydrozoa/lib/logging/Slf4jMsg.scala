@@ -23,36 +23,25 @@ object Slf4jMsg:
 /** Lift a [[Slf4jMsg]] into a [[LogEvent]] under [[routingKey]], keeping the message deferred. */
 object Slf4jMsgFormat:
     def humanFormat(routingKey: String)(m: Slf4jMsg): LogEvent = m match
-        case Slf4jMsg.Trace(msg) =>
-            LogEventTyped(
-              Level.Trace,
-              Some(routingKey),
-              msg.map(Rendered(_, Map.empty[String, String]))
-            )
-        case Slf4jMsg.Debug(msg) =>
-            LogEventTyped(
-              Level.Debug,
-              Some(routingKey),
-              msg.map(Rendered(_, Map.empty[String, String]))
-            )
-        case Slf4jMsg.Info(msg) =>
-            LogEventTyped(
-              Level.Info,
-              Some(routingKey),
-              msg.map(Rendered(_, Map.empty[String, String]))
-            )
-        case Slf4jMsg.Warn(msg) =>
-            LogEventTyped(
-              Level.Warn,
-              Some(routingKey),
-              msg.map(Rendered(_, Map.empty[String, String]))
-            )
-        case Slf4jMsg.Error(msg, cause) =>
-            LogEventTyped(
-              Level.Error,
-              Some(routingKey),
-              msg.map(Rendered(_, Map.empty[String, String], cause))
-            )
+        case Slf4jMsg.Trace(msg)        => lift(routingKey, Level.Trace, msg)
+        case Slf4jMsg.Debug(msg)        => lift(routingKey, Level.Debug, msg)
+        case Slf4jMsg.Info(msg)         => lift(routingKey, Level.Info, msg)
+        case Slf4jMsg.Warn(msg)         => lift(routingKey, Level.Warn, msg)
+        case Slf4jMsg.Error(msg, cause) => lift(routingKey, Level.Error, msg, cause)
+
+    // `msg` is already an `Eval[String]`, so mapping over it keeps the render deferred; a `Slf4jMsg`
+    // carries no context, hence the empty ctx.
+    private def lift(
+        routingKey: String,
+        level: Level,
+        msg: Eval[String],
+        cause: Option[Throwable] = None
+    ): LogEvent =
+        LogEventTyped(
+          level,
+          Some(routingKey),
+          msg.map(Rendered(_, Map.empty[String, String], cause))
+        )
 
 /** Logger-like extension on a `ContraTracer[F, Slf4jMsg]`. Build the tracer once at construction
   * time, then call `log.info / warn / error / debug / trace` at the call sites:
