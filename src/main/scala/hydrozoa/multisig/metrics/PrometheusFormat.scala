@@ -167,6 +167,55 @@ object PrometheusFormat:
                 }\n"
         }
 
+        // Whole-process resource gauges — concurrency axes, read against a cumulative counter
+        // above and across a load step-down (see `RuntimeStats`). The `_total` counters here are
+        // monotonic by construction.
+        gauge(
+          "hydrozoa_fibers_suspended",
+          "Fibers suspended on the cats-effect runtime. The axis that failed on 2026-08-26.",
+          s.runtime.fibersSuspended
+        )
+        gauge(
+          "hydrozoa_fibers_queued_local",
+          "Fibers sitting in worker-local run queues.",
+          s.runtime.fibersQueuedLocal
+        )
+        gauge("hydrozoa_worker_threads", "cats-effect compute workers.", s.runtime.workerThreads)
+        gauge(
+          "hydrozoa_workers_active",
+          "Compute workers running a fiber.",
+          s.runtime.workersActive
+        )
+        gauge(
+          "hydrozoa_workers_searching",
+          "Compute workers searching for work. Non-zero while hydrozoa_timers_executed_total is " +
+              "flat is the cats-effect scheduler-seizure signature.",
+          s.runtime.workersSearching
+        )
+        gauge(
+          "hydrozoa_workers_blocked",
+          "Compute workers inside a blocking region.",
+          s.runtime.workersBlocked
+        )
+        gauge(
+          "hydrozoa_timers_outstanding",
+          "Armed timers across all worker heaps.",
+          s.runtime.timersOutstanding
+        )
+        counter(
+          "hydrozoa_timers_executed_total",
+          "Timers fired since start. Flat while the process is loaded means timer delivery is dead.",
+          s.runtime.timersExecuted
+        )
+        gauge("hydrozoa_live_threads", "JVM live threads.", s.runtime.liveThreads)
+        gauge("hydrozoa_heap_used_bytes", "JVM heap in use.", s.runtime.heapUsedBytes)
+        gauge("hydrozoa_heap_committed_bytes", "JVM heap committed.", s.runtime.heapCommittedBytes)
+        gauge(
+          "hydrozoa_open_file_descriptors",
+          "Open file descriptors, or -1 where the platform does not report them.",
+          s.runtime.openFileDescriptors
+        )
+
         b.toString
 
     private def rate(name: String, help: String, r: RateView, b: StringBuilder): Unit =

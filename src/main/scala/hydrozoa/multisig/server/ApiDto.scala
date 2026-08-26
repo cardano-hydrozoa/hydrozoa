@@ -264,9 +264,31 @@ object ApiDto {
           * closed. One side of `treasury.value == evacuation map total + equity + beacon`.
           */
         equityLovelace: Long,
-        composer: ComposerStatsView
+        composer: ComposerStatsView,
+        runtime: RuntimeStatsView
     )
     given Codec[PeerStatsView] = deriveCodec
+
+    /** Whole-process resource gauges. Read these against the cumulative counters above (`blocks`,
+      * `stacks`, `localRequests.total`) and across a deliberate load step-down; they are
+      * concurrency axes, not backlog. Anything the platform does not expose reads as -1. See
+      * [[hydrozoa.multisig.metrics.RuntimeStats]] for how to read them and what they cannot say.
+      */
+    final case class RuntimeStatsView(
+        fibersSuspended: Long,
+        fibersQueuedLocal: Long,
+        workerThreads: Int,
+        workersActive: Int,
+        workersSearching: Int,
+        workersBlocked: Int,
+        timersOutstanding: Long,
+        timersExecuted: Long,
+        liveThreads: Int,
+        heapUsedBytes: Long,
+        heapCommittedBytes: Long,
+        openFileDescriptors: Long
+    )
+    given Codec[RuntimeStatsView] = deriveCodec
 
     /** Map a [[hydrozoa.multisig.metrics.PeerStats]] snapshot to its JSON body. */
     def mkPeerStatsView(s: PeerStats): PeerStatsView =
@@ -280,6 +302,20 @@ object ApiDto {
             )
         PeerStatsView(
           uptimeSeconds = s.uptimeSeconds,
+          runtime = RuntimeStatsView(
+            fibersSuspended = s.runtime.fibersSuspended,
+            fibersQueuedLocal = s.runtime.fibersQueuedLocal,
+            workerThreads = s.runtime.workerThreads,
+            workersActive = s.runtime.workersActive,
+            workersSearching = s.runtime.workersSearching,
+            workersBlocked = s.runtime.workersBlocked,
+            timersOutstanding = s.runtime.timersOutstanding,
+            timersExecuted = s.runtime.timersExecuted,
+            liveThreads = s.runtime.liveThreads,
+            heapUsedBytes = s.runtime.heapUsedBytes,
+            heapCommittedBytes = s.runtime.heapCommittedBytes,
+            openFileDescriptors = s.runtime.openFileDescriptors
+          ),
           localRequests = LocalRequestStatsView(
             total = s.localAccepted,
             rate = rate(s.localRate),

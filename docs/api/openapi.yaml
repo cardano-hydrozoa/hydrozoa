@@ -1242,6 +1242,7 @@ components:
       - sequencerHeadroom
       - equityLovelace
       - composer
+      - runtime
       properties:
         uptimeSeconds:
           type: integer
@@ -1272,6 +1273,8 @@ components:
           format: int64
         composer:
           $ref: '#/components/schemas/ComposerStats'
+        runtime:
+          $ref: '#/components/schemas/RuntimeStats'
     RateStats:
       title: RateStats
       type: object
@@ -1449,6 +1452,59 @@ components:
         type:
           type: string
           const: rollout
+    RuntimeStats:
+      title: RuntimeStats
+      type: object
+      required:
+      - fibersSuspended
+      - fibersQueuedLocal
+      - workerThreads
+      - workersActive
+      - workersSearching
+      - workersBlocked
+      - timersOutstanding
+      - timersExecuted
+      - liveThreads
+      - heapUsedBytes
+      - heapCommittedBytes
+      - openFileDescriptors
+      properties:
+        fibersSuspended:
+          type: integer
+          format: int64
+        fibersQueuedLocal:
+          type: integer
+          format: int64
+        workerThreads:
+          type: integer
+          format: int32
+        workersActive:
+          type: integer
+          format: int32
+        workersSearching:
+          type: integer
+          format: int32
+        workersBlocked:
+          type: integer
+          format: int32
+        timersOutstanding:
+          type: integer
+          format: int64
+        timersExecuted:
+          type: integer
+          format: int64
+        liveThreads:
+          type: integer
+          format: int32
+        heapUsedBytes:
+          type: integer
+          format: int64
+        heapCommittedBytes:
+          type: integer
+          format: int64
+        openFileDescriptors:
+          type: integer
+          format: int64
     Sec:
       title: Sec
       type: object

@@ -51,6 +51,21 @@ class PrometheusFormatTest extends AnyFunSuite:
         secondsInPhase = 42,
         partitionsDone = 17,
         partitionsTotal = 300
+      ),
+      runtime = RuntimeStats(
+        fibersSuspended = 27428,
+        fibersQueuedLocal = 5654,
+        workerThreads = 4,
+        workersActive = 2,
+        workersSearching = 1,
+        workersBlocked = 0,
+        timersOutstanding = 12,
+        timersExecuted = 98765,
+        liveThreads = 36,
+        heapUsedBytes = 241172480,
+        heapCommittedBytes = 536870912,
+        // -1 is the "platform does not report this" sentinel, and it must survive rendering.
+        openFileDescriptors = -1
       )
     )
 
@@ -102,3 +117,11 @@ class PrometheusFormatTest extends AnyFunSuite:
               !out.contains("E-"), // no scientific notation
           out
         )
+
+    test("the runtime gauges render, including the -1 unavailable sentinel"):
+        val out = PrometheusFormat.render(sample)
+        val _ = assert(out.contains("hydrozoa_fibers_suspended 27428"))
+        val _ = assert(out.contains("hydrozoa_workers_searching 1"))
+        val _ = assert(out.contains("hydrozoa_timers_executed_total 98765"))
+        val _ = assert(out.contains("# TYPE hydrozoa_timers_executed_total counter"))
+        assert(out.contains("hydrozoa_open_file_descriptors -1"))
