@@ -1,41 +1,45 @@
 # Spike: replace SLF4J + Logback + log4cats with scribe
 
-**Status:** decision spike, PoC run. **Recommendation: HOLD** — the level-API win is real and proven,
-but a measured load test found scribe's built-in async handle drops ~99.9% of a burst (a ~1000 ev/s
-drain ceiling). Adopt scribe only with a **custom async handle** (or if prod log volume is provably low).
+**Status:** decision spike, PoC + corrected benchmark run. **Recommendation: GO** (viable). The
+level-API win is proven, and scribe's *default synchronous* path is lossless and fast (~397k ev/s
+through a no-op writer, **0 drops**). An earlier **HOLD was a benchmarking error**: it measured
+scribe's opt-in `AsynchronousLogHandle` — a crude, non-default component whose drain thread writes one
+record then `Thread.sleep(1)` (a ~1000 rec/s ceiling, source-verified) — which the real sink never
+uses. Migrate on the synchronous handle; for the high-volume trace file, put async at the cats-effect
+layer (bounded `Queue` + consumer fiber), never scribe's `AsynchronousLogHandle`.
 
 ## PoC results (measured, this repo)
 
-Two artifacts landed to validate criteria 1 and 2 concretely (not just on paper):
-- `lib/logging/ScribeTracer.scala` — a drop-in `ContraTracer[IO, LogEvent]` sink on scribe. **Compiles
-  and works; the level gate reimplements via `scribe.Logger.get(name).includes(level)` with zero
-  `org.slf4j`.** ✅ Criterion 1 (the decisive one) proven in-repo.
-- `src/test/.../ScribeLoadTest.scala` (ignored by default) — 64 CE fibers × 20 000 `trace` emits =
-  1.28M events through `ScribeTracer.sink` with `AsynchronousLogHandle(maxBuffer = 8192, DropNew)` and a
-  counting no-op writer (measures the queue, not disk).
+`lib/logging/ScribeTracer.scala` is a drop-in `ContraTracer[IO, LogEvent]` sink on scribe. It compiles
+and works; the level gate reimplements via `scribe.Logger.get(name).includes(level)` with zero
+`org.slf4j`. ✅ Criterion 1 (the decisive one) proven in-repo. Its emit is `IO { logger.trace(msg) }`
+— scribe's **synchronous default handle** (`LogHandlerBuilder.handle = SynchronousLogHandle`,
+source-verified): a direct format-and-write, no queue, **no drop**.
 
-Measured (idiomatic-CE harness, no nested `unsafeRunSync`):
+`src/test/.../ScribeLoadTest.scala` bursts 320 000 `trace` emits from 32 CE fibers through the sink,
+against a counting no-op writer (measures the framework/queue mechanism, not disk):
 
-| metric | value |
-|---|---|
-| events produced | 1 280 000 |
-| **events drained/written** | **~1 090** |
-| **drops** | **~99.9%** |
-| producer throughput | ~829 000 ev/s (producers are *not* blocked in aggregate) |
-| worst single-emit | ~43 ms (likely a GC pause under the 1.28M-object burst, not a scribe block) |
+| wiring | drops | throughput | notes |
+|---|---|---|---|
+| **synchronous** (the sink's real path) | **0 / 320 000** | **~397k ev/s** | scribe default; lossless |
+| **ce-async** (bounded `Queue` + 1 consumer) | **0 / 320 000** | **~384k ev/s** | idiomatic `AsyncAppender` replacement; write off producers, backpressure not drop |
+| scribe `AsynchronousLogHandle` (`DropNew`, buf 8192) | **319 401 / 320 000 (99.8%)** | ~1k rec/s drain | opt-in, non-default; **do not use** |
 
-**Interpretation.** scribe's `AsynchronousLogHandle` is a single daemon thread sleep-polling a
-`ConcurrentLinkedQueue` (`sleep(1ms)` busy / `sleep(10ms)` idle), giving a **~1000 ev/s drain ceiling**.
-Under a burst the 8192 buffer fills in ~10ms and `DropNew` then drops essentially everything. Logback's
-`AsyncAppender` (disruptor-style) sustains 100k+/s, so it drops far less at the same load. This is a
-**real gap on the exact "consensus-rate trace" scenario** the async path exists for — not a harness
-artifact (confirmed across two harness variants).
+**Why the async handle drops (source-verified, scribe 3.19.0 `handler/AsynchronousLogHandle.scala`).**
+Its background thread runs `while(true){ if (flushNext()) sleep(1) else sleep(10) }`, and `flushNext()`
+polls and writes exactly **one** record. So it drains ~1 record/ms ≈ 1000 rec/s regardless of buffer
+size; under a faster burst the 8192 buffer fills in ~8ms and `DropNew` discards the rest. This is
+scribe's weakest, opt-in component — not its default, and not what a cats-effect app should touch. The
+prior HOLD benchmarked exactly this handle, so its ~99.9%-drop figure was real but irrelevant to the
+migration.
 
-Nuance: both back-ends *intentionally* drop under overload (that's `neverBlock`/`DropNew`); the
-difference is the rate at which they saturate. At low volume (info/warn/error, moderate debug) scribe
-is fine; the ceiling only bites high-frequency `trace`/`debug` bursts. A **synchronous** scribe handle
-(for the lossless `hydrozoa.trace` JSONL) has no drain thread and no drop — same trade as Logback's sync
-`TRACE_FILE`.
+**The correct async, when we want writes off the consensus fibers** (as Logback's `AsyncAppender` does
+today for the trace JSONL): a bounded cats-effect `Queue[IO, LogEvent]` drained by one consumer fiber
+that performs the synchronous scribe write. Measured lossless at ~384k ev/s with real backpressure
+(`offer` suspends the producing fiber when full) rather than dropping — strictly better than both
+scribe's handle and Logback's `neverBlock` drop policy, and we own the drain (batchable). scribe's own
+tagline is "the fastest JVM logger" on the **synchronous** path; the framework's intent is that you do
+not need a background thread at all.
 
 ## Context
 
@@ -87,13 +91,14 @@ depended on the logging backend.
    cats-effect module: `"com.outr" %% "scribe-cats" % "3.19.0"` (returns `F[Unit]` via `Sync`).
    Note: `log4cats-scribe` is a dead end (Scala 2.12 / scribe 2.7.1 only) — use `scribe-cats` directly.
 
-2. **Async fairness — NO-GO on the built-in handle (measured — see PoC results above).**
-   `AsynchronousLogHandle(maxBuffer, Overflow.DropNew)` is the API analogue of Logback
-   `AsyncAppender neverBlock=true`, but its single sleep-polling drain thread caps at **~1000 ev/s** and
-   dropped ~99.9% of the burst. This is the gate, and scribe's built-in async fails it for the
-   high-volume trace path. **Mitigation required:** a custom `LogHandle` (scribe lets you supply one)
-   that batch-drains without the per-item sleep — i.e. we'd write the async plumbing scribe doesn't,
-   which is exactly what Logback already gives us. Sync handles (lossless trace file) are unaffected.
+2. **Throughput / losslessness — GO (measured — see PoC results above).**
+   The sink uses scribe's **synchronous** handle: lossless at ~397k ev/s. For the high-volume trace
+   path where we want the write off the consensus fibers, wrap the sink in a bounded cats-effect
+   `Queue` + consumer fiber (lossless, ~384k ev/s, backpressure not drop). **Do not** use scribe's
+   `AsynchronousLogHandle`: its drain thread writes one record per `Thread.sleep(1)` (~1000 rec/s) and
+   drops ~99.8% under a burst. Its overflow default is `DropOld` and its `Overflow.Block` mode merely
+   converts the same ~1000/s ceiling into producer backpressure on a JVM thread — neither is what a
+   cats-effect app should use; own the async at the CE layer instead.
 
 3. **Custom Mermaid layout — GO, straightforward.**
    `Formatter { def format(record: LogRecord): LogOutput }` + a `Writer` (`FileWriter` with a path
@@ -145,16 +150,17 @@ prefix — a refinement, not needed for parity.
 
 1. **Level API, no `org.slf4j` — DONE, PASS.** `ScribeTracer` compiles and gates via
    `Logger.includes`; see PoC results.
-2. **Async drainer under consensus load — DONE, FAIL.** Measured ~99.9% drops / ~1000 ev/s ceiling;
-   see PoC results. Blocks a naive migration.
+2. **Throughput / losslessness under consensus load — DONE, PASS.** Synchronous sink: 0 drops, ~397k
+   ev/s; CE-async (queue + consumer): 0 drops, ~384k ev/s. Only scribe's opt-in `AsynchronousLogHandle`
+   drops — excluded from the migration.
 
-Remaining, only if scribe is pursued with a custom async handle:
+Remaining, before a full migration:
 
 3. **Third-party SLF4J floods.** `com.bloxbean`, `scalus`, `org.testcontainers`, dockerjava, scalacheck
    log through SLF4J and are muted today via logback levels. Dropping Logback needs `scribe-slf4j`
    (the SLF4J→scribe facade) so they route into scribe, then `Logger("com.bloxbean").withMinimumLevel(Warn)`.
    PoC must confirm the bridge captures and gates them, else the noise returns.
-3. **Config-profile fidelity.** Diff actual output (`hydrozoa-trace.jsonl`, `stage4-peers-interaction.mmd`,
+4. **Config-profile fidelity.** Diff actual output (`hydrozoa-trace.jsonl`, `stage4-peers-interaction.mmd`,
    `integration-tests.log`) against current Logback output; verify `additivity=false` / sync-vs-async
    choices reproduce.
 

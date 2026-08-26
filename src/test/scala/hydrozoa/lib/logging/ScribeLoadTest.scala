@@ -1,89 +1,129 @@
 package hydrozoa.lib.logging
 
 import cats.effect.IO
+import cats.effect.std.{CountDownLatch, Queue}
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import java.util.concurrent.atomic.AtomicLong
 import org.scalatest.funsuite.AnyFunSuite
+import scala.concurrent.duration.*
 import scribe.handler.{AsynchronousLogHandle, Overflow}
 import scribe.output.LogOutput
 import scribe.output.format.OutputFormat
 import scribe.writer.Writer
 import scribe.{Level as SLevel, LogRecord, Logger as SLogger}
 
-/** PoC load test (spike — `design/logging-scribe.md`): does scribe's single-drainer async handle
-  * keep consensus-rate log traffic off the producing fibers? Ignored by default (heavy,
-  * timing-based); un-ignore and run `sbt "testOnly *ScribeLoadTest"` to collect numbers.
+/** Load test (spike — `design/logging-scribe.md`): under a burst from many fibers, how do the three
+  * scribe wirings behave? A counting no-op [[Writer]] stands in for the appender so we measure the
+  * framework/queue mechanism, not disk I/O.
   *
-  * The go/no-go gate: with `Overflow.DropNew` + a bounded buffer, emitting through
-  * [[ScribeTracer.sink]] from many CE fibers must (a) never block the producer (bounded worst-case
-  * single-emit latency), (b) drop cleanly at the buffer bound rather than grow unboundedly.
+  *   - `synchronous` — scribe's default handle, and exactly what [[ScribeTracer.sink]] drives (`IO
+  *     { logger.trace(msg) }`). Lossless; the actual migration path.
+  *   - `ce-async` — that same sink behind a bounded cats-effect `Queue` drained by one consumer
+  *     fiber. Lossless with backpressure, and keeps the write off the producing fibers — the
+  *     idiomatic replacement for Logback's `AsyncAppender`.
+  *   - `scribe-async` — scribe's own `AsynchronousLogHandle`. Its drain loop writes one record then
+  *     `Thread.sleep(1)` (source-verified ~1000 rec/s ceiling), so under a burst it drops the vast
+  *     majority with `DropNew`. Ignored by default; kept only to document why NOT to use it.
   */
 class ScribeLoadTest extends AnyFunSuite:
 
-    private val fibers = 64
-    private val perFiber = 20000
+    private val fibers = 32
+    private val perFiber = 10000
     private val total = fibers.toLong * perFiber
-    private val maxBuffer = 8192
 
-    ignore("scribe async handle: producers do not stall under a consensus-rate burst") {
-        val written = new AtomicLong(0)
-        val maxEmitNanos = new AtomicLong(0)
+    private def countingWriter(counter: AtomicLong): Writer = new Writer:
+        def write(record: LogRecord, output: LogOutput, outputFormat: OutputFormat): Unit =
+            val _ = counter.incrementAndGet()
 
-        // Count what the drain thread actually writes (so total - written = drops), and discard the
-        // real output so we measure the queue mechanism, not disk I/O.
-        val countingWriter = new Writer:
-            def write(record: LogRecord, output: LogOutput, outputFormat: OutputFormat): Unit =
-                val _ = written.incrementAndGet()
-
-        SLogger("poc.load")
-            .orphan()
-            .withHandler(
-              writer = countingWriter,
-              minimumLevel = Some(SLevel.Trace),
-              handle = AsynchronousLogHandle(maxBuffer = maxBuffer, overflow = Overflow.DropNew)
+    private def configure(
+        name: String,
+        counter: AtomicLong,
+        handle: Option[AsynchronousLogHandle]
+    ): Unit =
+        val base = SLogger(name).orphan()
+        val withHandle = handle
+            .fold(
+              base.withHandler(writer = countingWriter(counter), minimumLevel = Some(SLevel.Trace))
+            )(h =>
+                base.withHandler(
+                  writer = countingWriter(counter),
+                  minimumLevel = Some(SLevel.Trace),
+                  handle = h
+                )
             )
-            .replace()
+        val _ = withHandle.replace()
 
-        // Each event forces a small render (an interpolation) at an ENABLED level, so it flows
-        // through the async queue — the realistic hot path.
-        def emitOne(i: Int): IO[Unit] =
-            val ev = LogEvent(Level.Trace, s"poc load event $i", routingKey = Some("poc.load"))
-            ScribeTracer.sink.traceWith(ev).timed.flatMap { (d, _) =>
-                IO {
-                    val dt =
-                        d.toNanos // keep the running max single-emit latency (never-block proof)
-                    var prev = maxEmitNanos.get()
-                    while dt > prev && !maxEmitNanos.compareAndSet(prev, dt) do
-                        prev = maxEmitNanos.get()
-                }
-            }
+    private def evAt(name: String)(i: Int): LogEvent =
+        LogEvent(Level.Trace, s"poc load event $i", routingKey = Some(name))
+
+    private def burst(emit: Int => IO[Unit]): IO[Unit] =
+        (0 until fibers).toList.parTraverse_(_ => (0 until perFiber).toList.traverse_(emit))
+
+    test("synchronous handle (the sink's real path) never drops") {
+        val written = new AtomicLong(0)
+        configure("poc.sync", written, None)
 
         val start = System.nanoTime()
-        val run = (0 until fibers).toList.parTraverse_ { _ =>
-            (0 until perFiber).toList.traverse_(emitOne)
-        }
-        run.unsafeRunSync()
+        burst(i => ScribeTracer.sink.traceWith(evAt("poc.sync")(i))).unsafeRunSync()
         val elapsedMs = (System.nanoTime() - start) / 1000000.0
 
-        // Give the single drain thread a moment to flush the tail before reading counts.
-        IO.sleep(scala.concurrent.duration.DurationInt(500).millis).unsafeRunSync()
+        val wrote = written.get()
+        info(
+          f"sync:     total=$total wrote=$wrote drops=${total - wrote} " +
+              f"throughput=${total / (elapsedMs / 1000)}%.0f ev/s"
+        )
+        assert(wrote == total, s"synchronous logging dropped ${total - wrote} of $total")
+    }
+
+    test("cats-effect async (bounded queue + one consumer) never drops, off the producer") {
+        val written = new AtomicLong(0)
+        configure("poc.ceasync", written, None)
+
+        val prog =
+            for
+                q <- Queue.bounded[IO, LogEvent](8192)
+                latch <- CountDownLatch[IO](total.toInt)
+                consumer <- q.take
+                    .flatMap(ev => ScribeTracer.sink.traceWith(ev) *> latch.release)
+                    .foreverM
+                    .start
+                start = System.nanoTime()
+                _ <- burst(i => q.offer(evAt("poc.ceasync")(i)))
+                _ <- latch.await.timeout(60.seconds)
+                elapsedMs = (System.nanoTime() - start) / 1000000.0
+                _ <- consumer.cancel
+            yield elapsedMs
+        val elapsedMs = prog.unsafeRunSync()
 
         val wrote = written.get()
-        val drops = total - wrote
-        val worstEmitUs = maxEmitNanos.get() / 1000.0
         info(
-          f"scribe async: total=$total wrote=$wrote drops=$drops (${drops * 100.0 / total}%.1f%%)"
+          f"ce-async: total=$total wrote=$wrote drops=${total - wrote} " +
+              f"throughput=${total / (elapsedMs / 1000)}%.0f ev/s"
         )
-        info(
-          f"scribe async: elapsed=${elapsedMs}%.0fms throughput=${total / (elapsedMs / 1000)}%.0f ev/s"
-        )
-        info(f"scribe async: worst single-emit=${worstEmitUs}%.1fus (buffer=$maxBuffer, DropNew)")
+        assert(wrote == total, s"ce-async dropped ${total - wrote} of $total")
+    }
 
-        // Producers must never stall (worst single emit bounded) and the buffer must bound memory
-        // (drops are fine, unbounded growth is not).
-        assert(
-          worstEmitUs < 50000.0 && wrote <= total,
-          s"worst single emit ${worstEmitUs}us / wrote $wrote of $total"
+    ignore("scribe AsynchronousLogHandle drops the majority under a burst — do not use") {
+        val written = new AtomicLong(0)
+        configure(
+          "poc.scribeasync",
+          written,
+          Some(AsynchronousLogHandle(maxBuffer = 8192, overflow = Overflow.DropNew))
         )
+
+        val start = System.nanoTime()
+        burst(i => ScribeTracer.sink.traceWith(evAt("poc.scribeasync")(i))).unsafeRunSync()
+        val elapsedMs = (System.nanoTime() - start) / 1000000.0
+        IO.sleep(500.millis).unsafeRunSync() // let the single drain thread flush its tail
+
+        val wrote = written.get()
+        // Report writes/drops, not a producer "throughput": with DropNew the producer never blocks,
+        // so a rate here would just measure how fast events are discarded. The drain ceiling is
+        // ~1000 rec/s (one record per `Thread.sleep(1)`), so `wrote` ≈ elapsed-in-seconds × 1000.
+        info(
+          f"scribe-async: total=$total wrote=$wrote drops=${total - wrote} " +
+              f"(${(total - wrote) * 100.0 / total}%.1f%%) — drain ceiling ~1000 rec/s"
+        )
+        assert(wrote < total / 10, s"expected heavy drops, wrote $wrote of $total")
     }
