@@ -4,40 +4,6 @@ info:
   version: 0.1.0
 paths:
   /head/requests:
-    get:
-      tags:
-      - Requests
-      description: Requests the head has assigned an id — opaque request id, author
-        peer number, and type (transaction or deposit). Filter with ?type=transaction|deposit
-        and ?peer_number=<n>.
-      operationId: getHeadRequests
-      parameters:
-      - name: type
-        in: query
-        required: false
-        schema:
-          type: string
-      - name: peer_number
-        in: query
-        required: false
-        schema:
-          type: integer
-          format: int32
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/RequestSummary'
-        default:
-          description: ''
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
     post:
       tags:
       - Requests
@@ -161,28 +127,6 @@ paths:
                       settlementEffect: 4d5e6f7a8b9c…
                       type: HARD_CONFIRMED
                     type: deposit
-        default:
-          description: ''
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /head/blocks:
-    get:
-      tags:
-      - Blocks
-      description: Every block of the head in block order — number, fast-cycle leader,
-        and type. Block 0 is the head's initial block (config, no leader).
-      operationId: getHeadBlocks
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/BlockSummary'
         default:
           description: ''
           content:
@@ -889,26 +833,6 @@ components:
           $ref: '#/components/schemas/RateStats'
         requestRate:
           $ref: '#/components/schemas/RateStats'
-    BlockSummary:
-      title: BlockSummary
-      type: object
-      required:
-      - number
-      - blockType
-      properties:
-        number:
-          type: integer
-          format: int32
-        leader:
-          type: integer
-          format: int32
-        blockType:
-          type: string
-          enum:
-          - initial
-          - minor
-          - major
-          - final
     BlockTiming:
       title: BlockTiming
       type: object
@@ -1500,25 +1424,6 @@ components:
           PROPOSED: '#/components/schemas/RequestProposed'
           SOFT_CONFIRMED: '#/components/schemas/RequestSoftConfirmed'
           UNPROCESSED: '#/components/schemas/RequestUnprocessed'
-    RequestSummary:
-      title: RequestSummary
-      type: object
-      required:
-      - requestId
-      - peerNumber
-      - requestType
-      properties:
-        requestId:
-          type: integer
-          format: int64
-        peerNumber:
-          type: integer
-          format: int32
-        requestType:
-          type: string
-          enum:
-          - deposit
-          - transaction
     RequestUnprocessed:
       title: RequestUnprocessed
       type: object
