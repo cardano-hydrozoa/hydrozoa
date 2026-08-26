@@ -170,7 +170,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       reader,
