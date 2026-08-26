@@ -66,6 +66,13 @@ class PrometheusFormatTest extends AnyFunSuite:
         heapCommittedBytes = 536870912,
         // -1 is the "platform does not report this" sentinel, and it must survive rendering.
         openFileDescriptors = -1
+      ),
+      blockGate = BlockGateStats(
+        multiplier = 0.25,
+        backlog = 917,
+        residual = 903.5,
+        holds = 288347,
+        drains = 313
       )
     )
 
@@ -125,3 +132,17 @@ class PrometheusFormatTest extends AnyFunSuite:
         val _ = assert(out.contains("hydrozoa_timers_executed_total 98765"))
         val _ = assert(out.contains("# TYPE hydrozoa_timers_executed_total counter"))
         assert(out.contains("hydrozoa_open_file_descriptors -1"))
+
+    // The gate is what tells an operator whether the shaper is live and whether it is binding, and
+    // the node runs at WARN so the limiter's own traces are invisible. If these stop being rendered
+    // the deploy becomes unverifiable from outside the process.
+    test("the block-rate gate is rendered, with the multiplier as a plain decimal"):
+        val out = PrometheusFormat.render(sample)
+        assert(
+          out.contains("# TYPE hydrozoa_block_gate_multiplier gauge") &&
+              out.contains("hydrozoa_block_gate_multiplier 0.25") &&
+              out.contains("hydrozoa_block_gate_backlog 917") &&
+              out.contains("# TYPE hydrozoa_block_gate_drains_total counter") &&
+              out.contains("hydrozoa_block_gate_drains_total 313"),
+          out
+        )

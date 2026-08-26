@@ -100,6 +100,8 @@ trait CoilMultisigRegimeManager(
               jointLedger = core.jointLedger,
               stackComposer = core.stackComposer,
               stackComposerLimiter = core.stackComposer,
+              // No limiter actor exists to gate, and a coil never leads block production.
+              blockRateGate = None,
               slowConsensusActor = core.slowConsensusActor,
               coilUplink = Some(hubLiaison),
               remoteHubLiaison = Some(remoteHubProxy),
