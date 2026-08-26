@@ -214,6 +214,7 @@ final case class StackComposer(
     ): IO[Unit] = {
         val stackNum = s.brief.stackNum
         for {
+            _ <- tracer.traceWith(StackComposerEvent.PreviousStackHardConfirmed(stackNum))
             _ <- state.update(_.withPreviousStackHardConfirmed(stackNum))
             _ <- tryProgress
         } yield ()
@@ -287,6 +288,9 @@ final case class StackComposer(
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
                     _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
+                    _ <- tracer.traceWith(
+                      StackComposerEvent.SingleFlightGateClosed(nextStackNum)
+                    )
                     _ <- reportEquity(newTreasury)
                 } yield ()
         }
@@ -489,6 +493,9 @@ final case class StackComposer(
                                 _ <- conn.slowConsensusActor ! handoff
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
+                                )
+                                _ <- tracer.traceWith(
+                                  StackComposerEvent.SingleFlightGateClosed(nextStackNum)
                                 )
                                 _ <- reportEquity(newTreasury)
                             } yield ()

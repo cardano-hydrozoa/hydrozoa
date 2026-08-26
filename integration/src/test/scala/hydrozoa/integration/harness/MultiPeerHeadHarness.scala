@@ -1690,7 +1690,9 @@ object MultiPeerHeadHarness:
               nodeConfig.headConfig.headPeerNums.toList.map(_.convert).toVector
             )
             HydrozoaRoutes(
-              requestSequencer,
+              // Some: the harness builds a head node's routes, and only a head mounts the
+              // submission and admin-finalize endpoints.
+              Some(requestSequencer),
               conns.blockWeaver,
               // The harness runs no head lifecycle, so readiness is a constant Active.
               IO.pure(NodeStatus.Active),

@@ -134,7 +134,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       reader,
@@ -336,6 +336,76 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 val _ = assert(missing._1 == Status.NotFound)
                 val _ = assert(malformed.status.code >= 400 && malformed.status.code < 500)
                 val _ = assert(outOfRange.status.code >= 400 && outOfRange.status.code < 500)
+                ()
+            }
+        }
+    }
+
+    /** Build the routes the way a **coil** peer gets them — `requestSequencer = None`, because a
+      * follower accepts no user requests — and run `check`.
+      */
+    private def withCoilRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
+        ActorSystem[IO]("HeadRequestsEndpointsTest-coil")
+            .use { system =>
+                for {
+                    blockWeaverStub <- system.actorOf(
+                      new Actor[IO, BlockWeaver.Request] {
+                          override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+                      }
+                    )
+                    routes <- HydrozoaRoutes(
+                      None,
+                      blockWeaverStub,
+                      IO.pure(NodeStatus.Active),
+                      stubReader(Map.empty),
+                      None,
+                      headConfig,
+                      HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
+                      PeerMetrics.create(0L, Vector.empty),
+                      ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
+                    )
+                    _ <- check(routes.routes.orNotFound)
+                } yield ()
+            }
+            .unsafeRunSync()
+
+    test(
+      "on a coil peer (no request sequencer) the mutating routes are absent, reads still serve"
+    ) {
+        // The coil exists to be observable: its read surface must answer, or the whole point of
+        // giving it a server is lost. So this asserts both halves — the mutations are gone AND a
+        // read still works. Without the second assertion a totally unmounted router would pass.
+        withCoilRoutes { app =>
+            for {
+                submit <- app.run(
+                  Request[IO](Method.POST, Uri.unsafeFromString("/head/requests"))
+                )
+                finalize <- app.run(
+                  Request[IO](Method.POST, Uri.unsafeFromString("/api/admin/finalize"))
+                )
+                stats <- app.run(Request[IO](Method.GET, Uri.unsafeFromString("/head/stats")))
+                ready <- app.run(Request[IO](Method.GET, Uri.unsafeFromString("/ready")))
+            } yield {
+                // 405, not 404: the coil still serves GET /head/requests (the listing), so the
+                // PATH exists and only the POST method is gone. That is the more accurate answer
+                // of the two, and asserting 404 here would be asserting the wrong behaviour.
+                val _ = assert(
+                  submit.status == Status.MethodNotAllowed,
+                  s"POST /head/requests must not be mounted on a coil, got ${submit.status}"
+                )
+                // 404, not the 401 challenge a mounted admin route would give.
+                val _ = assert(
+                  finalize.status == Status.NotFound,
+                  s"POST /api/admin/finalize must not be mounted on a coil, got ${finalize.status}"
+                )
+                val _ = assert(
+                  stats.status == Status.Ok,
+                  s"GET /head/stats must serve on a coil, got ${stats.status}"
+                )
+                val _ = assert(
+                  ready.status == Status.Ok,
+                  s"GET /ready must serve on a coil, got ${ready.status}"
+                )
                 ()
             }
         }
