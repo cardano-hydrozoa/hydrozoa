@@ -41,4 +41,7 @@
     <logger name="SettlementTx" level="warn"/>
     <logger name="Generators" level="warn"/>
     <logger name="scalus" level="warn"/>
+    <!-- Fixtures for Slf4jTracerTest: prove the level gate skips (or forces) rendering. -->
+    <logger name="hydrozoa.test.gated.off" level="off"/>
+    <logger name="hydrozoa.test.gated.on" level="debug"/>
 </configuration>
