@@ -2,6 +2,7 @@ package hydrozoa.lib.logging
 
 import cats.Eval
 import cats.effect.IO
+import java.util.concurrent.ConcurrentHashMap
 import org.typelevel.log4cats.Logger // scalafix:ok DisableSyntax
 import org.typelevel.log4cats.slf4j.Slf4jLogger // scalafix:ok DisableSyntax
 
@@ -87,53 +88,38 @@ type Slf4jTracer = ContraTracer[IO, LogEvent]
 object Slf4jTracer:
 
     /** SLF4J sink, **gated on the target logger's level**: an event whose level is disabled never
-      * forces its [[LogEventTyped.render]] and never reaches SLF4J. Build per-component tracers
-      * with `Slf4jTracer.sink.contramap(MyEventFormat.humanFormat(...))`. Compose capture sinks
-      * with `|+|` — the gate lives only in this leg, so capture legs always fire.
+      * forces its [[LogEventTyped.render]] and never reaches SLF4J. The render is handed to
+      * log4cats **by-name**, and its `contextLog` (`F.delay(if (isEnabled) log())`) forces it only
+      * when the routing key's logger has the level enabled — so a single check gates it, with no
+      * separate `ContraTracer` gate to run its own `isEnabled` and re-look-up the logger. Build
+      * per-component tracers with `Slf4jTracer.sink.contramap(MyEventFormat.humanFormat(...))`;
+      * compose capture sinks with `|+|` — they are separate legs, so a disabled slf4j leg never
+      * squelches them.
       */
-    val sink: ContraTracer[IO, LogEvent] = ContraTracer
-        .emit((ev: LogEvent) =>
-            val r = ev.render.value // forced only past the gate
-            val lg = loggerIO(ev.routingKey.getOrElse("hydrozoa"))
-            val msg = renderMsg(r)
-            ev.level match
-                case Level.Trace => lg.trace(msg)
-                case Level.Debug => lg.debug(msg)
-                case Level.Info  => lg.info(msg)
-                case Level.Warn  => lg.warn(msg)
-                case Level.Error => r.cause.fold(lg.error(msg))(lg.error(_)(msg))
-        )
-        .levelGated
-
-    extension (t: ContraTracer[IO, LogEvent])
-        /** Squelch `t` — **without forcing the event's `render`** — when the routing key's logger
-          * has the event's level disabled. Squelching drops everything downstream (arrow semantics:
-          * a squelching branch runs no effect), so no message, context, or cause is evaluated. Only
-          * the eager `level`/`routingKey` and the `isEnabled` check run.
-          */
-        def levelGated: ContraTracer[IO, LogEvent] =
-            t.squelchUnlessM(ev => isEnabled(ev.routingKey.getOrElse("hydrozoa"), ev.level))
-
-    /** Whether `name`'s logger has `level` enabled. Re-queried per trace (LoggerFactory caches the
-      * logger) so a runtime Logback level change is honored.
-      */
-    private def isEnabled(name: String, level: Level): IO[Boolean] = IO {
-        val lg = org.slf4j.LoggerFactory.getLogger(name) // scalafix:ok DisableSyntax
-        level match
-            case Level.Trace => lg.isTraceEnabled
-            case Level.Debug => lg.isDebugEnabled
-            case Level.Info  => lg.isInfoEnabled
-            case Level.Warn  => lg.isWarnEnabled
-            case Level.Error => lg.isErrorEnabled
+    val sink: ContraTracer[IO, LogEvent] = ContraTracer.emit { (ev: LogEvent) =>
+        val lg = loggerIO(ev.routingKey.getOrElse("hydrozoa"))
+        def msg = renderMsg(ev.render.value) // by-name: forced only when the level is enabled
+        ev.level match
+            case Level.Trace => lg.trace(msg)
+            case Level.Debug => lg.debug(msg)
+            case Level.Info  => lg.info(msg)
+            case Level.Warn  => lg.warn(msg)
+            // Error carries a cause, which lives in the (now forced) render; error is effectively
+            // always enabled, so forcing it here rather than by-name costs nothing in practice.
+            case Level.Error =>
+                val r = ev.render.value
+                r.cause.fold(lg.error(renderMsg(r)))(lg.error(_)(renderMsg(r)))
     }
 
-    /** The one SLF4J bridge in the codebase. Everything else logs through a `ContraTracer` and
-      * reaches SLF4J via [[sink]]; the `DisableSyntax` rule in `.scalafix.conf` keeps it that way.
+    /** log4cats loggers cached per routing key: `getLoggerFromName` allocates a fresh wrapper on
+      * every call, and routing keys are a small fixed set, so memoise to keep the sink from
+      * allocating one per emit. This is the one SLF4J bridge in the codebase; the `DisableSyntax`
+      * rule in `.scalafix.conf` keeps it that way.
       */
-    private def loggerIO(name: String): Logger[IO] = Slf4jLogger.getLoggerFromName[IO](name)
+    private val loggers = new ConcurrentHashMap[String, Logger[IO]]()
+    private def loggerIO(name: String): Logger[IO] =
+        loggers.computeIfAbsent(name, n => Slf4jLogger.getLoggerFromName[IO](n))
 
     private def renderMsg(r: Rendered[Map[String, String]]): String =
-        val prefix =
-            if r.ctx.isEmpty then ""
-            else "[" + r.ctx.map((k, v) => s"$k=$v").mkString(" ") + "] "
-        prefix + r.msg
+        if r.ctx.isEmpty then r.msg
+        else "[" + r.ctx.map((k, v) => s"$k=$v").mkString(" ") + "] " + r.msg

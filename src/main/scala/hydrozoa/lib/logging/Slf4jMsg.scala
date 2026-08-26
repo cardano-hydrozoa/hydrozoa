@@ -9,7 +9,7 @@ import cats.{Eval, Monad}
   * Pair with [[Slf4jMsgFormat.humanFormat]] to lift into [[LogEvent]] under a fixed routing key.
   * The extension methods on `ContraTracer[F, Slf4jMsg]` give `log.info("…")` ergonomics for any
   * `F[_]: Monad` — typically `IO` (via [[Slf4jTracer.sink]]). The message is held behind an `Eval`
-  * so it is not rendered unless the level is enabled (see [[Slf4jTracer.levelGated]]).
+  * so it is not rendered unless the level is enabled (see [[Slf4jTracer.sink]]).
   */
 sealed trait Slf4jMsg
 
