@@ -8,12 +8,9 @@ import org.typelevel.log4cats.slf4j.Slf4jLogger // scalafix:ok DisableSyntax
 enum Level:
     case Trace, Debug, Info, Warn, Error
 
-/** A [[LogEventTyped]]'s deferred payload: the message, context, and cause. Held behind an `Eval`
-  * so none of it — the message interpolation, the context values, `toString` on domain objects — is
-  * computed unless the event's level is enabled (see [[Slf4jTracer.levelGated]]). The event's
-  * [[LogEventTyped.level]] and [[LogEventTyped.routingKey]] stay eager because the gate needs them.
+/** A [[LogEventTyped]]'s deferred payload. See [[LogEvent.deferred]]
   */
-final case class Rendered[A](msg: String, ctx: A, cause: Option[Throwable] = None)
+final case class Rendered[A] private[logging] (msg: String, ctx: A, cause: Option[Throwable] = None)
 
 case class LogEventTyped[A](
     level: Level,
@@ -29,10 +26,15 @@ type LogEvent = LogEventTyped[Map[String, String]]
 
 object LogEvent {
 
-    /** `msg` is by-name and captured into the deferred [[LogEventTyped.render]], so the
-      * interpolation (and any `toString` inside it) runs only if the level is enabled — at every
-      * call site, `From.*` and direct `LogEvent(...)` alike.
+    /** Wrap a by-name message (plus context and cause) in the deferred [[Rendered]] payload.
       */
+    private[logging] def deferred[A](
+        msg: => String,
+        ctx: A,
+        cause: Option[Throwable] = None
+    ): Eval[Rendered[A]] =
+        Eval.later(Rendered(msg, ctx, cause))
+
     def apply(
         level: Level,
         msg: => String,
@@ -40,22 +42,29 @@ object LogEvent {
         cause: Option[Throwable] = None,
         routingKey: Option[String] = None
     ): LogEventTyped[Map[String, String]] =
-        LogEventTyped(level, routingKey, Eval.later(Rendered(msg, ctx, cause)))
+        LogEventTyped(level, routingKey, deferred(msg, ctx, cause))
 
     /** Partially-applied factory: fixes [[ctx]] and [[routingKey]] for a set of related events.
       * Extra context pairs passed as varargs are merged with the base [[ctx]].
       */
     final class From(val ctx: Map[String, String], val routingKey: Option[String]):
+        private def helper(
+            loggingLevel: Level,
+            msg: => String,
+            extra: (String, String)*
+        ): LogEvent =
+            LogEvent(loggingLevel, msg, ctx ++ extra, routingKey = routingKey)
+
         def trace(msg: => String, extra: (String, String)*): LogEvent =
-            LogEvent(Level.Trace, msg, ctx ++ extra, routingKey = routingKey)
+            helper(Level.Trace, msg, extra*)
         def debug(msg: => String, extra: (String, String)*): LogEvent =
-            LogEvent(Level.Debug, msg, ctx ++ extra, routingKey = routingKey)
+            helper(Level.Debug, msg, extra*)
         def info(msg: => String, extra: (String, String)*): LogEvent =
-            LogEvent(Level.Info, msg, ctx ++ extra, routingKey = routingKey)
+            helper(Level.Info, msg, extra*)
         def warn(msg: => String, extra: (String, String)*): LogEvent =
-            LogEvent(Level.Warn, msg, ctx ++ extra, routingKey = routingKey)
+            helper(Level.Warn, msg, extra*)
         def error(msg: => String): LogEvent =
-            LogEvent(Level.Error, msg, ctx, routingKey = routingKey)
+            helper(Level.Error, msg)
 
     object From:
         def apply(ctx: Map[String, String], routingKey: String): From =
