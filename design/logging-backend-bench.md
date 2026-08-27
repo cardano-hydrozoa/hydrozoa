@@ -84,10 +84,42 @@ through one `unsafeRunSync` (`@OperationsPerInvocation(1000)`) gives the honest 
 
 - The **typed-event-bus layer** (`ContraTracer` + `Eval.later` + `LogEvent`/`Rendered`) adds
   **~600 B/op and a ~3× throughput hit over a bare `IO`** — backend-independent, the cost of the
-  abstraction itself.
+  abstraction itself. (Reduced to ~430 B/op by the Haskell-parity port below.)
 - Routing a line through the full sink (**3.1M ops/s, 1,288 B/op**) vs a direct logback call
   (**7.2M ops/s, 844 B/op**) roughly **halves throughput and adds ~50% allocation**. At consensus log
   rates this is almost certainly negligible against real work, but it is not zero.
+- An **eager-event control** (same fields, message stored directly — no `Eval.later`/`Rendered`)
+  measures the deferral itself at **~80 B/op** on the enabled path. That is the insurance premium
+  for never building a message (or forcing a domain `toString`) at a disabled level — cheap, and
+  kept.
+
+### ContraTracer: porting the Haskell library's own optimizations
+
+`ContraTracer` is a faithful port of avieth/contra-tracer, whose source carries four performance
+mechanisms that GHC applies automatically but the JVM cannot: `{-# INLINE traceWith #-}` (+
+let-floating hoists the compiled arrow out of the hot loop), `arr (const ())` as a CAF, a strict
+hand-written `(****)` for the `(***)`/`(&&&)` equations (upstream's comment measures the class
+default at ~1KB of thunks per level per dispatch), and explicit `(|||)` equations avoiding the class
+default's extra merge stage. The original Scala port inherited the *semantics* but recompiled the
+arrow on every `traceWith` and used the cats class defaults — paying per trace what GHC pays once.
+
+Porting all four by hand (memoised compiled runner per tracer; `.void` tail; strict `split`/`merge`;
+explicit `choice`) — semantics unchanged, verified against the composition-algebra and laziness
+tests:
+
+| Layer (batched, per-op) | before | after |
+|---|---:|---:|
+| bare `IO` floor | 21.7M ops/s, 137 B | 21.7M ops/s, 137 B |
+| ContraTracer emit, eager event | 7.9M, 656 B | **9.9M, 486 B** |
+| ContraTracer emit, `Eval` + `Rendered` | 6.9M, 736 B | **8.2M, 568 B** |
+| full `Slf4jTracer.sink` | 3.1M, 1,288 B | 3.2M, 1,142 B |
+
+The arrow tax over a bare `IO` drops ~28% (600 → 430 B/op), and a squelched (`nullTracer`) trace
+compiles to a cached `unit` — allocation-free. The full sink's throughput barely moves because
+log4cats + logback dominates that path. Most of the remaining ~430 B/op is the event object plus the
+interpolated message string — present in any logging design — so further gains would require
+flattening the arrow encoding itself (what GHC effectively compiles the Haskell down to), not
+tuning it.
 
 ## Result 3 — file-writer delivery under load
 
