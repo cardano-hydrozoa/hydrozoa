@@ -19,6 +19,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
+import hydrozoa.multisig.metrics.{PeerMetrics, StackComposerPhase}
 import hydrozoa.multisig.persistence.recovery.{BlockResultScan, SoftConfirmationScan}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 import scala.annotation.tailrec
@@ -49,7 +50,8 @@ final case class StackComposer(
     config: StackComposer.Config,
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | StackComposer.Connections,
     tracer: ContraTracer[IO, StackComposerEvent],
-    persistence: Persistence[IO]
+    persistence: Persistence[IO],
+    metrics: PeerMetrics
 ) extends Actor[IO, StackComposer.Request] {
     import StackComposer.*
 
@@ -108,7 +110,18 @@ final case class StackComposer(
                 case Some(recoveredState) => state.set(recoveredState)
                 case None                 => bootstrapInitialStack
             }
+            // Seed the equity gauge from the boot treasury — the recovered one, or the
+            // initialization treasury `State.initial` starts from — so `/head/stats` reports the
+            // real figure from startup rather than zero until the first close.
+            s <- state.get
+            _ <- reportEquity(s.treasury)
         } yield ()
+
+    /** Publish the treasury's equity to [[PeerMetrics]] for `GET /head/stats`. Called at boot and
+      * on every stack close, the two points where the treasury this peer tracks changes.
+      */
+    private def reportEquity(treasury: MultisigTreasuryUtxo): IO[Unit] =
+        IO(metrics.onEquity(treasury.equity.coin.value))
 
     /** Compose and hand off stack 0 (the init + fallback) at startup.
       *
@@ -212,17 +225,25 @@ final case class StackComposer(
       */
     private def tryProgress: IO[Unit] = state.get.flatMap { s =>
         val nextStackNum = s.lastClosedStackNum.increment
-        if !s.previousStackHardConfirmed then IO.unit
+        if !s.previousStackHardConfirmed then
+            reportPhase(StackComposerPhase.WaitingForPreviousHardConfirmation)
         else if config.canLeadSlow(nextStackNum) then tryCloseAsLeader(s, nextStackNum)
         else tryCloseAsFollower(s, nextStackNum)
     }
+
+    /** Publish the composer's phase for `GET /head/stats`. Re-reporting the same phase leaves its
+      * clock running, so `secondsInPhase` reads as time stuck rather than time since the last event
+      * — and `tryProgress` fires on every inbound message.
+      */
+    private def reportPhase(phase: StackComposerPhase): IO[Unit] =
+        IO.realTime.flatMap(t => IO(metrics.onComposerPhase(phase, t.toMillis)))
 
     /** Leader close-attempt: drain the longest contiguous prefix of `ready` starting at
       * `lastClosedBlockNum + 1` into a new stack.
       */
     private def tryCloseAsLeader(s: State, nextStackNum: StackNumber): IO[Unit] =
         s.longestReadyPrefix match {
-            case Nil => IO.unit
+            case Nil => reportPhase(StackComposerPhase.WaitingForBlockResultsOrSoftConfirmations)
             case prefix =>
                 for {
                     now <- realTimeQuantizedInstant(config.slotConfig)
@@ -266,6 +287,7 @@ final case class StackComposer(
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
                     _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
+                    _ <- reportEquity(newTreasury)
                 } yield ()
         }
 
@@ -401,7 +423,7 @@ final case class StackComposer(
       */
     private def tryCloseAsFollower(s: State, nextStackNum: StackNumber): IO[Unit] =
         s.inboundLeaderBrief.get(nextStackNum) match {
-            case None => IO.unit // no brief yet — wait
+            case None => reportPhase(StackComposerPhase.WaitingForStackBrief) // no brief yet — wait
             case Some(brief) =>
                 val expectedFirst = s.lastClosedBlockNum.increment
                 val structurallyConsistent =
@@ -427,7 +449,9 @@ final case class StackComposer(
                         case None =>
                             // (2) not caught up — benign; wait for more BlockResults /
                             // SoftConfirmeds. tryProgress re-fires on the next event.
-                            IO.unit
+                            reportPhase(
+                              StackComposerPhase.WaitingForBlockResultsOrSoftConfirmations
+                            )
                         case Some(slice) =>
                             // (3) covered — accept exactly the brief's range.
                             for {
@@ -466,6 +490,7 @@ final case class StackComposer(
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
                                 )
+                                _ <- reportEquity(newTreasury)
                             } yield ()
                     }
         }
@@ -487,7 +512,17 @@ final case class StackComposer(
     ): IO[ComposedStack] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val partitions = StackPartition.partition(results)
-        StackEffectsBuilder.mkEffectsRegular(config, treasury, partitions, evacuationMap) match {
+        // Derivation runs to completion inside this one actor message — nothing else in the
+        // composer is processed meanwhile — so the phase is set before the fold, not during it.
+        metrics.onComposerPhase(StackComposerPhase.Deriving, System.currentTimeMillis())
+        StackEffectsBuilder.mkEffectsRegular(
+          config,
+          treasury,
+          partitions,
+          evacuationMap,
+          onPartitionDerived = metrics.onPartitionDerived,
+          onDerivationStarted = metrics.onDerivationStarted
+        ) match {
             case Right((effects, newTreasury, newMap, withdrawalTracking)) =>
                 IO.pure(
                   ComposedStack(
