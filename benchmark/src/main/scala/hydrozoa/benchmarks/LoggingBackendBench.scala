@@ -85,6 +85,22 @@ class LoggingBackendBench:
             IO { val _ = sink.addAndGet(ev.render.value.msg.length.toLong) }
         )
 
+    /** An eager event: the same fields a [[LogEvent]] carries, but the message is built and stored
+      * directly — no `Eval.later` deferral, no `Rendered` wrapper. Lets us isolate what that
+      * machinery costs from the bare ContraTracer arrow + event allocation.
+      */
+    private final case class EagerEvent(
+        level: HLevel,
+        routingKey: Option[String],
+        msg: String,
+        ctx: Map[String, String] = Map.empty,
+        cause: Option[Throwable] = None
+    )
+
+    /** ContraTracer over the eager event: reads `msg` directly (nothing to force) and counts. */
+    private val contraEmitEagerSink: ContraTracer[IO, EagerEvent] =
+        ContraTracer.emit((ev: EagerEvent) => IO { val _ = sink.addAndGet(ev.msg.length.toLong) })
+
     @Setup(Level.Trial)
     def setup(): Unit =
         configureLogback()
@@ -214,7 +230,8 @@ class LoggingBackendBench:
     // Batched: one `unsafeRunSync` amortized over `Batch` fresh events, so throughput reflects the
     // per-log cost of the sink (as it runs inside an actor's already-running IO), not the ~11µs
     // runloop-entry tax. The `traverse_` plumbing is identical across the three, so their deltas are
-    // clean: (emit - rawIO) = ContraTracer arrow + Eval + LogEvent build; (sink - emit) = log4cats + logback.
+    // clean: (emit - rawIO) = ContraTracer arrow + Eval + LogEvent build; (sink - emit) = log4cats +
+    // logback; (emit - emit_eager) = the Eval.later + Rendered deferral alone.
     private val Batch = 1000
 
     @Benchmark @OperationsPerInvocation(1000) def contra_rawIO_batch(): Unit =
@@ -227,6 +244,15 @@ class LoggingBackendBench:
             .traverse_(i =>
                 contraEmitSink.traceWith(
                   LogEvent(HLevel.Info, s"enabled $i obj=$payload", routingKey = Some("x"))
+                )
+            )
+            .unsafeRunSync()
+
+    @Benchmark @OperationsPerInvocation(1000) def contra_emit_eager_batch(): Unit =
+        (0 until Batch).toList
+            .traverse_(i =>
+                contraEmitEagerSink.traceWith(
+                  EagerEvent(HLevel.Info, Some("x"), s"enabled $i obj=$payload")
                 )
             )
             .unsafeRunSync()
