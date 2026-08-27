@@ -121,7 +121,10 @@ object HeadParamsHashTest extends Properties("HeadParamsHash") {
     private def bump(n: PositiveInt): PositiveInt = PositiveInt.unsafeApply(n.convert + 1)
 
     val _ = property("is deterministic") = Prop.forAll(generateConfig) { hc =>
-        hc.headParamsHash == HeadParamsHash(hc)
+        hc.headParamsHash == HeadParamsHash(
+          hc.headConfigBootstrap,
+          hc.initialBlock.blockBrief.header
+        )
     }
 
     /** `txTiming`'s constructor is private, so it cannot be mutated field by field like the rest.

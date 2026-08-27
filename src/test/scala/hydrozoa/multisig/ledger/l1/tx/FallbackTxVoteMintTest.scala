@@ -59,7 +59,10 @@ object FallbackTxVoteMintTest extends Properties("FallbackTx vote mint"):
     val _ = property("one vote token per ballot box, and peer payouts stay ada-only") =
         Prop.forAll(genCoilBearingHead) { case (config, funding) =>
             val res = InitializationTxSeq
-                .Build(config, funding)(config.initialBlock.blockBrief.endTime)
+                .Build(config, funding)(
+                  config.initialBlock.blockBrief.endTime,
+                  config.headParamsHash
+                )
                 .result
             val Right(txSeq) = res: @unchecked
             val fbTxBody = txSeq.fallbackTx.tx.body.value

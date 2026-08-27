@@ -317,33 +317,38 @@ Five checks, at four moments. Every one reuses a comparison point the code alrea
 | 4 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `l2ParamsHash` against the config's | refuse to boot |
 | 5 | every major block | every head and coil peer | the settlement tx's treasury datum `headParamsHash` against the local one | refuse to sign the block |
 
-Check 3 exists today. The rest are new, but checks 1 and 2 slot into comparison points that
-already exist — `InitializationTx.Parse`'s datum equality and `RocksDbBackendStore`'s
-`versionCheck`.
+Check 3 exists today. Checks 1 and 5 are built — they sit in `InitializationTx.Parse` and
+`SettlementTx`. Checks 2 and 4 are not yet.
 
 ### 1. The initialization transaction matches the hash
 
-The load-bearing one. `InitializationTx.Parse` already rebuilds the expected treasury datum
-from local config and compares it whole:
+The load-bearing one. `InitializationTx.Parse` rebuilds the expected treasury datum from local
+config and compares it **field by field** — a whole-datum equality would report one opaque
+message for three unrelated operator problems:
 
 ```scala
-expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(config.initialEvacuationMap)
-...
-if decodedTreasuryDatum == expectedTreasuryDatum then Right(()) else Left(InvalidTransactionError(...))
+expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
+  config.initialEvacuationMap,
+  ByteString.fromArray(headParamsHash.bytes)
+)
 ```
 
-Adding `headParamsHash` to the datum makes that comparison cover the whole configuration for
-free. Everything folded into the preimage becomes self-verifying against a value committed
+`headParamsHash` in the datum makes that comparison cover the whole configuration. Everything folded into the preimage becomes self-verifying against a value committed
 on-chain: a peer whose `depositMaturityDuration`, `maxRequestsPerBlock`, fallback contingency
 split, hub topology, or setup-ladder anchor differs from the one the initialization transaction
 was built for cannot parse that transaction, so it never signs block zero and the head does not
 start split.
 
-**Split the comparison into per-field checks.** A whole-datum equality reports
-`"actual treasury datum does not match the expected initial treasury datum"` for three
-completely different operator problems: a wrong initial evacuation map (`commit`), a stale
-version (`versionMajor`), and a configuration disagreement (`headParamsHash`). The third is the
-one an operator can actually act on, and it needs to say so.
+The three fields fail for three unrelated reasons — a wrong initial evacuation map (`commit`), a
+stale version (`versionMajor`), and a configuration disagreement (`headParamsHash`) — and only
+the third is something an operator can act on, so each carries its own message naming the two
+digests.
+
+`Parse` takes the digest as an already-computed `Hash32` rather than deriving it: computing it
+needs nearly the whole head config, and `Parse` deliberately asks for only the five sections it
+uses. `HeadConfig`'s decoder computes it, as does `Bootstrap.mkSharedHeadConfig` — which builds
+block zero's header **before** the transactions for exactly this reason, since the header is part
+of the preimage and the init tx's datum carries the result.
 
 Two properties fall out of where this check sits, and both are worth relying on deliberately:
 
@@ -445,11 +450,13 @@ wrong one. Same rule the evacuation map digest already follows.
 `SettlementTx` builds a fresh treasury datum for every major block:
 
 ```scala
-datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced)
+datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced, config.headParamsHashBytes)
 ```
 
-With a third field it must carry `headParamsHash` forward unchanged, and every peer verifies a
-settlement transaction before signing it. So the configuration agreement is re-checked once per
+The digest comes from the builder's **own config**, not from the spent treasury's datum. Carrying
+it forward would make every peer reproduce whatever was already there and check nothing; taking
+it from config means a peer whose config diverged produces a datum the others reject. Every peer
+verifies a settlement transaction before signing it. So the configuration agreement is re-checked once per
 major block for the life of the head, by the machinery that already verifies settlements — a
 peer whose configuration drifts after initialization stops being able to get blocks signed.
 
