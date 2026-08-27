@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.remote
 
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputDecoder, keepRawTransactionOutputEncoder}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
@@ -10,7 +11,7 @@ import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerComman
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder}
-import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, MultiAsset, PolicyId, ScriptHash, TransactionOutput, Value}
+import scalus.cardano.ledger.{AssetName, Coin, Hash32, KeepRaw, MultiAsset, PolicyId, ScriptHash, TransactionOutput, Value}
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
 object RemoteL2LedgerCodecs {
@@ -220,7 +221,9 @@ object RemoteL2LedgerCodecs {
                       for {
                           tip <- body.downField("tip").as[L2CommandNumber]
                           hash <- body.downField("evacuationMapHash").as[EvacuationMapHash]
-                      } yield RestoreResponse.Restored(tip, hash)
+                          // Optional while the remote side ships it; see `L2Ledger.Restored`.
+                          l2Params <- body.downField("l2ParamsHash").as[Option[Hash32]]
+                      } yield RestoreResponse.Restored(tip, hash, l2Params)
                   case "RestoreFailed" =>
                       val body = c.downField("RestoreFailed")
                       for {
@@ -237,12 +240,15 @@ object RemoteL2LedgerCodecs {
                       )
               },
       encodeA = {
-          case RestoreResponse.Restored(tip, evacuationMapHash) =>
+          case RestoreResponse.Restored(tip, evacuationMapHash, l2ParamsHash) =>
               io.circe.Json.obj(
-                "Restored" -> io.circe.Json.obj(
-                  "tip" -> tip.asJson,
-                  "evacuationMapHash" -> evacuationMapHash.asJson
-                )
+                "Restored" -> io.circe.Json
+                    .obj(
+                      "tip" -> tip.asJson,
+                      "evacuationMapHash" -> evacuationMapHash.asJson,
+                      "l2ParamsHash" -> l2ParamsHash.asJson
+                    )
+                    .dropNullValues
               )
           case RestoreResponse.RestoreFailed(requested, tip, reason) =>
               io.circe.Json.obj(

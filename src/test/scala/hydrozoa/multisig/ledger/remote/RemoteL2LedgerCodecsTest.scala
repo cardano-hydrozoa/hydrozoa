@@ -109,7 +109,7 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
     test("Restored success encodes to the canonical SugarRush wire shape and round-trips") {
         // The same vector SugarRush pins in `types/src/types/coordination/restore.rs`.
         val hash = EvacuationMapHash(ByteString.fromArray(Array.fill[Byte](32)(0xab.toByte)))
-        val response: RestoreResponse = RestoreResponse.Restored(L2CommandNumber(7L), hash)
+        val response: RestoreResponse = RestoreResponse.Restored(L2CommandNumber(7L), hash, None)
         val json = response.asJson.noSpaces
         assert(
           json == """{"Restored":{"tip":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab"}}"""

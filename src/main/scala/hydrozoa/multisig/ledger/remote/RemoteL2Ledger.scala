@@ -18,6 +18,7 @@ import org.http4s.Uri
 import org.http4s.client.websocket.{WSClient, WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
 import scala.concurrent.duration.*
+import scalus.cardano.ledger.Hash32
 
 /** A broken-transport failure from a [[RemoteL2Ledger]] — an undecodable frame, a command-number
   * echo mismatch, or a response whose `Applied`/`Rejected` variant does not match the command sent.
@@ -145,9 +146,10 @@ class RemoteL2Ledger private (
       */
     override def restoreTo(
         commandNumber: L2CommandNumber
-    ): EitherT[IO, RestoreError, EvacuationMapHash] =
+    ): EitherT[IO, RestoreError, L2Ledger.Restored] =
         EitherT(sendRestoreRequest(Request.Restore(commandNumber)).map {
-            case r: RestoreResponse.Restored => Right(r.evacuationMapHash)
+            case r: RestoreResponse.Restored =>
+                Right(L2Ledger.Restored(r.evacuationMapHash, r.l2ParamsHash))
             case RestoreResponse.RestoreFailed(requested, tip, reason) =>
                 if requested.value > tip.value then
                     Left(RestoreError.CommandNumberTooHigh(requested, tip))
@@ -399,8 +401,14 @@ object RemoteL2Ledger {
         /** `evacuationMapHash` is the remote's [[EvacuationMapHash]] at `tip` — the digest the
           * caller checks its own evacuation map against.
           */
-        final case class Restored(tip: L2CommandNumber, evacuationMapHash: EvacuationMapHash)
-            extends RestoreResponse {
+        /** @param l2ParamsHash
+          *   absent from a remote that does not report it yet; see [[L2Ledger.Restored]].
+          */
+        final case class Restored(
+            tip: L2CommandNumber,
+            evacuationMapHash: EvacuationMapHash,
+            l2ParamsHash: Option[Hash32]
+        ) extends RestoreResponse {
             def commandNumber: L2CommandNumber = tip
         }
         final case class RestoreFailed(

@@ -37,6 +37,7 @@ import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
 import monocle.Focus.focus
+import scalus.cardano.ledger.Hash32
 
 private case class UserRequestState(
     requests: List[(RequestId, ValidityFlag)],
@@ -205,7 +206,9 @@ final case class JointLedger(
               persistence,
               l2Ledger,
               fastBlockMark,
-              config.initialEvacuationMap
+              config.initialEvacuationMap,
+              config.l2ParamsHash,
+              tracer
             )
             _ <- recovered match {
                 case Some(done) =>
@@ -1078,38 +1081,68 @@ object JointLedger {
             persistence: Persistence[IO],
             l2Ledger: L2Ledger[IO],
             fastBlockMark: Option[BlockNumber],
-            initialEvacuationMap: EvacuationMap
+            initialEvacuationMap: EvacuationMap,
+            l2ParamsHash: Hash32,
+            tracer: ContraTracer[IO, JointLedgerEvent]
         )(using CardanoNetwork.Section): IO[Option[Done]] =
             fastBlockMark match
                 case None =>
-                    l2Ledger
-                        .restoreTo(L2CommandNumber.zero)
-                        .value
-                        .flatMap(IO.fromEither)
-                        .flatMap(actual =>
-                            IO.raiseUnless(actual == initialEvacuationMap.digest)(
-                              RestoreError.EvacuationMapMismatch(
-                                expected = initialEvacuationMap.digest,
-                                actual = actual
-                              )
-                            )
+                    for {
+                        restored <- l2Ledger
+                            .restoreTo(L2CommandNumber.zero)
+                            .value
+                            .flatMap(IO.fromEither)
+                        _ <- IO.raiseUnless(
+                          restored.evacuationMapHash == initialEvacuationMap.digest
+                        )(
+                          RestoreError.EvacuationMapMismatch(
+                            expected = initialEvacuationMap.digest,
+                            actual = restored.evacuationMapHash
+                          )
                         )
-                        .as(None)
+                        _ <- checkL2Params(restored, l2ParamsHash, tracer)
+                    } yield None
                 case Some(blockNum) =>
                     for {
                         done <- doneAt(persistence, blockNum)
-                        actual <- l2Ledger
+                        restored <- l2Ledger
                             .restoreTo(done.commandNumber)
                             .value
                             .flatMap(IO.fromEither)
                         expected <- evacuationMapAt(persistence, blockNum, initialEvacuationMap)
-                        _ <- IO.raiseUnless(actual == expected.digest)(
+                        _ <- IO.raiseUnless(restored.evacuationMapHash == expected.digest)(
                           RestoreError.EvacuationMapMismatch(
                             expected = expected.digest,
-                            actual = actual
+                            actual = restored.evacuationMapHash
                           )
                         )
+                        _ <- checkL2Params(restored, l2ParamsHash, tracer)
                     } yield Some(done)
+
+        /** Compare the ledger's reported agreed parameters against the head config's.
+          *
+          * Unlike the evacuation map digest, this one never moves, so it is checked at **every**
+          * anchor — warm or cold — against a config value that is equally fixed. Past a cold start
+          * the map digest only says both sides hold the same *state*; this is what keeps asking
+          * whether this is still the right *ledger*.
+          *
+          * A ledger that does not report the digest is let through with a warning: a remote that
+          * predates the field cannot be distinguished from a wrong one, and failing closed would
+          * refuse every currently-deployed sidecar. Remove this branch once the remote side ships
+          * it. See `design/head-params-hash.md`.
+          */
+        private def checkL2Params(
+            restored: L2Ledger.Restored,
+            expected: Hash32,
+            tracer: ContraTracer[IO, JointLedgerEvent]
+        ): IO[Unit] =
+            restored.l2ParamsHash match
+                case Some(actual) =>
+                    IO.raiseUnless(actual == expected)(
+                      RestoreError.L2ParamsMismatch(expected = expected, actual = actual)
+                    )
+                case None =>
+                    tracer.traceWith(JointLedgerEvent.L2ParamsHashUnreported(expected))
 
         /** This peer's cumulative evacuation map at `blockNum` — the fast anchor.
           *
