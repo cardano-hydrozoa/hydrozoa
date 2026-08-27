@@ -497,7 +497,11 @@ lazy val benchmark: Project = (project in file("benchmark"))
       libraryDependencies ++= Seq(
         // "org.scalacheck" %% "scalacheck" % "1.19.0",
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
-        "org.scalus" %% "scalus-testkit" % scalusVersion
+        "org.scalus" %% "scalus-testkit" % scalusVersion,
+        // scribe backend, for the scribe-vs-slf4j head-to-head bench only (not in `core`).
+        "com.outr" %% "scribe" % "3.19.0",
+        "com.outr" %% "scribe-cats" % "3.19.0",
+        "com.outr" %% "scribe-file" % "3.19.0"
       )
     )
 
