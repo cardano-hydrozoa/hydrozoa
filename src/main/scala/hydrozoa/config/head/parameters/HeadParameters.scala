@@ -97,14 +97,6 @@ object HeadParameters {
 
         def coilQuorum: Int = headParameters.coilQuorum
 
-        // TODO: unimplemented, and on the wrong Section — `headParamsHash` digests the whole head
-        //  config (this section plus the equity split, block-zero timing, coil hub topology and
-        //  script references), so it belongs on `HeadConfig.Section`. The multisig treasury datum
-        //  carries it, so a peer whose config differs cannot parse the initialization tx. Byte
-        //  layout, the `l2ParamsHash` contract, and the five checks are in
-        //  design/head-params-hash.md.
-        final def headParamsHash: Hash32 = ???
-
         def txTiming: TxTiming = headParameters.txTiming
 
         def fallbackContingency: FallbackContingency =

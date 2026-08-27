@@ -47,8 +47,10 @@ folded in as an opaque leaf.
 ### Where it lives
 
 The digest needs `initialEquityContributions`, `blockBrief`, `coilPeers`, and
-`scriptReferenceUtxos` as well as `HeadParameters`, so it belongs on `HeadConfig.Section`, not
-on `HeadParameters.Section` where the current stub sits.
+`scriptReferenceUtxos` as well as `HeadParameters`, so it lives on `HeadConfig.Section` — a
+`lazy val` on the `HeadConfig` case class, delegated to by the trait. The layout itself is
+`config/head/HeadParamsHash.scala`; `HeadParamsHashTest` mutates every covered field one at a
+time and asserts the digest moves, and asserts it does **not** move for `webSocketAddress`.
 
 `InitializationTx.Parse` must **not** compute it. Its `Config` is a deliberately minimal
 intersection —

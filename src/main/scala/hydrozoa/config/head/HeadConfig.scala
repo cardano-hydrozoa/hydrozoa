@@ -50,6 +50,8 @@ final case class HeadConfig private (
 ) extends HeadConfig.Section {
     override transparent inline def headConfig: HeadConfig = this
 
+    override lazy val headParamsHash: Hash32 = HeadParamsHash(this)
+
     override def headConfigBootstrap: HeadConfig.Bootstrap = {
         val initTx = initialBlock.effects.initializationTx
 
@@ -241,6 +243,11 @@ object HeadConfig {
 
     trait Section extends HeadConfig.Bootstrap.Section, InitialBlock.Section {
         def headConfig: HeadConfig
+
+        /** The digest pinning this whole configuration — see [[HeadParamsHash]] and
+          * `design/head-params-hash.md`.
+          */
+        def headParamsHash: Hash32 = headConfig.headParamsHash
 
         override def headConfigBootstrap: Bootstrap = headConfig.headConfigBootstrap
         def initialBlockSection: InitialBlock = headConfig.initialBlockSection
