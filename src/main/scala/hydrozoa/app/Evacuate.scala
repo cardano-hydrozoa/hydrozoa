@@ -13,7 +13,7 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.CardanoLiaisonEventFormat
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat, StoreIdentity}
 import hydrozoa.rulebased.{RuleBasedActorEventFormat, RuleBasedRegimeManager}
 import java.nio.file.Path
 
@@ -124,6 +124,11 @@ object Evacuate {
                 headPeers = nodeConfig.headConfig.headPeerNums.toList,
                 coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
                 hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+              ),
+              StoreIdentity(
+                headParamsHash = nodeConfig.headParamsHash,
+                headId = nodeConfig.headId,
+                ownPeerId = nodeConfig.ownPeerId
               ),
               persistenceTracer,
             )

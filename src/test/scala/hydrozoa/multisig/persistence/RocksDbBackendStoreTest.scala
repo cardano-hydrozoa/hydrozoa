@@ -32,6 +32,10 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
 
     private lazy val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
 
+    import TestStoreIdentity.mkIdentity
+
+    private val testIdentity: StoreIdentity = TestStoreIdentity.default
+
     test("put then get returns the same bytes in the same CF") {
         withFreshStore { p =>
             val key = JournalKey.Block(BlockNumber(7)).encode
@@ -116,14 +120,14 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
             val value = "durable".getBytes("UTF-8")
             // First session: write.
             RocksDbBackendStore
-                .open(tempDir, testCfs, tracer)
+                .open(tempDir, testCfs, testIdentity, tracer)
                 .use { p =>
                     p.put(Cf.Block, k, value)
                 }
                 .unsafeRunSync()
             // Second session: read back.
             val got = RocksDbBackendStore
-                .open(tempDir, testCfs, tracer)
+                .open(tempDir, testCfs, testIdentity, tracer)
                 .use { p =>
                     p.get(Cf.Block, k)
                 }
@@ -183,10 +187,13 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
         val tempDir = newTempDir()
         try
             // First open seeds the current version.
-            RocksDbBackendStore.open(tempDir, testCfs, tracer).use(_ => IO.unit).unsafeRunSync()
+            RocksDbBackendStore
+                .open(tempDir, testCfs, testIdentity, tracer)
+                .use(_ => IO.unit)
+                .unsafeRunSync()
             // Tamper: rewrite the version key with a bogus value.
             RocksDbBackendStore
-                .open(tempDir, testCfs, tracer)
+                .open(tempDir, testCfs, testIdentity, tracer)
                 .use { p =>
                     p.put(
                       Cf.Meta,
@@ -198,7 +205,7 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
             // Reopen — must fail.
             val outcome =
                 RocksDbBackendStore
-                    .open(tempDir, testCfs, tracer)
+                    .open(tempDir, testCfs, testIdentity, tracer)
                     .use(_ => IO.unit)
                     .attempt
                     .unsafeRunSync()
@@ -210,12 +217,77 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
         finally recursivelyDelete(tempDir)
     }
 
+    test("a fresh store is stamped with this node's identity and reopens cleanly") {
+        val tempDir = newTempDir()
+        try
+            RocksDbBackendStore
+                .open(tempDir, testCfs, testIdentity, tracer)
+                .use(_ => IO.unit)
+                .unsafeRunSync()
+            val outcome = RocksDbBackendStore
+                .open(tempDir, testCfs, testIdentity, tracer)
+                .use(_ => IO.unit)
+                .attempt
+                .unsafeRunSync()
+            assert(outcome.isRight, s"expected a clean reopen, got $outcome")
+        finally recursivelyDelete(tempDir)
+    }
+
+    /** A store built under one configuration must not be adopted by a node holding another: the
+      * digests differ, and the store's history means something else.
+      */
+    test("opening a store stamped for a different head config is refused") {
+        assertIdentityRefused(mkIdentity(headParamsHashByte = 0x33), "head_params_hash")
+    }
+
+    /** The dangerous one: every peer of a head has the identical `headParamsHash`, so nothing but
+      * `own_peer_id` stops head peer 1 adopting head peer 0's own-author journals as its own.
+      */
+    test("opening another peer's store from the same head is refused") {
+        assertIdentityRefused(
+          mkIdentity(ownPeerId = PeerId.Head(HeadPeerNumber(1))),
+          "own_peer_id"
+        )
+    }
+
+    test("opening a store stamped for a different head is refused") {
+        assertIdentityRefused(mkIdentity(headIdByte = 0x44), "head_id")
+    }
+
+    /** Stamp a fresh store with [[testIdentity]], then reopen it as `other` and require the failure
+      * to name `expectedField`.
+      */
+    private def assertIdentityRefused(other: StoreIdentity, expectedField: String): Assertion =
+        val tempDir = newTempDir()
+        try
+            RocksDbBackendStore
+                .open(tempDir, testCfs, testIdentity, tracer)
+                .use(_ => IO.unit)
+                .unsafeRunSync()
+            val outcome = RocksDbBackendStore
+                .open(tempDir, testCfs, other, tracer)
+                .use(_ => IO.unit)
+                .attempt
+                .unsafeRunSync()
+            assert(
+              outcome.left.toOption.exists(e =>
+                  e.getMessage.contains("belongs to a different head") &&
+                      e.getMessage.contains(expectedField)
+              ),
+              s"expected an identity-mismatch failure naming $expectedField, got $outcome"
+            )
+        finally recursivelyDelete(tempDir)
+
     // ---- helpers ----
 
     /** Run `prog(backend)` against a fresh temp-dir store; clean up afterward. */
     private def withFreshStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()
-        try RocksDbBackendStore.open(tempDir, testCfs, tracer).use(prog).unsafeRunSync()
+        try
+            RocksDbBackendStore
+                .open(tempDir, testCfs, testIdentity, tracer)
+                .use(prog)
+                .unsafeRunSync()
         finally recursivelyDelete(tempDir)
 
     private def newTempDir(): Path =
