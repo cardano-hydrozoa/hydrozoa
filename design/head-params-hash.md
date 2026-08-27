@@ -317,8 +317,8 @@ Five checks, at four moments. Every one reuses a comparison point the code alrea
 | 4 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `l2ParamsHash` against the config's | refuse to boot |
 | 5 | every major block | every head and coil peer | the settlement tx's treasury datum `headParamsHash` against the local one | refuse to sign the block |
 
-Check 3 exists today. Checks 1 and 5 are built — they sit in `InitializationTx.Parse` and
-`SettlementTx`. Checks 2 and 4 are not yet.
+Check 3 exists today. Checks 1, 2 and 5 are built — `InitializationTx.Parse`, `StoreIdentity`,
+and `SettlementTx`. Check 4 is not yet.
 
 ### 1. The initialization transaction matches the hash
 
@@ -388,7 +388,7 @@ inventing a second encoding.
 mismatch tells an operator nothing they can act on. "This store belongs to head `0134…6b10`,
 this config is head `8f2a…c401`" names the mistake.
 
-**Where it runs, and what it costs.** `RocksDbBackendStore.openInternal` already runs
+**Where it runs, and what it costs.** `RocksDbBackendStore.openInternal` runs
 `versionCheck` at open, and `StoreVersion.Check` already has the right three-way shape —
 `Fresh` / `Compatible` / `Incompatible`. The identity stamp is a sibling of that, with the same
 semantics: a writable open stamps a fresh store; a **read-only** open — the mode

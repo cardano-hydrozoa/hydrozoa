@@ -173,7 +173,7 @@ class PersistenceTest extends AnyFunSuite:
             val program = for
                 // First open bumps to a fresh generation and anchors it; take a stamp + conversion.
                 firstOpen <- RocksDbBackendStore
-                    .open(tempDir, testCfs, tracer)
+                    .open(tempDir, testCfs, TestStoreIdentity.default, tracer)
                     .use(backend =>
                         Persistence
                             .fromBackend(backend, tracer)
@@ -185,7 +185,7 @@ class PersistenceTest extends AnyFunSuite:
                 // anchor persists, so its stamp still converts to the same wall clock through the
                 // new instance's per-generation lookup.
                 secondWall <- RocksDbBackendStore
-                    .open(tempDir, testCfs, tracer)
+                    .open(tempDir, testCfs, TestStoreIdentity.default, tracer)
                     .use(backend =>
                         Persistence.fromBackend(backend, tracer).flatMap(_.wallClockOf(oldStamp))
                     )
@@ -204,7 +204,7 @@ class PersistenceTest extends AnyFunSuite:
         val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
         try
             RocksDbBackendStore
-                .open(tempDir, testCfs, tracer)
+                .open(tempDir, testCfs, TestStoreIdentity.default, tracer)
                 .use(backend => Persistence.fromBackend(backend, tracer).flatMap(prog))
                 .unsafeRunSync()
         finally recursivelyDelete(tempDir)
