@@ -7,7 +7,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets.UTF_8
 import scala.concurrent.duration.FiniteDuration
-import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, ScriptHash, TransactionInput}
 import scalus.uplc.builtin.{ByteString, platform}
 
@@ -84,10 +83,13 @@ object HeadParamsHash {
         out.framed(config.l2Ledger.configString.getBytes(UTF_8))
         out.bool(config.identityIsomorphism)
 
-        // -- cardanoNetwork. The protocol params are absent on purpose: they are fetched from the
-        // chain and move with hard forks, so they are not something the peers agree on.
+        // -- cardanoNetwork. `networkId` is scalus's own id byte, which covers `Network.Other` too;
+        // `protocolMagic` alone does not determine it, because `CardanoNetwork.Custom` pairs an
+        // arbitrary `CardanoInfo` with an arbitrary magic. The protocol params are absent on
+        // purpose: they are fetched from the chain and move with hard forks, so they are not
+        // something the peers agree on.
         out.u64(config.protocolMagic)
-        out.u8(networkId(config.network))
+        out.u8(config.network.networkId)
         val slotConfig = config.slotConfig
         out.u64(slotConfig.zeroTime)
         out.u64(slotConfig.zeroSlot)
@@ -132,15 +134,6 @@ object HeadParamsHash {
         hubs.foreach(hub => out.u32(hub.convert))
 
         Hash[Blake2b_256, Any](platform.blake2b_256(ByteString.unsafeFromArray(out.bytes)))
-    }
-
-    /** The Cardano network id byte. `protocolMagic` alone does not determine it, because
-      * [[hydrozoa.config.head.network.CardanoNetwork.Custom]] pairs an arbitrary `CardanoInfo` with
-      * an arbitrary magic.
-      */
-    private def networkId(network: Network): Int = network match {
-        case Network.Mainnet => 0x01
-        case Network.Testnet => 0x00
     }
 
     /** Accumulates the preimage. Variable-width values are length-framed and fixed-width ones are

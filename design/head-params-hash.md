@@ -175,9 +175,9 @@ limits are wall-clock gates that reach no transaction. See `docs/spec/rate-limit
 `coilQuorum` is folded in anyway because it is a `HeadParameters` field and the section is
 covered whole; the verification keys are not, because they are pinned by construction.
 
-`networkId` is the Cardano network id byte: `0x01` mainnet, `0x00` testnet. `protocolMagic`
-alone does not determine it, because `CardanoNetwork.Custom` pairs an arbitrary `CardanoInfo`
-with an arbitrary magic. `cardanoProtocolParams` is deliberately absent: it is fetched from the
+`networkId` is scalus's own `Network.networkId` — the Cardano network id byte, defined for every
+case including `Network.Other`. `protocolMagic` alone does not determine it, because
+`CardanoNetwork.Custom` pairs an arbitrary `CardanoInfo` with an arbitrary magic. `cardanoProtocolParams` is deliberately absent: it is fetched from the
 chain and moves with hard forks, so it is not something peers agree on.
 
 `initialEquityContributions` contributes its per-peer split, not just its total. Only the total
