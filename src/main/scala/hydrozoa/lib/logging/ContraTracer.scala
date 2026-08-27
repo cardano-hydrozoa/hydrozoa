@@ -191,7 +191,7 @@ object ContraTracerSyntax {
 
     def use[M[_], A](using ct: ContraTracer[M, A]): TracerA[M, A, Unit] = ct.runTracer
 
-    def traceMaybe[M[_]: Monad, A, B](f: B => Option[A])(using
+    def traceMaybe[M[_], A, B](f: B => Option[A])(using
         ct: ContraTracer[M, A]
     ): ContraTracer[M, B] =
         ct.traceMaybe(f)
