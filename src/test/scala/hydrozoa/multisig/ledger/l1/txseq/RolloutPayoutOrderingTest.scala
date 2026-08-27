@@ -55,8 +55,11 @@ class RolloutPayoutOrderingTest extends AnyFunSuite:
           utxoId =
               Arbitrary.arbitrary[TransactionInput].pureApply(Gen.Parameters.default, Seed(1L)),
           address = config.headMultisigAddress,
-          datum =
-              MultisigTreasuryUtxo.Datum(ByteString.fromArray(Array.fill[Byte](48)(0)), BigInt(7)),
+          datum = MultisigTreasuryUtxo.Datum(
+            ByteString.fromArray(Array.fill[Byte](48)(0)),
+            BigInt(7),
+            ByteString.fromArray(Array.fill[Byte](32)(0))
+          ),
           value = totalPayoutValue + Value(equity.coin),
           equity = equity
         )

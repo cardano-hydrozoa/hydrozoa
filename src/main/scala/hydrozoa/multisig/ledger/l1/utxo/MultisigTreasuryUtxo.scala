@@ -71,16 +71,27 @@ object MultisigTreasuryUtxo {
         def treasuryToSpend: MultisigTreasuryUtxo
     }
 
+    /** @param headParamsHash
+      *   the digest pinning the head's agreed configuration
+      *   (`hydrozoa.config.head.HeadParamsHash`). Written by the initialization tx and carried
+      *   forward unchanged by every settlement: peers rebuild a settlement before signing it, so a
+      *   peer whose configuration drifts stops being able to get blocks signed.
+      */
     final case class Datum(
         commit: KzgCommitment,
-        versionMajor: BigInt
+        versionMajor: BigInt,
+        headParamsHash: ByteString
     ) derives FromData,
           ToData
 
-    def mkInitMultisigTreasuryDatum(initialEvacuationMap: EvacuationMap): Datum =
+    def mkInitMultisigTreasuryDatum(
+        initialEvacuationMap: EvacuationMap,
+        headParamsHash: ByteString
+    ): Datum =
         Datum(
           initialEvacuationMap.kzgCommitment,
-          BigInt(BlockVersion.Major(0).toLong)
+          BigInt(BlockVersion.Major(0).toLong),
+          headParamsHash
         )
 
 }

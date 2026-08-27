@@ -50,7 +50,8 @@ final case class HeadConfig private (
 ) extends HeadConfig.Section {
     override transparent inline def headConfig: HeadConfig = this
 
-    override lazy val headParamsHash: Hash32 = HeadParamsHash(this)
+    override lazy val headParamsHash: Hash32 =
+        HeadParamsHash(headConfigBootstrap, initialBlockSection.initialBlock.blockBrief.header)
 
     override def headConfigBootstrap: HeadConfig.Bootstrap = {
         val initTx = initialBlock.effects.initializationTx
@@ -154,11 +155,15 @@ object HeadConfig {
 
                         // Parse the stored init tx (honouring its bytes) rather than re-building it.
                         // The fallback is protocol-derived, so we build it from the parsed init tx.
+                        // Computed here, where the bootstrap context and block zero's header are both
+                        // in hand, and handed to the parser as opaque bytes.
+                        headParamsHash = HeadParamsHash(hcBootstrap, brief.header)
                         parsedInitTx <- InitializationTx
                             .Parse(hcBootstrap)(
                               blockCreationEndTime = brief.endTime,
                               tx = initTx,
-                              resolvedUtxos = resolvedUtxos
+                              resolvedUtxos = resolvedUtxos,
+                              headParamsHash = headParamsHash
                             )
                             .result
                             .left
@@ -241,13 +246,16 @@ object HeadConfig {
             .andThen(headConfigBootstrap => HeadConfig(headConfigBootstrap, initialBlock))
     }
 
-    trait Section extends HeadConfig.Bootstrap.Section, InitialBlock.Section {
+    trait Section
+        extends HeadConfig.Bootstrap.Section,
+          InitialBlock.Section,
+          HeadParamsHash.Section {
         def headConfig: HeadConfig
 
         /** The digest pinning this whole configuration — see [[HeadParamsHash]] and
           * `design/head-params-hash.md`.
           */
-        def headParamsHash: Hash32 = headConfig.headParamsHash
+        override def headParamsHash: Hash32 = headConfig.headParamsHash
 
         override def headConfigBootstrap: Bootstrap = headConfig.headConfigBootstrap
         def initialBlockSection: InitialBlock = headConfig.initialBlockSection
