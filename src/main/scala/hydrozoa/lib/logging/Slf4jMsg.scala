@@ -1,6 +1,6 @@
 package hydrozoa.lib.logging
 
-import cats.{Eval, Monad}
+import cats.Eval
 
 /** A small generic message ADT for call sites that don't merit a typed event of their own —
   * typically app entry points (`hydrozoa.app.*`) and test scaffolding. Production actors and shared
@@ -8,8 +8,8 @@ import cats.{Eval, Monad}
   *
   * Pair with [[Slf4jMsgFormat.humanFormat]] to lift into [[LogEvent]] under a fixed routing key.
   * The extension methods on `ContraTracer[F, Slf4jMsg]` give `log.info("…")` ergonomics for any
-  * `F[_]: Monad` — typically `IO` (via [[Slf4jTracer.sink]]). The message is held behind an `Eval`
-  * so it is not rendered unless the level is enabled (see [[Slf4jTracer.sink]]).
+  * `F[_]` — typically `IO` (via [[Slf4jTracer.sink]]). The message is held behind an `Eval` so it
+  * is not rendered unless the level is enabled (see [[Slf4jTracer.sink]]).
   */
 sealed trait Slf4jMsg
 
@@ -54,7 +54,7 @@ object Slf4jMsgFormat:
   *
   * }}}
   */
-extension [F[_]: Monad](t: ContraTracer[F, Slf4jMsg])
+extension [F[_]](t: ContraTracer[F, Slf4jMsg])
     def trace(msg: => String): F[Unit] = t.traceWith(Slf4jMsg.Trace(Eval.later(msg)))
     def debug(msg: => String): F[Unit] = t.traceWith(Slf4jMsg.Debug(Eval.later(msg)))
     def info(msg: => String): F[Unit] = t.traceWith(Slf4jMsg.Info(Eval.later(msg)))
