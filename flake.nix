@@ -6,6 +6,13 @@
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Obsidian Systems' reproducible Daml toolchain packaging (daml + dpm +
+    # canton, pinned & patchelf'd). Non-flake repo: consumed as a source input
+    # and imported via its default.nix. Binary cache: s3://obsidian-open-source.
+    nix-daml-sdk = {
+      url = "github:obsidiansystems/nix-daml-sdk";
+      flake = false;
+    };
   };
 
   outputs =
@@ -83,15 +90,18 @@
             homepage = "https://www.canton.network";
           };
         };
-        # ── Daml SDK — TODO (canton-hydrozoa) ──────────────────────────────────
-        # The Daml 3.x SDK/compiler (Daml-LF 2.x, which Canton 3.5 runs) is NOT a
-        # public GitHub release: digital-asset/daml tops out at v2.10.6 (LF 1.x,
-        # the Daml 2.x line) and v3.x tags 404 — the 3.x compiler ships via
-        # `daml install <ver>` from get.daml.com / Artifactory. Pinning it needs
-        # (a) the exact 3.x version matching Canton 3.5.15 and (b) a fetchable
-        # source + hash. Deferred: PoC DAML template authoring picks this up next.
-        # (The public 2.10.6 SDK compiles only LF 1.x, which Canton 3.5 will likely
-        # reject, so it is intentionally NOT wired in as a stopgap.)
+        # ── Daml SDK (via Obsidian's nix-daml-sdk) ─────────────────────────────
+        # The Daml 3.x compiler/assistant + DPM, pinned & patchelf'd by
+        # obsidiansystems/nix-daml-sdk (imported as a source input above). SDK
+        # 3.4.11 is the latest it pins; it targets Daml-LF 2.1, which the Canton
+        # 3.5.15 runtime accepts (Canton checks LF compat, not an exact SDK match)
+        # — so we deliberately pair compiler 3.4.11 with runtime 3.5.15, and build
+        # DARs with `--target=2.1`. `daml` (the assistant) is deprecated in 3.x in
+        # favour of `dpm` (Daml Package Manager); both are on PATH.
+        damlSdk = import inputs.nix-daml-sdk {
+          inherit system;
+          sdkVersion = "3.4.11";
+        };
         # Define the hooks
         pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
@@ -114,6 +124,8 @@
           buildInputs = [ pkgs.bashInteractive ];
           packages = with pkgs; [
             canton # Digital Asset Canton runtime (nodes + console); see let-binding above
+            damlSdk.sdk # Daml SDK 3.4.11 — the `daml` assistant/compiler (nix-daml-sdk)
+            damlSdk.dpm # Daml Package Manager (`dpm`) — the 3.x replacement for `daml`
             ammonite # modernized scala repl: https://ammonite.io/
             async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
             git # otherwise `git` resolves to the broken macOS Xcode shim inside `nix develop`
