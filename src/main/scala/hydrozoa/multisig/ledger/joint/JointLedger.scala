@@ -933,7 +933,8 @@ object JointLedger {
 
     private object Env {
 
-        final class Connected(env: Env, val connections: Connections) {
+        final class Connected(env: Env, val connections: Connections)
+            extends CardanoNetwork.Section {
             export env.*
         }
     }

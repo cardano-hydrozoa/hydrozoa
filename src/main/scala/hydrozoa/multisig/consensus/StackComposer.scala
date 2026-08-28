@@ -831,7 +831,8 @@ object StackComposer {
 
     private object Env {
 
-        final class Connected(env: Env, val connections: Connections) {
+        final class Connected(env: Env, val connections: Connections)
+            extends HeadConfig.Bootstrap.Section {
             export env.*
         }
     }

@@ -550,7 +550,7 @@ object PeerLiaisonHeadToHead {
             val connections: Connections,
             val puller: Puller[Mesh.Get, Mesh.New],
             val server: Server[Mesh.Get, Mesh.New]
-        ) {
+        ) extends CardanoNetwork.Section {
             export env.*
         }
     }

@@ -244,6 +244,11 @@ trait HeadMultisigRegimeManager(
               leadsFastBlock = config.canLeadFast
             )(using config)
 
+            // Opening the barrier here is what makes every actor's `receive` reject-before-PreStart
+            // guard safe: each actor was spawned above and its own `preStart` self-sent `PreStart`,
+            // so `PreStart` is already mailbox message #1 and no real message can precede it. An
+            // actor spawned mid-life — handed a resolved ref before its own `preStart` runs — would
+            // break that ordering and trip the guard at runtime; spawn it before this line instead.
             _ <- pendingConnections.complete(connections)
             _ <- connectionsDeferred.complete(connections)
 
