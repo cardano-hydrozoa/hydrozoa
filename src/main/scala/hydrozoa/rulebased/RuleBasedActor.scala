@@ -231,7 +231,7 @@ final case class RuleBasedActor(
                 case Left(e) => raiseError(e)
             }
             _ <- traceRight(
-              RuleBasedActorEvent.Treasury.Found(treasuryUtxo.treasuryOutput.value.toString)
+              RuleBasedActorEvent.Treasury.Found(treasuryUtxo.treasuryOutput.value)
             )
             _ <- traceRight(RuleBasedActorEvent.Treasury.Parsing)
             _ <- treasuryUtxo.treasuryOutput.datum match {
@@ -356,7 +356,7 @@ final case class RuleBasedActor(
             _ <- tracer.traceWith(
               RuleBasedActorEvent.Evacuation.CandidateMaps(
                 s"$latest",
-                candidateEvacMaps.keySet.map(k => s"$k").toList
+                candidateEvacMaps.keySet
               )
             )
         } yield EvacuationInputs(candidateEvacMaps, fallbackTxHash)
@@ -418,7 +418,7 @@ final case class RuleBasedActor(
             ): IO[Either[StackNumber, TransactionHash]] =
                 tracer
                     .traceWith(
-                      RuleBasedActorEvent.Evacuation.EvacuationAnchor(label, s"$txId")
+                      RuleBasedActorEvent.Evacuation.EvacuationAnchor(label, txId)
                     )
                     .as(Right(txId))
             persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
@@ -960,9 +960,7 @@ final case class RuleBasedActor(
                 // past withdrawals; the original resolution-time map is committed by the oldest
                 // treasury tx's output datum, which is what `candidateEvacMaps` is keyed by.
                 _ <- EitherT.right[Error.RecoverableErrors](
-                  tracer.traceWith(
-                    RuleBasedActorEvent.Evacuation.ResolvedKzg(s"$resolutionKzg")
-                  )
+                  tracer.traceWith(RuleBasedActorEvent.Evacuation.ResolvedKzg(resolutionKzg))
                 )
                 evacuationMapAtResolution <- lookupMap(resolutionKzg, inputs.candidateEvacMaps)
 
@@ -1143,13 +1141,14 @@ final case class RuleBasedActor(
     // evacuation regime then spawns but never polls, so funds never come back (custody-critical). A
     // fixed-cadence self-tick fires every `evacuationBotPollingPeriod` regardless of mailbox
     // activity, which is correct here because `handleTick` is a poll-then-retry safe to re-run.
-    // TODO(#622-review): this overwrites `tickFiber` without cancelling any fiber already there. If
-    // cats-actors ever re-runs `preStart` on a restart without `postStop` in between, the old tick
-    // fiber orphans (two poll loops, one uncancellable). Cancel the existing fiber before replacing
-    // it — or confirm cats-actors' restart path always runs `postStop` first, and note that here.
     private def startTickTimer: IO[Unit] =
-        (IO.sleep(config.evacuationBotPollingPeriod) >> (context.self ! Tick)).foreverM.start
-            .flatMap(fib => tickFiber.set(Some(fib)))
+        val pollLoop =
+            (IO.sleep(config.evacuationBotPollingPeriod) >> (context.self ! Tick)).foreverM
+        for
+            fib <- pollLoop.start
+            previous <- tickFiber.getAndSet(Some(fib))
+            _ <- previous.fold(IO.unit)(_.cancel)
+        yield ()
 
     /** Cancel the self-tick fiber so it stops pinging `self` once the actor has stopped, instead of
       * leaking a fiber that keeps delivering `Tick` to a dead actor (dead letters).

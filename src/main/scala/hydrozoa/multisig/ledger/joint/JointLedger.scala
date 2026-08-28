@@ -460,7 +460,7 @@ final case class JointLedger(
                     p.nextBlockNumber,
                     blockCreationEndTime,
                     p.competingFallbackTxTime,
-                    split.toString
+                    split
                   )
                 )
 

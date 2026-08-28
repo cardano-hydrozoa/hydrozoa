@@ -5,8 +5,8 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
-import com.suprnation.actor.SupervisorStrategy.Escalate
-import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
+import com.suprnation.actor.SupervisorStrategy.{Directive, Escalate}
+import com.suprnation.actor.{ActorContext, OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
@@ -74,7 +74,7 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       * conspicuous.
       */
     override def supervisorStrategy: SupervisionStrategy[IO] =
-        OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute)(
+        new OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute)(
           PartialFunction.fromFunction {
               case _: IllegalArgumentException =>
                   Escalate // Normally `Stop` but we can't handle stopped actors yet
@@ -85,7 +85,20 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
               // the intent of the arms above legible for when they can take their real directives.
               case _ => Escalate
           }
-        )
+        ) {
+            override def logFailure(
+                context: ActorContext[IO, ?, ?],
+                child: NoSendActorRef[IO],
+                cause: Option[Throwable],
+                decision: Directive
+            ): IO[Unit] =
+                decision match
+                    case Escalate =>
+                        cause.traverse_(c =>
+                            tracer.traceWith(LifecycleEvent.SupervisedFailureEscalated(c))
+                        )
+                    case _ => super.logFailure(context, child, cause, decision)
+        }
 
     override def preStart: IO[Unit] = context.self ! PreStart
 
@@ -172,7 +185,13 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
               )
             )
             stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracers.stackComposer, persistence)
+              StackComposer(
+                config,
+                pendingConnections,
+                tracers.stackComposer,
+                persistence,
+                metrics
+              )
             )
             slowConsensusActor <- context.actorOf(
               SlowConsensusActor(

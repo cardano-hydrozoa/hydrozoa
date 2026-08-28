@@ -134,7 +134,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       reader,
@@ -155,47 +155,33 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
             body <- resp.as[Json]
         } yield (resp.status, body)
 
-    test("GET /head/requests lists rows with the opaque i64 id, peer number, and type") {
-        val reader = stubReader(
-          Map(peer0 -> List(txRequest(peer0, 0), depositRequest(peer0, 1)))
-        )
-        withRoutes(reader) { app =>
-            get(app, "/head/requests").map { (status, body) =>
-                val _ = assert(status == Status.Ok)
-                val rows = body.asArray.get
-                val _ = assert(rows.size == 2)
-                val r0 = rows(0).hcursor
-                // peer 0, request 0 packs to i64 0.
-                val _ = assert(r0.get[Long]("requestId") == Right(0L))
-                val _ = assert(r0.get[Int]("peerNumber") == Right(0))
-                val _ = assert(r0.get[String]("requestType") == Right("transaction"))
-                val r1 = rows(1).hcursor
-                val _ = assert(r1.get[Long]("requestId") == Right(1L))
-                val _ = assert(r1.get[String]("requestType") == Right("deposit"))
-                ()
-            }
-        }
-    }
-
-    test("GET /head/requests?type= and ?peer_number= narrow the listing") {
-        val reader = stubReader(
-          Map(peer0 -> List(txRequest(peer0, 0), depositRequest(peer0, 1)))
-        )
-        withRoutes(reader) { app =>
+    test("GET /head/requests is not mounted — an unpaged full-CF scan is an OOM, not an API") {
+        // Keyed lookups stay mounted, so it is the second assertion that carries the test: a
+        // router that mounted nothing at all would pass the first one on its own.
+        withRoutes(stubReader(Map(peer0 -> List(txRequest(peer0, 0))))) { app =>
             for {
-                deposits <- get(app, "/head/requests?type=deposit")
-                thisPeer <- get(app, "/head/requests?peer_number=0")
-                otherPeer <- get(app, "/head/requests?peer_number=99")
-                unknownType <- get(app, "/head/requests?type=nonsense")
+                listing <- app.run(
+                  Request[IO](Method.GET, Uri.unsafeFromString("/head/requests"))
+                )
+                filtered <- app.run(
+                  Request[IO](Method.GET, Uri.unsafeFromString("/head/requests?type=deposit"))
+                )
+                byId <- app.run(Request[IO](Method.GET, Uri.unsafeFromString("/head/requests/0")))
             } yield {
-                val _ = assert(deposits._1 == Status.Ok)
-                val depRows = deposits._2.asArray.get
-                val _ = assert(depRows.size == 1)
-                val _ = assert(depRows(0).hcursor.get[String]("requestType") == Right("deposit"))
-                val _ = assert(thisPeer._2.asArray.get.size == 2)
-                // No such author peer -> empty, not an error.
-                val _ = assert(otherPeer._1 == Status.Ok && otherPeer._2.asArray.get.isEmpty)
-                val _ = assert(unknownType._2.asArray.get.isEmpty)
+                // 405 rather than 404 on a HEAD node: POST /head/requests is mounted, so the
+                // path exists and only the GET verb is gone.
+                val _ = assert(
+                  listing.status == Status.MethodNotAllowed,
+                  s"GET /head/requests must not be mounted, got ${listing.status}"
+                )
+                val _ = assert(
+                  filtered.status == Status.MethodNotAllowed,
+                  s"a filtered listing must not be mounted either, got ${filtered.status}"
+                )
+                val _ = assert(
+                  byId.status == Status.Ok,
+                  s"GET /head/requests/{id} must still serve, got ${byId.status}"
+                )
                 ()
             }
         }
@@ -336,6 +322,74 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 val _ = assert(missing._1 == Status.NotFound)
                 val _ = assert(malformed.status.code >= 400 && malformed.status.code < 500)
                 val _ = assert(outOfRange.status.code >= 400 && outOfRange.status.code < 500)
+                ()
+            }
+        }
+    }
+
+    /** Build the routes the way a **coil** peer gets them — `requestSequencer = None`, because a
+      * follower accepts no user requests — and run `check`.
+      */
+    private def withCoilRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
+        ActorSystem[IO]("HeadRequestsEndpointsTest-coil")
+            .use { system =>
+                for {
+                    blockWeaverStub <- system.actorOf(
+                      new Actor[IO, BlockWeaver.Request] {
+                          override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+                      }
+                    )
+                    routes <- HydrozoaRoutes(
+                      None,
+                      blockWeaverStub,
+                      IO.pure(NodeStatus.Active),
+                      stubReader(Map.empty),
+                      None,
+                      headConfig,
+                      HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
+                      PeerMetrics.create(0L, Vector.empty),
+                      ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
+                    )
+                    _ <- check(routes.routes.orNotFound)
+                } yield ()
+            }
+            .unsafeRunSync()
+
+    test(
+      "on a coil peer (no request sequencer) the mutating routes are absent, reads still serve"
+    ) {
+        // The coil exists to be observable: its read surface must answer, or the whole point of
+        // giving it a server is lost. So this asserts both halves — the mutations are gone AND a
+        // read still works. Without the second assertion a totally unmounted router would pass.
+        withCoilRoutes { app =>
+            for {
+                submit <- app.run(
+                  Request[IO](Method.POST, Uri.unsafeFromString("/head/requests"))
+                )
+                finalize <- app.run(
+                  Request[IO](Method.POST, Uri.unsafeFromString("/api/admin/finalize"))
+                )
+                stats <- app.run(Request[IO](Method.GET, Uri.unsafeFromString("/head/stats")))
+                ready <- app.run(Request[IO](Method.GET, Uri.unsafeFromString("/ready")))
+            } yield {
+                // 404, not 405: a coil mounts neither verb, so the path does not exist there.
+                val _ = assert(
+                  submit.status == Status.NotFound,
+                  s"POST /head/requests must not be mounted on a coil, got ${submit.status}"
+                )
+                // 404, not the 401 challenge a mounted admin route would give.
+                val _ = assert(
+                  finalize.status == Status.NotFound,
+                  s"POST /api/admin/finalize must not be mounted on a coil, got ${finalize.status}"
+                )
+                val _ = assert(
+                  stats.status == Status.Ok,
+                  s"GET /head/stats must serve on a coil, got ${stats.status}"
+                )
+                val _ = assert(
+                  ready.status == Status.Ok,
+                  s"GET /ready must serve on a coil, got ${ready.status}"
+                )
                 ()
             }
         }

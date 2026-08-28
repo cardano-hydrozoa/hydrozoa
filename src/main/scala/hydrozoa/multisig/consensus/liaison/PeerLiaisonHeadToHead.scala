@@ -74,7 +74,7 @@ abstract class PeerLiaisonHeadToHead(
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
     // Each outbound side is backed by the journal this peer's own production lives in, so a reply
-    // hot-loads entries below the in-memory outbox floor and preStart restores only the high-water.
+    // reads entries below the in-memory outbox floor and preStart restores only the high-water.
     // The spines carry every leader's brief, so their backings keep only the ones THIS peer leads;
     // the satellites are this peer's own author (CF per author).
     private val backend = persistence.backend
@@ -89,48 +89,68 @@ abstract class PeerLiaisonHeadToHead(
     private val hubHardAckBacking: Option[LaneOutgoingBacking[HardAckWithId, HubHardAckNumber]] =
         Option.when(ownIsHub)(LaneOutgoingBacking.hubHardAck(backend, ownHeadPeerNum))
 
+    // Every outbound lane holds at most this many items; older ones are served from the journal.
+    private val outboxCap: Int = config.peerLiaisonOutboxCap
+
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       numberOf = _.blockNum,
       zero = BlockNumber.zero,
       outboundNext = config.nextOwnLeaderBlock,
       inboundNext = after => Some(remoteHead.nextLeaderBlock(after)),
-      backfill = blockBacking.backfill
+      outboxCap = outboxCap,
+      serveFromJournal = blockBacking.serveFromJournal
     )
     private val stackLane = LaneBidirectional.sparse[StackBrief, StackNumber](
       numberOf = _.stackNum,
       zero = StackNumber.zero,
       outboundNext = config.nextOwnSlowLeaderStack,
       inboundNext = after => Some(remoteHead.nextSlowLeaderStack(after)),
-      backfill = stackBacking.backfill
+      outboxCap = outboxCap,
+      serveFromJournal = stackBacking.serveFromJournal
     )
     private val requestLane = LaneBidirectional.contiguous[UserRequestWithId, RequestNumber](
       _.requestId.requestNum,
       RequestNumber.zero,
       _.increment,
       config.peerLiaisonMaxRequestsPerBatch,
-      backfill = requestBacking.backfill
+      outboxCap = outboxCap,
+      serveFromJournal = requestBacking.serveFromJournal
     )
     private val softAckLane =
         LaneBidirectional.contiguous[SoftAck, SoftAckNumber](
           _.ackNum,
           SoftAckNumber.zero.increment,
           _.increment,
-          backfill = softAckBacking.backfill
+          outboxCap = outboxCap,
+          serveFromJournal = softAckBacking.serveFromJournal
         )
     private val hardAckLane =
         LaneBidirectional.contiguous[HardAck, HardAckNumber](
           _.hardAckNum,
           HardAckNumber.zero,
           _.increment,
-          backfill = hardAckBacking.backfill
+          outboxCap = outboxCap,
+          serveFromJournal = hardAckBacking.serveFromJournal
         )
     private val hubHardAckLane =
         LaneBidirectional.contiguous[HardAckWithId, HubHardAckNumber](
           _.seqNum,
           HubHardAckNumber.zero,
           _.increment,
-          backfill = (from, limit) =>
-              hubHardAckBacking.fold(IO.pure(List.empty[HardAckWithId]))(_.backfill(from, limit))
+          outboxCap = outboxCap,
+          // A non-hub has no `HubHardAck` CF, and also never appends here — so `reply` answers from
+          // the un-seeded high-water without asking, and this is unreachable. Raising rather than
+          // returning nothing keeps it that way: were a non-hub ever to append, the item would be
+          // evictable with no journal behind it, and returning `Nil` would wedge the remote's lane
+          // silently instead of failing where the mistake is.
+          serveFromJournal = (from, limit) =>
+              hubHardAckBacking.fold(
+                IO.raiseError[List[HardAckWithId]](
+                  IllegalStateException(
+                    s"hub-hard-ack lane asked to serve from $from on a non-hub head peer"
+                  )
+                )
+              )(_.serveFromJournal(from, limit))
         )
 
     // The remote head peer's confirmed request high-water, learned from the local FastConsensusActor
@@ -356,7 +376,7 @@ abstract class PeerLiaisonHeadToHead(
     }
 
     /** Restore each outbound lane's high-water from its backing journal, leaving the queues empty
-      * (R3): the Server half hot-loads older own-produced entries from the store on the remote's
+      * (R3): the Server half reads older own-produced entries from the store on the remote's
       * `Mesh.Get`, and replay / live production re-appends the tail. The hub-hard-ack lane restores
       * on a **hub** head peer (its own `HubHardAck` is persisted by `CoilAckSequencer`); it is cold
       * on a non-hub.
@@ -447,7 +467,7 @@ abstract class PeerLiaisonHeadToHead(
             connections <- resolveConnections
             connected = env.connected(connections, mkPuller(connections), mkServer(connections))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
-            // Restore each lane's own-produced high-water; the Server half hot-loads older entries
+            // Restore each lane's own-produced high-water; the Server half reads older entries
             // from the store on the remote's Mesh.Get, and replay / live production re-appends the
             // tail. An empty store leaves every lane cold.
             _ <- restoreOutboundHighWaters
@@ -466,7 +486,14 @@ abstract class PeerLiaisonHeadToHead(
         (IO.sleep(
           config.peerLiaisonResendInterval
         ) >> (context.self ! ResendCurrent)).foreverM.start
-            .flatMap(fib => resendFiber.set(Some(fib)))
+            .flatMap(fib =>
+                // `getAndSet` + cancel, not `set`: `set` drops a fiber already stored without
+                // cancelling it, and the orphan is a `foreverM` that keeps delivering
+                // `ResendCurrent` for the life of the process. Keeping the single-fiber invariant
+                // local to this method is deliberate — see `FiberLifecycleTest` for why it cannot
+                // rest on the actor's own teardown running first.
+                resendFiber.getAndSet(Some(fib)).flatMap(_.fold(IO.unit)(_.cancel))
+            )
 
     /** Cancel the resend-timer fiber so it stops pinging `self` once the actor has stopped — e.g.
       * when fallback tears down the multisig regime and this liaison — instead of leaking a fiber

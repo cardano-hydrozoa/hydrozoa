@@ -309,7 +309,8 @@ peer's `GetMsgBatch` from them (per-liaison outboxes, not a
 shared `CoilRelay` buffer sliced per coil peer — this keeps each liaison the single
 owner of its link's send-state, uniform with `PeerLiaisonHeadToHead` and
 recovery-aligned per link, at the accepted cost of buffering each lane item once
-per coil peer on the hub, §4.1). It aggregates **nothing** — the six lane families
+per coil peer on the hub, §4.1 — bounded, because each outbox caps what it holds
+and serves anything older from the journal). It aggregates **nothing** — the six lane families
 stay separate end-to-end.
 
 **What feeds it:**

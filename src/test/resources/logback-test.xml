@@ -27,8 +27,11 @@
     <logger name="Limiter" level="warn"/>
     <logger name="Persistence" level="warn"/>
     <logger name="CoilPeerWsTransport" level="warn"/>
+    <logger name="PeerTransport" level="warn"/>
     <logger name="HubWsTransport" level="warn"/>
     <logger name="CoilAckSequencer" level="warn"/>
+    <!-- The only record of why a supervised actor failed; never quiet it. -->
+    <logger name="Supervision" level="error"/>
     <logger name="HydrozoaHttp" level="warn"/>
     <logger name="RemoteL2Ledger" level="warn"/>
     <logger name="RemoteL2Screener" level="warn"/>
@@ -39,4 +42,7 @@
     <logger name="SettlementTx" level="warn"/>
     <logger name="Generators" level="warn"/>
     <logger name="scalus" level="warn"/>
+    <!-- Fixtures for Slf4jTracerTest: prove the level gate skips (or forces) rendering. -->
+    <logger name="hydrozoa.test.gated.off" level="off"/>
+    <logger name="hydrozoa.test.gated.on" level="debug"/>
 </configuration>

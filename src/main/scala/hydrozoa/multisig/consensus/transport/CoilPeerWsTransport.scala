@@ -49,7 +49,7 @@ final class CoilPeerWsTransport private (
     override def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit] =
         CoilFrame.fromWire(request) match {
             case Some(wire) => outbox.offer(CoilFrame.encode(CoilFrame.Msg(wire)))
-            case None       => tracer.traceWith(DroppingNonWireRequest(request.toString))
+            case None       => tracer.traceWith(DroppingNonWireRequest(request))
         }
 
     private def dispatchInbound(payload: CoilFrame.Wire): IO[Unit] =
@@ -60,7 +60,7 @@ final class CoilPeerWsTransport private (
                     case Some(liaison) => liaison ! p
                     case None          => tracer.traceWith(NoLiaisonForInbound)
                 }
-            case other => tracer.traceWith(UnexpectedInboundWire(other.toString))
+            case other => tracer.traceWith(UnexpectedInboundWire(other))
         }
 
     private def onLine(s: String): IO[Unit] =
@@ -73,8 +73,10 @@ final class CoilPeerWsTransport private (
     private def dialerLoop(client: WSClient[IO], hubUri: Uri): IO[Nothing] = {
         val request = WSRequest(hubUri)
 
+        // Low-level `connect`, not `connectHighLevel`: the dialer needs to see the hub's keep-alive
+        // Ping to know the link is alive (see WsDuplex).
         def once: IO[Unit] =
-            client.connectHighLevel(request).use { conn =>
+            client.connect(request).use { conn =>
                 val helloLine = CoilFrame.encode(CoilFrame.Hello(ownCoilNum.convert))
                 tracer.traceWith(DialerConnected(hubUri)) >>
                     conn.send(WSFrame.Text(helloLine)) >>
@@ -82,7 +84,8 @@ final class CoilPeerWsTransport private (
             }
 
         val attempt: IO[Unit] =
-            once.handleErrorWith(e => tracer.traceWith(DialerFailed(e)))
+            (once >> tracer.traceWith(DialerDisconnected(hubUri)))
+                .handleErrorWith(e => tracer.traceWith(DialerFailed(e)))
 
         (attempt >> IO.sleep(1.second)).foreverM
     }

@@ -31,7 +31,8 @@ object HydrozoaServer {
     /** Create and start the HTTP server.
       *
       * @param requestSequencer
-      *   Handle to the RequestSequencer actor
+      *   Handle to the RequestSequencer actor, or `None` on a coil peer. See [[HydrozoaRoutes]] for
+      *   what its absence removes.
       * @param blockWeaver
       *   Handle to the BlockWeaver actor
       * @param nodeStatus
@@ -53,7 +54,7 @@ object HydrozoaServer {
       *   Resource that manages the server lifecycle
       */
     def create(
-        requestSequencer: RequestSequencer.Handle,
+        requestSequencer: Option[RequestSequencer.Handle],
         blockWeaver: BlockWeaver.Handle,
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
@@ -91,7 +92,7 @@ object HydrozoaServer {
       * Note: In production, this would be integrated into HydrozoaNode
       */
     def run(
-        requestSequencer: RequestSequencer.Handle,
+        requestSequencer: Option[RequestSequencer.Handle],
         blockWeaver: BlockWeaver.Handle,
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],

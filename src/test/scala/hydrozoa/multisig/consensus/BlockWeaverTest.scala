@@ -9,12 +9,13 @@ import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.multisig.block.BlockConfig
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, DepositDecisionWakeupTime}
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{HeadConfig, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
@@ -29,7 +30,7 @@ import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, Persist
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Gen, Properties, PropertyM, Test}
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genRequestId
 import test.TestPeerName.{Bob, Carol}
@@ -103,6 +104,75 @@ object BlockWeaverTestHelpers {
           userRequest = userRequest,
           requestId = requestId
         )
+
+    /** Like [[mkBlockWeaverActor]] but also returns the weaver's event stream.
+      *
+      * The wakeup paths are only observable through events: a forced completion and a dropped
+      * wakeup both leave the joint ledger looking similar, and "no completion happened" cannot
+      * distinguish "the guard ignored it" from "nothing ever fired".
+      */
+    def mkBlockWeaverActorWithEvents(
+        peerNumber: HeadPeerNumber
+    ): BWTest[(BlockWeaver.Handle, AtomicReference[Vector[BlockWeaverEvent]])] =
+        for {
+            env <- ask
+            config = env.multiNodeConfig.nodeConfigs(peerNumber)
+            metrics = PeerMetrics.create(0L, Vector(peerNumber: Int))
+            connections = BlockWeaver.ConnectionsPartial(env.jointLedgerMockActor, metrics)
+            seen = AtomicReference(Vector.empty[BlockWeaverEvent])
+            logging = Slf4jTracer.sink.contramap(BlockWeaverEventFormat.humanFormat(peerNumber))
+            tracer = ContraTracer[IO, BlockWeaverEvent](e =>
+                IO(seen.updateAndGet(_ :+ e)) >> logging.traceWith(e)
+            )
+            persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+            backend <- lift(InMemoryBackendStore.open(persistenceTracer).allocated.map(_._1))
+            persistence <- lift(Persistence.fromBackend(backend, persistenceTracer)(using config))
+            actor <- lift(
+              env.system.actorOf(BlockWeaver(config, connections, tracer, metrics, persistence))
+            )
+        } yield (actor, seen)
+
+    /** A soft-confirmed minor block whose two wakeup targets are placed relative to now.
+      *
+      * `forcedMajorBlockWakeupTime` cannot be set directly — it is derived, and works out to
+      * `endTime + inactivityMarginDuration` once `minSettlementDuration` and `silenceDuration`
+      * cancel between `newFallbackStartTime` and `forcedMajorBlockWakeupTime`. So the only way to
+      * place it is to place `endTime`, which is what the subtraction below does.
+      * `mDepositDecisionWakeupTime` IS directly constructible, and is the deposit-driven target
+      * that competes with it — `scheduleWakeupFiber` sleeps until whichever is EARLIER.
+      */
+    def mkConfirmedWithWakeups(
+        blockNum: BlockNumber,
+        config: HeadConfig,
+        forcedMajorIn: FiniteDuration,
+        depositWakeupIn: Option[FiniteDuration]
+    ): BWTest[Block.SoftConfirmed.Minor] =
+        lift(for {
+            now <- realTimeQuantizedInstant(config.slotConfig)
+        } yield {
+            val endTime = BlockCreationEndTime(
+              (now + forcedMajorIn) - (config.txTiming.inactivityMarginDuration: QuantizedFiniteDuration)
+            )
+            val fallbackTxStartTime = config.txTiming.newFallbackStartTime(endTime)
+            BlockBrief.Minor(
+              BlockHeader.Minor(
+                blockNum = blockNum,
+                blockVersion = BlockVersion.Full(0, 0),
+                startTime = BlockCreationStartTime(now),
+                endTime = endTime,
+                fallbackTxStartTime = fallbackTxStartTime,
+                forcedMajorBlockWakeupTime =
+                    config.txTiming.forcedMajorBlockWakeupTime(fallbackTxStartTime),
+                mDepositDecisionWakeupTime =
+                    depositWakeupIn.map(d => DepositDecisionWakeupTime(now + d))
+              ),
+              BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
+            )
+        })
+            .map(brief =>
+                Block.SoftConfirmed
+                    .Minor(brief, headerMultiSigned = List.empty, finalizationRequested = false)
+            )
 
     def mkBlockWeaverActor(peerNumber: HeadPeerNumber): BWTest[BlockWeaver.Handle] =
         for {

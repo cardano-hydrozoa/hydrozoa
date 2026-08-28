@@ -4,14 +4,14 @@ import cats.*
 import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.implicits.*
 import com.suprnation.actor.ActorContext
-import com.suprnation.actor.ActorRef.NoSendActorRef
+import com.suprnation.actor.ActorRef.{ActorRef, NoSendActorRef}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
 import hydrozoa.multisig.LifecycleEvent.{StartingActors, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.consensus.limiter.Limiter
+import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterControl}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -62,8 +62,17 @@ trait HeadMultisigRegimeManager(
             // hydrozoa.multisig.consensus.limiter.Limiter). Only the consensus actor's reference
             // to BlockWeaver is routed through this limiter; other senders (JointLedger,
             // PeerLiaisonHeadToHead, …) keep direct refs.
+            // The block lane carries the gate as well as the shaper: `gate` makes the period
+            // dynamic, tightening as the composer falls behind. The stack lane below deliberately
+            // takes no gate — it is a pure spacing gate at `hardStackMinPeriod`.
             blockWeaverLimiter <- context.actorOf(
-              Limiter[BlockWeaver.Request](core.blockWeaver, config, tracers.blockWeaverLimiter)
+              Limiter[BlockWeaver.Request](
+                core.blockWeaver,
+                config,
+                tracers.blockWeaverLimiter,
+                gate = Some(config.blockLimiterGate),
+                metrics = Some(metrics)
+              )
             )
 
             requestSequencer <- context.actorOf(
@@ -195,6 +204,7 @@ trait HeadMultisigRegimeManager(
             connections = HeadMultisigRegimeManager.Connections(
               blockWeaver = core.blockWeaver,
               blockWeaverLimiter = blockWeaverLimiter,
+              blockRateGate = Some(blockWeaverLimiter),
               cardanoLiaison = core.cardanoLiaison,
               consensusActor = core.consensusActor,
               requestSequencer = Some(requestSequencer),
@@ -311,6 +321,11 @@ object HeadMultisigRegimeManager {
         stackComposer: StackComposer.Handle,
         /** Throttled-write handle for the SlowConsensusActor → StackComposer lane. */
         stackComposerLimiter: StackComposer.Handle,
+        /** Control handle on the block lane's limiter, used to tell it a stack hard-confirmed.
+          * `None` on a coil peer, which runs no limiters. Contravariance in the message type is
+          * what lets the same actor be addressed both as `blockWeaverLimiter` and as this.
+          */
+        blockRateGate: Option[ActorRef[IO, LimiterControl]] = None,
         slowConsensusActor: SlowConsensusActor.Handle,
         // ---- Producer broadcast targets (§5.2) [doc-ref] ----
         /** Head-peer-mesh liaisons (one per other head peer); empty on a coil peer. Producers
