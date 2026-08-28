@@ -64,15 +64,17 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
         )
     }
 
-    /** The real hub→coil block lane, built exactly as `PeerLiaisonHubToCoil` builds it (`:93`).
-      * `backfill` is unused here — nothing in this scenario reads below the outbox floor.
+    /** The real hub→coil block lane, built exactly as `PeerLiaisonHubToCoil` builds it (`:93`). The
+      * journal read is unused here — the cap is far above what this scenario appends, so nothing is
+      * ever evicted and no reply falls below the outbox floor.
       */
     private def blockLane: LaneOutbound[BlockBrief.Next, BlockNumber] =
         LaneOutbound.contiguous[BlockBrief.Next, BlockNumber](
           _.blockNum,
           BlockNumber(1),
           _.increment,
-          backfill = (_, _) => IO.pure(Nil)
+          outboxCap = 1024,
+          serveFromJournal = (_, _) => IO.pure(Nil)
         )
 
     /** Stands in for `PeerLiaisonHubToCoil`, doing what its `appendArtifact` does for a block brief

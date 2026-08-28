@@ -1,17 +1,16 @@
 package hydrozoa.multisig.ledger.commitment
 
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import java.math.BigInteger
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.prelude.List as SList
-import scalus.cardano.onchain.plutus.prelude.bls12_381.G1
 import scalus.cardano.onchain.plutus.v3.TxInInfo
+import scalus.crypto.accumulator.BilinearAccumulatorProver
 import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.bls12_381.G1Element
 import scalus.|>
-import supranational.blst.{P1, Scalar}
+import supranational.blst.Scalar
 
 export KzgCommitment.asG1Element
 export KzgCommitment.kzgCommitment
@@ -62,81 +61,37 @@ object KzgCommitment {
 
     /** Calculates the commitment for the pairing-based accumulator.
       *
+      * The commitment is the polynomial `P(x) = product (x + s_i)` over the set's scalars,
+      * evaluated at the setup's secret `tau` in the exponent — that is, the multi-scalar
+      * multiplication of `P`'s coefficients against the SRS's G1 ladder.
+      *
+      * Both halves come from `scalus.crypto.accumulator`: the coefficients from a binary subproduct
+      * tree with NTT multiplication (`O(n log^2 n)`), and the evaluation from a Pippenger
+      * multi-scalar multiplication.
+      *
       * @param scalars
       *   utxo set (active, though might be any)
       * @return
       *   G1 point that corresponds to the commitment
       */
     def calculateKzgCommitment(scalars: SList[Scalar]): KzgCommitment = {
+        val setup = TrustedSetup.accumulatorSetupG1
 
-        // println(s"elems: ${scalars.length}")
-        // println(s"elems: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
-
-        // Get as much from the setup as we need: n + 1 elements
+        // The product polynomial has one coefficient more than it has roots, so an n-element set
+        // needs n + 1 points off the ladder.
         val size = scalars.length.toInt + 1
-        val srs = TrustedSetup.takeSrsG1(size)
-
-        // Check the size of the setup is big enough
         assert(
-          size == srs.length,
+          size <= setup.g1Powers.length,
           s"There are more UTxOs than supported by the setup: $size"
         )
 
-        val finalPoly = mkFinalPoly(scalars)
-
-        // println(s"finalPoly: ${finalPoly.map(e => BigInt.apply(e.to_bendian()))}")
-
-        val commitment = evalFinalPoly(srs, finalPoly).compress()
-//        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
-        ByteString.fromArray(commitment)
+        BilinearAccumulatorProver
+            .accumulateG1(setup, scalars.toScalaList.map(asFieldElement).toVector)
+            .toCompressedByteString
     }
 
-    /** Multiply normalized N binomials represented by their only coeeficients to get a final
-      * polynomial with N+1 coefficients. Uses the schoolbook convolution, which is `O(N^2)`. This
-      * is alleviated by the rather quick Montgomery multiplication the underlying `blst` library
-      * uses.
-      *
-      * Example: for (x+2)(x+3)(x+5)(x+7)(x+11) = 2310 + 2927 x + 1358 x^2 + 288 x^3 + 28 x^4 + x^5
-      *
-      * @param binomials
-      *   coefficients for binomials, order doesn't matter
-      * @return
-      *   the coefficients for the final polynomial, with the lowest-degree coefficient coming first
+    /** A `blst` scalar as the plain non-negative integer the accumulator prover takes. `blst`
+      * reduces on the way in, so the round trip through big-endian bytes is exact.
       */
-    def mkFinalPoly(binomials: SList[Scalar]): SList[Scalar] =
-        val zero = Scalar(BigInteger("0"))
-        val one = Scalar(BigInteger("1"))
-
-        binomials
-            .foldLeft(SList.single(one.dup())): (acc, term) =>
-                // We need to clone the whole `acc` since `mul` mutates it
-                // and the final adding gets mutated `shiftedPoly`
-                val shiftedPoly: SList[Scalar] = SList.Cons(zero.dup(), acc.map(_.dup))
-                val multipliedPoly = acc.map(s => s.mul(term)).appended(zero.dup())
-                SList.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
-
-    /** Evaluates the commitment to the final polynomial using the given SRS.
-      *
-      * TODO: use multi-scalar multiplication, once we have it in the java-blst
-      *
-      * @param srsG1
-      *   setup, should be big enough, controlled by the caller
-      * @param finalPoly
-      *   coefficients of the final polynimial
-      * @return
-      *   commitment, a point in G1
-      */
-    def evalFinalPoly(
-        srsG1: SList[P1],
-        finalPoly: SList[Scalar]
-    ): P1 =
-        // Multiply
-        val subsetPoints: SList[P1] =
-            SList.map2(finalPoly, srsG1): (sb, st) =>
-                // This dup is needed, since otherwise we modify the loaded SRS itself
-                st.dup().mult(sb)
-        // Add
-        val zero = P1(G1.zero.toCompressedByteString.bytes)
-        subsetPoints.foldLeft(zero.dup()): (a, b) =>
-            a.add(b)
+    private def asFieldElement(scalar: Scalar): BigInt = BigInt(1, scalar.to_bendian())
 }

@@ -23,6 +23,8 @@
         </layout>
     </appender>
     <logger name="Mermaid.PeerLiaison" level="info" additivity="false">
+    <!-- The only record of why a supervised actor failed; never quiet it. -->
+    <logger name="Supervision" level="error"/>
         <appender-ref ref="MERMAID"/>
     </logger>
 
