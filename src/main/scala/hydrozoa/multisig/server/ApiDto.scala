@@ -264,9 +264,46 @@ object ApiDto {
           * closed. One side of `treasury.value == evacuation map total + equity + beacon`.
           */
         equityLovelace: Long,
-        composer: ComposerStatsView
+        composer: ComposerStatsView,
+        runtime: RuntimeStatsView,
+        blockGate: BlockGateStatsView
     )
     given Codec[PeerStatsView] = deriveCodec
+
+    /** What the block lane's rate limiter is doing right now. `multiplier` 1.0 is the expected
+      * steady state; below 1.0 the stack composer is behind and the lane is being slowed. `backlog`
+      * is blocks released since the last hard confirmation, and `residual` is that count filtered
+      * over several stack cycles — see [[hydrozoa.multisig.metrics.BlockGateStats]].
+      */
+    final case class BlockGateStatsView(
+        multiplier: Double,
+        backlog: Long,
+        residual: Double,
+        holds: Long,
+        drains: Long
+    )
+    given Codec[BlockGateStatsView] = deriveCodec
+
+    /** Whole-process resource gauges. Read these against the cumulative counters above (`blocks`,
+      * `stacks`, `localRequests.total`) and across a deliberate load step-down; they are
+      * concurrency axes, not backlog. Anything the platform does not expose reads as -1. See
+      * [[hydrozoa.multisig.metrics.RuntimeStats]] for how to read them and what they cannot say.
+      */
+    final case class RuntimeStatsView(
+        fibersSuspended: Long,
+        fibersQueuedLocal: Long,
+        workerThreads: Int,
+        workersActive: Int,
+        workersSearching: Int,
+        workersBlocked: Int,
+        timersOutstanding: Long,
+        timersExecuted: Long,
+        liveThreads: Int,
+        heapUsedBytes: Long,
+        heapCommittedBytes: Long,
+        openFileDescriptors: Long
+    )
+    given Codec[RuntimeStatsView] = deriveCodec
 
     /** Map a [[hydrozoa.multisig.metrics.PeerStats]] snapshot to its JSON body. */
     def mkPeerStatsView(s: PeerStats): PeerStatsView =
@@ -280,6 +317,27 @@ object ApiDto {
             )
         PeerStatsView(
           uptimeSeconds = s.uptimeSeconds,
+          blockGate = BlockGateStatsView(
+            multiplier = s.blockGate.multiplier,
+            backlog = s.blockGate.backlog,
+            residual = s.blockGate.residual,
+            holds = s.blockGate.holds,
+            drains = s.blockGate.drains
+          ),
+          runtime = RuntimeStatsView(
+            fibersSuspended = s.runtime.fibersSuspended,
+            fibersQueuedLocal = s.runtime.fibersQueuedLocal,
+            workerThreads = s.runtime.workerThreads,
+            workersActive = s.runtime.workersActive,
+            workersSearching = s.runtime.workersSearching,
+            workersBlocked = s.runtime.workersBlocked,
+            timersOutstanding = s.runtime.timersOutstanding,
+            timersExecuted = s.runtime.timersExecuted,
+            liveThreads = s.runtime.liveThreads,
+            heapUsedBytes = s.runtime.heapUsedBytes,
+            heapCommittedBytes = s.runtime.heapCommittedBytes,
+            openFileDescriptors = s.runtime.openFileDescriptors
+          ),
           localRequests = LocalRequestStatsView(
             total = s.localAccepted,
             rate = rate(s.localRate),

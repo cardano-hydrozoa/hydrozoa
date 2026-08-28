@@ -4,40 +4,6 @@ info:
   version: 0.1.0
 paths:
   /head/requests:
-    get:
-      tags:
-      - Requests
-      description: Requests the head has assigned an id — opaque request id, author
-        peer number, and type (transaction or deposit). Filter with ?type=transaction|deposit
-        and ?peer_number=<n>.
-      operationId: getHeadRequests
-      parameters:
-      - name: type
-        in: query
-        required: false
-        schema:
-          type: string
-      - name: peer_number
-        in: query
-        required: false
-        schema:
-          type: integer
-          format: int32
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/RequestSummary'
-        default:
-          description: ''
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
     post:
       tags:
       - Requests
@@ -161,28 +127,6 @@ paths:
                       settlementEffect: 4d5e6f7a8b9c…
                       type: HARD_CONFIRMED
                     type: deposit
-        default:
-          description: ''
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /head/blocks:
-    get:
-      tags:
-      - Blocks
-      description: Every block of the head in block order — number, fast-cycle leader,
-        and type. Block 0 is the head's initial block (config, no leader).
-      operationId: getHeadBlocks
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/BlockSummary'
         default:
           description: ''
           content:
@@ -799,6 +743,31 @@ components:
         type:
           type: string
           const: minor
+    BlockGateStats:
+      title: BlockGateStats
+      type: object
+      required:
+      - multiplier
+      - backlog
+      - residual
+      - holds
+      - drains
+      properties:
+        multiplier:
+          type: number
+          format: double
+        backlog:
+          type: integer
+          format: int64
+        residual:
+          type: number
+          format: double
+        holds:
+          type: integer
+          format: int64
+        drains:
+          type: integer
+          format: int64
     BlockHardConfirmed:
       title: BlockHardConfirmed
       type: object
@@ -889,26 +858,6 @@ components:
           $ref: '#/components/schemas/RateStats'
         requestRate:
           $ref: '#/components/schemas/RateStats'
-    BlockSummary:
-      title: BlockSummary
-      type: object
-      required:
-      - number
-      - blockType
-      properties:
-        number:
-          type: integer
-          format: int32
-        leader:
-          type: integer
-          format: int32
-        blockType:
-          type: string
-          enum:
-          - initial
-          - minor
-          - major
-          - final
     BlockTiming:
       title: BlockTiming
       type: object
@@ -1318,6 +1267,8 @@ components:
       - sequencerHeadroom
       - equityLovelace
       - composer
+      - runtime
+      - blockGate
       properties:
         uptimeSeconds:
           type: integer
@@ -1348,6 +1299,10 @@ components:
           format: int64
         composer:
           $ref: '#/components/schemas/ComposerStats'
+        runtime:
+          $ref: '#/components/schemas/RuntimeStats'
+        blockGate:
+          $ref: '#/components/schemas/BlockGateStats'
     RateStats:
       title: RateStats
       type: object
@@ -1500,25 +1455,6 @@ components:
           PROPOSED: '#/components/schemas/RequestProposed'
           SOFT_CONFIRMED: '#/components/schemas/RequestSoftConfirmed'
           UNPROCESSED: '#/components/schemas/RequestUnprocessed'
-    RequestSummary:
-      title: RequestSummary
-      type: object
-      required:
-      - requestId
-      - peerNumber
-      - requestType
-      properties:
-        requestId:
-          type: integer
-          format: int64
-        peerNumber:
-          type: integer
-          format: int32
-        requestType:
-          type: string
-          enum:
-          - deposit
-          - transaction
     RequestUnprocessed:
       title: RequestUnprocessed
       type: object
@@ -1544,6 +1480,59 @@ components:
         type:
           type: string
           const: rollout
+    RuntimeStats:
+      title: RuntimeStats
+      type: object
+      required:
+      - fibersSuspended
+      - fibersQueuedLocal
+      - workerThreads
+      - workersActive
+      - workersSearching
+      - workersBlocked
+      - timersOutstanding
+      - timersExecuted
+      - liveThreads
+      - heapUsedBytes
+      - heapCommittedBytes
+      - openFileDescriptors
+      properties:
+        fibersSuspended:
+          type: integer
+          format: int64
+        fibersQueuedLocal:
+          type: integer
+          format: int64
+        workerThreads:
+          type: integer
+          format: int32
+        workersActive:
+          type: integer
+          format: int32
+        workersSearching:
+          type: integer
+          format: int32
+        workersBlocked:
+          type: integer
+          format: int32
+        timersOutstanding:
+          type: integer
+          format: int64
+        timersExecuted:
+          type: integer
+          format: int64
+        liveThreads:
+          type: integer
+          format: int32
+        heapUsedBytes:
+          type: integer
+          format: int64
+        heapCommittedBytes:
+          type: integer
+          format: int64
+        openFileDescriptors:
+          type: integer
+          format: int64
     Sec:
       title: Sec
       type: object
