@@ -18,13 +18,4 @@ object Logging {
     /** log4cats SLF4J adapter used by [[Slf4jTracer.sink]]. */
     def loggerIO(name: String): Logger[IO] =
         Slf4jLogger.getLoggerFromName[IO](name)
-
-    /** A synchronous logger, for the few places that have no effect context to log in.
-      *
-      * A supervision decider is one: it is a pure `Throwable => Directive` the actor library calls
-      * on the failure path, so there is no `IO` to sequence a log into. Everything else should use
-      * [[loggerIO]] or a tracer.
-      */
-    def loggerSync(name: String): org.slf4j.Logger =
-        org.slf4j.LoggerFactory.getLogger(name)
 }
