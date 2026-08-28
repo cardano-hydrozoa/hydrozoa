@@ -139,6 +139,11 @@ object PrometheusFormat:
           "Requests the sequencer will admit now before backpressure trips.",
           s.sequencerHeadroom
         )
+        gauge(
+          "hydrozoa_equity_lovelace",
+          "Head equity beyond L2 liabilities, as of the last stack this peer closed.",
+          s.equityLovelace
+        )
 
         b.toString
 

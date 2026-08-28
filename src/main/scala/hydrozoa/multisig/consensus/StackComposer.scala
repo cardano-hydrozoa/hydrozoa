@@ -19,6 +19,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.recovery.{BlockResultScan, SoftConfirmationScan}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 import scala.annotation.tailrec
@@ -49,7 +50,8 @@ final case class StackComposer(
     config: StackComposer.Config,
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | StackComposer.Connections,
     tracer: ContraTracer[IO, StackComposerEvent],
-    persistence: Persistence[IO]
+    persistence: Persistence[IO],
+    metrics: PeerMetrics
 ) extends Actor[IO, StackComposer.Request] {
     import StackComposer.*
 
@@ -108,7 +110,18 @@ final case class StackComposer(
                 case Some(recoveredState) => state.set(recoveredState)
                 case None                 => bootstrapInitialStack
             }
+            // Seed the equity gauge from the boot treasury — the recovered one, or the
+            // initialization treasury `State.initial` starts from — so `/head/stats` reports the
+            // real figure from startup rather than zero until the first close.
+            s <- state.get
+            _ <- reportEquity(s.treasury)
         } yield ()
+
+    /** Publish the treasury's equity to [[PeerMetrics]] for `GET /head/stats`. Called at boot and
+      * on every stack close, the two points where the treasury this peer tracks changes.
+      */
+    private def reportEquity(treasury: MultisigTreasuryUtxo): IO[Unit] =
+        IO(metrics.onEquity(treasury.equity.coin.value))
 
     /** Compose and hand off stack 0 (the init + fallback) at startup.
       *
@@ -266,6 +279,7 @@ final case class StackComposer(
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
                     _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
+                    _ <- reportEquity(newTreasury)
                 } yield ()
         }
 
@@ -466,6 +480,7 @@ final case class StackComposer(
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
                                 )
+                                _ <- reportEquity(newTreasury)
                             } yield ()
                     }
         }

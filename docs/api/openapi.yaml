@@ -1296,6 +1296,7 @@ components:
       - mempoolSize
       - leaderMempoolDrain
       - sequencerHeadroom
+      - equityLovelace
       properties:
         uptimeSeconds:
           type: integer
@@ -1319,6 +1320,9 @@ components:
           type: integer
           format: int64
         sequencerHeadroom:
+          type: integer
+          format: int64
+        equityLovelace:
           type: integer
           format: int64
     RateStats:

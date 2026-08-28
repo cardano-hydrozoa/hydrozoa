@@ -44,7 +44,8 @@ class PrometheusFormatTest extends AnyFunSuite:
       ),
       mempoolSize = 923,
       leaderMempoolDrain = 900,
-      sequencerHeadroom = 12
+      sequencerHeadroom = 12,
+      equityLovelace = 4_500_000L
     )
 
     test("counters carry the _total suffix and a TYPE line"):
