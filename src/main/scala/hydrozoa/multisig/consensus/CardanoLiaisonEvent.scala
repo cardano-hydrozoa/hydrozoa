@@ -83,7 +83,7 @@ object CardanoLiaisonEvent:
     ) extends CardanoLiaisonEvent
 
     /** Whether the init tx is on L1, probed (step 4) when the target anchor is missing and no
-      * rule-based treasury exists. `isKnown == "not known"` triggers a full skeleton re-submission.
+      * rule-based treasury exists. `isKnown == false` triggers a full skeleton re-submission.
       */
     final case class InitTxStatus(hash: TransactionHash, isKnown: Boolean)
         extends CardanoLiaisonEvent

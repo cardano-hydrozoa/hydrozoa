@@ -36,19 +36,23 @@ import scala.concurrent.duration.*
   */
 class RestartAfterBlocksTest extends AnyFunSuite {
 
-    /** Every case here is `ignore`, not `test`, and must stay that way until finding #57 is fixed.
+    /** Every case here is `ignore`, not `test`, pending one timed run that confirms the suite
+      * finishes.
       *
-      * The scenario itself is sound and the fixes it guards are real — but it does not finish. A
-      * thread dump of a run that looked deadlocked showed 31 parked workers and one thread inside
-      * `TestControl.tickOne` -> `CardanoLiaison.runEffects` -> `State.prettyDump` -> `stripMargin`:
-      * progressing, microscopically. `runEffects` builds that whole debug dump **eagerly** as an
-      * argument to `traceWith`, formatting the entire effect index on every liaison tick whether or
-      * not the trace is emitted, so cost grows with accumulated effects. A restarted peer is the
-      * worst case, because `CardanoLiaison.State.recover` rebuilds the full index.
+      * The scenario is sound and the fixes it guards are real. What stalled it was cost, not a
+      * deadlock: a thread dump of a run that looked wedged showed 31 parked workers and one thread
+      * inside `TestControl.tickOne` -> `CardanoLiaison.runEffects` -> `State.prettyDump` ->
+      * `stripMargin`, progressing microscopically. The dump was built for every liaison tick
+      * whether or not the trace was emitted, so cost grew with accumulated effects, and a restarted
+      * peer is the worst case because `CardanoLiaison.State.recover` rebuilds the full index.
       *
-      * This module is run by `integration/testOnly *` in CI, and CI has wedged in this suite before
-      * — five times, for up to six hours each. Enabling these before the eager dump is fixed would
-      * reintroduce exactly that failure, so they stay disabled rather than merely slow.
+      * That cost is gone. The dump now rides on `CardanoLiaisonEvent.CurrentL1State`, which renders
+      * at TRACE inside the format, and this module pins `CardanoLiaison` at DEBUG
+      * (`integration/src/test/resources/logback-test.xml`), so it never runs.
+      *
+      * The reason to keep them disabled is now narrower: CI has wedged in this suite five times,
+      * for up to six hours each, and nothing has yet measured a full run with the dump gone. Time
+      * one locally, then flip these to `test` — do not flip them on the strength of the fix alone.
       */
 
     /** Virtual time the head runs before the restart, so the victim has real history to recover. */

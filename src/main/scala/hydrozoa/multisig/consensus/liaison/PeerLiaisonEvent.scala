@@ -9,6 +9,11 @@ import cats.Eval
   * One event type covers all three liaison kinds — they speak the same batch protocol, and the
   * per-liaison / per-remote identity comes from the wiring layer's `contramap` wrapper (e.g.
   * `HeadMultisigRegimeManagerEvent.PL`), not from separate event ADTs.
+  *
+  * [[BatchRequested]] and [[BatchReceived]] are the exception to "pure data": their `detail` is an
+  * `Eval`, which compares by reference, so those two variants have no value equality. Two of them
+  * with the same `batchNum` and identical detail text are unequal — do not assert on them by
+  * construction, and do not `distinct` or dedupe a collection of them.
   */
 sealed trait PeerLiaisonEvent
 

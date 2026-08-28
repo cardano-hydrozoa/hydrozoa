@@ -69,7 +69,7 @@ object CardanoLiaisonEventFormat:
             case RuleBasedTreasuryQueryError(err) =>
                 error(s"error when probing the rule-based treasury: $err")
             case ActionsDispatched(actions, hasFallback) =>
-                val text =
+                def text =
                     "Liaison's actions:" + actions.map(a => s"\n\t- ${actionMsg(a)}").mkString
                 if hasFallback then warn(text) else info(text)
             case FallbackToRuleBasedDispatched(txId) =>
@@ -88,7 +88,7 @@ object CardanoLiaisonEventFormat:
         import Action.*
         action match
             case FallbackToRuleBased(tx)         => s"FallbackToRuleBased (${tx.tx.id})"
-            case PushForwardMultisig(txs)        => s"PushForwardMultisig (${txs.map(_.tx.id)}"
-            case Rollout(txs)                    => s"Rollout (${txs.map(_.tx.id)}"
+            case PushForwardMultisig(txs)        => s"PushForwardMultisig (${txs.map(_.tx.id)})"
+            case Rollout(txs)                    => s"Rollout (${txs.map(_.tx.id)})"
             case sp @ SilencePeriodNoop(_, _, _) => s"$sp"
-            case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.tx.id)}"
+            case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.tx.id)})"
