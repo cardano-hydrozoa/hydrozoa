@@ -6,7 +6,6 @@ import hydrozoa.BuildInfo
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -172,28 +171,6 @@ class HydrozoaRoutes(
                     DecodeResult.Error(s, new IllegalArgumentException("malformed 32-byte l1TxId"))
         )(_.toHex)
 
-    private val blocksEndpoint: ServerEndpoint[Any, IO] =
-        endpoint.get
-            .in("head" / "blocks")
-            .name("getHeadBlocks")
-            .tag("Blocks")
-            .out(jsonBody[List[BlockSummaryView]])
-            .errorOut(errorOut)
-            .description(
-              "Every block of the head in block order — number, fast-cycle leader, and type. " +
-                  "Block 0 is the head's initial block (config, no leader)."
-            )
-            .serverLogic(_ =>
-                consensusReader.blockBriefs
-                    .map(briefs =>
-                        Right(
-                          ApiDto.mkInitialBlockSummaryView ::
-                              briefs.map(ApiDto.mkBlockSummaryView(_, headConfig.nHeadPeers))
-                        )
-                    )
-                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
-            )
-
     private val blockDetailsEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
             .in("head" / "blocks" / path[BlockNumber]("block-number"))
@@ -320,25 +297,6 @@ class HydrozoaRoutes(
           "fallback" -> EffectKind.Fallback,
           "finalization" -> EffectKind.Finalization
         ).map(blockTxEffectEndpoint) :+ blockSecEffectEndpoint
-
-    private val requestsEndpoint: ServerEndpoint[Any, IO] =
-        endpoint.get
-            .in("head" / "requests")
-            .in(query[Option[String]]("type"))
-            .in(query[Option[Int]]("peer_number"))
-            .name("getHeadRequests")
-            .tag("Requests")
-            .out(jsonBody[List[RequestSummaryView]])
-            .errorOut(errorOut)
-            .description(
-              "Requests the head has assigned an id — opaque request id, author peer number, and " +
-                  "type (transaction or deposit). Filter with ?type=transaction|deposit and " +
-                  "?peer_number=<n>."
-            )
-            .serverLogic((typeFilter, peerFilter) =>
-                listRequests(typeFilter, peerFilter)
-                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
-            )
 
     private val transactionDetailExample: RequestDetailsView =
         RequestDetailsView.TransactionView(
@@ -603,13 +561,19 @@ class HydrozoaRoutes(
     private val finalizeEndpoints: List[ServerEndpoint[Any, IO]] =
         requestSequencer.fold(List.empty)(_ => List(finalizeEndpoint))
 
-    /** The core API endpoints, in the order they appear in the docs. */
+    /** The core API endpoints, in the order they appear in the docs.
+      *
+      * ⛔ `GET /head/requests` and `GET /head/blocks` are deliberately ABSENT. Each listed an entire
+      * column family into a heap `List` with no limit or offset — `?type=` / `?peer_number=` filter
+      * the result but still scan everything — so one unauthenticated call could exhaust the heap,
+      * and both journals only grow. Re-mount them only behind real paging (a cursor plus a bounded
+      * page size), never a bare limit that still requires the full scan to apply it. Everything
+      * kept here is keyed by id or block number, or is a fixed-size summary.
+      */
     private val coreEndpoints: List[ServerEndpoint[Any, IO]] =
         submitEndpoints ++ List(
           headInfoEndpoint,
-          requestsEndpoint,
           requestDetailsEndpoint,
-          blocksEndpoint,
           blockDetailsEndpoint,
           blockBodyEndpoint,
           blockEffectsEndpoint,
@@ -870,24 +834,6 @@ class HydrozoaRoutes(
       * The lifecycle status resolves through the request → block index and the block's confirmation
       * records.
       */
-    /** The request listing, optionally narrowed to one author peer (`peer_number`) and one type
-      * (`transaction`/`deposit`). An unknown `type` value matches nothing (empty list); an
-      * out-of-range `peer_number` likewise yields an empty list, since no such author exists.
-      */
-    private def listRequests(
-        typeFilter: Option[String],
-        peerFilter: Option[Int]
-    ): IO[Either[(StatusCode, ErrorResponse), List[RequestSummaryView]]] =
-        val peers = peerFilter match
-            case None    => headConfig.headPeerNums.toList
-            case Some(p) => headConfig.headPeerNums.toList.filter(_.convert == p)
-        peers
-            .traverse(consensusReader.requestsOf)
-            .map { perPeer =>
-                val rows = perPeer.flatten.map(t => ApiDto.mkRequestSummaryView(t.payload))
-                Right(typeFilter.fold(rows)(t => rows.filter(_.requestType == t)))
-            }
-
     private def requestDetails(
         id: RequestId
     ): IO[Either[(StatusCode, ErrorResponse), RequestDetailsView]] =
