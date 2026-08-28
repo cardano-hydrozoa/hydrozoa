@@ -71,9 +71,6 @@ final case class JointLedger(
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
-    val state: Ref[IO, JointLedger.State] =
-        Ref.unsafe[IO, JointLedger.State](JointLedger.State.initialize(config))
-
     /** Drive an `ApplyDepositDecisions` command and fold its evacuation diffs into the L2 ledger
       * state, **panicking** on any non-`Applied` response. Unlike a user request (register /
       * apply-tx), whose [[L2LedgerResponse.Rejected]] is a per-request verdict the caller
@@ -138,56 +135,53 @@ final case class JointLedger(
         case x: JointLedger.Connections => connections.set(Some(x))
     }
 
-    // TODO: Refactor to use "become" and use different receive functions
-
-    /** Get _only_ a [[Producing]] State or throw an exception QUESTION: What type of exception
-      * should this be?
-      */
-    private val unsafeGetProducing: IO[Producing] = for {
-        s <- state.get
-        p <- s match {
-            case _: Done =>
-                val msg = "Expected a `Producing` State, but got `Done`. This indicates" +
-                    " that a request was issued to the JointLedger that is only valid when the hydrozoa node is producing" +
-                    " a block."
-                tracer.traceWith(JointLedgerEvent.InvalidStateExpectedProducing) >>
-                    IO.raiseError(RuntimeException(msg))
-            case p: Producing => IO.pure(p)
-        }
-    } yield p
-
-    /** Get _only_ a [[Done]] State or throw an exception QUESTION: What type of exception should
-      * this be?
-      */
-    private val unsafeGetDone: IO[Done] = for {
-        s <- state.get
-        p <- s match {
-            case _: Producing =>
-                throw new RuntimeException(
-                  "Expected a `Done` State, but got `Producing`. This indicates" +
-                      " that a request was issued to the JointLedger that is only valid when the hydrozoa node is not producing" +
-                      " a block."
-                )
-            case d: Done => IO.pure(d)
-        }
-    } yield p
-
     override def preStart: IO[Unit] =
         context.self ! Requests.PreStart
 
-    override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction(receiveTotal)
+    /** The ledger is a two-phase state machine and the phase *is* the receive behavior (via
+      * `context.become`): [[done]] between blocks, [[producing]] while a block is open. A request
+      * that doesn't belong to the current phase is a coordination bug and fail-stops, instead of
+      * being guarded for at every handler. The carried [[State]] is the phase's data — no shared
+      * mutable cell, since the actor handles one message at a time.
+      *
+      * The initial phase is the cold-start `Done`; [[preStartLocal]] refines it from the store.
+      */
+    override def receive: Receive[IO, Requests.Request] = done(State.initialize(config))
 
-    private def receiveTotal(req: Requests.Request): IO[Unit] =
-        req match {
-            case Requests.PreStart       => preStartLocal
-            case e: UserRequestWithId    => applyUserRequestWithId(e)
-            case s: StartBlock           => startBlock(s)
-            case c: CompleteBlockRegular => completeBlockRegular(c)
-            case f: CompleteBlockFinal   => completeBlockFinal(f)
+    /** Passive phase (between blocks): open the next block on `StartBlock`. User requests and block
+      * completion need an open block, so they fail-stop here.
+      */
+    private def done(d: Done): Receive[IO, Requests.Request] = PartialFunction.fromFunction {
+        case Requests.PreStart => preStartLocal
+        case s: StartBlock     => startBlock(s, d)
+        case req: SyncRequest.Any =>
+            req.request match { case r: GetState.type => r.handleSync(req, _ => IO.pure(d)) }
+        case _: UserRequestWithId | _: CompleteBlockRegular | _: CompleteBlockFinal =>
+            tracer.traceWith(JointLedgerEvent.InvalidStateExpectedProducing) >>
+                IO.raiseError(
+                  RuntimeException(
+                    "A request valid only while producing a block reached the JointLedger in its" +
+                        " passive (Done) phase."
+                  )
+                )
+    }
+
+    /** Producing phase (a block is open): apply user requests and complete the block. `StartBlock`
+      * fail-stops here — a block is already open.
+      */
+    private def producing(p: Producing): Receive[IO, Requests.Request] =
+        PartialFunction.fromFunction {
+            case e: UserRequestWithId    => applyUserRequestWithId(e, p)
+            case c: CompleteBlockRegular => completeBlockRegular(c, p)
+            case f: CompleteBlockFinal   => completeBlockFinal(f, p)
             case req: SyncRequest.Any =>
-                req.request match {
-                    case r: GetState.type => r.handleSync(req, _ => state.get)
-                }
+                req.request match { case r: GetState.type => r.handleSync(req, _ => IO.pure(p)) }
+            case Requests.PreStart | _: StartBlock =>
+                IO.raiseError(
+                  RuntimeException(
+                    "A `StartBlock` reached the JointLedger while it is already producing a block."
+                  )
+                )
         }
 
     private def preStartLocal: IO[Unit] =
@@ -207,43 +201,46 @@ final case class JointLedger(
               fastBlockMark,
               config.initialEvacuationMap
             )
+            // A non-empty store yields a refined `Done` to become; a cold start stays in the
+            // initial `Done` already installed by `receive`.
             _ <- recovered match {
-                case Some(done) =>
-                    state.set(done) >> tracer.traceWith(
-                      JointLedgerEvent.PassiveStateRecovered(done.previousBlockHeader.blockNum)
+                case Some(recoveredDone) =>
+                    context.become(done(recoveredDone)) >> tracer.traceWith(
+                      JointLedgerEvent.PassiveStateRecovered(
+                        recoveredDone.previousBlockHeader.blockNum
+                      )
                     )
                 case None => IO.unit
             }
         } yield ()
 
-    private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = e match {
-        case req: UserRequestWithId.DepositRequest     => registerDeposit(req)
-        case req: UserRequestWithId.TransactionRequest => applyTransaction(req)
+    private def applyUserRequestWithId(e: UserRequestWithId, p: Producing): IO[Unit] = e match {
+        case req: UserRequestWithId.DepositRequest     => registerDeposit(req, p)
+        case req: UserRequestWithId.TransactionRequest => applyTransaction(req, p)
     }
 
     private def invalidateRequest(
+        p: Producing,
         requestId: RequestId,
         e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | String,
         invalidation: JointLedger.Invalidation = JointLedger.Invalidation.PreCommand
-    ): IO[Unit] =
-        for {
-            oldState <- unsafeGetProducing
-            currentBlockNum = oldState.nextBlockNumber
-            // A post-command rejection (the L2 ledger consumed a number on the reject) must still
-            // advance the command number so JointLedger stays in lock-step; a pre-command rejection
-            // (parse / timing, before any command was sent) advances nothing. We never leap: the
-            // advance is exactly one, via `incrementCommandNumber`.
-            advanced = invalidation match
-                case JointLedger.Invalidation.PreCommand  => oldState
-                case JointLedger.Invalidation.PostCommand => oldState.incrementCommandNumber
-            newState = advanced
-                .focus(_.userRequestState.requests)
-                .modify(_.appended((requestId, Invalid)))
-            _ <- state.set(newState)
-            _ <- tracer.traceWith(
+    ): IO[Unit] = {
+        val currentBlockNum = p.nextBlockNumber
+        // A post-command rejection (the L2 ledger consumed a number on the reject) must still
+        // advance the command number so JointLedger stays in lock-step; a pre-command rejection
+        // (parse / timing, before any command was sent) advances nothing. We never leap: the
+        // advance is exactly one, via `incrementCommandNumber`.
+        val advanced = invalidation match
+            case JointLedger.Invalidation.PreCommand  => p
+            case JointLedger.Invalidation.PostCommand => p.incrementCommandNumber
+        val newState = advanced
+            .focus(_.userRequestState.requests)
+            .modify(_.appended((requestId, Invalid)))
+        context.become(producing(newState)) >>
+            tracer.traceWith(
               JointLedgerEvent.RequestInvalidated(requestId, currentBlockNum, e.toString)
             )
-        } yield ()
+    }
 
     /** Pure deposit-ledger op: parse the deposit tx and append the produced deposit utxo to the L1
       * deposits map — this actor's only L1-ledger surface. Parsing derives the deposit's accept-by
@@ -278,7 +275,7 @@ final case class JointLedger(
     /** Update the work-in-progress block to accept or reject the deposit, depending on whether the
       * L2 ledger can register it.
       */
-    private def registerDeposit(req: UserRequestWithId.DepositRequest): IO[Unit] = {
+    private def registerDeposit(req: UserRequestWithId.DepositRequest, p: Producing): IO[Unit] = {
         import req.*
         import request.*
         import body.*
@@ -286,12 +283,11 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.DepositRegistrationStarted(requestId))
 
-            p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
             currentBlockNum = p.nextBlockNumber
 
             _ <- registerDepositInMap(p.deposits, req) match {
-                case Left(error) => invalidateRequest(requestId, error)
+                case Left(error) => invalidateRequest(p, requestId, error)
                 case Right((newDeposits, (depositProduced, refundTx))) =>
                     // The accept-by deadline is derived from the deposit tx's TTL during the parse
                     // above (ttl − submissionDuration), so the check can only run post-parse.
@@ -301,6 +297,7 @@ final case class JointLedger(
                         )
                     then
                         invalidateRequest(
+                          p,
                           requestId,
                           JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
                             blockStartTime,
@@ -327,6 +324,7 @@ final case class JointLedger(
                                 // and advance the command number the ledger consumed on the reject.
                                 case L2LedgerResponse.Rejected.RegisterDeposit(_, reason) =>
                                     invalidateRequest(
+                                      p,
                                       requestId,
                                       reason,
                                       JointLedger.Invalidation.PostCommand
@@ -334,22 +332,21 @@ final case class JointLedger(
                                 // RegisterDeposit produces no L2 ledger effects, so the accumulated
                                 // L2 state is unchanged; only the deposit map and request advance.
                                 case _: L2LedgerResponse.Applied.RegisterDeposit =>
-                                    for {
-                                        _ <- state.set(
-                                          p.setDeposits(newDeposits)
-                                              .incrementCommandNumber
-                                              .focus(_.userRequestState.requests)
-                                              .modify(_.appended((requestId, Valid)))
-                                              .focus(_.userRequestState.postDatedRefundTxs)
-                                              .modify(_.appended(refundTx))
-                                        )
-                                        _ <- tracer.traceWith(
-                                          JointLedgerEvent.DepositRegistrationCompleted(
-                                            requestId,
-                                            currentBlockNum
-                                          )
-                                        )
-                                    } yield ()
+                                    context.become(
+                                      producing(
+                                        p.setDeposits(newDeposits)
+                                            .incrementCommandNumber
+                                            .focus(_.userRequestState.requests)
+                                            .modify(_.appended((requestId, Valid)))
+                                            .focus(_.userRequestState.postDatedRefundTxs)
+                                            .modify(_.appended(refundTx))
+                                      )
+                                    ) >> tracer.traceWith(
+                                      JointLedgerEvent.DepositRegistrationCompleted(
+                                        requestId,
+                                        currentBlockNum
+                                      )
+                                    )
                                 case other => panicOnL2Response(assigned, other)
                             }
                         } yield ()
@@ -362,7 +359,8 @@ final case class JointLedger(
       * work-in-progress block.
       */
     private def applyTransaction(
-        req: UserRequestWithId.TransactionRequest
+        req: UserRequestWithId.TransactionRequest,
+        p: Producing
     ): IO[Unit] = {
         import req.*
         import request.*
@@ -371,7 +369,6 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.TransactionApplicationStarted(requestId))
 
-            p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber
 
             _ <- {
@@ -393,6 +390,7 @@ final case class JointLedger(
                     _ <- res match {
                         case L2LedgerResponse.Rejected.ApplyTransaction(_, reason) =>
                             invalidateRequest(
+                              p,
                               requestId,
                               reason,
                               JointLedger.Invalidation.PostCommand
@@ -400,20 +398,19 @@ final case class JointLedger(
                         case L2LedgerResponse.Applied.ApplyTransaction(_, diffs, payouts) =>
                             val newL2State =
                                 p.l2LedgerState.appendTransactionEffects(diffs, payouts, requestId)
-                            for {
-                                _ <- state.set(
-                                  p.setL2LedgerState(newL2State)
-                                      .incrementCommandNumber
-                                      .focus(_.userRequestState.requests)
-                                      .modify(_.appended((requestId, Valid)))
-                                )
-                                _ <- tracer.traceWith(
-                                  JointLedgerEvent.TransactionApplicationCompleted(
-                                    requestId,
-                                    currentBlockNum
-                                  )
-                                )
-                            } yield ()
+                            context.become(
+                              producing(
+                                p.setL2LedgerState(newL2State)
+                                    .incrementCommandNumber
+                                    .focus(_.userRequestState.requests)
+                                    .modify(_.appended((requestId, Valid)))
+                              )
+                            ) >> tracer.traceWith(
+                              JointLedgerEvent.TransactionApplicationCompleted(
+                                requestId,
+                                currentBlockNum
+                              )
+                            )
                         case other => panicOnL2Response(assigned, other)
                     }
                 } yield ()
@@ -424,13 +421,12 @@ final case class JointLedger(
     /** Move the JointLedger from `Done` to `Producing` for the next block: set the creation start
       * time and re-initialize the per-block transient fields (L2 ledger state, user-request state).
       */
-    private def startBlock(args: StartBlock): IO[Unit] = {
+    private def startBlock(args: StartBlock, d: Done): IO[Unit] = {
         import args.*
         for {
             _ <- tracer.traceWith(
               JointLedgerEvent.BlockStarted(args.blockNum, blockCreationStartTime)
             )
-            d <- unsafeGetDone
             newState = d.producing(
               l2LedgerState = L2LedgerInteractionState.empty,
               startTime = blockCreationStartTime,
@@ -439,75 +435,75 @@ final case class JointLedger(
                 postDatedRefundTxs = Vector.empty
               )
             )
-            _ <- state.set(newState)
+            _ <- context.become(producing(newState))
         } yield ()
     }
 
     /** Complete a Minor or Major block. */
     private def completeBlockRegular(
-        args: CompleteBlockRegular
+        args: CompleteBlockRegular,
+        p: Producing
     ): IO[Unit] = {
         import args.*
-        unsafeGetProducing.flatMap { p =>
-            // Coil peers classify deposit existence from the head peers' soft-confirmed view
-            // (the reference brief) rather than a fresh L1 poll. A coil below the settlement
-            // quorum can lag behind an already-submitted settlement that has spent the absorbed
-            // deposits; a fresh poll would then report them gone and diverge from the leader.
-            // Head peers (and any leader-mode producer) always poll — see DepositsMap.Existence.
-            val existence = referenceBlockBrief match {
-                case Some(ref) if config.ownPeerId.isCoil =>
-                    DepositsMap.Existence.FromLeaderView(ref.depositsRejected.toSet)
-                case _ =>
-                    DepositsMap.Existence.FromPoll(pollResults)
-            }
-            for {
-                partition <- p.deposits.partition(dmTracer)(
-                  blockCreationEndTime = blockCreationEndTime,
-                  settlementTxEndTime =
-                      config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
-                  existence = existence
-                )
-                split = partition.split(maxDepositsAbsorbedPerBlock)
-                _ <- tracer.traceWith(
-                  JointLedgerEvent.BlockCompleting(
-                    p.nextBlockNumber,
-                    blockCreationEndTime,
-                    p.competingFallbackTxTime,
-                    split.toString
-                  )
-                )
-
-                blockBriefRes <- mkBlockBriefIntermediate(
-                  p,
-                  blockCreationEndTime,
-                  split.decisions
-                )
-                (pBlockBrief, blockBrief, evacDiffs) = blockBriefRes
-
-                // Verify the produced brief against the reference brief (follower mode).
-                _ <- panicOnMismatchWithExpectedBrief(referenceBlockBrief, blockBrief)
-
-                // Drop the deposits we just absorbed/rejected from the L1 deposits map.
-                newJlState = pBlockBrief.setDeposits(split.surviving)
-
-                _ <- state.set(newJlState.done(blockBrief.header))
-
-                // Slow side: emit per-block result for the StackComposer to assemble into
-                // stacks. Independent of soft-confirmation.
-                blockResult = BlockResult(
-                  brief = blockBrief,
-                  evacuationMapDiff = evacDiffs,
-                  payoutObligations = newJlState.l2LedgerState.payouts.toList,
-                  payoutRequestIds = newJlState.l2LedgerState.payoutRequestIds.toList,
-                  postDatedRefundTxs = pBlockBrief.userRequestState.postDatedRefundTxs.toList,
-                  absorbedDeposits = split.decisions.absorbed.depositUtxos,
-                  competingFallbackTxTime = pBlockBrief.competingFallbackTxTime
-                )
-
-                // Hand off the brief: emit our soft-ack and broadcast the brief.
-                _ <- handleBlock(blockBrief, finalizationLocallyTriggered, blockResult)
-            } yield ()
+        // Coil peers classify deposit existence from the head peers' soft-confirmed view
+        // (the reference brief) rather than a fresh L1 poll. A coil below the settlement
+        // quorum can lag behind an already-submitted settlement that has spent the absorbed
+        // deposits; a fresh poll would then report them gone and diverge from the leader.
+        // Head peers (and any leader-mode producer) always poll — see DepositsMap.Existence.
+        val existence = referenceBlockBrief match {
+            case Some(ref) if config.ownPeerId.isCoil =>
+                DepositsMap.Existence.FromLeaderView(ref.depositsRejected.toSet)
+            case _ =>
+                DepositsMap.Existence.FromPoll(pollResults)
         }
+        for {
+            partition <- p.deposits.partition(dmTracer)(
+              blockCreationEndTime = blockCreationEndTime,
+              settlementTxEndTime = config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
+              existence = existence
+            )
+            split = partition.split(maxDepositsAbsorbedPerBlock)
+            _ <- tracer.traceWith(
+              JointLedgerEvent.BlockCompleting(
+                p.nextBlockNumber,
+                blockCreationEndTime,
+                p.competingFallbackTxTime,
+                split.toString
+              )
+            )
+
+            blockBriefRes <- mkBlockBriefIntermediate(
+              p,
+              blockCreationEndTime,
+              split.decisions
+            )
+            (pBlockBrief, blockBrief, evacDiffs) = blockBriefRes
+
+            // Verify the produced brief against the reference brief (follower mode).
+            _ <- panicOnMismatchWithExpectedBrief(referenceBlockBrief, blockBrief)
+
+            // Drop the deposits we just absorbed/rejected from the L1 deposits map.
+            newJlState = pBlockBrief.setDeposits(split.surviving)
+            completedDone = newJlState.done(blockBrief.header)
+
+            // Slow side: emit per-block result for the StackComposer to assemble into
+            // stacks. Independent of soft-confirmation.
+            blockResult = BlockResult(
+              brief = blockBrief,
+              evacuationMapDiff = evacDiffs,
+              payoutObligations = newJlState.l2LedgerState.payouts.toList,
+              payoutRequestIds = newJlState.l2LedgerState.payoutRequestIds.toList,
+              postDatedRefundTxs = pBlockBrief.userRequestState.postDatedRefundTxs.toList,
+              absorbedDeposits = split.decisions.absorbed.depositUtxos,
+              competingFallbackTxTime = pBlockBrief.competingFallbackTxTime
+            )
+
+            // Hand off the brief: emit our soft-ack and broadcast the brief. The completed
+            // `Done` carries the deposits snapshot + command number the per-block bundle
+            // persists (see [[snapshotBundleBatch]]).
+            _ <- handleBlock(blockBrief, finalizationLocallyTriggered, blockResult, completedDone)
+            _ <- context.become(done(completedDone))
+        } yield ()
     }
 
     /** Build the next block's header and intermediate brief from the current `Producing` state and
@@ -627,51 +623,50 @@ final case class JointLedger(
     // If the produced block is NOT equal to a passed reference block, then:
     //   - Consensus is broken
     //   - Send a panic to the multisig regime manager in a suicide note
-    def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
+    def completeBlockFinal(args: CompleteBlockFinal, p: Producing): IO[Unit] = {
         import args.*
-        unsafeGetProducing.flatMap { p =>
-            for {
-                blockBrief <- IO.pure {
-                    import p.userRequestState.*
-                    val blockHeader = p.previousBlockHeader.nextHeaderFinal(
-                      p.BlockCreationStartTime,
-                      args.blockCreationEndTime
-                    )
-                    val blockBody = BlockBody.Final(
-                      requests = requests,
-                      // Final block should reject all the deposits known.
-                      depositsRejected = p.deposits.requestIds
-                    )
-                    BlockBrief.Final(blockHeader, blockBody)
-                }
-
-                _ <- panicOnMismatchWithExpectedBrief(referenceBlockBrief, blockBrief)
-
-                _ <- state.set(p.done(blockBrief.header))
-
-                // Final block: like a Major, it emits its own window's `evacuationMapDiff` (the L2
-                // mutations applied while producing this block) so the slow side can fold them into
-                // its running map and drain the *true* post-final residual. The fast side still does
-                // not maintain the cumulative map, so it does NOT enumerate the whole-head drain —
-                // the slow side reads that off its own running map after applying this diff. The
-                // final block's OWN withdrawals (`payouts`) are real L2 requests that must be paid
-                // out, so they ride here in `payoutObligations` (with their provenance); the
-                // finalization tx pays them alongside the residual balances (StackEffectsBuilder
-                // Final branch), with no double-count since the withdrawals' spent inputs are
-                // deleted by this diff.
-                blockResult = BlockResult(
-                  brief = blockBrief,
-                  evacuationMapDiff = p.l2LedgerState.diffs,
-                  payoutObligations = p.l2LedgerState.payouts.toList,
-                  payoutRequestIds = p.l2LedgerState.payoutRequestIds.toList,
-                  postDatedRefundTxs = Nil,
-                  absorbedDeposits = Nil,
-                  competingFallbackTxTime = p.competingFallbackTxTime
+        for {
+            blockBrief <- IO.pure {
+                import p.userRequestState.*
+                val blockHeader = p.previousBlockHeader.nextHeaderFinal(
+                  p.BlockCreationStartTime,
+                  args.blockCreationEndTime
                 )
+                val blockBody = BlockBody.Final(
+                  requests = requests,
+                  // Final block should reject all the deposits known.
+                  depositsRejected = p.deposits.requestIds
+                )
+                BlockBrief.Final(blockHeader, blockBody)
+            }
 
-                _ <- handleBlock(blockBrief, NotTriggered, blockResult)
-            } yield ()
-        }
+            _ <- panicOnMismatchWithExpectedBrief(referenceBlockBrief, blockBrief)
+
+            completedDone = p.done(blockBrief.header)
+
+            // Final block: like a Major, it emits its own window's `evacuationMapDiff` (the L2
+            // mutations applied while producing this block) so the slow side can fold them into
+            // its running map and drain the *true* post-final residual. The fast side still does
+            // not maintain the cumulative map, so it does NOT enumerate the whole-head drain —
+            // the slow side reads that off its own running map after applying this diff. The
+            // final block's OWN withdrawals (`payouts`) are real L2 requests that must be paid
+            // out, so they ride here in `payoutObligations` (with their provenance); the
+            // finalization tx pays them alongside the residual balances (StackEffectsBuilder
+            // Final branch), with no double-count since the withdrawals' spent inputs are
+            // deleted by this diff.
+            blockResult = BlockResult(
+              brief = blockBrief,
+              evacuationMapDiff = p.l2LedgerState.diffs,
+              payoutObligations = p.l2LedgerState.payouts.toList,
+              payoutRequestIds = p.l2LedgerState.payoutRequestIds.toList,
+              postDatedRefundTxs = Nil,
+              absorbedDeposits = Nil,
+              competingFallbackTxTime = p.competingFallbackTxTime
+            )
+
+            _ <- handleBlock(blockBrief, NotTriggered, blockResult, completedDone)
+            _ <- context.become(done(completedDone))
+        } yield ()
     }
 
     /** When the joint ledger finishes producing (or reproducing) a brief:
@@ -691,7 +686,8 @@ final case class JointLedger(
     private def handleBlock(
         brief: BlockBrief.Next,
         localFinalization: LocalFinalizationTrigger,
-        blockResult: BlockResult
+        blockResult: BlockResult,
+        st: JointLedger.State
     ): IO[Unit] =
         for {
             conn <- getConnections
@@ -719,11 +715,11 @@ final case class JointLedger(
                       header = config.ownWallet.mkHeaderSignature(brief.header.signingBytes),
                       finalizationRequested = localFinalization.asBoolean
                     )
-                    persistOwnAckBundle(brief, ack, blockResult).as(Some(ack))
+                    persistOwnAckBundle(brief, ack, blockResult, st).as(Some(ack))
                 case PeerId.Coil(_) =>
                     // No own brief lane (never leads) and no soft-ack (authors none) — persist only
                     // the per-block snapshot bundle, anchored at coilBlockMark = max(BlockResult).
-                    persistCoilBlockBundle(brief, blockResult).as(None)
+                    persistCoilBlockBundle(brief, blockResult, st).as(None)
             }
             _ <- conn.fastConsensusActor ! brief
             // Head peers only: a coil authors no soft-ack and emits nothing on the fast cycle.
@@ -771,20 +767,20 @@ final case class JointLedger(
       */
     private def snapshotBundleBatch(
         brief: BlockBrief.Next,
-        blockResult: BlockResult
+        blockResult: BlockResult,
+        st: JointLedger.State
     ): IO[WriteBatch] =
         for {
-            st <- state.get
+            // The high-water is cumulative: extend the previous block's map (blocks are contiguous
+            // and never pruned below the fast anchor, so the predecessor entry is always present
+            // once past the first block).
+            priorHighWater <- previousBlockHighWater(brief.blockNum)
             deposits = st.deposits
             // JointLedger assigns command numbers and has already applied this block's commands (it
             // is the sole, single-message-at-a-time L2 driver), so its own command number now
             // reflects this block; record it so recover can co-anchor the L2 ledger to the fast
             // anchor via restoreTo.
             commandNumber = st.commandNumber
-            // The high-water is cumulative: extend the previous block's map (blocks are contiguous
-            // and never pruned below the fast anchor, so the predecessor entry is always present
-            // once past the first block).
-            priorHighWater <- previousBlockHighWater(brief.blockNum)
             highWater = ReplayCursors.mergeHighWater(priorHighWater, brief.requests.map(_._1))
         } yield {
             val bundle = WriteBatch.start
@@ -824,11 +820,12 @@ final case class JointLedger(
     private def persistOwnAckBundle(
         brief: BlockBrief.Next,
         softAck: SoftAck,
-        blockResult: BlockResult
+        blockResult: BlockResult,
+        st: JointLedger.State
     ): IO[Unit] =
         for {
             stamp <- persistence.arrivalStamp
-            common <- snapshotBundleBatch(brief, blockResult)
+            common <- snapshotBundleBatch(brief, blockResult, st)
             withLeaderBrief =
                 if config.canLeadFast(brief.blockNum) then
                     common.put(JournalKey.Block(brief.blockNum))(JournalValue(stamp, brief))
@@ -847,9 +844,10 @@ final case class JointLedger(
       */
     private def persistCoilBlockBundle(
         brief: BlockBrief.Next,
-        blockResult: BlockResult
+        blockResult: BlockResult,
+        st: JointLedger.State
     ): IO[Unit] =
-        snapshotBundleBatch(brief, blockResult).flatMap(persistence.write)
+        snapshotBundleBatch(brief, blockResult, st).flatMap(persistence.write)
 
     /** The cumulative request high-water persisted at the block before `blockNum`, or empty for the
       * first block (no predecessor entry).
