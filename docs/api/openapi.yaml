@@ -743,6 +743,31 @@ components:
         type:
           type: string
           const: minor
+    BlockGateStats:
+      title: BlockGateStats
+      type: object
+      required:
+      - multiplier
+      - backlog
+      - residual
+      - holds
+      - drains
+      properties:
+        multiplier:
+          type: number
+          format: double
+        backlog:
+          type: integer
+          format: int64
+        residual:
+          type: number
+          format: double
+        holds:
+          type: integer
+          format: int64
+        drains:
+          type: integer
+          format: int64
     BlockHardConfirmed:
       title: BlockHardConfirmed
       type: object
@@ -1243,6 +1268,7 @@ components:
       - equityLovelace
       - composer
       - runtime
+      - blockGate
       properties:
         uptimeSeconds:
           type: integer
@@ -1275,6 +1301,8 @@ components:
           $ref: '#/components/schemas/ComposerStats'
         runtime:
           $ref: '#/components/schemas/RuntimeStats'
+        blockGate:
+          $ref: '#/components/schemas/BlockGateStats'
     RateStats:
       title: RateStats
       type: object

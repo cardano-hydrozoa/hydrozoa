@@ -265,9 +265,24 @@ object ApiDto {
           */
         equityLovelace: Long,
         composer: ComposerStatsView,
-        runtime: RuntimeStatsView
+        runtime: RuntimeStatsView,
+        blockGate: BlockGateStatsView
     )
     given Codec[PeerStatsView] = deriveCodec
+
+    /** What the block lane's rate limiter is doing right now. `multiplier` 1.0 is the expected
+      * steady state; below 1.0 the stack composer is behind and the lane is being slowed. `backlog`
+      * is blocks released since the last hard confirmation, and `residual` is that count filtered
+      * over several stack cycles — see [[hydrozoa.multisig.metrics.BlockGateStats]].
+      */
+    final case class BlockGateStatsView(
+        multiplier: Double,
+        backlog: Long,
+        residual: Double,
+        holds: Long,
+        drains: Long
+    )
+    given Codec[BlockGateStatsView] = deriveCodec
 
     /** Whole-process resource gauges. Read these against the cumulative counters above (`blocks`,
       * `stacks`, `localRequests.total`) and across a deliberate load step-down; they are
@@ -302,6 +317,13 @@ object ApiDto {
             )
         PeerStatsView(
           uptimeSeconds = s.uptimeSeconds,
+          blockGate = BlockGateStatsView(
+            multiplier = s.blockGate.multiplier,
+            backlog = s.blockGate.backlog,
+            residual = s.blockGate.residual,
+            holds = s.blockGate.holds,
+            drains = s.blockGate.drains
+          ),
           runtime = RuntimeStatsView(
             fibersSuspended = s.runtime.fibersSuspended,
             fibersQueuedLocal = s.runtime.fibersQueuedLocal,
