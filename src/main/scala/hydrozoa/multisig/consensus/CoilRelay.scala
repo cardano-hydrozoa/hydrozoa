@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.{IO, Ref}
+import cats.effect.IO
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
@@ -73,15 +73,6 @@ import hydrozoa.multisig.ledger.stack.StackBrief
 abstract class CoilRelay(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | CoilRelay.Connections
 ) extends Actor[IO, CoilRelay.Request] {
-    private val connections = Ref.unsafe[IO, Option[CoilRelay.Connections]](None)
-
-    private def getConnections: IO[CoilRelay.Connections] =
-        connections.get.flatMap(
-          _.fold(IO.raiseError(IllegalStateException("CoilRelay missing its connections.")))(
-            IO.pure
-          )
-        )
-
     private def resolveConnections: IO[CoilRelay.Connections] = pendingConnections match {
         case shared: HeadMultisigRegimeManager.PendingConnections =>
             shared.get.map(s => CoilRelay.Connections(coilPeerLiaisons = s.coilPeerLiaisons))
@@ -90,13 +81,22 @@ abstract class CoilRelay(
 
     override def preStart: IO[Unit] = context.self ! CoilRelay.PreStart
 
-    override def receive: Receive[IO, CoilRelay.Request] =
-        PartialFunction.fromFunction(receiveTotal)
+    override def receive: Receive[IO, CoilRelay.Request] = PartialFunction.fromFunction {
+        case CoilRelay.PreStart =>
+            for {
+                given CoilRelay.Connections <- resolveConnections
+                _ <- context.become(PartialFunction.fromFunction(react))
+            } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
+    }
 
-    private def receiveTotal(req: CoilRelay.Request): IO[Unit] = req match {
-        case CoilRelay.PreStart => resolveConnections.flatMap(c => connections.set(Some(c)))
-        case artifact: CoilRelay.Artifact =>
-            getConnections.flatMap(c => (c.coilPeerLiaisons ! artifact).parallel)
+    private def react(req: CoilRelay.Request)(using
+        connections: CoilRelay.Connections
+    ): IO[Unit] = req match {
+        case CoilRelay.PreStart =>
+            IO.raiseError(RuntimeException("Unexpected second PreStart after connections wired"))
+        case artifact: CoilRelay.Artifact => (connections.coilPeerLiaisons ! artifact).parallel
     }
 }
 

@@ -81,7 +81,10 @@ final case class RuleBasedActor(
               before = RuleBasedActorEvent.Dispute.Querying,
               action = cardanoBackend.utxosAt(
                 address = HydrozoaBlueprint.mkDisputeAddress(config.cardanoInfo.network),
-                asset = (config.headMultisigScript.policyId, config.headTokenNames.voteTokenName)
+                asset = (
+                  config.headMultisigScript.policyId,
+                  config.headTokenNames.voteTokenName
+                )
               ),
               onError = RuleBasedActorEvent.Backend.ErrorDisputeUtxos(_)
             )
@@ -91,8 +94,10 @@ final case class RuleBasedActor(
               before = RuleBasedActorEvent.Treasury.Querying,
               action = cardanoBackend.utxosAt(
                 address = HydrozoaBlueprint.mkTreasuryAddress(config.cardanoInfo.network),
-                asset =
-                    (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
+                asset = (
+                  config.headMultisigScript.policyId,
+                  config.headTokenNames.treasuryTokenName
+                )
               ),
               onError = RuleBasedActorEvent.Backend.ErrorTreasuryUtxos(_)
             )
@@ -129,8 +134,10 @@ final case class RuleBasedActor(
         ): EitherT[IO, Error.RecoverableErrors, List[CardanoBackend.ContinuingTx]] =
             run(
               cardanoBackend.lastContinuingTxs(
-                asset =
-                    (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName),
+                asset = (
+                  config.headMultisigScript.policyId,
+                  config.headTokenNames.treasuryTokenName
+                ),
                 after = after
               ),
               RuleBasedActorEvent.Backend.ErrorContinuingTxs(_)
@@ -308,20 +315,23 @@ final case class RuleBasedActor(
               (StackNumber, List[StandaloneEvacuationCommitment.MultiSigned]),
               List[StandaloneEvacuationCommitment.MultiSigned]
             ]((latest, Nil)) { case (stack, acc) =>
-                persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
-                    case None =>
-                        IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
-                    // Stack 0 is Initial by construction: no SEC-bearing partition. Terminate.
-                    case Some(_: StackEffects.HardConfirmed.Initial) => IO.pure(Right(acc))
-                    case Some(r: StackEffects.HardConfirmed.Regular) =>
-                        val (matched, reachedPreviousMajor) =
-                            RuleBasedActor.secsAtVersion(r.partitions, versionMajor)
-                        val acc2 = acc ++ matched
-                        // A Regular stack is always >= 1, so `decrement` never underflows.
-                        if reachedPreviousMajor || stack == StackNumber.first then
-                            IO.pure(Right(acc2))
-                        else IO.pure(Left((stack.decrement, acc2)))
-                }
+                persistence
+                    .get(StoreKey.HardConfirmation(stack))
+                    .map(_.map(_.payload))
+                    .flatMap {
+                        case None =>
+                            IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
+                        // Stack 0 is Initial by construction: no SEC-bearing partition. Terminate.
+                        case Some(_: StackEffects.HardConfirmed.Initial) => IO.pure(Right(acc))
+                        case Some(r: StackEffects.HardConfirmed.Regular) =>
+                            val (matched, reachedPreviousMajor) =
+                                RuleBasedActor.secsAtVersion(r.partitions, versionMajor)
+                            val acc2 = acc ++ matched
+                            // A Regular stack is always >= 1, so `decrement` never underflows.
+                            if reachedPreviousMajor || stack == StackNumber.first then
+                                IO.pure(Right(acc2))
+                            else IO.pure(Left((stack.decrement, acc2)))
+                    }
             }
         } yield secs
 
@@ -437,7 +447,9 @@ final case class RuleBasedActor(
       */
     private def defaultVoteMap(versionMajor: BigInt): IO[(KzgCommitment, EvacuationMap)] =
         if versionMajor == 0 then
-            IO.pure(config.initialEvacuationMap.kzgCommitment -> config.initialEvacuationMap)
+            IO.pure(
+              config.initialEvacuationMap.kzgCommitment -> config.initialEvacuationMap
+            )
         else
             for {
                 markers <- Markers.derive(persistence.backend, config.ownPeerId)
@@ -1108,7 +1120,8 @@ final case class RuleBasedActor(
         // that retry is never fully silent. Backend errors already self-trace via `Backend.run`;
         // this catches the logical recoverables (e.g. `NoTreasuryFound`) that don't.
         et.value.flatTap {
-            case Left(e)  => tracer.traceWith(RuleBasedActorEvent.Tick.RecoverableRetry(e.toString))
+            case Left(e) =>
+                tracer.traceWith(RuleBasedActorEvent.Tick.RecoverableRetry(e.toString))
             case Right(_) => IO.unit
         }
     }

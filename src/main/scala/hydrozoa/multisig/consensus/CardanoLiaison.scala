@@ -114,6 +114,22 @@ object CardanoLiaison:
         blockWeaver: BlockWeaver.Handle
     )
 
+    private final case class Env(
+        config: Config,
+        cardanoBackend: CardanoBackend[IO],
+        persistence: Persistence[IO],
+        tracer: ContraTracer[IO, CardanoLiaisonEvent],
+        onRuleBasedRegimeObserved: TransactionInput => IO[Unit],
+        advanceNodeStatus: NodeStatus => IO[Unit]
+    ) extends CardanoNetwork.Section:
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+
+    private object Env:
+        final class Connected(env: Env, val connections: Connections)
+            extends CardanoNetwork.Section:
+            export env.*
+
     // ===================================
     // Actor's Internal state
     // ===================================
@@ -501,7 +517,15 @@ trait CardanoLiaison(
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
-    private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
+    private given env: Env =
+        Env(
+          config,
+          cardanoBackend,
+          persistence,
+          tracer,
+          onRuleBasedRegimeObserved,
+          advanceNodeStatus
+        )
 
     private val stateRef = Ref.unsafe[IO, CardanoLiaison.State](State.empty)
 
@@ -512,34 +536,34 @@ trait CardanoLiaison(
       */
     private val lastHandoffDispatchedFor = Ref.unsafe[IO, Option[TransactionInput]](None)
 
-    private def getConnections: IO[Connections] = this.connections.get.flatMap(
-      _.fold(
-        IO.raiseError(
-          RuntimeException("Consensus Actor is missing its connections to other actors.")
-        )
-      )(IO.pure)
-    )
-
-    private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: HeadMultisigRegimeManager.PendingConnections =>
-            for {
-                _connections <- x.get
-                _ <- connections.set(
-                  Some(CardanoLiaison.Connections(blockWeaver = _connections.blockWeaver))
-                )
-            } yield ()
-        case x: CardanoLiaison.Connections => connections.set(Some(x))
+    private def initializeConnections: IO[Env.Connected] = {
+        val connections: IO[CardanoLiaison.Connections] =
+            HeadMultisigRegimeManager.resolveConnections(pendingConnections)(c =>
+                CardanoLiaison.Connections(blockWeaver = c.blockWeaver)
+            )
+        connections.map(env.connected)
     }
 
     override def preStart: IO[Unit] =
         context.self ! CardanoLiaison.PreStart
 
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
+        case CardanoLiaison.PreStart =>
+            for {
+                // Suspends on the start barrier, so connections are in place before any real
+                // message is processed.
+                given Env.Connected <- initializeConnections
+                _ <- preStartLocal
+                _ <- context.become(PartialFunction.fromFunction(receiveConnected))
+            } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
+    }
 
-    private def receiveTotal(req: Request): IO[Unit] =
+    private def receiveConnected(req: Request)(using Env.Connected): IO[Unit] =
         req match {
             case CardanoLiaison.PreStart =>
-                preStartLocal
+                IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
             case CardanoLiaison.Timeout =>
                 tracer.traceWith(CardanoLiaisonEvent.TimeoutReceived) >> runEffects
             case stack: Stack.HardConfirmed =>
@@ -563,15 +587,14 @@ trait CardanoLiaison(
                 })
         }
 
-    private def preStartLocal: IO[Unit] =
+    private def preStartLocal(using env: Env.Connected): IO[Unit] =
         for {
-            _ <- initializeConnections
             // R3: rebuild the submission index by folding the persisted HardConfirmation CF (an
             // empty CF folds to `State.empty`). Submission progress itself is NOT persisted —
             // `runEffects` re-samples L1, so recover restores only the effect index.
-            recovered <- State.recover(persistence)(using config)
+            recovered <- State.recover(persistence)
             _ <- stateRef.set(recovered)
-            _ <- advanceNodeStatus(nodeStatusOf(recovered.targetState))
+            _ <- env.advanceNodeStatus(nodeStatusOf(recovered.targetState))
             // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout
             _ <- context.setReceiveTimeout(
@@ -600,11 +623,13 @@ trait CardanoLiaison(
       * *composed/produced* in the first place (StackComposer's `Bootstrap` param) — which is
       * orthogonal to (and unaffected by) this witnessing.
       */
-    private def handleInitialStackL1Effects(eff: StackEffects.HardConfirmed.Initial): IO[Unit] =
+    private def handleInitialStackL1Effects(
+        eff: StackEffects.HardConfirmed.Initial
+    )(using env: Env.Connected): IO[Unit] =
         for {
             _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsLearned)
             newState <- stateRef.updateAndGet(State.applyInitialEffects(_, eff))
-            _ <- advanceNodeStatus(nodeStatusOf(newState.targetState))
+            _ <- env.advanceNodeStatus(nodeStatusOf(newState.targetState))
             _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsState(newState))
         } yield ()
 
@@ -638,7 +663,9 @@ trait CardanoLiaison(
       * [[handleInitialStackL1Effects]]). So they are submittable on L1 as is — no
       * witness-attachment step remains here.
       */
-    private def handleStackL1Effects(eff: StackEffects.HardConfirmed.Regular): IO[Unit] = {
+    private def handleStackL1Effects(
+        eff: StackEffects.HardConfirmed.Regular
+    )(using env: Env.Connected): IO[Unit] = {
         val parts = eff.partitions.toList
         // A minor-only stack (only Minor partitions) produces no L1 backbone effect — nothing to
         // learn or submit — so short-circuit before deriving anything or touching the state.
@@ -692,7 +719,7 @@ trait CardanoLiaison(
                         )
                 }
                 _ <- stateRef.set(newState)
-                _ <- advanceNodeStatus(nodeStatusOf(newState.targetState))
+                _ <- env.advanceNodeStatus(nodeStatusOf(newState.targetState))
                 _ <- tracer.traceWith(CardanoLiaisonEvent.StackEffectsState(newState))
             } yield ()
         }
@@ -712,7 +739,7 @@ trait CardanoLiaison(
       *   - the liaison learns a new effect
       *   - by receiving timeout
       */
-    private def runEffects: IO[Unit] = for {
+    private def runEffects(using env: Env.Connected): IO[Unit] = for {
         _ <- tracer.traceWith(CardanoLiaisonEvent.RunEffectsStarted)
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current time
         resp <- cardanoBackend.utxosAt(config.headMultisigAddress)
@@ -734,9 +761,8 @@ trait CardanoLiaison(
                     // dispatched: the liaison outlives the handoff (to process refunds and finish
                     // rollouts) but the BlockWeaver is stopped with the other multisig children, so
                     // forwarding would only produce dead letters.
-                    conn <- getConnections
                     handedOff <- lastHandoffDispatchedFor.get.map(_.nonEmpty)
-                    _ <- IO.unlessA(handedOff)(conn.blockWeaver ! PollResults(utxoIds))
+                    _ <- IO.unlessA(handedOff)(env.connections.blockWeaver ! PollResults(utxoIds))
 
                     // 2. Based on the local state, find all due actions
                     state <- stateRef.get
@@ -802,7 +828,9 @@ trait CardanoLiaison(
                     // Submission errors are ignored, but dumped here
                     submissionErrors = submitRet.filter(_._2.isLeft)
                     _ <- IO.whenA(submissionErrors.nonEmpty)(
-                      tracer.traceWith(CardanoLiaisonEvent.SubmissionErrors(submissionErrors.size))
+                      tracer.traceWith(
+                        CardanoLiaisonEvent.SubmissionErrors(submissionErrors.size)
+                      )
                     )
 
                     // The handoff to the rule-based regime is driven by the rule-based treasury
@@ -825,7 +853,7 @@ trait CardanoLiaison(
         state: State,
         utxoIds: Set[TransactionInput],
         currentTime: QuantizedInstant
-    ): IO[Seq[Action]] =
+    )(using env: Env.Connected): IO[Seq[Action]] =
         state.targetState match {
             case TargetState.Uninitialized =>
                 // Pre stack-0: no L1 target to reconcile and nothing submittable — wait for the
@@ -875,12 +903,16 @@ trait CardanoLiaison(
       * regime, so hand off (idempotent) and submit nothing. Otherwise it is a genuine L1 rollback:
       * resubmit the skeleton via [[resubmitSkeleton]].
       */
-    private def handoffOrResubmit(state: State, currentTime: QuantizedInstant): IO[Seq[Action]] =
+    private def handoffOrResubmit(
+        state: State,
+        currentTime: QuantizedInstant
+    )(using env: Env.Connected): IO[Seq[Action]] =
         ruleBasedTreasuryPresent.flatMap {
             // Couldn't probe — skip this cycle, retry on the next tick.
             case Left(err) =>
-                tracer.traceWith(CardanoLiaisonEvent.RuleBasedTreasuryQueryError(err.toString)) >>
-                    IO.pure(Seq.empty)
+                tracer.traceWith(
+                  CardanoLiaisonEvent.RuleBasedTreasuryQueryError(err.toString)
+                ) >> IO.pure(Seq.empty)
             // (3) The rule-based treasury is on L1 — hand off. Every peer that observes it hands
             // off, not just the fallback's submitter; the MRM handler is idempotent so re-fires are
             // safe. The rule-based side reads its version/status from this treasury utxo, so the
@@ -897,7 +929,7 @@ trait CardanoLiaison(
                           CardanoLiaisonEvent
                               .FallbackToRuleBasedDispatched(treasuryUtxoId.transactionId)
                         ) >>
-                            onRuleBasedRegimeObserved(treasuryUtxoId) >>
+                            env.onRuleBasedRegimeObserved(treasuryUtxoId) >>
                             lastHandoffDispatchedFor.set(Some(treasuryUtxoId))
                     }
                 } >> IO.pure(Seq.empty)
@@ -915,28 +947,31 @@ trait CardanoLiaison(
       * inputs reappear. The init tx (and its window) come from the hard-confirmed stack 0 held in
       * `happyPathEffects`, not the unsigned config body.
       */
-    private def resubmitSkeleton(state: State, currentTime: QuantizedInstant): IO[Seq[Action]] =
+    private def resubmitSkeleton(
+        state: State,
+        currentTime: QuantizedInstant
+    )(using env: Env.Connected): IO[Seq[Action]] =
         state.happyPathEffects.get(EffectId.initializationEffectId) match {
             case Some(initTx: InitializationTx) =>
-                cardanoBackend.isTxKnown(initTx.tx.id).flatMap {
+                env.cardanoBackend.isTxKnown(initTx.tx.id).flatMap {
                     case Left(err) =>
-                        tracer.traceWith(CardanoLiaisonEvent.InitTxQueryError(err.toString)) >>
+                        env.tracer.traceWith(CardanoLiaisonEvent.InitTxQueryError(err.toString)) >>
                             IO.pure(Seq.empty)
                     case Right(true) =>
                         // Head is established — leave recovery to the direct-action path.
-                        tracer.traceWith(
+                        env.tracer.traceWith(
                           CardanoLiaisonEvent.InitTxStatus(initTx.tx.id, isKnown = true)
                         ) >> IO.pure(Seq.empty)
                     case Right(false) =>
                         val initEnd = initTx.initializationTxEndTime.convert
                         if currentTime < initEnd then
-                            tracer.traceWith(
+                            env.tracer.traceWith(
                               CardanoLiaisonEvent.InitTxStatus(initTx.tx.id, isKnown = false)
                             ) >> IO.pure(
                               Seq(Action.InitializeHead(state.happyPathEffects.values.toSeq))
                             )
                         else
-                            tracer.traceWith(
+                            env.tracer.traceWith(
                               CardanoLiaisonEvent
                                   .InitWindowElapsed(currentTime, initEnd)
                             ) >> IO.pure(Seq.empty)
@@ -950,12 +985,13 @@ trait CardanoLiaison(
       * script address. Its presence means the head has fallen into the rule-based regime. Returns
       * the treasury utxo's id when found (its `transactionId` names the producing tx, for tracing).
       */
-    private def ruleBasedTreasuryPresent
-        : IO[Either[CardanoBackend.Error, Option[TransactionInput]]] =
-        cardanoBackend
+    private def ruleBasedTreasuryPresent(using
+        env: Env.Connected
+    ): IO[Either[CardanoBackend.Error, Option[TransactionInput]]] =
+        env.cardanoBackend
             .utxosAt(
-              HydrozoaBlueprint.mkTreasuryAddress(config.network),
-              (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
+              HydrozoaBlueprint.mkTreasuryAddress(env.config.network),
+              (env.config.headMultisigScript.policyId, env.config.headTokenNames.treasuryTokenName)
             )
             .map(_.map(_.keySet.headOption))
 

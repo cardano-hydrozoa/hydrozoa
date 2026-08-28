@@ -38,17 +38,19 @@ final case class BlockWeaver(
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
+    private given env: Env = Env(config, persistence, tracer, metrics)
+
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
         _ <- context.become(receive)
     } yield ()
 
-    private def become(state: BlockWeaver.State.Reactive): IO[Unit] =
+    private def become(state: BlockWeaver.State.Reactive)(using Env.Connected): IO[Unit] =
         context.become(
           PartialFunction.fromFunction(req =>
               for {
                   // Handle the request using the current state's handler
-                  mNewState <- state.react(config)(req)
+                  mNewState <- state.react(req)
                   // If the handler returns a new state, become that state.
                   // Otherwise, stop the actor.
                   _ <- mNewState.fold(context.self.stop)(newState => become(newState))
@@ -61,10 +63,10 @@ final case class BlockWeaver(
             for {
                 // Suspends on the start barrier, so the base below is in place before any
                 // replayed journal entry is processed (§5.6, §8).
-                connections <- initializeConnections
+                given Env.Connected <- initializeConnections
                 // Same anchor as `JointLedger.preStartLocal`: the two step the spine in lockstep.
                 fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
-                recovered <- State.recover(config, connections, tracer, persistence, fastBlockMark)
+                recovered <- State.recover(fastBlockMark)
                 // `None`: the store says this head finalized, so the weaver retires rather than
                 // opening a block, as on the live path.
                 _ <- recovered.fold(context.self.stop)(become)
@@ -73,17 +75,20 @@ final case class BlockWeaver(
             IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
     }
 
-    private def initializeConnections: IO[BlockWeaver.Connections] = pendingConnections match {
-        case pc: HeadMultisigRegimeManager.PendingConnections =>
-            for {
-                c <- pc.get
-            } yield BlockWeaver.Connections(
-              blockWeaver = context.self,
-              jointLedger = c.jointLedger,
-              metrics = metrics,
-              wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None)
-            )
-        case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
+    private def initializeConnections: IO[Env.Connected] = {
+        val connections: IO[BlockWeaver.Connections] = pendingConnections match {
+            case pc: HeadMultisigRegimeManager.PendingConnections =>
+                for {
+                    c <- pc.get
+                } yield BlockWeaver.Connections(
+                  blockWeaver = context.self,
+                  jointLedger = c.jointLedger,
+                  metrics = metrics,
+                  wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None)
+                )
+            case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
+        }
+        connections.map(env.connected)
     }
 }
 
@@ -91,15 +96,27 @@ object BlockWeaver {
     type Config = CardanoNetwork.Section & OwnPeerPublic.Section &
         NodeOperationMultisigConfig.Section & BlockConfig.Section
 
+    private final case class Env(
+        config: Config,
+        persistence: Persistence[IO],
+        tracer: ContraTracer[IO, BlockWeaverEvent],
+        metrics: PeerMetrics
+    ) {
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+    }
+
+    private object Env {
+
+        final class Connected(env: Env, val connections: Connections) {
+            export env.*
+        }
+    }
+
     /** This peer's head-peer number. Only ever called on the leader path, which a coil peer never
       * reaches ([[OwnPeerPublic.Section.canLeadFast]] is always false there).
       */
     private def ownHeadPeerNum(config: OwnPeerPublic.Section): HeadPeerNumber =
-        config.ownPeerId match {
-            case PeerId.Head(n) => n
-            case PeerId.Coil(_) =>
-                throw IllegalStateException("BlockWeaver leader path reached on a coil peer")
-        }
+        config.ownPeerId.expectHead("BlockWeaver leader path reached on a coil peer")
 
     final case class Connections private[BlockWeaver] (
         blockWeaver: BlockWeaver.Handle,
@@ -147,67 +164,75 @@ object BlockWeaver {
         /** See [[State.Active]] and [[State.Reactive]]. */
         type NextReactiveState <: State.Reactive
 
-        def connections: Connections
-        def tracer: ContraTracer[IO, BlockWeaverEvent]
         def pollResults: PollResults
         def finalizationLocallyTriggered: LocalFinalizationTrigger
 
-        final def stop(): IO[None.type] =
+        final def stop()(using env: Env.Connected): IO[None.type] =
             // A retiring weaver must not leave a wakeup sleeping past it.
-            clearWakeupFiber >> tracer.traceWith(BlockWeaverEvent.Stopped) >> IO.pure(None)
+            clearWakeupFiber >> env.tracer.traceWith(BlockWeaverEvent.Stopped) >> IO.pure(None)
 
         /** Cancel and forget whatever wakeup is currently armed. See `scheduleWakeupFiber` for why
           * cancelling here is safe.
           */
-        final def clearWakeupFiber: IO[Unit] =
-            connections.wakeupFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
+        final def clearWakeupFiber(using env: Env.Connected): IO[Unit] =
+            env.connections.wakeupFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 
-        final def logStateTransition: IO[Unit] =
-            tracer.traceWith(BlockWeaverEvent.BecameState(stateName))
+        final def logStateTransition(using env: Env.Connected): IO[Unit] =
+            env.tracer.traceWith(BlockWeaverEvent.BecameState(stateName))
 
         /** Wrap a reactive state in `Some` and emit the "Becoming X" log only if the receiver (the
           * previous state) has a different [[stateName]]. Same-name self-loops (e.g. `pure(this)`
           * or `pure(copy(...))`) suppress the log so it doesn't drown the rest of the trace.
           */
-        final def pure[S <: State.Reactive](newState: S): IO[Some[S]] = {
+        final def pure[S <: State.Reactive](newState: S)(using Env.Connected): IO[Some[S]] = {
             val log =
                 if newState.stateName == this.stateName then IO.unit
                 else newState.logStateTransition
             log >> IO.pure(Some(newState))
         }
 
-        final def sendStartBlock(config: Config)(blockNumber: BlockNumber): IO[Unit] = for {
-            now <- realTimeQuantizedInstant(config.slotConfig)
-            blockCreationStartTime = BlockCreationStartTime(now)
-            startBlockMsg = StartBlock(blockNumber, blockCreationStartTime)
-            _ <- connections.jointLedger ! startBlockMsg
-        } yield ()
+        final def sendStartBlock(blockNumber: BlockNumber)(using env: Env.Connected): IO[Unit] = {
+            import env.*
+            for {
+                now <- realTimeQuantizedInstant(config.slotConfig)
+                blockCreationStartTime = BlockCreationStartTime(now)
+                startBlockMsg = StartBlock(blockNumber, blockCreationStartTime)
+                _ <- connections.jointLedger ! startBlockMsg
+            } yield ()
+        }
 
-        final def sendCompleteRegularBlockAsLeader(config: Config): IO[Unit] = for {
-            now <- realTimeQuantizedInstant(config.slotConfig)
-            blockCreationEndTime = BlockCreationEndTime(now)
-            completeBlockMsg = CompleteBlockRegular(
-              None,
-              pollResults,
-              finalizationLocallyTriggered,
-              blockCreationEndTime
-            )
-            _ <- connections.jointLedger ! completeBlockMsg
-        } yield ()
+        final def sendCompleteRegularBlockAsLeader(using env: Env.Connected): IO[Unit] = {
+            import env.*
+            for {
+                now <- realTimeQuantizedInstant(config.slotConfig)
+                blockCreationEndTime = BlockCreationEndTime(now)
+                completeBlockMsg = CompleteBlockRegular(
+                  None,
+                  pollResults,
+                  finalizationLocallyTriggered,
+                  blockCreationEndTime
+                )
+                _ <- connections.jointLedger ! completeBlockMsg
+            } yield ()
+        }
 
-        final def sendCompleteFinalBlockAsLeader(config: Config): IO[Unit] = for {
-            now <- realTimeQuantizedInstant(config.slotConfig)
-            blockCreationEndTime = BlockCreationEndTime(now)
-            completeBlockMsg = CompleteBlockFinal(
-              None,
-              blockCreationEndTime
-            )
-            _ <- connections.jointLedger ! completeBlockMsg
-        } yield ()
+        final def sendCompleteFinalBlockAsLeader(using env: Env.Connected): IO[Unit] = {
+            import env.*
+            for {
+                now <- realTimeQuantizedInstant(config.slotConfig)
+                blockCreationEndTime = BlockCreationEndTime(now)
+                completeBlockMsg = CompleteBlockFinal(
+                  None,
+                  blockCreationEndTime
+                )
+                _ <- connections.jointLedger ! completeBlockMsg
+            } yield ()
+        }
 
         final def sendCompleteBlockAsFollower(
             blockBrief: BlockBrief.Next
-        ): IO[Unit] = {
+        )(using env: Env.Connected): IO[Unit] = {
+            import env.*
             val completeBlockMsg = blockBrief match {
                 case x: BlockBrief.Intermediate =>
                     CompleteBlockRegular(
@@ -243,24 +268,22 @@ object BlockWeaver {
           * `FastConsensusActor` re-derives it from the replayed tail, so this is a no-op.
           */
         def recover(
-            config: Config,
-            connections: Connections,
-            tracer: ContraTracer[IO, BlockWeaverEvent],
-            persistence: Persistence[IO],
             fastBlockMark: Option[BlockNumber]
-        ): IO[Option[Reactive]] =
+        )(using env: Env.Connected): IO[Option[Reactive]] = {
+            import env.*
             for {
                 softConfirmed <- Markers.recoverSoftConfirmed(persistence.backend)
-                opening <- start(config, connections, tracer, fastBlockMark)
+                opening <- start(fastBlockMark)
                 // `filter(softConfirmed.contains)` is the "confirmed everything it applied" test.
                 resumed <- fastBlockMark
                     .filter(softConfirmed.contains)
                     .fold(IO.pure(Some(opening)))(applied =>
                         persistence
                             .getOrFail(StoreKey.SoftConfirmation(applied))
-                            .flatMap(stamped => opening.react(config)(stamped.payload))
+                            .flatMap(stamped => opening.react(stamped.payload))
                     )
             } yield resumed
+        }
 
         /** The weaver's opening state: resume at `fastBlockMark + 1`, the block after the highest
           * this peer durably applied (`max(BlockResult)`). `None` is a cold store, and opens on
@@ -276,28 +299,24 @@ object BlockWeaver {
           * [[recover]] applies the other half — whether block `fastBlockMark` is already confirmed.
           */
         def start(
-            config: Config,
-            connections: Connections,
-            tracer: ContraTracer[IO, BlockWeaverEvent],
             fastBlockMark: Option[BlockNumber]
-        ): IO[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
+        )(using Env.Connected): IO[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
             for {
                 state: Some[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] <-
                     DecidingRole(
-                      connections = connections,
-                      tracer = tracer,
                       pollResults = PollResults.empty,
                       finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
                       mempool = Mempool.empty,
                       nextBlockNumber = fastBlockMark.fold(BlockNumber.zero.increment)(_.increment)
-                    ).act(config)
+                    ).act
             } yield state.get
 
         /** A state with a mempool can store requests in its mempool. */
         sealed trait WithMempool extends State {
             def mempool: Mempool
 
-            def storeRequest(request: UserRequestWithId): IO[Mempool] =
+            def storeRequest(request: UserRequestWithId)(using env: Env.Connected): IO[Mempool] = {
+                import env.*
                 mempool.addRequest(request) match {
                     case Some(newMempool) =>
                         IO(connections.metrics.onMempoolSize(newMempool.size))
@@ -309,6 +328,7 @@ object BlockWeaver {
                           )
                         )
                 }
+            }
         }
 
         /** An active state can immediately transition into another state, without waiting for a new
@@ -322,7 +342,7 @@ object BlockWeaver {
           * terminates in a reactive state.
           */
         sealed trait Active extends State {
-            def act(config: Config): IO[Option[NextReactiveState]]
+            def act(using Env.Connected): IO[Option[NextReactiveState]]
         }
 
         /** A reactive state can receive a message, reacting by transitioning to another state.
@@ -337,7 +357,7 @@ object BlockWeaver {
         sealed trait Reactive extends State {
             type Unexpected <: Request
 
-            def react(config: Config)(req: Request): IO[Option[NextReactiveState]]
+            def react(req: Request)(using Env.Connected): IO[Option[NextReactiveState]]
 
             final def panicUnexpectedRequest(
                 state: State.Reactive,
@@ -351,8 +371,6 @@ object BlockWeaver {
         }
 
         final case class DecidingRole private[State] (
-            override val connections: Connections,
-            override val tracer: ContraTracer[IO, BlockWeaverEvent],
             override val pollResults: PollResults,
             override val finalizationLocallyTriggered: LocalFinalizationTrigger,
             override val mempool: Mempool,
@@ -363,16 +381,19 @@ object BlockWeaver {
 
             export DecidingRole.NextReactiveState
 
-            override def act(config: Config): IO[Some[NextReactiveState]] = for {
-                _ <- logStateTransition
-                newState <-
-                    if config.canLeadFast(nextBlockNumber)
-                    then {
-                        Leader.ProcessingReadyRequests(this, mempool, nextBlockNumber).act(config)
-                    } else {
-                        pure(Follower.AwaitingBlockBrief(this, mempool, nextBlockNumber))
-                    }
-            } yield newState
+            override def act(using env: Env.Connected): IO[Some[NextReactiveState]] = {
+                import env.*
+                for {
+                    _ <- logStateTransition
+                    newState <-
+                        if config.canLeadFast(nextBlockNumber)
+                        then {
+                            Leader.ProcessingReadyRequests(this, mempool, nextBlockNumber).act
+                        } else {
+                            pure(Follower.AwaitingBlockBrief(this, mempool, nextBlockNumber))
+                        }
+                } yield newState
+            }
 
         }
 
@@ -387,8 +408,6 @@ object BlockWeaver {
             ): DecidingRole =
                 import stateToTransitionFrom.*
                 DecidingRole(
-                  connections,
-                  tracer,
                   pollResults,
                   finalizationLocallyTriggered,
                   mempool,
@@ -398,8 +417,6 @@ object BlockWeaver {
 
         object Follower {
             final case class AwaitingBlockBrief private (
-                override val connections: Connections,
-                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
@@ -412,8 +429,9 @@ object BlockWeaver {
                 export Follower.AwaitingBlockBrief.{NextReactiveState, Unexpected}
 
                 override def react(
-                    config: Config
-                )(req: Request): IO[Option[NextReactiveState]] =
+                    req: Request
+                )(using env: Env.Connected): IO[Option[NextReactiveState]] = {
+                    import env.*
                     req match {
                         case ur: UserRequestWithId =>
                             for {
@@ -422,8 +440,10 @@ object BlockWeaver {
                             } yield newState
 
                         case bb: BlockBrief.Next =>
-                            tracer.traceWith(BlockWeaverEvent.BlockBriefReceived(bb.blockNum)) >>
-                                Follower.ProcessingReadyRequests(this, mempool, bb).act(config)
+                            tracer.traceWith(
+                              BlockWeaverEvent.BlockBriefReceived(bb.blockNum)
+                            ) >>
+                                Follower.ProcessingReadyRequests(this, mempool, bb).act
 
                         case pr: PollResults =>
                             tracer.traceWith(BlockWeaverEvent.PollResultsUpdated) >>
@@ -446,6 +466,7 @@ object BlockWeaver {
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
+                }
             }
 
             object AwaitingBlockBrief {
@@ -460,8 +481,6 @@ object BlockWeaver {
                 ): Follower.AwaitingBlockBrief =
                     import state.*
                     Follower.AwaitingBlockBrief(
-                      connections,
-                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       mempool,
@@ -472,8 +491,6 @@ object BlockWeaver {
             /** Processing ready requests, i.e. those, which are already in the mempool.
               */
             final case class ProcessingReadyRequests private (
-                override val connections: Connections,
-                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
@@ -485,45 +502,54 @@ object BlockWeaver {
 
                 export Follower.ProcessingReadyRequests.NextReactiveState
 
-                def act(config: Config): IO[Option[NextReactiveState]] = for {
-                    _ <- logStateTransition
-                    // Received a brief to reproduce: start this block's "replay" clock (closed at the
-                    // reproduced brief, in FCA).
-                    _ <- IO(
-                      connections.metrics.onReplayStart(
-                        (reproducingBlockBrief.blockNum: Int).toLong
-                      )
-                    )
-                    _ <- connections.jointLedger ! StartBlock(
-                      reproducingBlockBrief.blockNum,
-                      reproducingBlockBrief.startTime
-                    )
-                    extractionResult <- extractAndSendRequestsFromMempool
-                    newState <- extractionResult match {
-                        case Mempool.Extraction.Complete(extractedRequests, survivingMempool) =>
-                            val nextBlockNumber = reproducingBlockBrief.blockNum.increment
-                            for {
-                                _ <- sendCompleteBlockAsFollower(reproducingBlockBrief)
-                                newState <- reproducingBlockBrief match {
-                                    // The reproduced block was the final one: no further block
-                                    // will ever be woven, so retire instead of arming to lead.
-                                    case _: BlockBrief.Final =>
-                                        tracer.traceWith(
-                                          BlockWeaverEvent.RetiredOnFinalBlock(
-                                            reproducingBlockBrief.blockNum
-                                          )
-                                        ) >> IO.pure(None)
-                                    case _ =>
-                                        DecidingRole(this, survivingMempool, nextBlockNumber)
-                                            .act(config)
-                                }
-                            } yield newState
-                        case result: Mempool.Extraction.Incomplete =>
-                            pure(Follower.AwaitingRequest(this, reproducingBlockBrief, result))
-                    }
-                } yield newState
+                def act(using env: Env.Connected): IO[Option[NextReactiveState]] = {
+                    import env.*
+                    for {
+                        _ <- logStateTransition
+                        // Received a brief to reproduce: start this block's "replay" clock (closed
+                        // at the reproduced brief, in FCA).
+                        _ <- IO(
+                          connections.metrics.onReplayStart(
+                            (reproducingBlockBrief.blockNum: Int).toLong
+                          )
+                        )
+                        _ <- connections.jointLedger ! StartBlock(
+                          reproducingBlockBrief.blockNum,
+                          reproducingBlockBrief.startTime
+                        )
+                        extractionResult <- extractAndSendRequestsFromMempool
+                        newState <- extractionResult match {
+                            case Mempool.Extraction.Complete(extractedRequests, survivingMempool) =>
+                                val nextBlockNumber = reproducingBlockBrief.blockNum.increment
+                                for {
+                                    _ <- sendCompleteBlockAsFollower(reproducingBlockBrief)
+                                    newState <- reproducingBlockBrief match {
+                                        // The reproduced block was the final one: no further block
+                                        // will ever be woven, so retire instead of arming to lead.
+                                        case _: BlockBrief.Final =>
+                                            tracer.traceWith(
+                                              BlockWeaverEvent.RetiredOnFinalBlock(
+                                                reproducingBlockBrief.blockNum
+                                              )
+                                            ) >> IO.pure(None)
+                                        case _ =>
+                                            DecidingRole(
+                                              this,
+                                              survivingMempool,
+                                              nextBlockNumber
+                                            ).act
+                                    }
+                                } yield newState
+                            case result: Mempool.Extraction.Incomplete =>
+                                pure(Follower.AwaitingRequest(this, reproducingBlockBrief, result))
+                        }
+                    } yield newState
+                }
 
-                private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
+                private def extractAndSendRequestsFromMempool(using
+                    env: Env.Connected
+                ): IO[Mempool.Extraction.Result] = {
+                    import env.*
                     val requestIds: List[RequestId] = reproducingBlockBrief.requests.map(_._1)
                     val newExtractionResult = mempool.extractRequestsWhile(requestIds)
                     import newExtractionResult.*
@@ -546,8 +572,6 @@ object BlockWeaver {
                 ): Follower.ProcessingReadyRequests = {
                     import state.*
                     Follower.ProcessingReadyRequests(
-                      connections,
-                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       mempool,
@@ -557,8 +581,6 @@ object BlockWeaver {
             }
 
             final case class AwaitingRequest private (
-                override val connections: Connections,
-                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
@@ -576,7 +598,10 @@ object BlockWeaver {
 
                 export Follower.AwaitingRequest.{NextReactiveState, Unexpected}
 
-                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] =
+                override def react(
+                    req: Request
+                )(using env: Env.Connected): IO[Option[NextReactiveState]] = {
+                    import env.*
                     req match {
                         case ur: UserRequestWithId =>
                             for {
@@ -629,7 +654,7 @@ object BlockWeaver {
                                                                   this,
                                                                   survivingMempool,
                                                                   nextBlockNumber
-                                                                ).act(config)
+                                                                ).act
                                                         }
                                                     } yield newState
                                                 case result: Mempool.Extraction.Incomplete =>
@@ -688,11 +713,13 @@ object BlockWeaver {
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
+                }
 
                 // TODO: pass awaited request not the whole mempool
                 private def extractAndSendRequestsFromMempool(
                     mempool: Mempool
-                ): IO[Mempool.Extraction.Result] = {
+                )(using env: Env.Connected): IO[Mempool.Extraction.Result] = {
+                    import env.*
                     val allRequestIds: List[RequestId] = reproducingBlockBrief.requests.map(_._1)
                     val requestIds =
                         allRequestIds.dropWhile(_ != incompleteExtraction.awaitingRequestId)
@@ -718,8 +745,6 @@ object BlockWeaver {
                 ): Follower.AwaitingRequest =
                     import state.*
                     Follower.AwaitingRequest(
-                      connections,
-                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       incompleteExtraction.survivingMempool,
@@ -731,8 +756,6 @@ object BlockWeaver {
 
         object Leader {
             final case class ProcessingReadyRequests private (
-                override val connections: Connections,
-                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
@@ -743,42 +766,48 @@ object BlockWeaver {
 
                 export Leader.ProcessingReadyRequests.NextReactiveState
 
-                override def act(config: Config): IO[Some[NextReactiveState]] = for {
-                    _ <- logStateTransition
-                    // Became leader of this block: start its "lead" clock (closed at the brief, in FCA).
-                    _ <- IO(connections.metrics.onLeadStart((leadingBlockNum: Int).toLong))
-                    _ <- realTimeQuantizedInstant(config.slotConfig)
-                    extracted <- extractRequestsForBlock(config)
-                    (requests, survivingMempool) = extracted
-                    // How many requests this lead pulled out of the mempool, and what's left behind.
-                    _ <- IO(connections.metrics.onLeaderMempoolDrain(requests.size))
-                    _ <- IO(connections.metrics.onMempoolSize(survivingMempool.size))
-                    isBlockStarted <-
-                        if requests.isEmpty
-                        then IO.pure(NotStarted)
-                        else
-                            for {
-                                _ <- sendStartBlock(config)(leadingBlockNum)
-                                _ <- requests.traverse_(connections.jointLedger ! _)
-                            } yield Started
-                    newState <- pure(
-                      Leader.AwaitingConfirmation(
-                        this,
-                        leadingBlockNum,
-                        isBlockStarted,
-                        survivingMempool,
-                        requestsInBlock = requests.size
-                      )
-                    )
-                } yield newState
+                override def act(using env: Env.Connected): IO[Some[NextReactiveState]] = {
+                    import env.*
+                    for {
+                        _ <- logStateTransition
+                        // Became leader of this block: start its "lead" clock (closed at the brief,
+                        // in FCA).
+                        _ <- IO(connections.metrics.onLeadStart((leadingBlockNum: Int).toLong))
+                        _ <- realTimeQuantizedInstant(config.slotConfig)
+                        extracted <- extractRequestsForBlock
+                        (requests, survivingMempool) = extracted
+                        // How many requests this lead pulled out of the mempool, and what's left
+                        // behind.
+                        _ <- IO(connections.metrics.onLeaderMempoolDrain(requests.size))
+                        _ <- IO(connections.metrics.onMempoolSize(survivingMempool.size))
+                        isBlockStarted <-
+                            if requests.isEmpty
+                            then IO.pure(NotStarted)
+                            else
+                                for {
+                                    _ <- sendStartBlock(leadingBlockNum)
+                                    _ <- requests.traverse_(connections.jointLedger ! _)
+                                } yield Started
+                        newState <- pure(
+                          Leader.AwaitingConfirmation(
+                            this,
+                            leadingBlockNum,
+                            isBlockStarted,
+                            survivingMempool,
+                            requestsInBlock = requests.size
+                          )
+                        )
+                    } yield newState
+                }
 
                 /** Extract at most [[BlockConfig.Section.maxRequestsPerBlock]] requests for the
                   * block this peer is leading, preferring this peer's own requests (fairness); the
                   * overflow stays in the surviving mempool for later blocks.
                   */
-                private def extractRequestsForBlock(
-                    config: Config
+                private def extractRequestsForBlock(using
+                    env: Env.Connected
                 ): IO[(List[UserRequestWithId], Mempool)] = {
+                    import env.*
                     val (requests, survivingMempool) =
                         mempool.extractInOrderPreferring(
                           ownHeadPeerNum(config),
@@ -800,8 +829,6 @@ object BlockWeaver {
                 ): Leader.ProcessingReadyRequests = {
                     import state.*
                     Leader.ProcessingReadyRequests(
-                      connections,
-                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       mempool,
@@ -811,8 +838,6 @@ object BlockWeaver {
             }
 
             final case class AwaitingConfirmation private (
-                override val connections: Connections,
-                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 leadingBlockNumber: BlockNumber,
@@ -831,7 +856,10 @@ object BlockWeaver {
 
                 export Leader.AwaitingConfirmation.{NextReactiveState, Unexpected}
 
-                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
+                override def react(
+                    req: Request
+                )(using env: Env.Connected): IO[Option[NextReactiveState]] = {
+                    import env.*
                     req match {
                         case ur: UserRequestWithId =>
                             // First block is implicitly confirmed, so we complete it immediately —
@@ -840,24 +868,22 @@ object BlockWeaver {
                             // rolls into the next block.
                             def completeFirstBlock =
                                 if finalizationLocallyTriggered.asBoolean
-                                then sendCompleteFinalBlockAsLeader(config) >> stop()
+                                then sendCompleteFinalBlockAsLeader >> stop()
                                 else
                                     for {
-                                        _ <- sendCompleteRegularBlockAsLeader(config)
+                                        _ <- sendCompleteRegularBlockAsLeader
                                         newState <- DecidingRole(
-                                          connections,
-                                          tracer,
                                           pollResults,
                                           finalizationLocallyTriggered,
                                           mempool = mempool,
                                           nextBlockNumber = leadingBlockNumber.increment
-                                        ).act(config)
+                                        ).act
                                     } yield newState
 
                             def forwardIntoBlock =
                                 for {
                                     _ <- IO.whenA(isBlockStarted == NotStarted)(
-                                      sendStartBlock(config)(leadingBlockNumber)
+                                      sendStartBlock(leadingBlockNumber)
                                     )
                                     _ <- tracer.traceWith(
                                       BlockWeaverEvent.RequestSentToJointLedger(ur.requestId)
@@ -895,18 +921,16 @@ object BlockWeaver {
 
                         case bc: Block.SoftConfirmed.NonFinal =>
                             def completeBlockRegular =
-                                sendCompleteRegularBlockAsLeader(config) >>
+                                sendCompleteRegularBlockAsLeader >>
                                     DecidingRole(
-                                      connections,
-                                      tracer,
                                       pollResults,
                                       finalizationLocallyTriggered = finalizationLocallyTriggered,
                                       mempool = mempool,
                                       nextBlockNumber = leadingBlockNumber.increment
-                                    ).act(config)
+                                    ).act
 
                             def completeBlockFinal =
-                                sendCompleteFinalBlockAsLeader(config) >> IO.pure(None)
+                                sendCompleteFinalBlockAsLeader >> IO.pure(None)
 
                             def completeNextBlock =
                                 if bc.finalizationRequested || finalizationLocallyTriggered.asBoolean
@@ -926,7 +950,7 @@ object BlockWeaver {
                                     // handing off to AwaitingRequest.
                                     tracer.traceWith(
                                       BlockWeaverEvent.PreviousBlockConfirmation(bc.blockNum)
-                                    ) >> scheduleWakeupFiber(config, bc) >>
+                                    ) >> scheduleWakeupFiber(bc) >>
                                         pure(
                                           Leader.AwaitingRequest(this, previousBlockConfirmed = bc)
                                         )
@@ -982,11 +1006,13 @@ object BlockWeaver {
                             if leadingBlockNumber == BlockNumber.zero.increment
                             then
                                 for {
-                                    _ <- tracer.traceWith(BlockWeaverEvent.FinalizationTriggered)
-                                    _ <- IO.whenA(isBlockStarted == NotStarted)(
-                                      sendStartBlock(config)(leadingBlockNumber)
+                                    _ <- tracer.traceWith(
+                                      BlockWeaverEvent.FinalizationTriggered
                                     )
-                                    _ <- sendCompleteFinalBlockAsLeader(config)
+                                    _ <- IO.whenA(isBlockStarted == NotStarted)(
+                                      sendStartBlock(leadingBlockNumber)
+                                    )
+                                    _ <- sendCompleteFinalBlockAsLeader
                                     newState <- stop()
                                 } yield newState
                             else
@@ -1003,9 +1029,9 @@ object BlockWeaver {
                 }
 
                 private def scheduleWakeupFiber(
-                    config: Config,
                     bc: Block.SoftConfirmed.NonFinal
-                ): IO[Unit] =
+                )(using env: Env.Connected): IO[Unit] = {
+                    import env.*
                     for {
                         now <- realTimeQuantizedInstant(config.slotConfig)
                         fmbwtInstant = bc.headerNonFinal.forcedMajorBlockWakeupTime.convert
@@ -1061,10 +1087,13 @@ object BlockWeaver {
                                             .flatMap(_.fold(IO.unit)(_.cancel))
                                     )
                     } yield ()
+                }
 
-                private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] =
+                private def sleepSendWakeup(
+                    sleepDuration: QuantizedFiniteDuration
+                )(using env: Env.Connected): IO[Unit] =
                     IO.sleep(sleepDuration.finiteDuration) >>
-                        (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
+                        (env.connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
             }
 
             object AwaitingConfirmation {
@@ -1082,8 +1111,6 @@ object BlockWeaver {
                 ): Leader.AwaitingConfirmation =
                     import state.*
                     Leader.AwaitingConfirmation(
-                      connections,
-                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       blockNumber,
@@ -1097,12 +1124,9 @@ object BlockWeaver {
             }
 
             final case class AwaitingRequest private (
-                override val connections: Connections,
-                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 previousBlockConfirmed: Block.SoftConfirmed.NonFinal,
-                // wakeupFiber: Fiber[IO, Throwable, Unit]
             ) extends Reactive {
                 override def stateName: String =
                     s"Leader.AwaitingRequest(current=$currentBlockNumber)"
@@ -1111,7 +1135,10 @@ object BlockWeaver {
 
                 private val currentBlockNumber = previousBlockConfirmed.blockNum.increment
 
-                override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
+                override def react(
+                    req: Request
+                )(using env: Env.Connected): IO[Option[NextReactiveState]] = {
+                    import env.*
                     // Completing this block is the moment its wakeup stops being wanted.
                     // Cancel-on-replace alone does not cover it: leadership rotates, so the peer
                     // usually becomes a FOLLOWER next and arms no replacement for several blocks,
@@ -1119,23 +1146,23 @@ object BlockWeaver {
                     // cancelled is armed for the block being completed right now, so it cannot be
                     // one anyone still needs.
                     def completeBlockRegular = clearWakeupFiber >>
-                        sendCompleteRegularBlockAsLeader(config) >>
+                        sendCompleteRegularBlockAsLeader >>
                         DecidingRole(
                           this,
                           mempool = Mempool.empty,
                           nextBlockNumber = currentBlockNumber.increment
-                        ).act(config)
+                        ).act
 
                     def completeBlock = {
                         if finalizationLocallyTriggered.asBoolean || previousBlockConfirmed.finalizationRequested
-                        then sendCompleteFinalBlockAsLeader(config) >> stop()
+                        then sendCompleteFinalBlockAsLeader >> stop()
                         else completeBlockRegular
                     }
 
                     req match {
                         case ur: UserRequestWithId =>
                             for {
-                                _ <- sendStartBlock(config)(currentBlockNumber)
+                                _ <- sendStartBlock(currentBlockNumber)
                                 _ <- connections.jointLedger ! ur
                                 newState <- completeBlock
                             } yield newState
@@ -1146,7 +1173,7 @@ object BlockWeaver {
                                     _ <- tracer.traceWith(
                                       BlockWeaverEvent.ForcedBlockCompletion(currentBlockNumber)
                                     )
-                                    _ <- sendStartBlock(config)(currentBlockNumber)
+                                    _ <- sendStartBlock(currentBlockNumber)
                                     newState <- completeBlock
                                 } yield newState
 
@@ -1183,16 +1210,12 @@ object BlockWeaver {
                 private[State] def apply(
                     state: State,
                     previousBlockConfirmed: Block.SoftConfirmed.NonFinal,
-                    // wakeupFiber: Fiber[IO, Throwable, Unit]
                 ): Leader.AwaitingRequest =
                     import state.*
                     Leader.AwaitingRequest(
-                      connections,
-                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       previousBlockConfirmed,
-                      // wakeupFiber
                     )
             }
         }
