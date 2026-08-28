@@ -51,6 +51,47 @@
           '';
         };
         visualvm = pkgs.visualvm.override { jdk = jdk; };
+        # ── Canton (Digital Asset) ─────────────────────────────────────────────
+        # Canton open-source runtime: participant / sequencer / mediator nodes +
+        # the Canton console. Not in nixpkgs, so fetch the release tarball and wrap
+        # the sbt-native-packager launcher with a pinned LTS JDK. The devShell JDK
+        # is 25 (for the Scala build); Canton 3.x targets Java 17–21, so pin 21 here
+        # independently rather than risk the JVM the build happens to use.
+        cantonVersion = "3.5.15";
+        cantonJdk = pkgs.openjdk21;
+        canton = pkgs.stdenv.mkDerivation {
+          pname = "canton";
+          version = cantonVersion;
+          src = pkgs.fetchurl {
+            url = "https://github.com/digital-asset/canton/releases/download/v${cantonVersion}/canton-open-source-${cantonVersion}.tar.gz";
+            hash = "sha256-oRRT2YkXvmE2yy6qP4APW2fuWez/dZB/e1m0zP03Zrg=";
+          };
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          dontConfigure = true;
+          dontBuild = true;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/libexec/canton $out/bin
+            cp -r . $out/libexec/canton/
+            makeWrapper $out/libexec/canton/bin/canton $out/bin/canton \
+              --set JAVA_HOME ${cantonJdk} \
+              --prefix PATH : ${cantonJdk}/bin
+            runHook postInstall
+          '';
+          meta = {
+            description = "Canton open-source runtime: sequencer/mediator (synchronizer) + participant nodes + console";
+            homepage = "https://www.canton.network";
+          };
+        };
+        # ── Daml SDK — TODO (canton-hydrozoa) ──────────────────────────────────
+        # The Daml 3.x SDK/compiler (Daml-LF 2.x, which Canton 3.5 runs) is NOT a
+        # public GitHub release: digital-asset/daml tops out at v2.10.6 (LF 1.x,
+        # the Daml 2.x line) and v3.x tags 404 — the 3.x compiler ships via
+        # `daml install <ver>` from get.daml.com / Artifactory. Pinning it needs
+        # (a) the exact 3.x version matching Canton 3.5.15 and (b) a fetchable
+        # source + hash. Deferred: PoC DAML template authoring picks this up next.
+        # (The public 2.10.6 SDK compiles only LF 1.x, which Canton 3.5 will likely
+        # reject, so it is intentionally NOT wired in as a stopgap.)
         # Define the hooks
         pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
@@ -72,6 +113,7 @@
           # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
           buildInputs = [ pkgs.bashInteractive ];
           packages = with pkgs; [
+            canton # Digital Asset Canton runtime (nodes + console); see let-binding above
             ammonite # modernized scala repl: https://ammonite.io/
             async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
             git # otherwise `git` resolves to the broken macOS Xcode shim inside `nix develop`
@@ -92,6 +134,7 @@
           ];
           inherit (pre-commit-check) shellHook;
         };
+        packages.canton = canton;
       }
     ));
 }
