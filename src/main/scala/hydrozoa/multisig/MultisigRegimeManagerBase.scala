@@ -8,7 +8,7 @@ import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.lib.logging.{ContraTracer, Logging}
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
 import hydrozoa.multisig.MultisigRegimeManagerBase.CoreActors
 import hydrozoa.multisig.backend.cardano.CardanoBackend
@@ -75,16 +75,37 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       */
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute)(
-          PartialFunction.fromFunction {
-              case _: IllegalArgumentException =>
-                  Escalate // Normally `Stop` but we can't handle stopped actors yet
-              case _: RuntimeException =>
-                  Escalate // Normally `Restart` but our actors can't do that yet
-              case _: Exception => Escalate
-              // `Error`, and anything extending `Throwable` directly. Keeping this arm last leaves
-              // the intent of the arms above legible for when they can take their real directives.
-              case _ => Escalate
+          PartialFunction.fromFunction { failure =>
+              recordFailure(failure)
+              failure match {
+                  case _: IllegalArgumentException =>
+                      Escalate // Normally `Stop` but we can't handle stopped actors yet
+                  case _: RuntimeException =>
+                      Escalate // Normally `Restart` but our actors can't do that yet
+                  case _: Exception => Escalate
+                  // `Error`, and anything extending `Throwable` directly. Keeping this arm last
+                  // leaves the intent of the arms above legible for when they can take their real
+                  // directives.
+                  case _ => Escalate
+              }
           }
+        )
+
+    /** Write down a child's failure while it is still intact.
+      *
+      * This is the last place that holds it. Escalation is the only directive available, and the
+      * escalation path itself raises before the cause is re-reported, so what survives in the log
+      * names that secondary failure and not this one — a node stops with no record of why.
+      * Everything downstream (`/ready`, the exit code, an operator reading journald) can say that
+      * the node died but not what killed it, unless it is written here.
+      *
+      * Synchronous, because a decider is a pure function with no effect context. It runs once per
+      * failure, which is once per node lifetime given every directive escalates.
+      */
+    private def recordFailure(cause: Throwable): Unit =
+        MultisigRegimeManagerBase.supervisionLog.error(
+          "A supervised actor failed; escalating to the guardian, which will stop the system.",
+          cause
         )
 
     override def preStart: IO[Unit] = context.self ! PreStart
@@ -172,7 +193,13 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
               )
             )
             stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracers.stackComposer, persistence)
+              StackComposer(
+                config,
+                pendingConnections,
+                tracers.stackComposer,
+                persistence,
+                metrics
+              )
             )
             slowConsensusActor <- context.actorOf(
               SlowConsensusActor(
@@ -194,6 +221,11 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
 }
 
 object MultisigRegimeManagerBase {
+
+    /** Where a supervised failure's cause is written. Its own route so the line survives a log
+      * config that quiets `hydrozoa` generally — it is the only record of why a node stopped.
+      */
+    private val supervisionLog = Logging.loggerSync("Supervision")
 
     /** The actors spawned by [[MultisigRegimeManagerBase.spawnCoreActors]] — present on every
       * multisig peer regardless of role.

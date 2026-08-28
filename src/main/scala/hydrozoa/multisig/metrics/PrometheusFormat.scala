@@ -139,6 +139,33 @@ object PrometheusFormat:
           "Requests the sequencer will admit now before backpressure trips.",
           s.sequencerHeadroom
         )
+        gauge(
+          "hydrozoa_equity_lovelace",
+          "Head equity beyond L2 liabilities, as of the last stack this peer closed.",
+          s.equityLovelace
+        )
+        gauge(
+          "hydrozoa_composer_seconds_in_phase",
+          "How long the StackComposer has been in its current phase.",
+          s.composer.secondsInPhase
+        )
+        gauge(
+          "hydrozoa_composer_partitions_done",
+          "Partitions derived so far for the stack being built.",
+          s.composer.partitionsDone
+        )
+        gauge(
+          "hydrozoa_composer_partitions_total",
+          "Partitions in the stack being built.",
+          s.composer.partitionsTotal
+        )
+        // The phase itself as a labelled 0/1 set, so a dashboard can select on it.
+        StackComposerPhase.values.foreach { p =>
+            b ++= "# TYPE hydrozoa_composer_phase gauge\n"
+            b ++= s"hydrozoa_composer_phase{phase=\"$p\"} ${
+                    if s.composer.phase == p then 1 else 0
+                }\n"
+        }
 
         b.toString
 

@@ -87,10 +87,18 @@ class CardanoBackendBlockfrost private (
                         utxos <- EitherT(convertUtxosWithScripts(List(res.getValue)))
                         utxo = ledger.Utxo(utxos.head)
                     } yield Some(utxo)
-                // Resolution unsuccessful for some other reason
+                // Resolution unsuccessful for some other reason. The status code goes in the
+                // message: it is what separates "retry, the backend is having a moment" (429, 5xx)
+                // from "this will never work" (401 on a bad key, 400), and the response body alone
+                // does not carry it — a proxy's 502 body is often empty.
                 case _ =>
                     EitherT.left(
-                      IO.pure(ErrorResolving(input, s"resolution response: ${res.getResponse}"))
+                      IO.pure(
+                        ErrorResolving(
+                          input,
+                          s"resolution failed with HTTP ${res.code()}: ${res.getResponse}"
+                        )
+                      )
                     )
             }
         } yield mbUtxo).value

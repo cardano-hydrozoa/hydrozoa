@@ -125,8 +125,8 @@ abstract class PeerLiaisonCoilToHub(
         }.toMap
 
     // Outbound: this coil peer's own hard-ack, served to the hub. Backed by the own coil `HardAck`
-    // journal so a reply hot-loads acks below the in-memory outbox floor (the hub re-pulls old acks
-    // it missed during our crash); preStart restores only the high-water, replay re-appends the
+    // journal so a reply reads acks below the in-memory outbox floor (the hub re-pulls old acks it
+    // missed during our crash); preStart restores only the high-water, replay re-appends the
     // in-flight tail.
     private val ownHardAckBacking =
         LaneOutgoingBacking.hardAck(persistence.backend, PeerId.Coil(ownCoilPeerNumber))
@@ -135,7 +135,8 @@ abstract class PeerLiaisonCoilToHub(
           _.hardAckNum,
           HardAckNumber.zero,
           _.increment,
-          backfill = ownHardAckBacking.backfill
+          outboxCap = config.peerLiaisonOutboxCap,
+          serveFromJournal = ownHardAckBacking.serveFromJournal
         )
 
     // ---- Connections ----------------------------------------------------------------------------

@@ -940,6 +940,26 @@ components:
           $ref: '#/components/schemas/TimingStats'
         softConsensus:
           $ref: '#/components/schemas/TimingStats'
+    ComposerStats:
+      title: ComposerStats
+      type: object
+      required:
+      - phase
+      - secondsInPhase
+      - partitionsDone
+      - partitionsTotal
+      properties:
+        phase:
+          type: string
+        secondsInPhase:
+          type: integer
+          format: int64
+        partitionsDone:
+          type: integer
+          format: int64
+        partitionsTotal:
+          type: integer
+          format: int64
     Deposit:
       title: Deposit
       type: object
@@ -1296,6 +1316,8 @@ components:
       - mempoolSize
       - leaderMempoolDrain
       - sequencerHeadroom
+      - equityLovelace
+      - composer
       properties:
         uptimeSeconds:
           type: integer
@@ -1321,6 +1343,11 @@ components:
         sequencerHeadroom:
           type: integer
           format: int64
+        equityLovelace:
+          type: integer
+          format: int64
+        composer:
+          $ref: '#/components/schemas/ComposerStats'
     RateStats:
       title: RateStats
       type: object
