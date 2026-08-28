@@ -45,7 +45,13 @@ class PrometheusFormatTest extends AnyFunSuite:
       mempoolSize = 923,
       leaderMempoolDrain = 900,
       sequencerHeadroom = 12,
-      equityLovelace = 4_500_000L
+      equityLovelace = 4_500_000L,
+      composer = ComposerStats(
+        phase = StackComposerPhase.WaitingForPreviousHardConfirmation,
+        secondsInPhase = 42,
+        partitionsDone = 17,
+        partitionsTotal = 300
+      )
     )
 
     test("counters carry the _total suffix and a TYPE line"):

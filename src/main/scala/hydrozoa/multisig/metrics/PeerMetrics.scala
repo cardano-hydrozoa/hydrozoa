@@ -71,6 +71,12 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
     private val seqHeadroom = new AtomicLong(0)
     private val equityLovelace = new AtomicLong(0)
 
+    // ---- stack-composer phase (see StackComposerPhase) ----
+    private val composerPhase = new AtomicReference[StackComposerPhase](StackComposerPhase.Deriving)
+    private val composerPhaseSince = new AtomicLong(startedAtMillis)
+    private val partitionsDone = new AtomicLong(0)
+    private val partitionsTotal = new AtomicLong(0)
+
     // ---- derived rates (written only by the sampler fiber) ----
     private val rolling = new AtomicReference[Rolling](Rolling.empty(remotePeerNums))
 
@@ -154,6 +160,23 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
       */
     def onEquity(lovelace: Long): Unit = equityLovelace.set(lovelace)
 
+    /** The [[StackComposer]] entered a new phase. Re-entering the same phase does NOT restart the
+      * clock, so `secondsInPhase` measures how long the composer has been stuck in it — the whole
+      * point of the gauge, and `tryProgress` re-evaluates on every inbound event.
+      */
+    def onComposerPhase(phase: StackComposerPhase, nowMillis: Long): Unit =
+        if composerPhase.getAndSet(phase) != phase then composerPhaseSince.set(nowMillis)
+
+    /** Effect-derivation progress. `total` is set once when a stack starts deriving; `done`
+      * advances per partition — a plain write, negligible beside the KZG commitment and tx building
+      * each partition costs, so it is not sampled.
+      */
+    def onDerivationStarted(totalPartitions: Int): Unit =
+        partitionsTotal.set(totalPartitions.toLong)
+        partitionsDone.set(0L)
+
+    def onPartitionDerived(done: Int): Unit = partitionsDone.set(done.toLong)
+
     private def startClock(m: TrieMap[Long, Long], blockNum: Long): Unit =
         m.update(blockNum, now())
         // Defensive: a block that never closes (crash) would leak a start entry; cap the in-flight
@@ -208,7 +231,13 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
           mempoolSize = mempool.get(),
           leaderMempoolDrain = leaderMempoolDrain.get(),
           sequencerHeadroom = seqHeadroom.get(),
-          equityLovelace = equityLovelace.get()
+          equityLovelace = equityLovelace.get(),
+          composer = ComposerStats(
+            phase = composerPhase.get(),
+            secondsInPhase = math.max(0L, (nowMillis - composerPhaseSince.get()) / 1000),
+            partitionsDone = partitionsDone.get(),
+            partitionsTotal = partitionsTotal.get()
+          )
         )
 
     /** The 1 Hz sampler: feeds every rate's EWMAs from the cumulative counters, then publishes one
@@ -405,5 +434,19 @@ final case class PeerStats(
     mempoolSize: Long,
     leaderMempoolDrain: Long,
     sequencerHeadroom: Long,
-    equityLovelace: Long
+    equityLovelace: Long,
+    composer: ComposerStats
+)
+
+/** What the [[hydrozoa.multisig.consensus.StackComposer]] is doing, and for how long.
+  *
+  * Every path through `tryProgress` that is not `Deriving` returns `IO.unit` silently, so without
+  * this a composer waiting on a peer and one with nothing to do are indistinguishable. While
+  * `Deriving`, the partition counts show progress through a stack that may hold hundreds.
+  */
+final case class ComposerStats(
+    phase: StackComposerPhase,
+    secondsInPhase: Long,
+    partitionsDone: Long,
+    partitionsTotal: Long
 )
