@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.transport
 
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import org.http4s.Uri
 
 /** Typed events emitted by [[CoilPeerWsTransport]]. Pure data; formatters in
@@ -12,7 +13,8 @@ object CoilPeerWsTransportEvent:
     // ---- send ----
 
     /** `send` was called with a request variant that cannot be serialised over the wire. */
-    final case class DroppingNonWireRequest(request: String) extends CoilPeerWsTransportEvent
+    final case class DroppingNonWireRequest(request: LiaisonProtocol.HubToCoilRequest)
+        extends CoilPeerWsTransportEvent
 
     // ---- inbound dispatch ----
 
@@ -20,7 +22,7 @@ object CoilPeerWsTransportEvent:
     case object NoLiaisonForInbound extends CoilPeerWsTransportEvent
 
     /** Received an inbound wire payload from the hub that is not in the hub-emitted subset. */
-    final case class UnexpectedInboundWire(payload: String) extends CoilPeerWsTransportEvent
+    final case class UnexpectedInboundWire(payload: CoilFrame.Wire) extends CoilPeerWsTransportEvent
 
     /** A frame received on the active dialer connection could not be decoded. */
     final case class DecodeError(cause: Throwable) extends CoilPeerWsTransportEvent
