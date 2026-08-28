@@ -54,7 +54,7 @@ class OpenApiSchemaTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       ConsensusStoreReader.empty,

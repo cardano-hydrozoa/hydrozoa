@@ -41,7 +41,11 @@ import sttp.tapir.swagger.bundle.SwaggerInterpreter
   * result is a plain `HttpRoutes[IO]`, and it mounts on the same Ember server.
   */
 class HydrozoaRoutes(
-    requestSequencer: RequestSequencer.Handle,
+    /** `None` on a coil peer, which must not accept user submissions or trigger finalization. Same
+      * idiom as [[l2QueryReader]]: an absent capability removes its routes rather than mounting one
+      * that fails at request time.
+      */
+    requestSequencer: Option[RequestSequencer.Handle],
     blockWeaver: BlockWeaver.Handle,
     nodeStatus: IO[NodeStatus],
     consensusReader: ConsensusStoreReader[IO],
@@ -78,7 +82,9 @@ class HydrozoaRoutes(
 
     // ---- Endpoint definitions (the single source of truth for routes + schema) ----
 
-    private val submitRequestEndpoint: ServerEndpoint[Any, IO] =
+    private def submitRequestEndpoint(
+        sequencer: RequestSequencer.Handle
+    ): ServerEndpoint[Any, IO] =
         endpoint.post
             .in("head" / "requests")
             .name("postHeadRequest")
@@ -112,7 +118,7 @@ class HydrozoaRoutes(
                   "transaction (a native, self-authenticating Cardano tx). Payloads are lowercase " +
                   "hex. Returns the assigned request id."
             )
-            .serverLogic(body => acceptUserRequest("POST /head/requests", body))
+            .serverLogic(body => acceptUserRequest("POST /head/requests", body, sequencer))
 
     private val headInfoEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -585,10 +591,21 @@ class HydrozoaRoutes(
                     )
             )
 
-    /** The core API endpoints, in the order they appear in the docs — always served. */
+    /** The two mutating endpoints, mounted only on a node that accepts submissions.
+      *
+      * They stay at the head and tail of `coreEndpoints` below so that on a head node the endpoint
+      * ORDER is unchanged — the generated `openapi.yaml` is pinned by a golden test, and order is
+      * part of that document.
+      */
+    private val submitEndpoints: List[ServerEndpoint[Any, IO]] =
+        requestSequencer.fold(List.empty)(sequencer => List(submitRequestEndpoint(sequencer)))
+
+    private val finalizeEndpoints: List[ServerEndpoint[Any, IO]] =
+        requestSequencer.fold(List.empty)(_ => List(finalizeEndpoint))
+
+    /** The core API endpoints, in the order they appear in the docs. */
     private val coreEndpoints: List[ServerEndpoint[Any, IO]] =
-        List(
-          submitRequestEndpoint,
+        submitEndpoints ++ List(
           headInfoEndpoint,
           requestsEndpoint,
           requestDetailsEndpoint,
@@ -602,9 +619,8 @@ class HydrozoaRoutes(
           readyEndpoint,
           statsEndpoint,
           metricsEndpoint,
-          versionEndpoint,
-          finalizeEndpoint
-        ) ++ blockEffectKindEndpoints
+          versionEndpoint
+        ) ++ finalizeEndpoints ++ blockEffectKindEndpoints
 
     /** OpenAPI doc options:
       *   - drop the `View` suffix from every DTO's component-schema name (the Scala types keep it
@@ -653,7 +669,8 @@ class HydrozoaRoutes(
       */
     private def acceptUserRequest(
         path: String,
-        body: SubmitRequestView
+        body: SubmitRequestView,
+        sequencer: RequestSequencer.Handle
     ): IO[Either[(StatusCode, ErrorResponse), RequestAcceptedResponse]] =
         val handled: IO[Either[(StatusCode, ErrorResponse), RequestAcceptedResponse]] =
             for {
@@ -664,7 +681,7 @@ class HydrozoaRoutes(
                     case Right(request) => IO.pure(request)
                 }
                 _ <- tracer.traceWith(HydrozoaRoutes.decodedEvent(path, userRequest))
-                result <- (requestSequencer ?: userRequest).flatMap {
+                result <- (sequencer ?: userRequest).flatMap {
                     case Right(id) =>
                         IO.pure(Right(ApiDto.mkRequestAcceptedResponse(id)))
                     // Screening / backpressure rejection: an expected 400, not a fault — log the
@@ -964,7 +981,7 @@ object HydrozoaRoutes {
     val apiVersion: String = "0.1.0"
 
     def apply(
-        requestSequencer: RequestSequencer.Handle,
+        requestSequencer: Option[RequestSequencer.Handle],
         blockWeaver: BlockWeaver.Handle,
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
