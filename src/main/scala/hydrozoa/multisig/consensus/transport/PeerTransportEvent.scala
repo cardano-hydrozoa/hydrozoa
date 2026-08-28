@@ -29,6 +29,14 @@ object PeerTransportEvent:
     /** A dialer attempt to a remote peer failed. */
     final case class DialerFailed(remote: HeadPeerId, cause: Throwable) extends PeerTransportEvent
 
+    /** The connection to a remote ended without error — the peer closed cleanly, or the receive
+      * side reached end of stream. A read-deadline expiry is an **error** and surfaces as
+      * [[DialerFailed]], not here.
+      *
+      * Logged because a normal return is otherwise an unlogged state change.
+      */
+    final case class DialerDisconnected(remote: HeadPeerId, uri: Uri) extends PeerTransportEvent
+
     /** The dialer fiber for a remote peer was cancelled (resource release). */
     final case class DialerStopped(remote: HeadPeerId, uri: Uri) extends PeerTransportEvent
 

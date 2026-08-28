@@ -27,6 +27,10 @@ object CoilPeerWsTransportEventFormat:
             case DialerConnected(uri) =>
                 info(s"dialer: connected to hub at $uri")
             case DialerFailed(cause) =>
-                warn(s"dialer to hub failed: ${cause.getMessage}")
+                // Class as well as message: getMessage is null for most connection exceptions,
+                // which made a live incident undiagnosable from the logs.
+                warn(s"dialer to hub failed: ${cause.getClass.getSimpleName}: ${cause.getMessage}")
+            case DialerDisconnected(uri) =>
+                warn(s"dialer: disconnected from hub at $uri; redialing")
         }
     }

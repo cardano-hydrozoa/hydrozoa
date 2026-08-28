@@ -22,6 +22,8 @@
             <pattern>%msg%n</pattern>
         </layout>
     </appender>
+    <logger name="CoilPeerWsTransport" level="warn"/>
+    <logger name="PeerTransport" level="warn"/>
     <logger name="Mermaid.PeerLiaison" level="info" additivity="false">
     <!-- The only record of why a supervised actor failed; never quiet it. -->
     <logger name="Supervision" level="error"/>

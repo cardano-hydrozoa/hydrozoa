@@ -32,3 +32,12 @@ object CoilPeerWsTransportEvent:
 
     /** A dialer attempt to the hub failed. */
     final case class DialerFailed(cause: Throwable) extends CoilPeerWsTransportEvent
+
+    /** The connection to the hub ended without error — the peer closed cleanly, or the receive side
+      * reached end of stream. A read-deadline expiry is an **error** and surfaces as
+      * [[DialerFailed]], not here.
+      *
+      * Logged because `once` returning normally is otherwise an unlogged state change: the dialer
+      * goes straight back to redialing and the link looks continuously up.
+      */
+    final case class DialerDisconnected(uri: Uri) extends CoilPeerWsTransportEvent
