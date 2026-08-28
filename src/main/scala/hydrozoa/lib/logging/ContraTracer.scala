@@ -56,13 +56,19 @@ import scala.annotation.unused
   * @tparam M
   * @tparam A
   */
-case class ContraTracer[M[_], A](runTracer: TracerA[M, A, Unit]) {
+case class ContraTracer[M[_], A](runTracer: TracerA[M, A, Unit])(using Monad[M]) {
     import TracerA.given
     import ContraTracer.given
 
+    /** [[runTracer]] compiled to a plain function, once per tracer. Tracers are wired at
+      * construction time and traced hot, and recompiling the arrow per trace allocates; the
+      * upstream Haskell gets the same effect from `INLINE traceWith` + GHC let-floating.
+      */
+    private lazy val compiled: A => M[Unit] = runTracer.compile
+
     /** Run a tracer with a given input.
       */
-    def traceWith(a: A)(using Monad[M]): M[Unit] = this.runTracer.runTracerA.run(a)
+    def traceWith(a: A): M[Unit] = compiled(a)
 
     /** -- | Inverse of 'arrow'. Useful when writing arrow tracers which use a -- contravariant
       * tracer (the newtype in this module).
@@ -77,7 +83,7 @@ case class ContraTracer[M[_], A](runTracer: TracerA[M, A, Unit]) {
       *   -> m ()@, in which the predicate _must_ be forced no matter what, because it's impossible
       *   to know a priori whether that function will not produce any tracing effects.
       */
-    def traceMaybe[B](f: B => Option[A])(using Monad[M]): ContraTracer[M, B] = {
+    def traceMaybe[B](f: B => Option[A]): ContraTracer[M, B] = {
         def classify: TracerA[M, B, Either[Unit, A]] =
             Arrow[[X, Y] =>> TracerA[M, X, Y]].lift((x: B) =>
                 f(x).map(Right(_)).getOrElse(Left(()))
@@ -87,7 +93,7 @@ case class ContraTracer[M[_], A](runTracer: TracerA[M, A, Unit]) {
 
     /** A monadic version of `traceMaybe`.
       */
-    def traceMaybeM[B](f: B => M[Option[A]])(using Monad[M]): ContraTracer[M, B] = {
+    def traceMaybeM[B](f: B => M[Option[A]]): ContraTracer[M, B] = {
         def classify: TracerA[M, B, Either[Unit, A]] =
             TracerA.effect((x: B) => f(x).map(_.map(Right(_)).getOrElse(Left(()))))
         ContraTracer(classify >>> (TracerA.squelch ||| this.use))
@@ -95,33 +101,35 @@ case class ContraTracer[M[_], A](runTracer: TracerA[M, A, Unit]) {
 
     /** Uses 'traceMaybe' to give a tracer which emits only if a predicate is true.
       */
-    def squelchUnless(p: (A => Boolean))(using Monad[M]): ContraTracer[M, A] =
+    def squelchUnless(p: (A => Boolean)): ContraTracer[M, A] =
         traceMaybe(a => Some(a).filter(p))
 
     /** A monadic version of `squelchUnless`. */
-    def squelchUnlessM(p: A => M[Boolean])(using Monad[M]): ContraTracer[M, A] =
+    def squelchUnlessM(p: A => M[Boolean]): ContraTracer[M, A] =
         traceMaybeM(a => p(a).map(prop => if prop then Some(a) else None))
 
-    def traceTraversable[T[_]: Foldable](using Monad[M]): ContraTracer[M, T[A]] = runTracer match {
+    def traceTraversable[T[_]: Foldable]: ContraTracer[M, T[A]] = runTracer match {
         case Squelching(_) => nullTracer
         case _ => ContraTracer(TracerA.emit((t: T[A]) => Foldable[T].traverse_(t)(this.traceWith)))
     }
 
-    def traceAll[T[_]: Foldable, B](f: (B => T[A]))(using Monad[M]): ContraTracer[M, B] =
+    def traceAll[T[_]: Foldable, B](f: (B => T[A])): ContraTracer[M, B] =
         Contravariant[[X] =>> ContraTracer[M, X]].contramap(this.traceTraversable)(f)
 
     /** A contravariant transformation of a tracer using a Kleisli arrow
       * @param f
       *   Kleisli arrow which is evaluated only if a downstream tracer emits
       */
-    def contramapM[B](f: B => M[A])(using Monad[M]): ContraTracer[M, B] = ContraTracer(
+    def contramapM[B](f: B => M[A]): ContraTracer[M, B] = ContraTracer(
       TracerA.effect(f) >>> this.use
     )
 
     /** Use a natural transformation to change the @m@ type. This is useful, for instance, to use
       * concrete IO tracers in monad transformer stacks that have IO as their base.
       */
-    def natTracer[N[_], S](h: M ~> N): ContraTracer[N, A] = ContraTracer(TracerA.nat(h)(this.use))
+    def natTracer[N[_]: Monad, S](h: M ~> N): ContraTracer[N, A] = ContraTracer(
+      TracerA.nat(h)(this.use)
+    )
 }
 
 object ContraTracer {
@@ -157,7 +165,7 @@ object ContraTracer {
     /** Make an emitting tracer from a callback. -- mkTracer :: Applicative m => (a -> m ()) ->
       * Tracer m a mkTracer = Tracer . Arrow.emit
       */
-    def apply[M[_]: Applicative, A](f: A => M[Unit]): ContraTracer[M, A] = ContraTracer(
+    def apply[M[_]: Monad, A](f: A => M[Unit]): ContraTracer[M, A] = ContraTracer(
       TracerA.emit(f)
     )
 
@@ -169,7 +177,7 @@ object ContraTracer {
     /** Create a simple contravariant tracer which runs a given side-effect. emit :: Applicative m =>
       * (a -> m ()) -> Tracer m a emit f = Tracer (Arrow.emit f)
       */
-    def emit[M[_]: Applicative, A](f: A => M[Unit]): ContraTracer[M, A] = ContraTracer(
+    def emit[M[_]: Monad, A](f: A => M[Unit]): ContraTracer[M, A] = ContraTracer(
       TracerA.emit(f)
     )
 }
@@ -178,19 +186,19 @@ object ContraTracer {
   */
 object ContraTracerSyntax {
 
-    def traceWith[M[_]: Monad, A](a: A)(using ct: ContraTracer[M, A]): M[Unit] =
-        ct.runTracer.runTracerA.run(a)
+    def traceWith[M[_], A](a: A)(using ct: ContraTracer[M, A]): M[Unit] =
+        ct.traceWith(a)
 
     def use[M[_], A](using ct: ContraTracer[M, A]): TracerA[M, A, Unit] = ct.runTracer
 
-    def traceMaybe[M[_]: Monad, A, B](f: B => Option[A])(using
+    def traceMaybe[M[_], A, B](f: B => Option[A])(using
         ct: ContraTracer[M, A]
     ): ContraTracer[M, B] =
         ct.traceMaybe(f)
 //
 //        /** A monadic version of `traceMaybe`.
 //         */
-//        def traceMaybeM[B](f: B => M[Option[A]])(using Monad[M]): ContraTracer[M, B] = {
+//        def traceMaybeM[B](f: B => M[Option[A]]): ContraTracer[M, B] = {
 //            def classify: TracerA[M, B, Either[Unit, A]] =
 //                TracerA.effect((x: B) => f(x).map(_.map(Right(_)).getOrElse(Left(()))))
 //
@@ -199,11 +207,11 @@ object ContraTracerSyntax {
 //
 //        /** Uses 'traceMaybe' to give a tracer which emits only if a predicate is true.
 //         */
-//        def squelchUnless(p: (A => Boolean))(using Monad[M]): ContraTracer[M, A] =
+//        def squelchUnless(p: (A => Boolean)): ContraTracer[M, A] =
 //            traceMaybe(a => Some(a).filter(p))
 //
 //        /** A monadic version of `squelchUnless`. */
-//        def squelchUnlessM(p: A => M[Boolean])(using Monad[M]): ContraTracer[M, A] =
+//        def squelchUnlessM(p: A => M[Boolean]): ContraTracer[M, A] =
 //            traceMaybeM(a => p(a).map(prop => if prop then Some(a) else None))
 //
 //        def traceTraversable[T[_] : Foldable](using Monad[M]): ContraTracer[M, T[A]] = runTracer match {
@@ -219,7 +227,7 @@ object ContraTracerSyntax {
 //         * @param f
 //         * Kleisli arrow which is evaluated only if a downstream tracer emits
 //         */
-//        def contramapM[B](f: B => M[A])(using Monad[M]): ContraTracer[M, B] = ContraTracer(
+//        def contramapM[B](f: B => M[A]): ContraTracer[M, B] = ContraTracer(
 //            TracerA.effect(f) >>> this.use
 //        )
 //

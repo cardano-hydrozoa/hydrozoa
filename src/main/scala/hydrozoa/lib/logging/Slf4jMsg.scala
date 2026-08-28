@@ -1,7 +1,5 @@
 package hydrozoa.lib.logging
 
-import cats.Monad
-
 /** A small generic message ADT for call sites that don't merit a typed event of their own —
   * typically app entry points (`hydrozoa.app.*`) and test scaffolding. Production actors and shared
   * infrastructure define their own `XYZEvent` ADT and pass `ContraTracer[IO, XYZEvent]`.
@@ -44,7 +42,7 @@ object Slf4jMsgFormat:
   *
   * }}}
   */
-extension [F[_]: Monad](t: ContraTracer[F, Slf4jMsg])
+extension [F[_]](t: ContraTracer[F, Slf4jMsg])
     def trace(msg: => String): F[Unit] = t.traceWith(Slf4jMsg.Trace(msg))
     def debug(msg: => String): F[Unit] = t.traceWith(Slf4jMsg.Debug(msg))
     def info(msg: => String): F[Unit] = t.traceWith(Slf4jMsg.Info(msg))
