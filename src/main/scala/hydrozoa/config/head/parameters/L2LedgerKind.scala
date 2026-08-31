@@ -18,10 +18,16 @@ object L2LedgerKind {
     private val cardanoEutxo = "cardano-eutxo"
     private val anyRemote = "any-remote"
 
-    given Encoder[L2LedgerKind] = Encoder.encodeString.contramap {
-        case L2LedgerKind.CardanoEutxo => cardanoEutxo
-        case L2LedgerKind.AnyRemote    => anyRemote
-    }
+    extension (self: L2LedgerKind)
+        /** The name this kind carries in every config file and on the wire. Single-sourced here so
+          * the JSON codec and [[hydrozoa.config.head.HeadParamsHash]] agree by construction.
+          */
+        def configString: String = self match {
+            case L2LedgerKind.CardanoEutxo => cardanoEutxo
+            case L2LedgerKind.AnyRemote    => anyRemote
+        }
+
+    given Encoder[L2LedgerKind] = Encoder.encodeString.contramap(_.configString)
 
     given Decoder[L2LedgerKind] = Decoder.decodeString.emap {
         case `cardanoEutxo` => Right(L2LedgerKind.CardanoEutxo)

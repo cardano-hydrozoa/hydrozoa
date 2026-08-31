@@ -47,8 +47,10 @@ folded in as an opaque leaf.
 ### Where it lives
 
 The digest needs `initialEquityContributions`, `blockBrief`, `coilPeers`, and
-`scriptReferenceUtxos` as well as `HeadParameters`, so it belongs on `HeadConfig.Section`, not
-on `HeadParameters.Section` where the current stub sits.
+`scriptReferenceUtxos` as well as `HeadParameters`, so it lives on `HeadConfig.Section` — a
+`lazy val` on the `HeadConfig` case class, delegated to by the trait. The layout itself is
+`config/head/HeadParamsHash.scala`; `HeadParamsHashTest` mutates every covered field one at a
+time and asserts the digest moves, and asserts it does **not** move for `webSocketAddress`.
 
 `InitializationTx.Parse` must **not** compute it. Its `Config` is a deliberately minimal
 intersection —
@@ -76,6 +78,7 @@ unable to parse its own initialization transaction.
 | `u8(n)` | 1 byte |
 | `u32(n)` | 4 bytes, big-endian unsigned |
 | `u64(n)` | 8 bytes, big-endian; signed values two's-complement |
+| `f64(x)` | 8 bytes, big-endian IEEE-754 bits (`doubleToLongBits`, so every NaN is one pattern) |
 | `bool(b)` | 1 byte, `0x00` false / `0x01` true |
 | `framed(b)` | `u32(length)` ‖ the bytes |
 | `raw(b)` | the bytes, no framing — fixed-width fields only |
@@ -89,6 +92,7 @@ boundary unambiguous. Value types map as:
 | `QuantizedInstant` | `u64` milliseconds since the Unix epoch (`.toEpochMilli`) |
 | `Coin` | `u64` lovelace |
 | `PositiveInt`, `Int`, `HeadPeerNumber`, `CoilPeerNumber` | `u32` |
+| `Double` | `f64` |
 | `Boolean` | `bool` |
 | `Hash32`, `EvacuationMapHash` | `raw`, 32 bytes |
 | `ScriptHash` | `raw`, 28 bytes |
@@ -124,6 +128,9 @@ headParamsHash = blake2b_256(
 
   -- HeadParameters.rateLimits
   || u64(softBlockMinPeriod)         || u64(hardStackMinPeriod)
+  || u32(blockBacklogSoftLimit)      || u32(blockBacklogHardLimit)
+  || f64(blockGateFloor)             || f64(blockGateSmoothing)
+  || u64(blockGateSlice)
 
   -- HeadParameters: the rest
   || u32(coilQuorum)
@@ -162,20 +169,24 @@ of it is separately checked.
 ### Notes on individual fields
 
 `rateLimits` lives in `HeadParameters` rather than in the per-node
-`NodeOperationMultisigConfig` because both knobs gate consensus cadence — `softBlockMinPeriod`
-on the `FastConsensusActor → BlockWeaver` lane, `hardStackMinPeriod` on
-`SlowConsensusActor → StackComposer` — and peers running different cadences produce different
-blocks. It is its own section rather than a member of `txTiming`: `txTiming` holds L1
-transaction validity windows, slot-quantized and consumed by transaction builders, while rate
-limits are wall-clock gates that reach no transaction. See `docs/spec/rate-limiter.md`.
+`NodeOperationMultisigConfig` because every knob in it gates consensus cadence, and peers
+running different cadences produce different blocks. `softBlockMinPeriod` spaces the
+`FastConsensusActor → BlockWeaver` lane and `hardStackMinPeriod` the
+`SlowConsensusActor → StackComposer` lane; `blockBacklogSoftLimit`, `blockBacklogHardLimit`,
+`blockGateFloor`, `blockGateSmoothing` and `blockGateSlice` shape how the block gate shortens
+that spacing as the backlog grows. Pinning the period alone would leave two peers agreeing on
+the hash while cutting different blocks under load, so the whole section is covered. It is its
+own section rather than a member of `txTiming`: `txTiming` holds L1 transaction validity
+windows, slot-quantized and consumed by transaction builders, while rate limits are wall-clock
+gates that reach no transaction. See `docs/spec/rate-limiter.md`.
 
 `coilQuorum` and the peer verification keys are already pinned by the native script.
 `coilQuorum` is folded in anyway because it is a `HeadParameters` field and the section is
 covered whole; the verification keys are not, because they are pinned by construction.
 
-`networkId` is the Cardano network id byte: `0x01` mainnet, `0x00` testnet. `protocolMagic`
-alone does not determine it, because `CardanoNetwork.Custom` pairs an arbitrary `CardanoInfo`
-with an arbitrary magic. `cardanoProtocolParams` is deliberately absent: it is fetched from the
+`networkId` is scalus's own `Network.networkId` — the Cardano network id byte, defined for every
+case including `Network.Other`. `protocolMagic` alone does not determine it, because
+`CardanoNetwork.Custom` pairs an arbitrary `CardanoInfo` with an arbitrary magic. `cardanoProtocolParams` is deliberately absent: it is fetched from the
 chain and moves with hard forks, so it is not something peers agree on.
 
 `initialEquityContributions` contributes its per-peer split, not just its total. Only the total
