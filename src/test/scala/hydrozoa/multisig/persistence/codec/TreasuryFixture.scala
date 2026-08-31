@@ -25,7 +25,8 @@ object TreasuryFixture:
         )
         val datum = MultisigTreasuryUtxo.Datum(
           commit = ByteString.fromArray(Array.fill[Byte](48)(0x42.toByte)),
-          versionMajor = BigInt(7)
+          versionMajor = BigInt(7),
+          headParamsHash = ByteString.fromArray(Array.fill[Byte](32)(0x11.toByte))
         )
         MultisigTreasuryUtxo(
           treasuryTokenName = AssetName(tokenNameBytes),

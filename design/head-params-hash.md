@@ -46,9 +46,11 @@ folded in as an opaque leaf.
 
 ### Where it lives
 
-The digest needs `initialEquityContributions`, `blockBrief`, `coilPeers`, and
-`scriptReferenceUtxos` as well as `HeadParameters`, so it lives on `HeadConfig.Section` — a
-`lazy val` on the `HeadConfig` case class, delegated to by the trait. The layout itself is
+`HeadParamsHash(config, initialBlockHeader)` takes `HeadConfig.Bootstrap.Section` — which
+carries `initialEquityContributions`, `coilPeers` and `scriptReferenceUtxos` alongside
+`HeadParameters` — plus block zero's header on its own, because the digest must be computable
+before the initialization transaction is parsed. The result is a `lazy val` on the `HeadConfig`
+case class, delegated to by `HeadParamsHash.Section`. The layout itself is
 `config/head/HeadParamsHash.scala`; `HeadParamsHashTest` mutates every covered field one at a
 time and asserts the digest moves, and asserts it does **not** move for `webSocketAddress`.
 
@@ -203,11 +205,15 @@ many `HubHardAck` journals a recovering coil peer must read. It is not in the na
 Coil peer numbers are contiguous from zero, so their position in the sequence is their number
 and is not repeated.
 
-### Pin the outref where the chain pins the outref
+`coilPeers` contributes **only** that topology. Its verification keys are deliberately left
+out: they sit in the native script's `MOf` branch and so are already pinned by the treasury
+address, exactly as the head peer keys are by the `AllOf` branch. Folding a key in twice would
+buy nothing, and the hub assignment is the one part of `CoilPeerData` no script covers.
 
-The three script references are pinned three different ways, and the rule behind that is worth
-stating: **pin an output reference exactly where the chain pins an output reference; pin the
-hash everywhere else.**
+### How the three script references are pinned
+
+Not the same way, and the rule behind the split is worth stating: **pin an output reference
+exactly where the chain pins an output reference; pin the hash everywhere else.**
 
 | reference | pinned as | why |
 |---|---|---|
@@ -326,33 +332,38 @@ Five checks, at four moments. Every one reuses a comparison point the code alrea
 | 4 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `l2ParamsHash` against the config's | refuse to boot |
 | 5 | every major block | every head and coil peer | the settlement tx's treasury datum `headParamsHash` against the local one | refuse to sign the block |
 
-Check 3 exists today. The rest are new, but checks 1 and 2 slot into comparison points that
-already exist — `InitializationTx.Parse`'s datum equality and `RocksDbBackendStore`'s
-`versionCheck`.
+Check 3 exists today. Checks 1 and 5 are built — they sit in `InitializationTx.Parse` and
+`SettlementTx`. Checks 2 and 4 are not yet.
 
 ### 1. The initialization transaction matches the hash
 
-The load-bearing one. `InitializationTx.Parse` already rebuilds the expected treasury datum
-from local config and compares it whole:
+The load-bearing one. `InitializationTx.Parse` rebuilds the expected treasury datum from local
+config and compares it **field by field** — a whole-datum equality would report one opaque
+message for three unrelated operator problems:
 
 ```scala
-expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(config.initialEvacuationMap)
-...
-if decodedTreasuryDatum == expectedTreasuryDatum then Right(()) else Left(InvalidTransactionError(...))
+expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
+  config.initialEvacuationMap,
+  ByteString.fromArray(headParamsHash.bytes)
+)
 ```
 
-Adding `headParamsHash` to the datum makes that comparison cover the whole configuration for
-free. Everything folded into the preimage becomes self-verifying against a value committed
+`headParamsHash` in the datum makes that comparison cover the whole configuration. Everything folded into the preimage becomes self-verifying against a value committed
 on-chain: a peer whose `depositMaturityDuration`, `maxRequestsPerBlock`, fallback contingency
 split, hub topology, or setup-ladder anchor differs from the one the initialization transaction
 was built for cannot parse that transaction, so it never signs block zero and the head does not
 start split.
 
-**Split the comparison into per-field checks.** A whole-datum equality reports
-`"actual treasury datum does not match the expected initial treasury datum"` for three
-completely different operator problems: a wrong initial evacuation map (`commit`), a stale
-version (`versionMajor`), and a configuration disagreement (`headParamsHash`). The third is the
-one an operator can actually act on, and it needs to say so.
+The three fields fail for three unrelated reasons — a wrong initial evacuation map (`commit`), a
+stale version (`versionMajor`), and a configuration disagreement (`headParamsHash`) — and only
+the third is something an operator can act on, so each carries its own message naming the two
+digests.
+
+`Parse` takes the digest as an already-computed `Hash32` rather than deriving it: computing it
+needs nearly the whole head config, and `Parse` deliberately asks for only the five sections it
+uses. `HeadConfig`'s decoder computes it, as does `Bootstrap.mkSharedHeadConfig` — which builds
+block zero's header **before** the transactions for exactly this reason, since the header is part
+of the preimage and the init tx's datum carries the result.
 
 Two properties fall out of where this check sits, and both are worth relying on deliberately:
 
@@ -454,11 +465,13 @@ wrong one. Same rule the evacuation map digest already follows.
 `SettlementTx` builds a fresh treasury datum for every major block:
 
 ```scala
-datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced)
+datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced, config.headParamsHashBytes)
 ```
 
-With a third field it must carry `headParamsHash` forward unchanged, and every peer verifies a
-settlement transaction before signing it. So the configuration agreement is re-checked once per
+The digest comes from the builder's **own config**, not from the spent treasury's datum. Carrying
+it forward would make every peer reproduce whatever was already there and check nothing; taking
+it from config means a peer whose config diverged produces a datum the others reject. Every peer
+verifies a settlement transaction before signing it. So the configuration agreement is re-checked once per
 major block for the life of the head, by the machinery that already verifies settlements — a
 peer whose configuration drifts after initialization stops being able to get blocks signed.
 
@@ -496,3 +509,39 @@ afterwards. Follow the configuration-change procedure: state which files change,
 existing configs still decode, verify both decoders (`HeadParameters` and
 `Bootstrap.BootstrapHeadParams`), and carry the migration into the release notes of the release
 that ships it.
+
+## Open questions
+
+1. **The datum, or transaction metadata?** Nothing on-chain reads `headParamsHash`: the
+   multisig treasury sits at a native script address, so no validator runs, and the Plutus
+   treasury in the digest is the rule-based one, a different address after fallback. Off-chain
+   there is exactly one reader — `InitializationTx.Parse` compares the decoded datum against
+   the locally computed value. `SettlementTx` writes the field from config and never reads the
+   spent treasury's copy. Metadata would satisfy both of today's checks equally well, and
+   signing is not a differentiator: `auxiliary_data_hash` sits in the transaction body, so
+   signatures commit to metadata exactly as they do to a datum. What the datum buys is that it
+   is utxo state, so every settlement is structurally forced to reproduce it — which is what
+   makes check 5 cover config fields that reach no transaction at all — and that it survives
+   into the rule-based regime if the dispute path ever needs to read it. What it costs is 32
+   bytes plus encoding on every treasury utxo for the life of the head, and a datum arity
+   change that no running head can adopt. Decision so far: keep it in the datum.
+
+2. **Retuning rate limits on a live head.** The five block-gate knobs exist precisely to be
+   tuned against observed load, and operators will want to change them on a head that is
+   already running. Folding `rateLimits` into `headParamsHash` makes that impossible: a changed
+   knob changes the digest, so check 1 refuses the config at boot and check 5 refuses to sign
+   the next major block. Retuning becomes a head re-initialization. Three ways out, none
+   chosen:
+   - **Accept it.** Cadence decides block boundaries, so it is a head-governance parameter like
+     any other, and changing it mid-head is exactly the kind of unilateral drift the digest
+     exists to stop.
+   - **Split the section.** Keep `softBlockMinPeriod` and `hardStackMinPeriod` head-agreed —
+     they set the spacing every peer must share — and leave the backlog-gate shape
+     (`blockBacklogSoftLimit`, `blockBacklogHardLimit`, `blockGateFloor`, `blockGateSmoothing`,
+     `blockGateSlice`) node-local, on the argument that it only decides how far a peer shortens
+     its *own* spacing under its *own* backlog. Whether that argument holds is the crux: if two
+     peers with different gate shapes can cut different blocks from the same mempool, it does
+     not.
+   - **A signed parameter-change path.** The treasury datum already carries `versionMajor`; a
+     settlement could in principle move the head to a new `headParamsHash` under an effect every
+     peer signs. That is a feature in its own right, not a tweak to this design.

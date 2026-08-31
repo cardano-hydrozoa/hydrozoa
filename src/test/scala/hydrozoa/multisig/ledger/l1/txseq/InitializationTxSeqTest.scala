@@ -19,6 +19,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.uplc.builtin.Builtins.blake2b_224
+import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
 import test.*
 import test.TransactionChain.observeTxChain
@@ -63,7 +64,10 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             val props = mutable.Buffer.empty[Prop]
             val res =
                 InitializationTxSeq
-                    .Build(config, funding)(config.initialBlock.blockBrief.endTime)
+                    .Build(config, funding)(
+                      config.initialBlock.blockBrief.endTime,
+                      config.headParamsHash
+                    )
                     .result
             props.append(s"Expected successful build, but got $res" |: res.isRight)
 
@@ -547,10 +551,31 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                       blockCreationEndTime = config.initialBlock.blockBrief.endTime,
                       transactionSequence = txSeq,
                       resolvedUtxos = iTx.resolvedUtxos,
+                      headParamsHash = config.headParamsHash
                     )
                     .result
 
                 s"InitializationTxSeq should parse successfully $parseRes" |: parseRes.isRight
+            }
+
+            // The configuration-agreement gate: a peer whose head config differs from the one the
+            // init tx was built for must refuse it, so it never signs block zero and the head does
+            // not start split. Standing in for a divergent config with a divergent digest is
+            // exactly what the parser sees — it takes the hash, not the config.
+            props.append {
+                val foreignHash = Hash[Blake2b_256, Any](
+                  ByteString.fromArray(Array.fill[Byte](32)(0x5a))
+                )
+                val parseRes = InitializationTxSeq
+                    .Parse(config)(
+                      blockCreationEndTime = config.initialBlock.blockBrief.endTime,
+                      transactionSequence = (iTx.tx, fbTx.tx),
+                      resolvedUtxos = iTx.resolvedUtxos,
+                      headParamsHash = foreignHash
+                    )
+                    .result
+
+                s"a mismatched headParamsHash must be rejected, got $parseRes" |: parseRes.isLeft
             }
 
             // The init tx anchors the head's double-entry balance identity: the treasury output
@@ -572,7 +597,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                     .Parse(config)(
                       blockCreationEndTime = config.initialBlock.blockBrief.endTime,
                       tx = doctoredTx,
-                      resolvedUtxos = iTx.resolvedUtxos
+                      resolvedUtxos = iTx.resolvedUtxos,
+                      headParamsHash = config.headParamsHash
                     )
                     .result
                 val rejected = parseRes match {

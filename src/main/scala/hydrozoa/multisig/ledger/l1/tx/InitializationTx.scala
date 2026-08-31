@@ -93,10 +93,17 @@ object InitializationTx {
 
         }
 
+        /** @param headParamsHash
+          *   the digest of the reader's own head config, passed in already computed rather than
+          *   derived from [[Config]]: computing it needs nearly the whole head config, and this
+          *   parser deliberately asks for only the five sections it uses. See
+          *   `design/head-params-hash.md`.
+          */
         final case class Parse(config: Config)(
             blockCreationEndTime: BlockCreationEndTime,
             tx: Transaction,
-            resolvedUtxos: ResolvedUtxos
+            resolvedUtxos: ResolvedUtxos,
+            headParamsHash: Hash32
         ) {
 
             import Parse.*
@@ -122,7 +129,8 @@ object InitializationTx {
                 )
 
                 expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
-                  config.initialEvacuationMap
+                  config.initialEvacuationMap,
+                  ByteString.fromArray(headParamsHash.bytes)
                 )
 
                 actualOutputs = tx.body.value.outputs.map(_.value)
@@ -211,13 +219,40 @@ object InitializationTx {
                   Data.fromData[MultisigTreasuryUtxo.Datum](encodedTreasuryDatum)
                 ).toEither.left
                     .map(_ => InvalidTransactionError("data decoding of treasury datum failed"))
+                // Field by field, not a whole-datum equality: the three fields fail for three
+                // unrelated reasons, and only a per-field message tells the operator which.
                 _ <-
-                    if decodedTreasuryDatum == expectedTreasuryDatum then Right(())
+                    if decodedTreasuryDatum.commit == expectedTreasuryDatum.commit then Right(())
                     else
                         Left(
                           InvalidTransactionError(
-                            "actual treasury datum does not match the expected initial " +
-                                "treasury datum"
+                            "treasury datum commits to a different initial evacuation map than " +
+                                "this config's"
+                          )
+                        )
+                _ <-
+                    if decodedTreasuryDatum.versionMajor == expectedTreasuryDatum.versionMajor
+                    then Right(())
+                    else
+                        Left(
+                          InvalidTransactionError(
+                            s"treasury datum has major version ${decodedTreasuryDatum.versionMajor}," +
+                                s" expected ${expectedTreasuryDatum.versionMajor}"
+                          )
+                        )
+                // The configuration-agreement gate. Peers never compare configs with each other;
+                // they each compare against this one transaction, so agreeing with it is agreeing
+                // with each other (design/head-params-hash.md).
+                _ <-
+                    if decodedTreasuryDatum.headParamsHash == expectedTreasuryDatum.headParamsHash
+                    then Right(())
+                    else
+                        Left(
+                          InvalidTransactionError(
+                            "this node's head config does not match the one the head was " +
+                                "initialized with: the initialization tx pins headParamsHash " +
+                                s"${decodedTreasuryDatum.headParamsHash.toHex}, this config " +
+                                s"hashes to ${expectedTreasuryDatum.headParamsHash.toHex}"
                           )
                         )
 

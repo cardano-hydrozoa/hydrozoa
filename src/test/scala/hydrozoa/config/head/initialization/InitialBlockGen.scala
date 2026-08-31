@@ -5,7 +5,7 @@ import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
-import hydrozoa.config.head.{HeadConfig, generateHeadConfigBootstrap}
+import hydrozoa.config.head.{HeadConfig, HeadParamsHash, generateHeadConfigBootstrap}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import org.scalacheck.Test.Parameters
@@ -26,29 +26,34 @@ def generateInitialBlock(
 
         blockCreationEndTime <- generateBlockCreationEndTime
 
-        initTxSeq =
-            InitializationTxSeq.Build(config, funding)(blockCreationEndTime).result match {
-                case Left(e) =>
-                    throw new RuntimeException(e.toString, e)
-                case Right(x) => x
-            }
-
-        fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
+        // The header is built before the transactions, as `Bootstrap.mkSharedHeadConfig` does:
+        // `headParamsHash` covers it and the init tx's treasury datum carries that digest.
+        fallbackTxStartTime = config.headParameters.txTiming.newFallbackStartTime(
+          blockCreationEndTime
+        )
         forcedMajorBlockWakeupTime = config.headParameters.txTiming.forcedMajorBlockWakeupTime(
           fallbackTxStartTime
         )
+        header = BlockHeader.Initial(
+          startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
+          endTime = blockCreationEndTime,
+          fallbackTxStartTime = fallbackTxStartTime,
+          forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+          mDepositDecisionWakeupTime = None,
+        )
+
+        initTxSeqResult = InitializationTxSeq
+            .Build(config, funding)(blockCreationEndTime, HeadParamsHash(config, header))
+            .result
+
+        initTxSeq = initTxSeqResult match {
+            case Left(e)  => throw new RuntimeException(e.toString, e)
+            case Right(x) => x
+        }
 
     } yield InitialBlock(
       Block.Unsigned.Initial(
-        blockBrief = BlockBrief.Initial(
-          BlockHeader.Initial(
-            startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
-            endTime = blockCreationEndTime,
-            fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
-            forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
-            mDepositDecisionWakeupTime = None,
-          )
-        ),
+        blockBrief = BlockBrief.Initial(header),
         // Unsigned — slow consensus stack-0 signs them at startup.
         effects = BlockEffects.Unsigned.Initial(
           initializationTx = initTxSeq.initializationTx,

@@ -4,6 +4,7 @@ import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.multisig.ledger.block.BlockHeader
 import java.io.ByteArrayOutputStream
 import java.lang.Double.doubleToLongBits
 import java.nio.charset.StandardCharsets.UTF_8
@@ -12,6 +13,11 @@ import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, ScriptHash, Trans
 import scalus.uplc.builtin.{ByteString, platform}
 
 /** The digest that pins a head's agreed configuration, as defined in `design/head-params-hash.md`.
+  *
+  * It takes the bootstrap context and block zero's header rather than a whole
+  * [[HeadConfig.Section]] because it must be computable **before** the initialization transaction
+  * is parsed: `HeadConfig`'s decoder needs the digest to hand to `InitializationTx.Parse`, and only
+  * the block brief's header — never the transaction — is part of the preimage.
   *
   * It covers the **whole head config**, not only the [[parameters.HeadParameters]] case class: the
   * head parameters, the L1 network, the per-peer equity split, the script references, block zero's
@@ -38,13 +44,26 @@ import scalus.uplc.builtin.{ByteString, platform}
   */
 object HeadParamsHash {
 
+    /** Grants read access to the digest without dragging in the whole [[HeadConfig.Section]].
+      * Transaction builders that must write it into a treasury datum ask for this and nothing more.
+      */
+    trait Section {
+        def headParamsHash: Hash32
+
+        /** The digest in the form the treasury datum holds it. */
+        final def headParamsHashBytes: ByteString = ByteString.fromArray(headParamsHash.bytes)
+    }
+
     /** Mixed in before anything else so this digest can never collide with a hash of the same bytes
       * taken for another purpose. ASCII, no terminator — the fixed-width field that follows makes
       * the boundary unambiguous.
       */
     val domainTag: Array[Byte] = "gummiworm-head-params-v1".getBytes(UTF_8)
 
-    def apply(config: HeadConfig.Section): Hash32 = {
+    def apply(
+        config: HeadConfig.Bootstrap.Section,
+        initialBlockHeader: BlockHeader.Initial
+    ): Hash32 = {
         val out = Buffer()
         out.raw(domainTag)
 
@@ -122,7 +141,7 @@ object HeadParamsHash {
 
         // -- initialBlockTiming. Only `startTime` and `endTime` reach the initialization
         // transaction's validity end; the other three reach no transaction at all.
-        val header = config.initialBlock.blockBrief.header
+        val header = initialBlockHeader
         out.instant(header.startTime.convert)
         out.instant(header.endTime.convert)
         out.instant(header.fallbackTxStartTime.convert)
@@ -134,8 +153,12 @@ object HeadParamsHash {
                 out.instant(wakeup.convert)
         }
 
-        // -- coilHubTopology, ascending by CoilPeerNumber. Coil peer numbers are contiguous from
-        // zero, so a hub's position in the sequence is its coil peer number and is not repeated.
+        // -- coilHubTopology, ascending by CoilPeerNumber. Only the topology is taken from
+        // `coilPeers` — which head peer hubs each coil peer, which the native script says nothing
+        // about. The coil verification keys are deliberately NOT folded in: they sit in the
+        // script's `MOf` branch, so they are already pinned by the treasury address, exactly as
+        // the head peer keys are. Coil peer numbers are contiguous from zero, so a hub's position
+        // in the sequence is its coil peer number and is not repeated.
         val coilPeers = config.coilPeers
         val hubs = coilPeers.coilPeerNumbers.flatMap(coilPeers.hubHeadPeerNumber)
         out.u32(hubs.size)

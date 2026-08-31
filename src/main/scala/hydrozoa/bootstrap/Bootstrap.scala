@@ -6,7 +6,6 @@ import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.config.ScriptReferenceUtxos
-import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.block.BlockConfig
@@ -19,6 +18,7 @@ import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind, RateLimits}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
+import hydrozoa.config.head.{HeadConfig, HeadParamsHash}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
@@ -558,30 +558,34 @@ object Bootstrap:
           )
         )(IO.pure)
 
+        // Block zero's header is built before the transactions, not read back off them: the init
+        // tx's treasury datum carries `headParamsHash`, and the header is part of that digest's
+        // preimage. Every field here is derived from the config and `blockCreationEndTime`, which
+        // is exactly what `InitializationTxSeq.Build` derives the fallback's start time from.
+        fallbackTxStartTime = headParams.txTiming.newFallbackStartTime(blockCreationEndTime)
+        forcedMajorBlockWakeupTime = headParams.txTiming.forcedMajorBlockWakeupTime(
+          fallbackTxStartTime
+        )
+        initialBlockHeader = BlockHeader.Initial(
+          startTime = blockCreationStartTime,
+          endTime = blockCreationEndTime,
+          fallbackTxStartTime = fallbackTxStartTime,
+          forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+          mDepositDecisionWakeupTime = None,
+        )
+        headParamsHash = HeadParamsHash(bootstrap, initialBlockHeader)
+
         initTxSeq <- InitializationTxSeq
-            .Build(bootstrap, funding)(blockCreationEndTime)
+            .Build(bootstrap, funding)(blockCreationEndTime, headParamsHash)
             .result
             .fold(
               e => logger.error(e.toString) >> IO.raiseError(e),
               IO.pure
             )
 
-        fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
-        forcedMajorBlockWakeupTime = headParams.txTiming.forcedMajorBlockWakeupTime(
-          fallbackTxStartTime
-        )
-
         initialBlock = InitialBlock(
           Block.Unsigned.Initial(
-            blockBrief = BlockBrief.Initial(
-              BlockHeader.Initial(
-                startTime = blockCreationStartTime,
-                endTime = blockCreationEndTime,
-                fallbackTxStartTime = fallbackTxStartTime,
-                forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
-                mDepositDecisionWakeupTime = None,
-              )
-            ),
+            blockBrief = BlockBrief.Initial(initialBlockHeader),
             // Unsigned init+fallback — slow consensus's stack-0 hard-ack flow signs them at boot.
             effects = BlockEffects.Unsigned.Initial(
               initializationTx = initTxSeq.initializationTx,
