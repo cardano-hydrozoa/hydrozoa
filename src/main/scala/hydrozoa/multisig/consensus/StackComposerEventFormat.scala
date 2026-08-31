@@ -21,6 +21,16 @@ object StackComposerEventFormat:
                   s"$role closing stack $sn with blocks $first..$last",
                   "stackNum" -> s"${sn: Int}"
                 )
+            case PreviousStackHardConfirmed(sn) =>
+                info(
+                  s"single-flight gate OPEN: stack $sn hard-confirmed",
+                  "stackNum" -> s"${sn: Int}"
+                )
+            case SingleFlightGateClosed(sn) =>
+                info(
+                  s"single-flight gate CLOSED on stack $sn; awaiting its hard confirmation",
+                  "stackNum" -> s"${sn: Int}"
+                )
             case StructuralDivergence(sn, lFirst, lLast, expected) =>
                 warn(
                   s"Follower stack $sn structural divergence: leader brief [$lFirst..$lLast] but expected to start at $expected",

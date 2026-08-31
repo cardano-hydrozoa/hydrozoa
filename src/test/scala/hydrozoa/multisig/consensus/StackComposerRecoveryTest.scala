@@ -18,6 +18,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
@@ -184,7 +185,8 @@ class StackComposerRecoveryTest extends AnyFunSuite:
                               headPeerLiaisons = List()
                             ),
                             ContraTracer.nullTracer[IO, StackComposerEvent],
-                            persistence
+                            persistence,
+                            PeerMetrics.create(0L, Vector.empty)
                           )
                         )
                         r <- check(gotHandoff)

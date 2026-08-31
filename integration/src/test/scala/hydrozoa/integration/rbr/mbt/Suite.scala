@@ -7,7 +7,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness.CardanoBackend as HarnessCardanoBackend
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.harness.{DiagnosticTracers, MultiPeerHeadHarness, ScenarioSummary}
+import hydrozoa.integration.harness.{DiagnosticTracers, MultiPeerHeadHarness}
 import hydrozoa.integration.preview.PublicSetup
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet
 import hydrozoa.integration.rbr.property.{ObservableMarking, RbrSeed}
@@ -241,12 +241,6 @@ case class RbrMbtSuite(
 
     override def sutResource(state: Model.ModelState): Resource[IO, Sut] =
         for
-            // Acquired first so its finalizer runs last: the run-scoped scenario summary is
-            // rendered at the very end, after harness teardown.
-            summary <- ScenarioSummary.resource(
-              s"$label-ws",
-              explorerTxUrl(state.params.cardanoBackendMode),
-            )
             fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
             evacuationDone <- Resource.eval(Deferred[IO, Unit])
             firstPayoutsLeft <- Resource.eval(Ref[IO].of(Option.empty[Int]))
@@ -267,8 +261,6 @@ case class RbrMbtSuite(
                   // Reusable test-side diagnostic tracer (composed, not baked into production
                   // formatting) that surfaces the RBA's candidate-map / resolved-kzg detail.
                   DiagnosticTracers.rbrDiagnostics |+|
-                  // Run-scoped summarizer: collects only successful actions, prints once at the end.
-                  summary.tracer |+|
                   observerTracer(
                     fallbackDispatched,
                     evacuationDone,
@@ -286,10 +278,8 @@ case class RbrMbtSuite(
                             .map(_ && etx.transactionFamily == "SettlementTx"),
                     // Record the inputs of every settlement that clears the firewall (for the
                     // committed-deposit set) and the L1 position of every withdrawal that lands
-                    // (for `W`) — both derived at fallback (see [[Sut]]). `summary.firewallTracer`
-                    // captures every successful L1 submission for the run's evidence ledger.
+                    // (for `W`) — both derived at fallback (see [[Sut]]).
                     firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId) |+|
-                        summary.firewallTracer(peerId) |+|
                         firewallLedgerObserver(
                           submittedSettlementInputs,
                           settledMajors,
@@ -316,18 +306,6 @@ case class RbrMbtSuite(
           withdrawnOutputRefs,
           submittedTxIds,
         )
-
-    /** The per-backend cexplorer link builder the scenario summary injects. `Mock` has no chain and
-      * `Yaci` is a `Custom` devnet with no public explorer, so both yield no link (the summary
-      * falls back to the bare tx hash). `Public` runs on Preview — its network is modeled as
-      * `Custom` (for live params/slots), but it *is* Preview, so link to `preview.cexplorer.io`.
-      */
-    private def explorerTxUrl(mode: HarnessCardanoBackend.Mode): TransactionHash => Option[String] =
-        mode match
-            case HarnessCardanoBackend.Mode.Mock         => _ => None
-            case HarnessCardanoBackend.Mode.Yaci(net, _) => ScenarioSummary.cexplorerTxUrl(net, _)
-            case HarnessCardanoBackend.Mode.Public(_, _, _) =>
-                ScenarioSummary.cexplorerTxUrl(CardanoNetwork.Preview, _)
 
     /** Firewall observer over every outbound tx that clears the firewall (a `SubmittedTx`):
       *   - For a settlement: record its L1 inputs (`submittedSettlementInputs`) and produced major

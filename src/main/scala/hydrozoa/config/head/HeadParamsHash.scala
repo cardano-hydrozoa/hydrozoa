@@ -6,6 +6,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.Durations.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.block.BlockHeader
 import java.io.ByteArrayOutputStream
+import java.lang.Double.doubleToLongBits
 import java.nio.charset.StandardCharsets.UTF_8
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, ScriptHash, TransactionInput}
@@ -92,9 +93,16 @@ object HeadParamsHash {
         out.u32(config.maxRequestsPerBlock.convert)
         out.u32(config.backpressureCoefficient.convert)
 
-        // -- HeadParameters.rateLimits
+        // -- HeadParameters.rateLimits. Every knob of the block gate, not only the spacing period:
+        // the backlog limits and the smoothing shape decide when a leader cuts a block under load,
+        // so two peers agreeing on the period alone would still cut different blocks.
         out.finiteDuration(config.softBlockMinPeriod)
         out.finiteDuration(config.hardStackMinPeriod)
+        out.u32(config.blockBacklogSoftLimit)
+        out.u32(config.blockBacklogHardLimit)
+        out.f64(config.blockGateFloor)
+        out.f64(config.blockGateSmoothing)
+        out.finiteDuration(config.blockGateSlice)
 
         // -- HeadParameters: the rest
         out.u32(config.coilQuorum)
@@ -145,8 +153,12 @@ object HeadParamsHash {
                 out.instant(wakeup.convert)
         }
 
-        // -- coilHubTopology, ascending by CoilPeerNumber. Coil peer numbers are contiguous from
-        // zero, so a hub's position in the sequence is its coil peer number and is not repeated.
+        // -- coilHubTopology, ascending by CoilPeerNumber. Only the topology is taken from
+        // `coilPeers` — which head peer hubs each coil peer, which the native script says nothing
+        // about. The coil verification keys are deliberately NOT folded in: they sit in the
+        // script's `MOf` branch, so they are already pinned by the treasury address, exactly as
+        // the head peer keys are. Coil peer numbers are contiguous from zero, so a hub's position
+        // in the sequence is its coil peer number and is not repeated.
         val coilPeers = config.coilPeers
         val hubs = coilPeers.coilPeerNumbers.flatMap(coilPeers.hubHeadPeerNumber)
         out.u32(hubs.size)
@@ -185,6 +197,12 @@ object HeadParamsHash {
         }
 
         def bool(value: Boolean): Unit = u8(if value then 0x01 else 0x00)
+
+        /** IEEE-754 bits, big-endian. `doubleToLongBits` rather than the raw variant, so every NaN
+          * collapses to one canonical bit pattern and the digest cannot depend on which NaN a
+          * decoder happened to produce.
+          */
+        def f64(value: Double): Unit = u64(doubleToLongBits(value))
 
         def coin(value: Coin): Unit = u64(value.value)
 

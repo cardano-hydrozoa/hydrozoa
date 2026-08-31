@@ -44,7 +44,36 @@ class PrometheusFormatTest extends AnyFunSuite:
       ),
       mempoolSize = 923,
       leaderMempoolDrain = 900,
-      sequencerHeadroom = 12
+      sequencerHeadroom = 12,
+      equityLovelace = 4_500_000L,
+      composer = ComposerStats(
+        phase = StackComposerPhase.WaitingForPreviousHardConfirmation,
+        secondsInPhase = 42,
+        partitionsDone = 17,
+        partitionsTotal = 300
+      ),
+      runtime = RuntimeStats(
+        fibersSuspended = 27428,
+        fibersQueuedLocal = 5654,
+        workerThreads = 4,
+        workersActive = 2,
+        workersSearching = 1,
+        workersBlocked = 0,
+        timersOutstanding = 12,
+        timersExecuted = 98765,
+        liveThreads = 36,
+        heapUsedBytes = 241172480,
+        heapCommittedBytes = 536870912,
+        // -1 is the "platform does not report this" sentinel, and it must survive rendering.
+        openFileDescriptors = -1
+      ),
+      blockGate = BlockGateStats(
+        multiplier = 0.25,
+        backlog = 917,
+        residual = 903.5,
+        holds = 288347,
+        drains = 313
+      )
     )
 
     test("counters carry the _total suffix and a TYPE line"):
@@ -93,5 +122,27 @@ class PrometheusFormatTest extends AnyFunSuite:
               out.contains("""hydrozoa_local_requests_load{window="5m"} 0.0001""") &&
               out.contains("""hydrozoa_local_requests_load{window="15m"} 12345.678""") &&
               !out.contains("E-"), // no scientific notation
+          out
+        )
+
+    test("the runtime gauges render, including the -1 unavailable sentinel"):
+        val out = PrometheusFormat.render(sample)
+        val _ = assert(out.contains("hydrozoa_fibers_suspended 27428"))
+        val _ = assert(out.contains("hydrozoa_workers_searching 1"))
+        val _ = assert(out.contains("hydrozoa_timers_executed_total 98765"))
+        val _ = assert(out.contains("# TYPE hydrozoa_timers_executed_total counter"))
+        assert(out.contains("hydrozoa_open_file_descriptors -1"))
+
+    // The gate is what tells an operator whether the shaper is live and whether it is binding, and
+    // the node runs at WARN so the limiter's own traces are invisible. If these stop being rendered
+    // the deploy becomes unverifiable from outside the process.
+    test("the block-rate gate is rendered, with the multiplier as a plain decimal"):
+        val out = PrometheusFormat.render(sample)
+        assert(
+          out.contains("# TYPE hydrozoa_block_gate_multiplier gauge") &&
+              out.contains("hydrozoa_block_gate_multiplier 0.25") &&
+              out.contains("hydrozoa_block_gate_backlog 917") &&
+              out.contains("# TYPE hydrozoa_block_gate_drains_total counter") &&
+              out.contains("hydrozoa_block_gate_drains_total 313"),
           out
         )

@@ -679,7 +679,7 @@ class RecoverSeamsTest extends AnyFunSuite:
             for
                 hwHardAck <- hardAckBacking.highWater
                 hwBlock <- blockBacking.highWater
-                loaded <- hardAckBacking.backfill(HardAckNumber.zero, 16)
+                loaded <- hardAckBacking.serveFromJournal(HardAckNumber.zero, 16)
             yield assert(hwHardAck.isEmpty && hwBlock.isEmpty && loaded.isEmpty)
         }
     }
@@ -719,9 +719,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                 hwHardAck <- hardAckBacking.highWater
                 hwBlock <- blockBacking.highWater
                 hwStack <- stackBacking.highWater
-                ownHardAcks <- hardAckBacking.backfill(HardAckNumber.zero, 16)
-                ownBlocks <- blockBacking.backfill(BlockNumber.zero, 16)
-                ownStacks <- stackBacking.backfill(StackNumber.zero, 16)
+                ownHardAcks <- hardAckBacking.serveFromJournal(HardAckNumber.zero, 16)
+                ownBlocks <- blockBacking.serveFromJournal(BlockNumber.zero, 16)
+                ownStacks <- stackBacking.serveFromJournal(StackNumber.zero, 16)
             yield assert(
               // satellite high-water = own max (other peer's CF is separate);
               hwHardAck == Some(HardAckNumber(2)) &&

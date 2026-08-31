@@ -24,6 +24,7 @@ import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{ByteString, Data, ToData, platform}
 import scalus.|>
+import scodec.bits.ByteVector
 import supranational.blst.Scalar
 
 given toDataTransactionInput: ToData[TransactionInput] with {
@@ -56,7 +57,8 @@ object EvacuationMapInstances:
     }
 
     given evacuationKeyKeyEncoder: KeyEncoder[EvacuationKey] = {
-        KeyEncoder.encodeKeyString.contramap(_.byteString.toHex)
+        // Hex via ByteVector, not `byteString.toHex`: the latter caches its hex on the retained key.
+        KeyEncoder.encodeKeyString.contramap(ek => ByteVector(ek.byteString.bytes).toHex)
     }
 
     // FIXME: This is partial, but KeyDecoder lacks the "emap" method that Decoder has?
@@ -82,7 +84,9 @@ object EvacuationMapInstances:
   * golden, so a change to [[EvacuationMap.digest]] is a wire break.
   */
 final case class EvacuationMapHash(byteString: ByteString) {
-    def toHex: String = byteString.toHex
+    // ByteVector, not `byteString.toHex`: the latter caches its hex on this retained digest, and
+    // `toString`/the circe encoder both route through here. `bytes` is already in hand.
+    def toHex: String = ByteVector(byteString.bytes).toHex
 
     override def toString: String = toHex
 }
@@ -128,13 +132,13 @@ final case class EvacuationMap(
     /** The evac map, where we threw away the "KeepRaw"
       */
     // Its a silly name, but we use the term "value" too much
-    val cooked: TreeMap[EvacuationKey, TransactionOutput] =
+    lazy val cooked: TreeMap[EvacuationKey, TransactionOutput] =
         evacuationMap.map((i, obligation) => (i, obligation.utxo.value))
     val outputs: Iterable[Payout.Obligation] = evacuationMap.values
 
     /** The outputs of the evac map, where we threw away the "KeepRaw"
       */
-    val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.utxo.value)
+    lazy val outputsCooked: Iterable[TransactionOutput] = evacuationMap.values.map(_.utxo.value)
 
     lazy val kzgCommitment: KzgCommitment = KzgCommitment.calculateKzgCommitment(scalars)
 
