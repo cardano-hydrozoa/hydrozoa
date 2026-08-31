@@ -35,6 +35,12 @@ object LifecycleEvent:
     final case class TerminatedActor(actor: Actors) extends LifecycleEvent
     final case class TerminatedDependency(dep: Dependencies) extends LifecycleEvent
 
+    /** A supervised child failed and the decider escalated to the guardian, which stops the system.
+      * Carries the original `cause`: escalation re-raises a secondary failure before the cause is
+      * reported, so this is the only record of why the node stopped.
+      */
+    final case class SupervisedFailureEscalated(cause: Throwable) extends LifecycleEvent
+
 /** Child actors every regime+role spawns — the "core" set in
   * [[MultisigRegimeManagerBase.spawnCoreActors]] plus the peer liaison (which both head-mesh and
   * coil-uplink reuse, tagged by `remotePeerId`).

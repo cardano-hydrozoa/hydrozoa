@@ -48,7 +48,7 @@ class ReadyEndpointTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(status),
                       ConsensusStoreReader.empty,
