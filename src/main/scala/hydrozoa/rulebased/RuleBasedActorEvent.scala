@@ -1,8 +1,10 @@
 package hydrozoa.rulebased
 
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.{TransactionHash, Value}
 
 sealed trait RuleBasedActorEvent
 
@@ -19,7 +21,7 @@ object RuleBasedActorEvent:
 
     object Treasury:
         case object Querying extends RuleBasedActorEvent
-        final case class Found(value: String) extends RuleBasedActorEvent
+        final case class Found(value: Value) extends RuleBasedActorEvent
         case object NotFound extends RuleBasedActorEvent
         case object Parsing extends RuleBasedActorEvent
         case object ParsedUnresolved extends RuleBasedActorEvent
@@ -98,13 +100,15 @@ object RuleBasedActorEvent:
           * latest hard-confirmed stack they were derived from — logged to compare against the
           * commitment the treasury actually resolved to (see [[ResolvedKzg]]).
           */
-        final case class CandidateMaps(latestHardConfirmed: String, candidateKzgs: List[String])
-            extends RuleBasedActorEvent
+        final case class CandidateMaps(
+            latestHardConfirmed: String,
+            candidateKzgs: Set[KzgCommitment]
+        ) extends RuleBasedActorEvent
 
         /** DIAGNOSTIC: the commitment the resolution wrote into the treasury, looked up against the
           * candidate set. A miss is the `UnknownResolvedKzg` crash.
           */
-        final case class ResolvedKzg(kzg: String) extends RuleBasedActorEvent
+        final case class ResolvedKzg(kzg: KzgCommitment) extends RuleBasedActorEvent
 
         /** DIAGNOSTIC: the provenance of the candidate evacuation-map set — the default-vote map's
           * source block + commitment, and every votable SEC commitment collected (as
@@ -123,5 +127,5 @@ object RuleBasedActorEvent:
           * minor-only stack is walked past; the stack shown is the one that actually supplied the
           * anchor.
           */
-        final case class EvacuationAnchor(anchorStack: String, fallbackTxId: String)
+        final case class EvacuationAnchor(anchorStack: String, fallbackTxId: TransactionHash)
             extends RuleBasedActorEvent

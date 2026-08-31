@@ -1,5 +1,7 @@
 package hydrozoa.multisig.consensus.liaison
 
+import cats.Eval
+
 /** Typed events emitted by the liaison actors ([[PeerLiaisonHeadToHead]], [[PeerLiaisonCoilToHub]],
   * [[PeerLiaisonHubToCoil]]) and their shared [[Puller]] engine. Pure data; formatters in
   * [[PeerLiaisonEventFormat]] decide how each variant is rendered to a particular sink.
@@ -7,6 +9,11 @@ package hydrozoa.multisig.consensus.liaison
   * One event type covers all three liaison kinds — they speak the same batch protocol, and the
   * per-liaison / per-remote identity comes from the wiring layer's `contramap` wrapper (e.g.
   * `HeadMultisigRegimeManagerEvent.PL`), not from separate event ADTs.
+  *
+  * [[BatchRequested]] and [[BatchReceived]] are the exception to "pure data": their `detail` is an
+  * `Eval`, which compares by reference, so those two variants have no value equality. Two of them
+  * with the same `batchNum` and identical detail text are unequal — do not assert on them by
+  * construction, and do not `distinct` or dedupe a collection of them.
   */
 sealed trait PeerLiaisonEvent
 
@@ -19,13 +26,15 @@ object PeerLiaisonEvent:
       * `detail` summarizes the requested cursors — including the backpressure `requestCeiling` — so
       * the mesh's request-flow throttling is visible. High-frequency: DEBUG.
       */
-    final case class BatchRequested(batchNum: BatchNumber, detail: String) extends PeerLiaisonEvent
+    final case class BatchRequested(batchNum: BatchNumber, detail: Eval[String])
+        extends PeerLiaisonEvent
 
     /** A `NewMsgBatch` reply accepted from the remote. `detail` summarizes the per-lane payload
       * (requests / soft-ack / block / …) so co-arriving lanes are visible — e.g. requests and acks
       * delivered in the same batch. High-frequency: DEBUG.
       */
-    final case class BatchReceived(batchNum: BatchNumber, detail: String) extends PeerLiaisonEvent
+    final case class BatchReceived(batchNum: BatchNumber, detail: Eval[String])
+        extends PeerLiaisonEvent
 
     /** A reply whose batch number does not match the outstanding request — a stale duplicate the
       * [[Puller]] drops.

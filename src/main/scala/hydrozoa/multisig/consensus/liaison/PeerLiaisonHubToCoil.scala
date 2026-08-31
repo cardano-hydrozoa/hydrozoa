@@ -76,7 +76,7 @@ abstract class PeerLiaisonHubToCoil(
 
     // ---- Outbox lanes (the population we serve to the coil peer) ---------------------------------
     // Each lane is backed by the journal the hub already persists as a head-mesh member (own-produced
-    // or inbound-replicated), so a reply hot-loads entries below the in-memory outbox floor and
+    // or inbound-replicated), so a reply reads entries below the in-memory outbox floor and
     // preStart restores only the high-water; the hub serves every author (no own-led filter).
     private val backend = persistence.backend
     private val blockBacking = LaneOutgoingBacking.block(backend, _ => true)
@@ -90,19 +90,26 @@ abstract class PeerLiaisonHubToCoil(
     private val coilHardAckBackings =
         hubNums.map(h => h -> LaneOutgoingBacking.hubHardAck(backend, h)).toMap
 
+    // Every outbound lane holds at most this many items; older ones are served from the journal.
+    // One liaison exists per *configured* coil peer, so a coil that is configured but not connected
+    // advances no cursor here — the cap is the only thing that bounds its lanes.
+    private val outboxCap: Int = config.peerLiaisonOutboxCap
+
     private val blockLane =
         LaneOutbound.contiguous[BlockBrief.Next, BlockNumber](
           _.blockNum,
           BlockNumber(1),
           _.increment,
-          backfill = blockBacking.backfill
+          outboxCap = outboxCap,
+          serveFromJournal = blockBacking.serveFromJournal
         )
     private val stackLane =
         LaneOutbound.contiguous[StackBrief, StackNumber](
           _.stackNum,
           StackNumber(1),
           _.increment,
-          backfill = stackBacking.backfill
+          outboxCap = outboxCap,
+          serveFromJournal = stackBacking.serveFromJournal
         )
     private val requestLanes: Map[HeadPeerNumber, LaneOutbound[UserRequestWithId, RequestNumber]] =
         headPeerNums.map { h =>
@@ -111,7 +118,8 @@ abstract class PeerLiaisonHubToCoil(
               RequestNumber.zero,
               _.increment,
               config.peerLiaisonMaxRequestsPerBatch,
-              backfill = requestBackings(h).backfill
+              outboxCap = outboxCap,
+              serveFromJournal = requestBackings(h).serveFromJournal
             )
         }.toMap
     private val softAckLanes: Map[HeadPeerNumber, LaneOutbound[SoftAck, SoftAckNumber]] =
@@ -120,7 +128,8 @@ abstract class PeerLiaisonHubToCoil(
               _.ackNum,
               SoftAckNumber.zero.increment,
               _.increment,
-              backfill = softAckBackings(h).backfill
+              outboxCap = outboxCap,
+              serveFromJournal = softAckBackings(h).serveFromJournal
             )
         }.toMap
     private val headHardAckLanes: Map[HeadPeerNumber, LaneOutbound[HardAck, HardAckNumber]] =
@@ -129,7 +138,8 @@ abstract class PeerLiaisonHubToCoil(
               _.hardAckNum,
               HardAckNumber.zero,
               _.increment,
-              backfill = headHardAckBackings(h).backfill
+              outboxCap = outboxCap,
+              serveFromJournal = headHardAckBackings(h).serveFromJournal
             )
         }.toMap
     private val coilHardAckLanes
@@ -139,7 +149,8 @@ abstract class PeerLiaisonHubToCoil(
               _.seqNum,
               HubHardAckNumber.zero,
               _.increment,
-              backfill = coilHardAckBackings(h).backfill
+              outboxCap = outboxCap,
+              serveFromJournal = coilHardAckBackings(h).serveFromJournal
             )
         }.toMap
 
@@ -329,9 +340,9 @@ abstract class PeerLiaisonHubToCoil(
     }
 
     /** Restore each population outbox lane's high-water from its backing journal, leaving the
-      * queues empty. The Server half answers the coil peer's `Population.Get` by hot-loading older
-      * entries from the store (`LaneOutgoingBacking.backfill`); live `CoilRelay` production
-      * re-appends the tail. An empty store leaves every lane cold.
+      * outboxes empty. The Server half answers the coil peer's `Population.Get` from the store
+      * (`LaneOutgoingBacking.serveFromJournal`); live `CoilRelay` production re-appends the tail.
+      * An empty store leaves every lane cold.
       */
     private def restoreHighWaters: IO[Unit] =
         for {
@@ -369,7 +380,7 @@ abstract class PeerLiaisonHubToCoil(
             c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
-            // Restore each lane's high-water; the Server half hot-loads older population entries
+            // Restore each lane's high-water; the Server half reads older population entries
             // from the store on the coil peer's Population.Get, and live CoilRelay production
             // re-appends the tail. An empty store leaves every lane cold.
             _ <- restoreHighWaters
@@ -383,7 +394,14 @@ abstract class PeerLiaisonHubToCoil(
         (IO.sleep(
           config.peerLiaisonResendInterval
         ) >> (context.self ! ResendCurrent)).foreverM.start
-            .flatMap(fib => resendFiber.set(Some(fib)))
+            .flatMap(fib =>
+                // `getAndSet` + cancel, not `set`: `set` drops a fiber already stored without
+                // cancelling it, and the orphan is a `foreverM` that keeps delivering
+                // `ResendCurrent` for the life of the process. Keeping the single-fiber invariant
+                // local to this method is deliberate — see `FiberLifecycleTest` for why it cannot
+                // rest on the actor's own teardown running first.
+                resendFiber.getAndSet(Some(fib)).flatMap(_.fold(IO.unit)(_.cancel))
+            )
 
     /** Cancel the resend-timer fiber so it stops pinging `self` once the actor has stopped — e.g.
       * when fallback tears down the multisig regime and this liaison — instead of leaking a fiber

@@ -28,4 +28,12 @@ trait LimiterTimestamp {
     /** Minimum wall-clock gap between this message and the next throttled message on the same lane.
       */
     def minPeriod(using RateLimits.Section): FiniteDuration
+
+    /** Released without pacing, in arrival order, and does not restart the spacing clock.
+      *
+      * For messages that end the lane: they add no ongoing backlog, so pacing them only costs
+      * latency. In arrival order, not ahead of the queue — overtaking a held message would reorder
+      * the lane.
+      */
+    def limiterExempt: Boolean = false
 }

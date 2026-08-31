@@ -1,6 +1,8 @@
 package hydrozoa.multisig.metrics
 
 import cats.effect.IO
+import cats.effect.unsafe.IORuntime
+import java.lang.management.ManagementFactory
 import java.util.concurrent.atomic.{AtomicLong, AtomicReference, LongAdder}
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.*
@@ -69,6 +71,23 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
     private val mempool = new AtomicLong(0)
     private val leaderMempoolDrain = new AtomicLong(0)
     private val seqHeadroom = new AtomicLong(0)
+    private val equityLovelace = new AtomicLong(0)
+
+    // ---- block-rate gate (written by the block lane's Limiter) ----
+    // Observability only. The limiter acts on the multiplier in its own actor state; these are a
+    // write-only copy so the stats endpoints can show what the gate is doing. Nothing in the
+    // control path reads them back.
+    private val gateMultiplierMilli = new AtomicLong(1000)
+    private val gateBacklog = new AtomicLong(0)
+    private val gateResidualMilli = new AtomicLong(0)
+    private val gateHolds = new AtomicLong(0)
+    private val gateDrains = new AtomicLong(0)
+
+    // ---- stack-composer phase (see StackComposerPhase) ----
+    private val composerPhase = new AtomicReference[StackComposerPhase](StackComposerPhase.Deriving)
+    private val composerPhaseSince = new AtomicLong(startedAtMillis)
+    private val partitionsDone = new AtomicLong(0)
+    private val partitionsTotal = new AtomicLong(0)
 
     // ---- derived rates (written only by the sampler fiber) ----
     private val rolling = new AtomicReference[Rolling](Rolling.empty(remotePeerNums))
@@ -145,6 +164,44 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
     def onSequencerHeadroom(headroom: Long): Unit =
         seqHeadroom.set(math.max(0L, headroom))
 
+    /** The equity the head holds beyond its L2 liabilities, in lovelace — the treasury utxo's own
+      * `equity` field, one side of the double-entry identity `treasury.value == evacuation map
+      * total + equity + beacon`. Reported by [[hydrozoa.multisig.consensus.StackComposer]] from the
+      * initialization treasury at boot and from the rotated treasury on every stack close, so it is
+      * the equity as of the last stack this peer closed.
+      */
+    def onEquity(lovelace: Long): Unit = equityLovelace.set(lovelace)
+
+    /** The [[StackComposer]] entered a new phase. Re-entering the same phase does NOT restart the
+      * clock, so `secondsInPhase` measures how long the composer has been stuck in it — the whole
+      * point of the gauge, and `tryProgress` re-evaluates on every inbound event.
+      */
+    /** One throttled message released; `backlog` is the running count since the last drain. */
+    def onBlockGateRelease(backlog: Long): Unit = gateBacklog.set(backlog)
+
+    /** A hold began (once per hold, not once per slice). */
+    def onBlockGateHold(): Unit = { val _ = gateHolds.incrementAndGet() }
+
+    /** The gate re-derived its multiplier at the end of a downstream cycle. */
+    def onBlockGateUpdate(backlogAtDrain: Long, residual: Double, multiplier: Double): Unit =
+        gateBacklog.set(backlogAtDrain)
+        gateResidualMilli.set(math.round(residual * 1000.0))
+        gateMultiplierMilli.set(math.round(multiplier * 1000.0))
+        val _ = gateDrains.incrementAndGet()
+
+    def onComposerPhase(phase: StackComposerPhase, nowMillis: Long): Unit =
+        if composerPhase.getAndSet(phase) != phase then composerPhaseSince.set(nowMillis)
+
+    /** Effect-derivation progress. `total` is set once when a stack starts deriving; `done`
+      * advances per partition — a plain write, negligible beside the KZG commitment and tx building
+      * each partition costs, so it is not sampled.
+      */
+    def onDerivationStarted(totalPartitions: Int): Unit =
+        partitionsTotal.set(totalPartitions.toLong)
+        partitionsDone.set(0L)
+
+    def onPartitionDerived(done: Int): Unit = partitionsDone.set(done.toLong)
+
     private def startClock(m: TrieMap[Long, Long], blockNum: Long): Unit =
         m.update(blockNum, now())
         // Defensive: a block that never closes (crash) would leak a start entry; cap the in-flight
@@ -198,7 +255,22 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
           ),
           mempoolSize = mempool.get(),
           leaderMempoolDrain = leaderMempoolDrain.get(),
-          sequencerHeadroom = seqHeadroom.get()
+          sequencerHeadroom = seqHeadroom.get(),
+          equityLovelace = equityLovelace.get(),
+          runtime = PeerMetrics.runtimeSnapshot(),
+          blockGate = BlockGateStats(
+            multiplier = gateMultiplierMilli.get() / 1000.0,
+            backlog = gateBacklog.get(),
+            residual = gateResidualMilli.get() / 1000.0,
+            holds = gateHolds.get(),
+            drains = gateDrains.get()
+          ),
+          composer = ComposerStats(
+            phase = composerPhase.get(),
+            secondsInPhase = math.max(0L, (nowMillis - composerPhaseSince.get()) / 1000),
+            partitionsDone = partitionsDone.get(),
+            partitionsTotal = partitionsTotal.get()
+          )
         )
 
     /** The 1 Hz sampler: feeds every rate's EWMAs from the cumulative counters, then publishes one
@@ -258,6 +330,50 @@ final class PeerMetrics private (startedAtMillis: Long, remotePeerNums: Vector[I
 
 object PeerMetrics:
     private val Taus: Vector[Double] = Vector(60.0, 300.0, 900.0) // 1m / 5m / 15m
+
+    /** Read the whole-process resource gauges. Cheap enough for the 1 Hz sampler: counter reads,
+      * one `MemoryMXBean` poll, and one attribute read for the fd count.
+      *
+      * Deliberately tolerant. `workStealingThreadPool` is `None` on a non-WSTP compute pool (the
+      * test harnesses), the fd count is an `OperatingSystemMXBean` attribute that exists on Linux
+      * and not everywhere, and none of this is worth failing a stats request over — so anything
+      * unavailable reports as -1 rather than throwing.
+      */
+    def runtimeSnapshot(): RuntimeStats =
+        val heap = ManagementFactory.getMemoryMXBean.getHeapMemoryUsage
+        val wstp = IORuntime.global.metrics.workStealingThreadPool
+        RuntimeStats(
+          fibersSuspended = wstp.map(_.suspendedFiberCount()).getOrElse(-1L),
+          fibersQueuedLocal = wstp.map(_.localQueueFiberCount()).getOrElse(-1L),
+          workerThreads = wstp.map(_.workerThreadCount()).getOrElse(-1),
+          workersActive = wstp.map(_.activeThreadCount()).getOrElse(-1),
+          workersSearching = wstp.map(_.searchingThreadCount()).getOrElse(-1),
+          workersBlocked = wstp.map(_.blockedWorkerThreadCount()).getOrElse(-1),
+          timersOutstanding = wstp
+              .map(_.workerThreads.map(_.timerHeap.timersOutstandingCount().toLong).sum)
+              .getOrElse(-1L),
+          timersExecuted = wstp
+              .map(_.workerThreads.map(_.timerHeap.totalTimersExecutedCount()).sum)
+              .getOrElse(-1L),
+          liveThreads = ManagementFactory.getThreadMXBean.getThreadCount,
+          heapUsedBytes = heap.getUsed,
+          heapCommittedBytes = heap.getCommitted,
+          openFileDescriptors = openFdCount()
+        )
+
+    /** Open file descriptors, or -1 where the platform does not expose them. Socket exhaustion
+      * presents as a box that has stopped responding, with nothing in the process reporting why.
+      */
+    private def openFdCount(): Long =
+        try
+            ManagementFactory.getPlatformMBeanServer
+                .getAttribute(
+                  new javax.management.ObjectName("java.lang:type=OperatingSystem"),
+                  "OpenFileDescriptorCount"
+                )
+                .asInstanceOf[java.lang.Long]
+                .longValue()
+        catch case _: Throwable => -1L
 
     /** Upper bound on in-flight (unclosed) block clocks before we assume a leak and reset. */
     private val InFlightCap = 8192
@@ -394,5 +510,72 @@ final case class PeerStats(
     blockTimings: BlockTimingSet,
     mempoolSize: Long,
     leaderMempoolDrain: Long,
-    sequencerHeadroom: Long
+    sequencerHeadroom: Long,
+    equityLovelace: Long,
+    composer: ComposerStats,
+    runtime: RuntimeStats,
+    blockGate: BlockGateStats
+)
+
+/** What the block lane's rate limiter is doing, so a deploy can be checked with one request rather
+  * than by log-diving at a level the node does not run at.
+  *
+  * `multiplier` 1.0 means the backlog gate is fully open and the lane is paced only by the
+  * configured period — the expected steady state. Below 1.0 the composer is behind and the lane is
+  * being slowed; the effective period is `softBlockMinPeriod / multiplier`.
+  */
+final case class BlockGateStats(
+    multiplier: Double,
+    backlog: Long,
+    residual: Double,
+    holds: Long,
+    drains: Long
+)
+
+/** Whole-process resource use, for answering one question about a run: is the resource curve
+  * proportional to work IN FLIGHT, or to HISTORY?
+  *
+  * The discriminator is a slope against the right denominator, so these have to be read against the
+  * cumulative counters already in [[PeerStats]] (`blocks`, `stacks`, `localAccepted`) and against a
+  * deliberate load step-down: an in-flight-sized resource plateaus at constant load and comes back
+  * DOWN when load drops; a history-sized one tracks the cumulative counter and does not.
+  *
+  * ⛔ Every axis here is a CONCURRENCY axis. A peer can hold all of them at their idle floor while
+  * carrying a large backlog of unabsorbed deposits, unconfirmed blocks and queued resubmissions, so
+  * these do not answer "has the node drained?" — only "is it running work right now?"
+  *
+  * `fibersSuspended` is a fiber census, not a fiber dump: `kill -USR1` costs seconds and megabytes,
+  * this is two counter reads. `workersSearching` and `timersExecuted` are the cats-effect
+  * scheduler-seizure signature — in that state `workersSearching` stays non-zero while
+  * `timersExecuted` stops advancing, and the runtime cannot self-report it, because its own
+  * starvation checker is an `IO.sleep` that fires once and then goes silent. All of these are read
+  * from a plain snapshot rather than from a fiber, so a scraper outside the process still gets them
+  * when the runtime is seized.
+  */
+final case class RuntimeStats(
+    fibersSuspended: Long,
+    fibersQueuedLocal: Long,
+    workerThreads: Int,
+    workersActive: Int,
+    workersSearching: Int,
+    workersBlocked: Int,
+    timersOutstanding: Long,
+    timersExecuted: Long,
+    liveThreads: Int,
+    heapUsedBytes: Long,
+    heapCommittedBytes: Long,
+    openFileDescriptors: Long
+)
+
+/** What the [[hydrozoa.multisig.consensus.StackComposer]] is doing, and for how long.
+  *
+  * Every path through `tryProgress` that is not `Deriving` returns `IO.unit` silently, so without
+  * this a composer waiting on a peer and one with nothing to do are indistinguishable. While
+  * `Deriving`, the partition counts show progress through a stack that may hold hundreds.
+  */
+final case class ComposerStats(
+    phase: StackComposerPhase,
+    secondsInPhase: Long,
+    partitionsDone: Long,
+    partitionsTotal: Long
 )
