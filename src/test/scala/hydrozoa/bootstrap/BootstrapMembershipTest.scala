@@ -6,6 +6,7 @@ import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackCont
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.RateLimits
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -149,6 +150,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
           disputeResolutionConfig = DisputeResolutionConfig.default(network.slotConfig),
           settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
           blockConfig = BlockConfig(PositiveInt.unsafeApply(1000)),
+          rateLimits = RateLimits.default,
           coilQuorum = coilQuorum
         )
         Bootstrap.BootstrapDefaults(

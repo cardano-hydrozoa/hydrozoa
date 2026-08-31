@@ -14,11 +14,11 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.parameters.{RateLimits, generateHeadParameters}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.{HeadConfig, InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
-import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperationMultisigConfig}
+import hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos, generateScriptReferenceUtxos as defaultScriptRefsGen}
 import hydrozoa.integration.yaci.DevKit
@@ -496,6 +496,10 @@ object MultiPeerHeadHarness:
                         generateHeadParams = generateHeadParameters(
                           generateTxTiming = fastTxTiming,
                           generateDisputeResolutionConfig = disputeResolutionConfig,
+                          rateLimits = RateLimits(
+                            softBlockMinPeriod = 500.millis,
+                            hardStackMinPeriod = 250.millis,
+                          ),
                         ).map(_.copy(coilQuorum = coilQuorum)),
                         generateInitializationParameters = InitParamsType.TopDown(
                           InitializationParametersGenTopDown.GenWithDeps(
@@ -540,10 +544,6 @@ object MultiPeerHeadHarness:
                           maxPollingPeriod =
                               if scriptReferenceUtxos.isDefined then liveBackendPollingPeriod
                               else hc.maxCardanoLiaisonPollingPeriod / 2,
-                          rateLimits = RateLimits(
-                            softBlockMinPeriod = 500.millis,
-                            hardStackMinPeriod = 250.millis,
-                          ),
                         )
                         // Real backend: pin the CL poll to exactly `liveBackendPollingPeriod` (not a
                         // uniform sample up to it) so it doesn't storm the store/API with

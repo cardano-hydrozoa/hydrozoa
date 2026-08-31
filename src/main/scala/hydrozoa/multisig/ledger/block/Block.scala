@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.config.head.parameters.RateLimits
 import hydrozoa.multisig.consensus.limiter.LimiterTimestamp
 import io.circe.*
 import io.circe.generic.semiauto.*

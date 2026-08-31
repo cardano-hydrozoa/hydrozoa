@@ -3,7 +3,7 @@ package hydrozoa.multisig.consensus.limiter
 import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.config.head.parameters.RateLimits
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.metrics.PeerMetrics
 import scala.concurrent.duration.DurationLong

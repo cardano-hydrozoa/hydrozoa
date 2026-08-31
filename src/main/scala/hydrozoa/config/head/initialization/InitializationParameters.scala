@@ -68,6 +68,9 @@ object InitializationParameters {
         def initialL2Value: Value =
             Value.combine(initialEvacuationMap.outputs.map(_.utxo.value.value))
 
+        // TODO: unimplemented, and design/head-params-hash.md folds the per-peer equity split
+        //  into `headParamsHash` instead of giving it a digest of its own. Delete this once that
+        //  lands, unless a caller for a standalone equity digest appears first.
         final def initialEquityContributionsHash: Hash32 = Hash[Blake2b_256, Any](
           platform.blake2b_256(ByteString.unsafeFromArray(???))
         )

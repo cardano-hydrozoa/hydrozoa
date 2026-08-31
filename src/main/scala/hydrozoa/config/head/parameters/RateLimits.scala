@@ -1,4 +1,4 @@
-package hydrozoa.config.node.operation.multisig
+package hydrozoa.config.head.parameters
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given
 import hydrozoa.multisig.consensus.limiter.LimiterGate
@@ -13,11 +13,11 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
   * message's timestamp — see [[hydrozoa.multisig.consensus.limiter.Limiter]] for why that
   * distinction is what makes it a rate limit rather than a delay line.
   *
-  * ⚠️ **Node-local.** These change only the cadence at which a peer offers work to its own
-  * downstream, never what it sends, so peers may run different values without diverging. The cost
-  * is a leader-dependent cadence under rotation; operators should align informally.
+  * The defaults below are non-zero: these lanes are limited unless a config overrides them.
   *
-  * Defaults are non-zero: these lanes are limited unless a config overrides them.
+  * Head-agreed, not per-node: every knob here gates consensus cadence, so peers running different
+  * values produce different blocks. They live in [[HeadParameters]] and are covered by
+  * `headParamsHash` (design/head-params-hash.md).
   */
 final case class RateLimits(
     override val softBlockMinPeriod: FiniteDuration,

@@ -10,14 +10,13 @@ final case class NodeOperationMultisigConfig(
     override val cardanoLiaisonPollingPeriod: FiniteDuration,
     override val peerLiaisonMaxRequestsPerBatch: PositiveInt,
     override val peerLiaisonOutboxCap: PositiveInt,
-    override val peerLiaisonResendInterval: FiniteDuration,
-    override val rateLimits: RateLimits
+    override val peerLiaisonResendInterval: FiniteDuration
 ) extends NodeOperationMultisigConfig.Section {
     override transparent inline def nodeOperationMultisigConfig: NodeOperationMultisigConfig = this
 }
 
 object NodeOperationMultisigConfig {
-    trait Section extends RateLimits.Section {
+    trait Section {
         def nodeOperationMultisigConfig: NodeOperationMultisigConfig
 
         def cardanoLiaisonPollingPeriod: FiniteDuration =
@@ -44,8 +43,6 @@ object NodeOperationMultisigConfig {
           */
         def peerLiaisonResendInterval: FiniteDuration =
             nodeOperationMultisigConfig.peerLiaisonResendInterval
-
-        override def rateLimits: RateLimits = nodeOperationMultisigConfig.rateLimits
     }
 
     /** Two `peerLiaisonMaxRequestsPerBatch` batches of requests, which is also generous headroom on
@@ -58,8 +55,7 @@ object NodeOperationMultisigConfig {
       cardanoLiaisonPollingPeriod = 10.seconds,
       peerLiaisonMaxRequestsPerBatch = PositiveInt.unsafeApply(500),
       peerLiaisonOutboxCap = defaultPeerLiaisonOutboxCap,
-      peerLiaisonResendInterval = 5.seconds,
-      rateLimits = RateLimits.default
+      peerLiaisonResendInterval = 5.seconds
     )
 
     given Encoder[NodeOperationMultisigConfig] = deriveEncoder[NodeOperationMultisigConfig]
@@ -74,13 +70,11 @@ object NodeOperationMultisigConfig {
             maxRequestsPerBatch <- c.downField("peerLiaisonMaxRequestsPerBatch").as[PositiveInt]
             outboxCap <- c.downField("peerLiaisonOutboxCap").as[Option[PositiveInt]]
             resendInterval <- c.downField("peerLiaisonResendInterval").as[FiniteDuration]
-            limits <- c.downField("rateLimits").as[RateLimits]
         } yield NodeOperationMultisigConfig(
           cardanoLiaisonPollingPeriod = pollingPeriod,
           peerLiaisonMaxRequestsPerBatch = maxRequestsPerBatch,
           peerLiaisonOutboxCap = outboxCap.getOrElse(defaultPeerLiaisonOutboxCap),
-          peerLiaisonResendInterval = resendInterval,
-          rateLimits = limits
+          peerLiaisonResendInterval = resendInterval
         )
     )
 }

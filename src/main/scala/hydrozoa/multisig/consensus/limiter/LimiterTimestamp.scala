@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.limiter
 
-import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.config.head.parameters.RateLimits
 import java.time.Instant
 import scala.concurrent.duration.FiniteDuration
 

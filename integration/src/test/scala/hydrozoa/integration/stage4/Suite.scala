@@ -7,7 +7,7 @@ import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.parameters.{RateLimits, generateHeadParameters}
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
@@ -811,8 +811,16 @@ object Stage4Suite:
         val generateHeadStartTime = MultiPeerHeadHarness.generateHeadStartTime(takeoffTime)
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
-          generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming)
-              .map(_.copy(coilQuorum = nCoilPeers)),
+          // Pin `softBlockMinPeriod` to 5s and narrow `hardStackMinPeriod` from its 3-minute
+          // production value to 2s to fit the WS test wall-clock budget (see
+          // docs/spec/rate-limiter.md). 5s paces soft-confirmed block production (and the model
+          // command-batching that tracks it) on the real clock under WS so the test exercises the
+          // throttle's cross-block batching intent; 2s keeps CardanoLiaison fed with PushResults
+          // within the effects-landed poll budget.
+          generateHeadParams = generateHeadParameters(
+            generateTxTiming = generateYaciTxTiming,
+            rateLimits = RateLimits(softBlockMinPeriod = 5.seconds, hardStackMinPeriod = 2.seconds)
+          ).map(_.copy(coilQuorum = nCoilPeers)),
           generateInitializationParameters = InitParamsType.TopDown(
             InitializationParametersGenTopDown.GenWithDeps(
               generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
@@ -850,17 +858,7 @@ object Stage4Suite:
               // currently produce mismatched block briefs at major-block consensus.
               generateNodeOperationMultisigConfig = hc =>
                   hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig(
-                    maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
-                    // Pin `softBlockMinPeriod` to 5s and narrow `hardStackMinPeriod` from its
-                    // 3-minute production value to 2s to fit the WS test wall-clock budget (see
-                    // docs/rate-limiter.md). 5s paces soft-confirmed block production (and the
-                    // model command-batching that tracks it) on the real clock under WS so the
-                    // test exercises the throttle's cross-block batching intent; 2s keeps
-                    // CardanoLiaison fed with PushResults within the effects-landed poll budget.
-                    rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
-                      softBlockMinPeriod = 5.seconds,
-                      hardStackMinPeriod = 2.seconds
-                    )
+                    maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2
                   )
             )
 

@@ -6,7 +6,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
-import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.config.head.parameters.RateLimits
 import hydrozoa.lib.logging.ContraTracer
 import io.circe.parser.decode
 import java.time.Instant

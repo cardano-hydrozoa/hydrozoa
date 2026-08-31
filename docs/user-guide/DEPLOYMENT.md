@@ -285,7 +285,8 @@ Peer numbering is positional in the roster: `private/head-N` ↔ head peer N; li
 of them:
 
 - `headParams` — `coilQuorum` (the QUORUM argument passed to keygen-fleet; 2 here), timing,
-  fallback contingency, dispute resolution, settlement.
+  fallback contingency, dispute resolution, settlement, block limits, and `rateLimits`. Every
+  peer must agree on all of them; omit `rateLimits` and the built-in defaults apply.
 - `initialEquityContributions` — per head peer; the demo default is head peer 0 funds
   everything, the rest contribute zero.
 

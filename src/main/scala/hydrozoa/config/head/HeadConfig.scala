@@ -248,10 +248,10 @@ object HeadConfig {
 
     /** @param coilPeers
       *   The coil peers keyed by explicit [[CoilPeerNumber]] (verification key + hub head peer).
-      * @param l2Params
-      *   a black-box, L2-specific blake2b-256 hash of parameters that the peers must agree on
-      *   before initialization.
       */
+    // TODO: the L2 parameters hash is `HeadParameters.l2ParamsHash` and is documented there.
+    //  Keep that single name — `l2Params` is not a field of anything. See
+    //  design/head-params-hash.md for what the hash covers per backend.
     final case class Bootstrap private[head] (
         override val cardanoNetwork: CardanoNetwork,
         override val headParameters: HeadParameters,
