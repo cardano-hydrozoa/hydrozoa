@@ -220,7 +220,14 @@ object Serve {
                       httpExtraTracer
                     )
                 case NodeRun.CoilNode(mrm) =>
-                    runCoilNode(system, mrm)
+                    runCoilNode(
+                      nodeConfig,
+                      system,
+                      mrm,
+                      consensusReader,
+                      metrics,
+                      httpExtraTracer
+                    )
             }
         }
     }
@@ -451,8 +458,9 @@ object Serve {
         } yield NodeRun.HeadNode(mrm, l2QueryReader)
     }
 
-    /** Build the coil-node uplink dialer (no inbound server) and allocate the
-      * [[CoilMultisigRegimeManager]]. A coil peer runs no user-facing HTTP server.
+    /** Build the coil-node uplink dialer (no inbound WebSocket server) and allocate the
+      * [[CoilMultisigRegimeManager]]. The coil's HTTP surface is bound separately, in
+      * `runCoilNode`.
       */
     private def buildCoilNode(
         nodeConfig: NodeConfig,
@@ -502,6 +510,33 @@ object Serve {
         } yield NodeRun.CoilNode(mrm)
     }
 
+    /** The HTTP bind address and admin credentials, from the node's own private config. Shared by
+      * both roles: a coil serves the same server minus the mutating routes, so it reads the same
+      * fields.
+      */
+    private def httpServerConfig(nodeConfig: NodeConfig): HydrozoaServer.Config = {
+        val httpHost = Host
+            .fromString(nodeConfig.httpHost)
+            .getOrElse(
+              throw new IllegalArgumentException(
+                s"Invalid httpHost in node config: ${nodeConfig.httpHost}"
+              )
+            )
+        val httpPort = Port
+            .fromString(nodeConfig.httpPort)
+            .getOrElse(
+              throw new IllegalArgumentException(
+                s"Invalid httpPort in node config: ${nodeConfig.httpPort}"
+              )
+            )
+        HydrozoaServer.Config(
+          host = httpHost,
+          port = httpPort,
+          adminUsername = nodeConfig.adminUsername,
+          adminPassword = nodeConfig.adminPassword
+        )
+    }
+
     private def runHeadNode(
         nodeConfig: NodeConfig,
         system: ActorSystem[IO],
@@ -515,64 +550,84 @@ object Serve {
             _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
             _ <- log.info("Hydrozoa node started successfully")
 
-            // Start HTTP server once RequestSequencer is available
-            _ <- mrm.connectionsDeferred.get.flatMap { connections =>
-                val httpHost = Host
-                    .fromString(nodeConfig.httpHost)
-                    .getOrElse(
-                      throw new IllegalArgumentException(
-                        s"Invalid httpHost in node config: ${nodeConfig.httpHost}"
-                      )
-                    )
-                val httpPort = Port
-                    .fromString(nodeConfig.httpPort)
-                    .getOrElse(
-                      throw new IllegalArgumentException(
-                        s"Invalid httpPort in node config: ${nodeConfig.httpPort}"
-                      )
-                    )
-                val serverConfig = HydrozoaServer.Config(
-                  host = httpHost,
-                  port = httpPort,
-                  adminUsername = nodeConfig.adminUsername,
-                  adminPassword = nodeConfig.adminPassword
-                )
-                val httpTracer = Slf4jTracer.sink
-                    .contramap(HydrozoaHttpEventFormat.humanFormat) |+| httpExtraTracer
-                log.info("Starting HTTP server...") *>
-                    HydrozoaServer
-                        .create(
-                          connections.requestSequencer.getOrElse(
-                            sys.error("RequestSequencer required on head peers")
-                          ),
-                          connections.blockWeaver,
-                          mrm.nodeStatus.get,
-                          consensusReader,
-                          // Some(reader) for a cardano-eutxo node (mounts GET /l2/cardano-eutxo/...); None for
-                          // a remote-ledger node, which serves no L2-query endpoints.
-                          l2QueryReader,
-                          nodeConfig.headConfig,
-                          serverConfig,
-                          metrics,
-                          httpTracer,
-                        )
-                        .use(_ => IO.never)
-                        .start
-                        .void
-            }
+            // The HTTP server needs the RequestSequencer, which only exists once connections
+            // resolve, so wait for them before binding.
+            connections <- mrm.connectionsDeferred.get
+            _ <- log.info("Starting HTTP server...")
 
-            _ <- system.waitForTermination
+            // `surround`, not `start.void`: the server is bound for exactly as long as the node
+            // waits, and its finalizer runs when the actor system terminates. `runCoilNode` has
+            // the same shape and spells out what the old one leaked.
+            _ <- HydrozoaServer
+                .create(
+                  // Always present on a head; the `Option` exists for the coil.
+                  Some(
+                    connections.requestSequencer.getOrElse(
+                      sys.error("RequestSequencer required on head peers")
+                    )
+                  ),
+                  connections.blockWeaver,
+                  mrm.nodeStatus.get,
+                  consensusReader,
+                  // Some(reader) for a cardano-eutxo node (mounts GET /l2/cardano-eutxo/...); None for
+                  // a remote-ledger node, which serves no L2-query endpoints.
+                  l2QueryReader,
+                  nodeConfig.headConfig,
+                  httpServerConfig(nodeConfig),
+                  metrics,
+                  Slf4jTracer.sink
+                      .contramap(HydrozoaHttpEventFormat.humanFormat) |+| httpExtraTracer,
+                )
+                .surround(system.waitForTermination)
+
             exit <- abnormalTermination
         } yield exit
 
+    /** A coil peer runs the same HTTP server as a head, minus the mutating routes: it passes `None`
+      * for the request sequencer, which is what removes them (see
+      * [[hydrozoa.multisig.server.HydrozoaRoutes]]).
+      *
+      * Serving a coil at all is for observability. It runs its own `StackComposer`, and its
+      * hard-ack gates the head's next stack — so without `/head/stats` and `/metrics`, a coil
+      * wedged on its single-flight gate looks exactly like an idle one.
+      */
     private def runCoilNode(
+        nodeConfig: NodeConfig,
         system: ActorSystem[IO],
         mrm: CoilMultisigRegimeManager,
+        consensusReader: ConsensusStoreReader[IO],
+        metrics: PeerMetrics,
+        httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
     ): IO[ExitCode] =
         for {
             _ <- system.actorOf(mrm, "CoilMultisigRegimeManager")
             _ <- log.info("Hydrozoa coil node started successfully")
-            _ <- system.waitForTermination
+
+            connections <- mrm.connectionsDeferred.get
+            _ <- log.info("Starting HTTP server (coil: read-only surface)...")
+
+            // `surround` binds the server for the node's lifetime and releases it when the actor
+            // system terminates. `use(_ => IO.never).start.void` -- what this was, on both roles --
+            // dropped the fiber handle, so nothing could cancel it and the finalizer never ran: the
+            // port stayed bound and answering after the node was dead, and a bind failure could not
+            // fail the node because no one joined the fiber's outcome.
+            _ <- HydrozoaServer
+                .create(
+                  // None on a coil — this is what removes the mutating routes.
+                  connections.requestSequencer,
+                  connections.blockWeaver,
+                  mrm.nodeStatus.get,
+                  consensusReader,
+                  // A coil always runs a remote ledger, so no L2-query endpoints.
+                  None,
+                  nodeConfig.headConfig,
+                  httpServerConfig(nodeConfig),
+                  metrics,
+                  Slf4jTracer.sink
+                      .contramap(HydrozoaHttpEventFormat.humanFormat) |+| httpExtraTracer,
+                )
+                .surround(system.waitForTermination)
+
             exit <- abnormalTermination
         } yield exit
 

@@ -15,12 +15,13 @@ import hydrozoa.config.node.NodePrivateConfig.given
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.{OwnCoilPeerPrivate, OwnHeadPeerPrivate}
-import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, warn}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.PeerId.isCoil
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.{parser, *}
 import java.nio.file.{Files, Path}
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 final case class NodeConfig private (
     override val headConfig: HeadConfig,
@@ -48,6 +49,9 @@ final case class NodeConfig private (
 }
 
 object NodeConfig {
+
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa"))
 
     def fromJson(
         headConfigStr: String,
@@ -186,13 +190,78 @@ object NodeConfig {
         for {
             headStr <- IO.blocking(Files.readString(headConfigPath))
             privateStr <- IO.blocking(Files.readString(privateConfigPath))
-            loaded <- NodeConfig
-                .fromJson(headStr, privateStr, backendOverride)
-                .foldF(
-                  err => IO.raiseError(new RuntimeException(s"Failed to load NodeConfig: $err")),
-                  IO.pure
-                )
+            loaded <- retryingBackendReads(
+              backendReadRetryWaits,
+              NodeConfig.fromJson(headStr, privateStr, backendOverride).value
+            ).flatMap {
+                case Left(err) =>
+                    IO.raiseError(new RuntimeException(s"Failed to load NodeConfig: $err"))
+                case Right(ok) => IO.pure(ok)
+            }
         } yield loaded
+
+    /** Waits before each retry of the config load's backend reads.
+      *
+      * Decoding a config resolves the script reference UTxOs against Cardano, so loading it is a
+      * network operation, and a node that cannot reach the backend for a few seconds exits — which
+      * a process supervisor answers by starting it again, immediately, into the same failure. That
+      * turns a brief loss of egress into a crash loop that outlives it.
+      *
+      * The total wait is a little under two minutes. Long enough to ride out a DNS or upstream
+      * blip; short enough that a genuinely wrong config still fails while someone is watching the
+      * deploy.
+      */
+    private val backendReadRetryWaits: List[FiniteDuration] =
+        List(2.seconds, 5.seconds, 15.seconds, 30.seconds, 60.seconds)
+
+    /** Whether a failed load is worth another attempt. Anything that reached the Cardano backend is
+      * — including an error the backend classified, since a DNS failure surfaces as a resolve error
+      * rather than a raised exception. A malformed config is not: re-reading the same bytes gives
+      * the same answer.
+      */
+    private def isWorthRetrying(
+        err: ScriptReferenceUtxos.Error | io.circe.Error
+    ): Boolean = err match
+        case _: ScriptReferenceUtxos.Error.CardanoBackendError => true
+        case _                                                 => false
+
+    /** Re-run `attempt` while it fails for a reason another attempt could fix, waiting `waits` in
+      * turn and giving up with the last failure once they run out. `waits` is a parameter so a test
+      * can drive the same loop without waiting minutes.
+      */
+    private[node] def retryingBackendReads[A](
+        waits: List[FiniteDuration],
+        attempt: IO[Either[ScriptReferenceUtxos.Error | io.circe.Error, A]]
+    ): IO[Either[ScriptReferenceUtxos.Error | io.circe.Error, A]] =
+        def go(
+            remaining: List[FiniteDuration]
+        ): IO[Either[ScriptReferenceUtxos.Error | io.circe.Error, A]] =
+            // A raised throwable gets the same treatment as a backend error: building the backend
+            // is itself a network operation, and it reports failure by raising rather than by a
+            // Left.
+            attempt.attempt.flatMap {
+                case Right(Right(ok)) => IO.pure(Right(ok))
+                case other =>
+                    val reason = other match
+                        case Left(t)         => t.toString
+                        case Right(Left(e))  => e.toString
+                        case Right(Right(_)) => ""
+                    val retryable = other match
+                        case Left(_)        => true
+                        case Right(Left(e)) => isWorthRetrying(e)
+                        case _              => false
+                    (remaining, retryable) match
+                        case (wait :: rest, true) =>
+                            log.warn(
+                              s"Config load failed against the Cardano backend ($reason); " +
+                                  s"retrying in $wait (${rest.length} attempts left after this)."
+                            ) >> IO.sleep(wait) >> go(rest)
+                        case _ =>
+                            other match
+                                case Left(t)     => IO.raiseError(t)
+                                case Right(left) => IO.pure(left)
+            }
+        go(waits)
 
     trait Section extends NodePrivateConfig.Section, HeadConfig.Section {
         def nodeConfig: NodeConfig

@@ -24,7 +24,7 @@ import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
-import hydrozoa.lib.logging.{ContraTracer, Logging, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -56,7 +56,8 @@ import scalus.uplc.builtin.ByteString
 
 object Bootstrap:
 
-    private val logger = Logging.loggerIO("hydrozoa.bootstrap.Bootstrap")
+    private val logger: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.bootstrap.Bootstrap"))
 
     /** Generate a new Ed25519 key pair for Cardano. */
     def generateKeyPair(): IO[(VerificationKey, SigningKey)] =
@@ -1106,7 +1107,8 @@ end Migrate
   */
 object BuildHeadConfig:
 
-    private val logger = Logging.loggerIO("hydrozoa.bootstrap.BuildHeadConfig")
+    private val logger: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.bootstrap.BuildHeadConfig"))
 
     private val blockfrostKeyOpt: Opts[Option[String]] =
         Opts.option[String](
@@ -1280,7 +1282,10 @@ end BuildHeadConfig
   */
 object InitBootstrapFiles:
 
-    private val logger = Logging.loggerIO("hydrozoa.bootstrap.InitBootstrapFiles")
+    private val logger: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(
+          Slf4jMsgFormat.humanFormat("hydrozoa.bootstrap.InitBootstrapFiles")
+        )
 
     private val rosterArg: Opts[Path] =
         Opts.argument[String]("roster.json").map(Path.of(_))

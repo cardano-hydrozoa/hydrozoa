@@ -11,9 +11,9 @@ sealed trait SlowConsensusActorEvent
 object SlowConsensusActorEvent:
 
     /** Stack handed off from StackComposer: own acks verified, cell created, own acks broadcast.
-      * `phase` is `"2-phase"` or `"sole"`.
+      * `twoPhase` distinguishes the two-phase handoff from the sole-peer one.
       */
-    final case class StackHandedOff(stackNum: StackNumber, phase: String)
+    final case class StackHandedOff(stackNum: StackNumber, twoPhase: Boolean)
         extends SlowConsensusActorEvent
 
     /** Round-1 saturated: all peers' round-1 acks collected; own round-2 ack released. */

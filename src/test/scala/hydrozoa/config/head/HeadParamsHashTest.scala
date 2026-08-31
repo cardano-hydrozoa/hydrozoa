@@ -67,6 +67,21 @@ object HeadParamsHashTest extends Properties("HeadParamsHash") {
       "rateLimits.hardStackMinPeriod" -> (p =>
           p.copy(rateLimits = p.rateLimits.copy(hardStackMinPeriod = 8888.millis))
       ),
+      "rateLimits.blockBacklogSoftLimit" -> (p =>
+          p.copy(rateLimits = p.rateLimits.copy(blockBacklogSoftLimit = 4242))
+      ),
+      "rateLimits.blockBacklogHardLimit" -> (p =>
+          p.copy(rateLimits = p.rateLimits.copy(blockBacklogHardLimit = 9999))
+      ),
+      "rateLimits.blockGateFloor" -> (p =>
+          p.copy(rateLimits = p.rateLimits.copy(blockGateFloor = 0.37))
+      ),
+      "rateLimits.blockGateSmoothing" -> (p =>
+          p.copy(rateLimits = p.rateLimits.copy(blockGateSmoothing = 0.71))
+      ),
+      "rateLimits.blockGateSlice" -> (p =>
+          p.copy(rateLimits = p.rateLimits.copy(blockGateSlice = 999.millis))
+      ),
       "l2ParamsHash" -> (p =>
           p.copy(l2ParamsHash =
               Hash[Blake2b_256, Any](ByteString.fromArray(Array.fill[Byte](32)(0x5a)))
