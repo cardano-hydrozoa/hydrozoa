@@ -46,9 +46,11 @@ folded in as an opaque leaf.
 
 ### Where it lives
 
-The digest needs `initialEquityContributions`, `blockBrief`, `coilPeers`, and
-`scriptReferenceUtxos` as well as `HeadParameters`, so it lives on `HeadConfig.Section` — a
-`lazy val` on the `HeadConfig` case class, delegated to by the trait. The layout itself is
+`HeadParamsHash(config, initialBlockHeader)` takes `HeadConfig.Bootstrap.Section` — which
+carries `initialEquityContributions`, `coilPeers` and `scriptReferenceUtxos` alongside
+`HeadParameters` — plus block zero's header on its own, because the digest must be computable
+before the initialization transaction is parsed. The result is a `lazy val` on the `HeadConfig`
+case class, delegated to by `HeadParamsHash.Section`. The layout itself is
 `config/head/HeadParamsHash.scala`; `HeadParamsHashTest` mutates every covered field one at a
 time and asserts the digest moves, and asserts it does **not** move for `webSocketAddress`.
 
@@ -78,6 +80,7 @@ unable to parse its own initialization transaction.
 | `u8(n)` | 1 byte |
 | `u32(n)` | 4 bytes, big-endian unsigned |
 | `u64(n)` | 8 bytes, big-endian; signed values two's-complement |
+| `f64(x)` | 8 bytes, big-endian IEEE-754 bits (`doubleToLongBits`, so every NaN is one pattern) |
 | `bool(b)` | 1 byte, `0x00` false / `0x01` true |
 | `framed(b)` | `u32(length)` ‖ the bytes |
 | `raw(b)` | the bytes, no framing — fixed-width fields only |
@@ -91,6 +94,7 @@ boundary unambiguous. Value types map as:
 | `QuantizedInstant` | `u64` milliseconds since the Unix epoch (`.toEpochMilli`) |
 | `Coin` | `u64` lovelace |
 | `PositiveInt`, `Int`, `HeadPeerNumber`, `CoilPeerNumber` | `u32` |
+| `Double` | `f64` |
 | `Boolean` | `bool` |
 | `Hash32`, `EvacuationMapHash` | `raw`, 32 bytes |
 | `ScriptHash` | `raw`, 28 bytes |
@@ -126,6 +130,9 @@ headParamsHash = blake2b_256(
 
   -- HeadParameters.rateLimits
   || u64(softBlockMinPeriod)         || u64(hardStackMinPeriod)
+  || u32(blockBacklogSoftLimit)      || u32(blockBacklogHardLimit)
+  || f64(blockGateFloor)             || f64(blockGateSmoothing)
+  || u64(blockGateSlice)
 
   -- HeadParameters: the rest
   || u32(coilQuorum)
@@ -164,12 +171,16 @@ of it is separately checked.
 ### Notes on individual fields
 
 `rateLimits` lives in `HeadParameters` rather than in the per-node
-`NodeOperationMultisigConfig` because both knobs gate consensus cadence — `softBlockMinPeriod`
-on the `FastConsensusActor → BlockWeaver` lane, `hardStackMinPeriod` on
-`SlowConsensusActor → StackComposer` — and peers running different cadences produce different
-blocks. It is its own section rather than a member of `txTiming`: `txTiming` holds L1
-transaction validity windows, slot-quantized and consumed by transaction builders, while rate
-limits are wall-clock gates that reach no transaction. See `docs/spec/rate-limiter.md`.
+`NodeOperationMultisigConfig` because every knob in it gates consensus cadence, and peers
+running different cadences produce different blocks. `softBlockMinPeriod` spaces the
+`FastConsensusActor → BlockWeaver` lane and `hardStackMinPeriod` the
+`SlowConsensusActor → StackComposer` lane; `blockBacklogSoftLimit`, `blockBacklogHardLimit`,
+`blockGateFloor`, `blockGateSmoothing` and `blockGateSlice` shape how the block gate shortens
+that spacing as the backlog grows. Pinning the period alone would leave two peers agreeing on
+the hash while cutting different blocks under load, so the whole section is covered. It is its
+own section rather than a member of `txTiming`: `txTiming` holds L1 transaction validity
+windows, slot-quantized and consumed by transaction builders, while rate limits are wall-clock
+gates that reach no transaction. See `docs/spec/rate-limiter.md`.
 
 `coilQuorum` and the peer verification keys are already pinned by the native script.
 `coilQuorum` is folded in anyway because it is a `HeadParameters` field and the section is
@@ -194,11 +205,15 @@ many `HubHardAck` journals a recovering coil peer must read. It is not in the na
 Coil peer numbers are contiguous from zero, so their position in the sequence is their number
 and is not repeated.
 
-### Pin the outref where the chain pins the outref
+`coilPeers` contributes **only** that topology. Its verification keys are deliberately left
+out: they sit in the native script's `MOf` branch and so are already pinned by the treasury
+address, exactly as the head peer keys are by the `AllOf` branch. Folding a key in twice would
+buy nothing, and the hub assignment is the one part of `CoilPeerData` no script covers.
 
-The three script references are pinned three different ways, and the rule behind that is worth
-stating: **pin an output reference exactly where the chain pins an output reference; pin the
-hash everywhere else.**
+### How the three script references are pinned
+
+Not the same way, and the rule behind the split is worth stating: **pin an output reference
+exactly where the chain pins an output reference; pin the hash everywhere else.**
 
 | reference | pinned as | why |
 |---|---|---|
@@ -494,3 +509,39 @@ afterwards. Follow the configuration-change procedure: state which files change,
 existing configs still decode, verify both decoders (`HeadParameters` and
 `Bootstrap.BootstrapHeadParams`), and carry the migration into the release notes of the release
 that ships it.
+
+## Open questions
+
+1. **The datum, or transaction metadata?** Nothing on-chain reads `headParamsHash`: the
+   multisig treasury sits at a native script address, so no validator runs, and the Plutus
+   treasury in the digest is the rule-based one, a different address after fallback. Off-chain
+   there is exactly one reader — `InitializationTx.Parse` compares the decoded datum against
+   the locally computed value. `SettlementTx` writes the field from config and never reads the
+   spent treasury's copy. Metadata would satisfy both of today's checks equally well, and
+   signing is not a differentiator: `auxiliary_data_hash` sits in the transaction body, so
+   signatures commit to metadata exactly as they do to a datum. What the datum buys is that it
+   is utxo state, so every settlement is structurally forced to reproduce it — which is what
+   makes check 5 cover config fields that reach no transaction at all — and that it survives
+   into the rule-based regime if the dispute path ever needs to read it. What it costs is 32
+   bytes plus encoding on every treasury utxo for the life of the head, and a datum arity
+   change that no running head can adopt. Decision so far: keep it in the datum.
+
+2. **Retuning rate limits on a live head.** The five block-gate knobs exist precisely to be
+   tuned against observed load, and operators will want to change them on a head that is
+   already running. Folding `rateLimits` into `headParamsHash` makes that impossible: a changed
+   knob changes the digest, so check 1 refuses the config at boot and check 5 refuses to sign
+   the next major block. Retuning becomes a head re-initialization. Three ways out, none
+   chosen:
+   - **Accept it.** Cadence decides block boundaries, so it is a head-governance parameter like
+     any other, and changing it mid-head is exactly the kind of unilateral drift the digest
+     exists to stop.
+   - **Split the section.** Keep `softBlockMinPeriod` and `hardStackMinPeriod` head-agreed —
+     they set the spacing every peer must share — and leave the backlog-gate shape
+     (`blockBacklogSoftLimit`, `blockBacklogHardLimit`, `blockGateFloor`, `blockGateSmoothing`,
+     `blockGateSlice`) node-local, on the argument that it only decides how far a peer shortens
+     its *own* spacing under its *own* backlog. Whether that argument holds is the crux: if two
+     peers with different gate shapes can cut different blocks from the same mempool, it does
+     not.
+   - **A signed parameter-change path.** The treasury datum already carries `versionMajor`; a
+     settlement could in principle move the head to a new `headParamsHash` under an effect every
+     peer signs. That is a feature in its own right, not a tweak to this design.

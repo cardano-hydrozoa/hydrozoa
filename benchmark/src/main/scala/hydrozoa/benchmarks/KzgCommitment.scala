@@ -9,19 +9,27 @@ import org.scalacheck.{Arbitrary, Gen}
 import scalus.cardano.address.*
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genMapOfSizeFromArbitrary, given}
-import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v3.TxInInfo
-import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
+import scalus.crypto.accumulator.Poly
+import scalus.uplc.builtin.Builtins.{blake2b_224, bls12_381_G1_multiScalarMul, serialiseData}
 import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.bls12_381.G1Element
 import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
-import supranational.blst.{P1, Scalar}
 
 def genUtxos(size: Int) =
     genMapOfSizeFromArbitrary[TransactionInput, TransactionOutput](size, size)(using
       transactionInput,
       transactionOutput
     ).sample.get
+
+/** The scalars a utxo set commits to, as the field elements the accumulator takes. */
+def genElements(size: Int): Vector[BigInt] =
+    KzgCommitment
+        .hashToScalar(genUtxos(size))
+        .toScalaList
+        .map(s => BigInt(1, s.to_bendian()))
+        .toVector
 
 /** N.B. don't use it BEFORE testing hashing, it will be memoized by JVM! Use it in the @TearDown
   * method after the benchmarks to control the test data set.
@@ -185,54 +193,54 @@ class HashUtxoBenchmark {
     def stat(): Unit = printUtxoStat(utxos)
 }
 
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ mkFinalPoly ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ The commitment polynomial ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+/** Multiplying the set's binomials out into the coefficients of their product — the first half of a
+  * commitment, and the half that grows fastest with the set size.
+  */
 @BenchmarkMode(Array(Mode.SingleShotTime))
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Thread)
-class MkFinalPolyBenchmark {
+class ProductPolyBenchmark {
 
     @Param(Array("10", "50", "100", "1000", "10000", "20000", "25000", "32767"))
-    // @Param(Array("10", "50", "100"))
     var size: Int = _
 
-    var utxosHashed: SList[Scalar] = _
+    var elements: Vector[BigInt] = _
 
     @Setup(Level.Iteration)
-    def setup(): Unit = {
-        val utxos = genUtxos(size)
-        utxosHashed = KzgCommitment.hashToScalar(utxos)
-    }
+    def setup(): Unit = elements = genElements(size)
 
     @Benchmark
-    def run(): Unit = KzgCommitment.mkFinalPoly(utxosHashed): Unit
+    def run(): Unit = Poly.product(elements): Unit
 
 }
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ evalFinalPoly ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Committing to that polynomial ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+/** Evaluating the polynomial at the setup's secret in the exponent: one multi-scalar multiplication
+  * of its coefficients against the SRS ladder — the second half of a commitment.
+  */
 @BenchmarkMode(Array(Mode.SingleShotTime))
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Thread)
-class EvalFinalPolyBenchmark {
+class CommitPolyBenchmark {
 
     @Param(Array("10", "50", "100", "1000", "10000", "20000", "25000", "32767"))
-    // @Param(Array("10", "50", "100"))
     var size: Int = _
 
-    var finalPoly: SList[Scalar] = _
-    var srs: SList[P1] = _
+    var coefficients: Vector[BigInt] = _
+    var srs: Vector[G1Element] = _
 
     @Setup(Level.Iteration)
     def setup(): Unit = {
         println(s"size: $size")
-        val utxos = genUtxos(size)
-        val utxosHashed = KzgCommitment.hashToScalar(utxos)
-        finalPoly = KzgCommitment.mkFinalPoly(utxosHashed)
-        srs = TrustedSetup.takeSrsG1(size)
+        coefficients = Poly.product(genElements(size)).coefficients
+        srs = TrustedSetup.srsG1Elements.take(coefficients.length)
     }
 
     @Benchmark
-    def run(): Unit = KzgCommitment.evalFinalPoly(srs, finalPoly): Unit
+    def run(): Unit = bls12_381_G1_multiScalarMul(coefficients, srs): Unit
 
 }
 

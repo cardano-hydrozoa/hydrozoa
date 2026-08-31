@@ -170,7 +170,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       reader,
@@ -191,23 +191,27 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             body <- resp.as[Json]
         } yield (resp.status, body)
 
-    test("GET /head/blocks lists block 0 plus the spine briefs, leaders round-robin") {
+    test("GET /head/blocks is not mounted — it listed the whole spine with no paging") {
+        // Same defect as GET /head/requests: every block brief into one heap List, no limit and no
+        // offset at all. Keyed lookups are unaffected, which is what the second assertion pins.
         mkMinorBrief1
             .flatMap(brief =>
                 IO(withRoutes(stubReader(brief, soft = false, hard = false)) { app =>
-                    get(app, "/head/blocks").map { (status, body) =>
-                        val _ = assert(status == Status.Ok)
-                        val rows = body.asArray.get
-                        val _ = assert(rows.size == 2)
-                        val row0 = rows(0).hcursor
-                        val _ = assert(row0.get[Int]("number") == Right(0))
-                        val _ = assert(row0.get[String]("blockType") == Right("initial"))
-                        val _ = assert(row0.downField("leader").focus.forall(_.isNull))
-                        val row1 = rows(1).hcursor
-                        val _ = assert(row1.get[Int]("number") == Right(1))
-                        val _ = assert(row1.get[String]("blockType") == Right("minor"))
+                    for {
+                        listing <- app.run(
+                          Request[IO](Method.GET, Uri.unsafeFromString("/head/blocks"))
+                        )
+                        byNum <- app.run(
+                          Request[IO](Method.GET, Uri.unsafeFromString("/head/blocks/1"))
+                        )
+                    } yield {
                         val _ = assert(
-                          row1.get[Int]("leader") == Right(1 % headConfig.nHeadPeers.convert)
+                          listing.status == Status.NotFound,
+                          s"GET /head/blocks must not be mounted, got ${listing.status}"
+                        )
+                        val _ = assert(
+                          byNum.status == Status.Ok,
+                          s"GET /head/blocks/{n} must still serve, got ${byNum.status}"
                         )
                         ()
                     }

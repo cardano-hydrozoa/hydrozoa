@@ -11,6 +11,7 @@ import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder}
 import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, MultiAsset, PolicyId, ScriptHash, TransactionOutput, Value}
+import scodec.bits.ByteVector
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
 object RemoteL2LedgerCodecs {
@@ -42,8 +43,10 @@ object RemoteL2LedgerCodecs {
                 io.circe.Json.obj(
                   "asset" -> io.circe.Json.obj(
                     "tag" -> io.circe.Json.fromString("NativeToken"),
-                    "policyId" -> io.circe.Json.fromString(policyId.toHex),
-                    "assetName" -> io.circe.Json.fromString(assetName.bytes.toHex)
+                    // Hex via ByteVector, not `.toHex`: PolicyId/AssetName are ByteStrings that cache
+                    // hex on the instance, and these live in retained L2 ledger Values.
+                    "policyId" -> io.circe.Json.fromString(ByteVector(policyId.bytes).toHex),
+                    "assetName" -> io.circe.Json.fromString(ByteVector(assetName.bytes.bytes).toHex)
                   ),
                   "value" -> io.circe.Json.fromLong(quantity)
                 )
