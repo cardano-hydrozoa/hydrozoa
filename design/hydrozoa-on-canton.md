@@ -228,6 +228,16 @@ conservation, the double-claim nullifier, and the model-level delegation. The in
 can't produce secp256k1 signatures, so the positive signature path and OQ-1's *runtime* answer wait on
 the Canton deployment (step 2).
 
+**Step 2 (live Canton, `canton-poc/canton/`):** the DAR runs on a real single-process Canton (BFT
+synchronizer + 3 participants). **OQ-1 is verified ✓** — the `settlementAgent` (a different party)
+drives `ClaimPayout` and a custodian-signed `Payout` is minted via signatory delegation with no
+custodian key at exercise time; Merkle inclusion, conservation, and the nullifier all pass on the live
+engine. **OQ-2 remains open ⚠** — promoting `custodian` to a 2-of-3 decentralized party via three
+console `propose` calls doesn't aggregate (mapping stays `serial=1/threshold=1`), so OQ-1 currently
+holds only at single-participant strength; proper decentralized-party onboarding (shared-store
+proposals or the interactive-topology flow) is the next increment and is also the sharpest OQ-1 form
+(external custodian, key withheld).
+
 ---
 
 ## 9. Reconciliation with the Gummiworm spec

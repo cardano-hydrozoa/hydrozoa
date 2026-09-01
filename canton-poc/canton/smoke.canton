@@ -1,0 +1,16 @@
+// Boot smoke test: start every local node, bootstrap the synchronizer, connect
+// all three participants, and ping. Confirms Canton runs in this environment
+// before we layer the OQ-1/OQ-2 topology on top. Exits non-interactively.
+nodes.local.start()
+bootstrap.synchronizer_local()
+
+participant1.synchronizers.connect_local(sequencer1, alias = "da")
+participant2.synchronizers.connect_local(sequencer1, alias = "da")
+participant3.synchronizers.connect_local(sequencer1, alias = "da")
+
+utils.retry_until_true { participant2.synchronizers.active("da") }
+utils.retry_until_true { participant3.synchronizers.active("da") }
+
+participant1.health.ping(participant2)
+println(">>> SMOKE OK")
+sys.exit(0)

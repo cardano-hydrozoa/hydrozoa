@@ -62,3 +62,6 @@ target/
 
 # Daml build output (canton-poc PoC)
 canton-poc/.daml/
+
+# Canton runtime logs (canton-poc)
+/log/

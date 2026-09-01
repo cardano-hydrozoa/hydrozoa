@@ -1,0 +1,112 @@
+// Step-2 live-Canton test of OQ-1 (delegation) and OQ-2 (threshold composition)
+// from design/hydrozoa-on-canton.md §7/§8. Stands up custodian, a threshold-1
+// settlementAgent, and a recipient (alice); uploads the custody DAR; has the
+// custodian author a Custody contract; and drives ClaimPayout via the agent.
+// Post-setup phases are guarded so one run reports how far the mechanics hold.
+//
+// STATUS (verified on Canton 3.5.15):
+//   OQ-1 ✓ — the settlementAgent (a DIFFERENT party) exercises ClaimPayout and a
+//     custodian-signed Payout is minted via signatory delegation, no custodian
+//     key at exercise time. The Merkle single-leaf proof + conservation +
+//     nullifier all pass on the live engine (and the Scala leaf hash below
+//     matches Daml's sha256, confirming the hashing convention).
+//   OQ-2 ⚠ WIP — the three console `propose` calls below leave the mapping at
+//     serial=1/threshold=1 (they don't aggregate to a 2-of-3 decentralized
+//     party). Proper decentralized-party onboarding is the next step; until then
+//     custodian is single-hosted on p1, so OQ-1 holds at single-participant
+//     strength. See README "Step 2".
+import com.digitalasset.canton.topology.transaction.ParticipantPermission
+import com.digitalasset.canton.config.RequireTypes.PositiveInt
+import java.security.MessageDigest
+
+def phase(s: String): Unit = println(s"\n>>> PHASE: $s")
+def attempt(name: String)(body: => Unit): Unit =
+  try { body } catch { case e: Throwable => println(s">>> $name FAILED: ${e.getClass.getSimpleName}: ${e.getMessage}") }
+def hex(bs: Array[Byte]): String = bs.map(b => f"${b & 0xff}%02x").mkString
+
+// Reproduce Merkle.leafHash: SHA-256 over UTF-8 of (show party | show amount).
+// Daml `show` quotes a Party ('p::12..') and prints a Decimal minimally (100.0).
+def leafHash(partyLf: String, amountShown: String): String =
+  hex(MessageDigest.getInstance("SHA-256").digest(s"'$partyLf'|$amountShown".getBytes("UTF-8")))
+
+phase("boot + connect")
+nodes.local.start()
+val synchronizerId = bootstrap.synchronizer_local()
+participants.local.foreach(_.synchronizers.connect_local(sequencer1, alias = "da"))
+utils.retry_until_true { participant2.synchronizers.active("da") && participant3.synchronizers.active("da") }
+
+phase("upload DAR to all three participants")
+val darPath = "canton-poc/.daml/dist/custody-0.1.0.dar"
+Seq(participant1, participant2, participant3).foreach(_.dars.upload(darPath))
+
+phase("enable parties (settlementAgent + alice on p1; custodian seeded on p1)")
+val agent = participant1.parties.enable("settlementAgent")
+val alice = participant1.parties.enable("alice")
+val custodian = participant1.parties.enable("custodian")
+println(s"custodian=${custodian.toLf}")
+val leaf = leafHash(alice.toLf, "100.0")
+println(s"leaf(alice,100.0)=$leaf")
+
+attempt("OQ-2 promote custodian to 2-of-3") {
+  val hosts = Seq(
+    (participant1.id, ParticipantPermission.Submission),
+    (participant2.id, ParticipantPermission.Confirmation),
+    (participant3.id, ParticipantPermission.Confirmation),
+  )
+  // TODO(OQ-2): these three proposes (default "Authorized" store) do NOT
+  // aggregate into a fully-authorized serial-2 mapping — the diagnostic below
+  // still reads serial=1/threshold=1. Proper decentralized-party onboarding
+  // likely needs the proposals targeted at the shared synchronizer store, or the
+  // interactive topology flow from example 08. Left in place as the start point.
+  Seq(participant1, participant2, participant3).foreach { p =>
+    p.topology.party_to_participant_mappings.propose(
+      custodian, hosts, threshold = PositiveInt.tryCreate(2), mustFullyAuthorize = false)
+  }
+  Thread.sleep(5000)
+  val res = participant1.topology.party_to_participant_mappings
+    .list(synchronizerId, filterParty = custodian.filterString)
+  res.foreach(r => println(s">>> OQ-2 mapping: serial=${r.context.serial.value} threshold=${r.item.threshold.value} hosts=${r.item.participants.size}"))
+  val props = participant1.topology.party_to_participant_mappings
+    .list_hosting_proposals(synchronizerId, participant1.id)
+  println(s">>> OQ-2 pending hosting proposals at p1=${props.size}")
+}
+
+var custodyCid: Option[String] = None
+attempt("2-of-3 custodian authors Custody contract") {
+  val createCmd = ledger_api_utils.create("#custody", "Custody", "Custody",
+    Map(
+      "custodian" -> custodian,
+      "enclaveKey" -> "02",
+      "instanceId" -> "head-0",
+      "epoch" -> 0,
+      "seqNo" -> 7,
+      "mrh" -> leaf,
+      "quantity" -> 150.0d, // Double → Numeric (ledger_api_utils dispatch)
+      "settlementAgent" -> agent,
+      "disputed" -> true,
+      "claimed" -> List.empty[String],
+    ))
+  participant1.ledger_api.commands.submit(Seq(custodian), Seq(createCmd))
+  val entries = participant1.ledger_api.state.acs.active_contracts_of_party(agent)
+    .filter(_.createdEvent.flatMap(_.templateId).exists(_.entityName == "Custody"))
+  println(s">>> CREATE OK: Custody contracts visible to agent = ${entries.size}")
+  custodyCid = entries.headOption.flatMap(_.createdEvent).map(_.contractId)
+}
+
+attempt("OQ-1 settlementAgent drives ClaimPayout (custodian-signed Payout via delegation)") {
+  val cid = custodyCid.getOrElse(sys.error("no custody cid from create phase"))
+  println(s"custody cid=$cid")
+  val exeCmd = ledger_api_utils.exercise("#custody", "Custody", "Custody", "ClaimPayout",
+    Map(
+      "recipient" -> alice,
+      "amount" -> 100.0d, // Double → Numeric
+      "proof" -> List.empty[Any], // single-leaf tree: root == leaf, empty proof
+    ), cid)
+  participant1.ledger_api.commands.submit(Seq(agent), Seq(exeCmd))
+  val payouts = participant1.ledger_api.state.acs.active_contracts_of_party(alice)
+    .filter(_.createdEvent.flatMap(_.templateId).exists(_.entityName == "Payout"))
+  println(s">>> OQ-1 RESULT: Payout contracts visible to alice = ${payouts.size} (expect 1)")
+}
+
+println("\n>>> OQ-TEST DONE")
+sys.exit(0)

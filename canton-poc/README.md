@@ -72,6 +72,40 @@ verify, not sign), so:
      signing `(instanceId, epoch, seqNo, mrh, quantity)` — note the message is
      hex-encoded (`Merkle.toHex`) before signing/verifying.
 
+## Step 2 — live Canton (OQ-1 verified)
+
+`canton/` runs the contract on a real single-process Canton (3.5.15): a BFT
+synchronizer (sequencer + mediator) plus three participants, in-memory storage.
+
+| File | Role |
+|---|---|
+| `canton/topology.conf` | synchronizer + 3 participants (ports 50xx) |
+| `canton/smoke.canton` | boot + connect + cross-participant ping |
+| `canton/oq-test.canton` | upload DAR, set up parties, create Custody, drive ClaimPayout |
+
+Run headless from the repo root inside the dev shell (build the DAR first):
+
+```bash
+cd canton-poc && daml build && cd ..
+canton run canton-poc/canton/oq-test.canton -c canton-poc/canton/topology.conf --no-tty </dev/null
+```
+
+**Result — OQ-1 ✓.** The `settlementAgent` (a *different* party from `custodian`)
+exercises `ClaimPayout` and a **custodian-signed `Payout` is minted via signatory
+delegation, with no custodian key at exercise time**. The Merkle single-leaf
+proof, conservation bound, and nullifier all pass on the live Daml engine — and
+the leaf hash computed in Scala matches Daml's `sha256`, confirming the hashing
+convention across the boundary.
+
+**Open — OQ-2 ⚠.** The three console `propose` calls that should promote
+`custodian` to a 2-of-3 decentralized party leave the mapping at
+`serial=1/threshold=1` (they don't aggregate). So today `custodian`, `agent`, and
+`alice` are all hosted on participant1 and OQ-1 holds at *single-participant*
+strength. Proper decentralized-party onboarding — proposals targeted at the
+shared synchronizer store, or the interactive-topology flow of Canton's
+`08-interactive-submission` example — is the next increment, and is also the
+sharpest form of OQ-1 (custodian as an *external* party with its key withheld).
+
 ## Simplifications vs. the design
 
 - **Nullifier as an explicit list** (`claimed : [Text]`) — O(N). Production uses
