@@ -138,16 +138,30 @@ Notes on the layout:
 
 ## Where it lives and what compares it
 
-**`SignedDigest.Onchain` becomes the hash.** Not a fifth field beside the four scalars —
-*instead* of them. `blockNum`, `startTime`, `versionMajor` and `versionMinor` are all already
-inside the `blockHash` preimage, so keeping them alongside commits the same bytes twice, once
-directly and once through the digest. The soft-ack then signs one 32-byte commitment to the
-entire block rather than to four scalars, and the peer-facing check moves from a structural
-comparison to signature verification, which is where it belongs: a follower that derives a
-different block produces a different `blockHash`, and the leader's ack fails to verify against
-its own brief.
+**The soft-ack signs the hash, and nothing else.** `SignedDigest.Onchain` does not shrink to one
+field — it goes away, and `signingBytes` becomes the 32 hash bytes. All four of its fields are
+already inside the `blockHash` preimage, so carrying them alongside commits the same bytes
+twice, once directly and once through the digest.
 
-Nothing reads those four fields back. The only reference to `SignedDigest` outside
+Not even the version needs to survive. The argument for keeping a scalar visible is a verifier
+that must check a signature *without* the block, and no such verifier exists here:
+`FastConsensusActor` verifies with `msg = brief.header.signingBytes`, holding the brief it is
+verifying acks against — as any verifier must, since a signature is meaningless without knowing
+which block it covers. The on-chain ratchet reads its versions from
+`StandaloneEvacuationCommitmentOnchain(headId, versionMajor, versionMinor, commitment)` and
+`VoteStatus.Voted(commitment, versionMinor)`, the SEC's own shape, never the block header's.
+
+Dropping the last field also drops the `serialiseData` wrapper: signing a bare 32-byte digest
+needs no Plutus `Data` encoding, so the fast side loses that dependency, and the misleading
+`Onchain` name disappears with the type rather than needing a correction.
+
+The soft-ack then signs one commitment to the entire block, and the peer-facing check moves from
+a structural comparison to signature verification, which is where it belongs — a follower that
+derives a different block produces a different `blockHash`, and the leader's ack fails to verify
+against its own brief. The domain tag inside the preimage keeps those signed bytes separable
+from any other 32-byte digest the protocol signs.
+
+Nothing reads the four fields back today. The only reference to `SignedDigest` outside
 `BlockHeader.scala` is a doc comment in `PeerWallet.scala`; the type is constructed, serialised,
 signed and verified as opaque bytes and never destructured. The rule-based coupling is nominal —
 `VoteTx`, `RatchetVoteTx` and `RuleBasedActor` use `BlockHeader.Minor.HeaderSignature` as the
@@ -157,11 +171,12 @@ and none of them rebuilds the header preimage.
 **This costs no Plutus budget.** Despite the name, `SignedDigest.Onchain` is not consumed
 on-chain. Its only readers are `PeerWallet.mkHeaderSignature`, `JointLedger` (signing, `:719`)
 and `FastConsensusActor` (verification, `:285`). The on-chain signature check in
-`DisputeResolutionScript` verifies over `voteRedeemer.sec`, the standalone evacuation
-commitment; the `headerSerialized` member in `VoteState.scala` belongs to
-`StandaloneEvacuationCommitmentOnchain`, not to `BlockHeader`. So this is an off-chain change
-with no script cost — and `Onchain` is then a misleading name worth correcting in the same work
-item.
+`DisputeResolutionScript` verifies over `voteRedeemer.sec`; the `headerSerialized` member in
+`VoteState.scala` belongs to `StandaloneEvacuationCommitmentOnchain`, not to `BlockHeader`.
+
+**A running head cannot be upgraded across this change.** The signed bytes move, so acks from a
+peer on the old preimage fail to verify on the new one and the reverse. It applies to heads
+initialized afterwards, and belongs in the release notes of the release that ships it.
 
 **`JointLedger` compares hashes.** `panicOnMismatchWithExpectedBrief` compares one 32-byte value
 instead of two case-class trees. `briefMismatchSummary` stays: once the hashes differ, the
