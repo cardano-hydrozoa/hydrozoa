@@ -1,0 +1,118 @@
+-- Daml Script coverage for the custody PoC. The script service can't produce
+-- secp256k1 signatures, so the signed-transition paths (UpdateState / a real
+-- ChallengeMrh) are exercised only on their rejection side here; the positive
+-- signature path and the OQ-1 external-party delegation belong to the Canton
+-- deployment step. The exit logic — Merkle inclusion, conservation, the
+-- nullifier, and custodian-authority delegation into `Payout` — is fully
+-- exercised with real hashes by seeding the disputed state directly.
+module CustodyTest where
+
+import Daml.Script
+import DA.Assert ((===))
+import Custody
+import Merkle
+
+-- A two-leaf evacuation map: alice ↦ 100, bob ↦ 50.
+data Fixture = Fixture
+  with
+    custodian : Party
+    agent : Party
+    alice : Party
+    bob : Party
+    root : Text
+    proofA : [ProofStep]
+    proofB : [ProofStep]
+
+setup : Script Fixture
+setup = do
+  custodian <- allocateParty "custodian"
+  agent <- allocateParty "settlementAgent"
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let leafA = leafHash alice 100.0
+      leafB = leafHash bob 50.0
+      root = nodeHash leafA leafB
+      proofA = [ProofStep leafB False] -- alice is the left leaf; sibling on right
+      proofB = [ProofStep leafA True]  -- bob is the right leaf; sibling on left
+  pure Fixture with custodian, agent, alice, bob, root, proofA, proofB
+
+-- Seed a custody contract already in the rules-based regime with a known MRH.
+-- (In production ChallengeMrh sets disputed=True from a real enclave signature;
+-- the script can't produce secp256k1 signatures, so we seed the state directly.)
+seedDisputed : Party -> Party -> Text -> Decimal -> Script (ContractId Custody)
+seedDisputed custodian agent root quantity =
+  submit custodian $ createCmd Custody with
+    custodian
+    settlementAgent = agent
+    enclaveKey = "02" -- placeholder pubkey; the exit path needs no signature
+    instanceId = "head-0"
+    epoch = 0
+    seqNo = 7
+    mrh = root
+    quantity
+    disputed = True
+    claimed = []
+
+-- Happy path: both recipients exit, each Payout is custodian-signed via
+-- delegation (driven by the settlement agent, not the custodian's key), the
+-- nullifier blocks a replay, and conservation drains the treasury to zero.
+testExitFlow : Script ()
+testExitFlow = do
+  Fixture{custodian, agent, alice, bob, root, proofA, proofB} <- setup
+  cid <- seedDisputed custodian agent root 150.0
+
+  (cid1, payoutA) <- submit agent $ exerciseCmd cid ClaimPayout with
+    recipient = alice, amount = 100.0, proof = proofA
+  Some p <- queryContractId custodian payoutA
+  p.custodian === custodian -- minted under custodian authority, no enclave key
+  p.recipient === alice
+  p.amount === 100.0
+
+  -- the nullifier set rejects a second claim of the same leaf
+  submitMustFail agent $ exerciseCmd cid1 ClaimPayout with
+    recipient = alice, amount = 100.0, proof = proofA
+
+  (cid2, _) <- submit agent $ exerciseCmd cid1 ClaimPayout with
+    recipient = bob, amount = 50.0, proof = proofB
+  Some c <- queryContractId custodian cid2
+  c.quantity === 0.0
+
+-- A payout not in the map (wrong proof) is rejected by inclusion.
+testWrongProofRejected : Script ()
+testWrongProofRejected = do
+  Fixture{custodian, agent, alice, root, proofB} <- setup
+  cid <- seedDisputed custodian agent root 150.0
+  submitMustFail agent $ exerciseCmd cid ClaimPayout with
+    recipient = alice, amount = 100.0, proof = proofB -- bob's proof, not alice's
+
+-- Conservation caps a claim at the treasury balance even with a valid proof.
+testConservation : Script ()
+testConservation = do
+  custodian <- allocateParty "custodian"
+  agent <- allocateParty "settlementAgent"
+  carol <- allocateParty "carol"
+  let leaf = leafHash carol 999.0 -- single-leaf tree: root == leaf, empty proof
+  cid <- seedDisputed custodian agent leaf 10.0
+  submitMustFail agent $ exerciseCmd cid ClaimPayout with
+    recipient = carol, amount = 999.0, proof = []
+
+-- A ratchet with a bad enclave signature is rejected (signature-guard path).
+-- The settlement agent is an observer, so this fails on the signature — not on
+-- contract visibility.
+testBadSignatureRejected : Script ()
+testBadSignatureRejected = do
+  custodian <- allocateParty "custodian"
+  agent <- allocateParty "settlementAgent"
+  cid <- submit custodian $ createCmd Custody with
+    custodian
+    settlementAgent = agent
+    enclaveKey = "02"
+    instanceId = "head-0"
+    epoch = 0
+    seqNo = 1
+    mrh = "00"
+    quantity = 100.0
+    disputed = False
+    claimed = []
+  submitMustFail agent $ exerciseCmd cid ChallengeMrh with
+    newSeqNo = 2, newMrh = "ff", newQuantity = 100.0, sig = "deadbeef"

@@ -1,0 +1,41 @@
+-- Minimal Merkle inclusion proofs over SHA-256 — the Canton stand-in for the
+-- Gummiworm evacuation map's KZG set accumulator (no pairings on Canton). The
+-- leaf commits (recipient, amount) so a redirected payout fails inclusion,
+-- preserving the accumulator's payout-binding property. See
+-- design/hydrozoa-on-canton.md §2 (evacuation map) and §9 (KZG → Merkle).
+module Merkle where
+
+import DA.Crypto.Text (sha256)
+import DA.Text qualified as T
+
+-- One step of an inclusion path: the sibling digest and which side it sits on.
+data ProofStep = ProofStep
+  with
+    sibling : Text
+    siblingOnLeft : Bool
+  deriving (Eq, Show)
+
+-- `DA.Crypto.Text.sha256` requires hex-encoded input, so encode a preimage's
+-- code points to hex first. Preimages here are ASCII (party names + decimals),
+-- for which code point == byte.
+toHex : Text -> Text
+toHex t = T.implode (map byteToHex (T.toCodePoints t))
+  where
+    byteToHex c = hexDigit (c / 16) <> hexDigit (c % 16)
+    hexDigit n = T.take 1 (T.drop n "0123456789abcdef")
+
+-- Leaf digest binding a payout to the map. `show` on Party/Decimal is stable
+-- within a package, which is all the commitment needs.
+leafHash : Party -> Decimal -> Text
+leafHash recipient amount = sha256 (toHex (show recipient <> "|" <> show amount))
+
+-- Combine two child digests into their parent. Inputs are already hex.
+nodeHash : Text -> Text -> Text
+nodeHash l r = sha256 (l <> r)
+
+-- Fold an inclusion path from a leaf up to a claimed root.
+verifyInclusion : Text -> Text -> [ProofStep] -> Bool
+verifyInclusion root leaf steps = foldl climb leaf steps == root
+  where
+    climb acc ps =
+      if ps.siblingOnLeft then nodeHash ps.sibling acc else nodeHash acc ps.sibling

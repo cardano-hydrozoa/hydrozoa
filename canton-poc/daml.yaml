@@ -1,0 +1,16 @@
+# Compiler 3.4.11 (latest pinned by nix-daml-sdk) targeting Daml-LF 2.1, which
+# the Canton 3.5.15 runtime accepts. See design/hydrozoa-on-canton.md §11 and the
+# flake's nix-daml-sdk note for why the compiler/runtime versions differ.
+sdk-version: 3.4.11
+name: custody
+version: 0.1.0
+source: daml
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+build-options:
+  - --target=2.1
+  # We use DA.Crypto.Text.{sha256,secp256k1} deliberately; it is the only
+  # in-contract crypto Canton offers (design §1). Silence its alpha-feature nag.
+  - -Wno-crypto-text-is-alpha

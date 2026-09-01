@@ -222,6 +222,12 @@ run arbitrarily fast off-Canton; only ramp rate and checkpoint cadence touch the
 If (2) passes, the architecture stands as written. If it fails, fall back to the quarantined public
 `settlementAgent` and re-test.
 
+**Status:** step 1 is scaffolded in [`../canton-poc/`](../canton-poc/README.md) — a Daml package with
+the `Custody`/`Payout` templates, a SHA-256 Merkle module, and Daml Script tests covering exit,
+conservation, the double-claim nullifier, and the model-level delegation. The in-memory script service
+can't produce secp256k1 signatures, so the positive signature path and OQ-1's *runtime* answer wait on
+the Canton deployment (step 2).
+
 ---
 
 ## 9. Reconciliation with the Gummiworm spec

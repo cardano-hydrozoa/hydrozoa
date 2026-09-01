@@ -1,0 +1,123 @@
+-- Custody / settlement contract — PoC step 1 of design/hydrozoa-on-canton.md §8.
+--
+-- Models the two regimes of §3 on one template:
+--   * Multisig regime  — the custodian (a Canton decentralized/threshold party)
+--     advances the enclave-signed bundle; Canton supplies the m-of-n confirmation.
+--   * Rules-based regime — a permissionless monotonic ratchet to the freshest
+--     enclave-signed MRH, then constrained, conservation-bounded exit.
+--
+-- The load-bearing question this exists to probe is OQ-1 (§7): does exercising a
+-- choice on a custodian-signed contract mint custodian-signed children WITHOUT a
+-- fresh custodian key at exercise time? `ClaimPayout` → `Payout` is that test.
+-- The Daml model always honours this delegation; the open question is whether
+-- Canton honours it for an *external, multi-hosted* custodian — which only the
+-- deployment step (PoC step 2) can answer. See canton-poc/README.md.
+module Custody where
+
+import DA.Crypto.Text (secp256k1)
+import Merkle (ProofStep, leafHash, verifyInclusion, toHex)
+
+-- The exact bytes the enclave signs, hex-encoded for `secp256k1`. Every field is
+-- anti-replay (§3): instanceId → cross-instance/head replay; epoch →
+-- post-reset/key-rotation; seqNo → backward replay; mrh bound to quantity →
+-- splice. You can forge only "older", which monotonicity makes inert.
+signedMessage : Text -> Int -> Int -> Text -> Decimal -> Text
+signedMessage instanceId epoch seqNo mrh quantity =
+  toHex (instanceId <> "|" <> show epoch <> "|" <> show seqNo <> "|" <> mrh <> "|" <> show quantity)
+
+template Custody
+  with
+    custodian : Party
+      -- The Canton decentralized/threshold party holding the funds (CoilQuorum).
+    enclaveKey : Text
+      -- secp256k1 public key (hex) the L2 enclave signs settlement bundles with.
+    instanceId : Text
+    epoch : Int
+    seqNo : Int
+    mrh : Text
+      -- Merkle root of the evacuation map (the "quality" / who-owns-what).
+    quantity : Decimal
+      -- Treasury balance (the "quantity"); Canton owns this natively.
+    settlementAgent : Party
+      -- The constrained-exit driver (§4): the threshold-1 settlement/watchtower
+      -- party that ratchets the MRH and drives payouts. Modelled here as one
+      -- observer; on Canton a permissionless driver reaches the contract via
+      -- explicit disclosure. Its identity grants no power — the enclave
+      -- signature, monotonicity, and conservation are what constrain it.
+    disputed : Bool
+      -- False = multisig regime, True = rules-based (dispute) regime.
+    claimed : [Text]
+      -- Nullifier set of already-exited leaf digests. PoC uses an explicit list;
+      -- production replaces it with archival-as-nullifier (§3) for O(1) space.
+  where
+    signatory custodian
+    observer settlementAgent
+
+    -- Multisig regime: advance state under custodian authority (Canton m-of-n).
+    -- Requires a fresh, strictly-monotonic, enclave-signed bundle.
+    choice UpdateState : ContractId Custody
+      with
+        newSeqNo : Int
+        newMrh : Text
+        newQuantity : Decimal
+        sig : Text
+      controller custodian
+      do
+        assertMsg "regime: must be multisig (not disputed)" (not disputed)
+        assertMsg "seqNo must strictly increase" (newSeqNo > seqNo)
+        assertMsg "enclave signature invalid"
+          (secp256k1 sig (signedMessage instanceId epoch newSeqNo newMrh newQuantity) enclaveKey)
+        create this with seqNo = newSeqNo, mrh = newMrh, quantity = newQuantity
+
+    -- Rules-based regime: permissionless monotonic ratchet. Anyone may post a
+    -- fresher enclave-signed bundle; accepted iff the signature verifies and the
+    -- seqNo strictly increases (advance-to-freshest happens before any exit).
+    choice ChallengeMrh : ContractId Custody
+      with
+        newSeqNo : Int
+        newMrh : Text
+        newQuantity : Decimal
+        sig : Text
+      controller settlementAgent
+      do
+        assertMsg "seqNo must strictly increase" (newSeqNo > seqNo)
+        assertMsg "enclave signature invalid"
+          (secp256k1 sig (signedMessage instanceId epoch newSeqNo newMrh newQuantity) enclaveKey)
+        create this with
+          seqNo = newSeqNo
+          mrh = newMrh
+          quantity = newQuantity
+          disputed = True
+
+    -- Constrained exit. The claimant proves (recipient, amount) is in the
+    -- canonical MRH; conservation caps the draw at the treasury balance; the leaf
+    -- digest is a nullifier against double-claims. The minted Payout is
+    -- custodian-signed via signatory delegation — no enclave key here (OQ-1).
+    choice ClaimPayout : (ContractId Custody, ContractId Payout)
+      with
+        recipient : Party
+        amount : Decimal
+        proof : [ProofStep]
+      controller settlementAgent
+      do
+        assertMsg "regime: exit only in rules-based regime" disputed
+        let leaf = leafHash recipient amount
+        assertMsg "double claim" (not (leaf `elem` claimed))
+        assertMsg "not in evacuation map" (verifyInclusion mrh leaf proof)
+        assertMsg "conservation: amount exceeds treasury" (amount <= quantity)
+        payout <- create Payout with custodian, recipient, amount
+        custody <- create this with
+          quantity = quantity - amount
+          claimed = leaf :: claimed
+        pure (custody, payout)
+
+-- Custodian-signed child minted by ClaimPayout. Its existence is the proof that
+-- the choice carried custodian authority without a fresh custodian signature.
+template Payout
+  with
+    custodian : Party
+    recipient : Party
+    amount : Decimal
+  where
+    signatory custodian
+    observer recipient
