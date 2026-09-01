@@ -72,7 +72,7 @@ trait RequestSequencer(
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
-                _connections <- x.get
+                _connections <- x.get.flatMap(IO.fromEither)
                 _ <- connections.set(
                   Some(
                     Connections(

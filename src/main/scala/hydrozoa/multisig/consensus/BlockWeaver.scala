@@ -87,7 +87,7 @@ final case class BlockWeaver(
     private def initializeConnections: IO[BlockWeaver.Connections] = pendingConnections match {
         case pc: HeadMultisigRegimeManager.PendingConnections =>
             for {
-                c <- pc.get
+                c <- pc.get.flatMap(IO.fromEither)
             } yield BlockWeaver.Connections(
               blockWeaver = context.self,
               jointLedger = c.jointLedger,

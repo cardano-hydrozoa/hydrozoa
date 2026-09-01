@@ -1,6 +1,6 @@
 package hydrozoa.multisig
 
-import cats.effect.{Deferred, IO, Ref, Resource}
+import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all.*
 import com.suprnation.actor.ActorContext
 import com.suprnation.actor.ActorRef.NoSendActorRef
@@ -65,7 +65,6 @@ trait CoilMultisigRegimeManager(
                 .getOrElse(
                   throw new IllegalStateException(s"No hub configured for coil $ownCoilNum")
                 )
-            pendingConnections <- Deferred[IO, Connections]
 
             // Every recovery marker this peer boots from, derived ONCE here and projected into
             // each child actor. Deriving per-actor let two paths interpret the same journal
@@ -154,8 +153,8 @@ trait CoilMultisigRegimeManager(
               markers = markers
             )(using config)
 
-            _ <- pendingConnections.complete(connections)
-            _ <- connectionsDeferred.complete(connections)
+            _ <- pendingConnections.complete(Right(connections))
+            _ <- connectionsDeferred.complete(Right(connections))
 
             _ <- tracer.traceWith(WatchingActors)
 

@@ -49,8 +49,6 @@ trait HeadMultisigRegimeManager(
         for {
             _ <- tracer.traceWith(StartingActors)
 
-            pendingConnections <- Deferred[IO, HeadMultisigRegimeManager.Connections]
-
             // Every recovery marker this peer boots from, derived ONCE here and projected into
             // each child actor. Deriving per-actor let two paths interpret the same journal
             // independently, which is how a seeded store could satisfy one and not the other.
@@ -272,8 +270,8 @@ trait HeadMultisigRegimeManager(
               markers = markers
             )(using config)
 
-            _ <- pendingConnections.complete(connections)
-            _ <- connectionsDeferred.complete(connections)
+            _ <- pendingConnections.complete(Right(connections))
+            _ <- connectionsDeferred.complete(Right(connections))
 
             _ <- tracer.traceWith(WatchingActors)
 
@@ -383,7 +381,7 @@ object HeadMultisigRegimeManager {
         coilPeerLiaisons: List[liaison.PeerLiaisonHubToCoil.Handle] = Nil,
     )
 
-    type PendingConnections = Deferred[IO, Connections]
+    type PendingConnections = Deferred[IO, Either[Throwable, Connections]]
 
     def resource(
         config: NodeConfig,

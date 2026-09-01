@@ -547,7 +547,7 @@ object Serve {
 
             // The HTTP server needs the RequestSequencer, which only exists once connections
             // resolve, so wait for them before binding.
-            connections <- mrm.connectionsDeferred.get
+            connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
             _ <- log.info("Starting HTTP server...")
 
             // `surround`, not `start.void`: the server is bound for exactly as long as the node
@@ -598,7 +598,7 @@ object Serve {
             _ <- system.actorOf(mrm, "CoilMultisigRegimeManager")
             _ <- log.info("Hydrozoa coil node started successfully")
 
-            connections <- mrm.connectionsDeferred.get
+            connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
             _ <- log.info("Starting HTTP server (coil: read-only surface)...")
 
             // `surround` binds the server for the node's lifetime and releases it when the actor

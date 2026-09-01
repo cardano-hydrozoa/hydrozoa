@@ -813,7 +813,7 @@ final case class StackComposer(
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
-                c <- x.get
+                c <- x.get.flatMap(IO.fromEither)
                 _ <- connections.set(
                   Some(
                     Connections(
