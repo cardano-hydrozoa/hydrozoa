@@ -138,23 +138,27 @@ Notes on the layout:
 
 ## Where it lives and what compares it
 
-**The soft-ack signs the block hash, with `blockNum` and the versions beside it.**
+**The soft-ack signs the block hash, with the two version components beside it.**
 
 ```scala
-SignedDigest(blockNum, versionMajor, versionMinor, blockHash)
+SignedDigest(versionMajor, versionMinor, blockHash)
 ```
 
-Only `startTime` goes. It is inside the `blockHash` preimage and nothing reads it out of the
-signed bytes.
+`blockNum` and `startTime` go. Both are inside the `blockHash` preimage, so dropping them
+unbinds nothing — a signature made over block N still cannot be replayed as block M. `SoftAck`
+already carries `blockNum` as a plain field, so anything wanting an ack's block number has it
+without parsing signed bytes.
 
-The other three stay, each duplicated in the preimage on purpose:
+The versions stay, duplicated in the preimage on purpose: a ratchet must read them **without
+recomputing a hash** — `versionMajor` for equality, `versionMinor` for the strict increase. A
+digest gives an ordering on nothing; it can only say two things differ.
 
-- `versionMajor` and `versionMinor`, because a ratchet must read them without recomputing a
-  hash — major for equality, minor for the strict increase. A digest gives an ordering on
-  nothing; it can only say two things differ.
-- `blockNum`, because it names what the signature is about. A signed blob that says only "some
-  block, version 3.7" is worse to hold, log and diagnose than one that names the block, and the
-  cost is four bytes in an off-chain message.
+Be honest about what that is. **Nothing reads any field of `SignedDigest` today.** The type has
+five references in the repository — constructed in `signingBytes`, its own declaration, an
+unused `Serialized.Section`, and a doc comment in `PeerWallet` — and its derived `FromData`
+decoder is never called. So the versions are kept for a ratchet that does not yet read them, at
+a cost of eight bytes in an off-chain message, to keep that option open. That is a deliberate
+choice, not a current requirement.
 
 **Everything else collapses into the hash.** The check moves from a structural comparison to
 signature verification, which is where it belongs — a follower that derives a different block
