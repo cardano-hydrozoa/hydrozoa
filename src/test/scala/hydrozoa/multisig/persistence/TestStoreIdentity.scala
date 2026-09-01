@@ -2,7 +2,8 @@ package hydrozoa.multisig.persistence
 
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import scalus.cardano.ledger.{AssetName, Blake2b_256, Hash}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.ledger.{AssetName, Blake2b_256, Hash, ScriptHash}
 import scalus.uplc.builtin.ByteString
 
 /** The [[StoreIdentity]] the persistence tests stamp their stores with.
@@ -16,12 +17,21 @@ object TestStoreIdentity {
     def mkIdentity(
         headParamsHashByte: Byte = 0x11,
         headIdByte: Byte = 0x22,
+        headAddressByte: Byte = 0x33,
         ownPeerId: PeerId = PeerId.Head(HeadPeerNumber(0))
     ): StoreIdentity = StoreIdentity(
       headParamsHash = Hash[Blake2b_256, Any](
         ByteString.fromArray(Array.fill[Byte](32)(headParamsHashByte))
       ),
       headId = HeadId(AssetName(ByteString.fromArray(Array.fill[Byte](16)(headIdByte)))),
+      // A script address, as a real head's is: the head multisig script hash under Testnet.
+      headAddress = ShelleyAddress(
+        network = Network.Testnet,
+        payment = ShelleyPaymentPart.Script(
+          ScriptHash.fromArray(Array.fill[Byte](28)(headAddressByte))
+        ),
+        delegation = ShelleyDelegationPart.Null
+      ),
       ownPeerId = ownPeerId
     )
 

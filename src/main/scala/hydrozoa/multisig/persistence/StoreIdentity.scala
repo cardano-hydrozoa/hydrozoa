@@ -5,6 +5,7 @@ import hydrozoa.config.head.initialization.InitializationParameters.HeadId.toHex
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.peer.PeerId.toWireInt
 import java.nio.ByteBuffer
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.Hash32
 
 /** What a store belongs to: one head, under one configuration, written by one peer.
@@ -31,11 +32,21 @@ import scalus.cardano.ledger.Hash32
   * `headId` is redundant against `headParamsHash` and is stamped anyway, because a bare hash
   * mismatch tells an operator nothing they can act on.
   *
+  * `headAddress` is stamped for the same reason, and covers what neither of the others does. The
+  * digest deliberately leaves the peer verification keys out — they are pinned by construction,
+  * through the native script hash that becomes this address — and `headId` is the beacon token
+  * *name*, not the policy id, so it names the head instance but not its roster. Without the address
+  * the stamp records no trace of who the peers are. `InitializationTx.Parse` already rejects a
+  * swapped key by comparing the same address, and runs before any store is opened, so this is
+  * defence in depth rather than the only guard; what it adds on its own is that a store handed over
+  * without its config still says which head, and which roster, it was written for.
+  *
   * See `design/head-params-hash.md`.
   */
 final case class StoreIdentity(
     headParamsHash: Hash32,
     headId: HeadId,
+    headAddress: ShelleyAddress,
     ownPeerId: PeerId
 )
 
@@ -44,6 +55,7 @@ object StoreIdentity {
     /** Keys in [[Cf.Meta]], name-keyed UTF-8 like [[StoreVersion.key]]. */
     val headParamsHashKey: Array[Byte] = "head_params_hash".getBytes("UTF-8")
     val headIdKey: Array[Byte] = "head_id".getBytes("UTF-8")
+    val headAddressKey: Array[Byte] = "head_address".getBytes("UTF-8")
     val ownPeerIdKey: Array[Byte] = "own_peer_id".getBytes("UTF-8")
 
     extension (self: StoreIdentity) {
@@ -53,16 +65,25 @@ object StoreIdentity {
           * no raw-bytes accessor.
           */
         def headIdBytes: Array[Byte] = self.headId.toHex.getBytes("UTF-8")
+
+        /** The head's multisig address as bech32, falling back to hex — the same rendering the
+          * server's JSON codecs use. Stored in its readable form for the same reason as
+          * [[headIdBytes]]: a store dump has no config to decode it against.
+          */
+        def headAddressText: String =
+            self.headAddress.toBech32.getOrElse(self.headAddress.toHex)
+        def headAddressBytes: Array[Byte] = self.headAddressText.getBytes("UTF-8")
         def ownPeerIdBytes: Array[Byte] =
             ByteBuffer.allocate(4).putInt(self.ownPeerId.toWireInt).array()
     }
 
-    /** The three stamped fields, paired with how to read one off a [[StoreIdentity]] and how to
+    /** The four stamped fields, paired with how to read one off a [[StoreIdentity]] and how to
       * render it for an operator. Single-sourced so writing, comparing and reporting cannot drift.
       */
     val fields: List[Field] = List(
       Field("head_params_hash", headParamsHashKey, _.headParamsHashBytes, _.headParamsHash.toHex),
       Field("head_id", headIdKey, _.headIdBytes, _.headId.toHex),
+      Field("head_address", headAddressKey, _.headAddressBytes, _.headAddressText),
       Field("own_peer_id", ownPeerIdKey, _.ownPeerIdBytes, _.ownPeerId.toWireInt.toString)
     )
 
@@ -86,7 +107,7 @@ object StoreIdentity {
 
     /** Compare a store's stamped fields against `expected`.
       *
-      * A partially-written stamp is a mismatch, not a fresh store: writing all three is a single
+      * A partially-written stamp is a mismatch, not a fresh store: writing all four is a single
       * step on a fresh open, so a store missing only some of them is one this build does not
       * understand.
       */
@@ -115,6 +136,7 @@ object StoreIdentity {
     private def renderRaw(field: Field, bytes: Array[Byte]): String =
         if field.name == "own_peer_id" && bytes.length == 4 then
             ByteBuffer.wrap(bytes).getInt.toString
-        else if field.name == "head_id" then new String(bytes, "UTF-8")
+        else if field.name == "head_id" || field.name == "head_address" then
+            new String(bytes, "UTF-8")
         else bytes.map("%02x".format(_)).mkString
 }

@@ -169,6 +169,7 @@ object Serve {
                   StoreIdentity(
                     headParamsHash = nodeConfig.headParamsHash,
                     headId = nodeConfig.headId,
+                    headAddress = nodeConfig.headMultisigAddress,
                     ownPeerId = nodeConfig.ownPeerId
                   ),
                   persistenceTracer,

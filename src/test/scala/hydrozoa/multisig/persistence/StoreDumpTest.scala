@@ -79,8 +79,8 @@ class StoreDumpTest extends AnyFunSuite:
             // Build a name → entries map to assert key counts independent of CF ordering.
             val byCf = stats.perCf.map(s => s.cf -> s.entries).toMap
             val rendered = stats.render
-            // 8 we wrote + the 4 Meta entries `RocksDbBackendStore.open` seeds on a fresh store
-            // (the schema version, plus the three `StoreIdentity` fields) = 12.
+            // 8 we wrote + the 5 Meta entries `RocksDbBackendStore.open` seeds on a fresh store
+            // (the schema version, plus the four `StoreIdentity` fields) = 13.
             assert(
               byCf(Cf.Block) == 2 &&
                   byCf(Cf.SoftAck(ownPeer)) == 1 &&
@@ -89,8 +89,8 @@ class StoreDumpTest extends AnyFunSuite:
                   byCf(Cf.HardConfirmation) == 1 &&
                   byCf(Cf.DepositMap) == 1 &&
                   byCf(Cf.Treasury) == 1 &&
-                  byCf(Cf.Meta) == 4 &&
-                  stats.total.entries == 12 &&
+                  byCf(Cf.Meta) == 5 &&
+                  stats.total.entries == 13 &&
                   rendered.contains("TOTAL") &&
                   rendered.contains("Block"),
               s"stats=$stats\nrendered:\n$rendered"

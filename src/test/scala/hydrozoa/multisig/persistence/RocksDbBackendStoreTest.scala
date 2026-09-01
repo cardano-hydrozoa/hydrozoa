@@ -254,6 +254,14 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
         assertIdentityRefused(mkIdentity(headIdByte = 0x44), "head_id")
     }
 
+    /** The address is the roster: `headParamsHash` leaves the peer verification keys out because
+      * the native script hash behind this address already pins them, so a swapped key moves the
+      * address and nothing else in the stamp.
+      */
+    test("opening a store stamped for a different head address is refused") {
+        assertIdentityRefused(mkIdentity(headAddressByte = 0x55), "head_address")
+    }
+
     /** Stamp a fresh store with [[testIdentity]], then reopen it as `other` and require the failure
       * to name `expectedField`.
       */
