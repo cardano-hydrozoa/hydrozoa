@@ -4,6 +4,7 @@ import cats.effect.std.Queue
 import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub}
@@ -85,7 +86,7 @@ final class CoilPeerWsTransport private (
         // Low-level `connect`, not `connectHighLevel`: the dialer needs to see the hub's keep-alive
         // Ping to know the link is alive (see WsDuplex).
         def once: IO[Unit] =
-            client.connect(request).use { conn =>
+            QuietRelease(client.connect(request)).use { conn =>
                 val helloLine = CoilFrame.encode(CoilFrame.Hello(ownCoilNum.convert))
                 tracer.traceWith(DialerConnected(hubUri)) >>
                     conn.send(WSFrame.Text(helloLine)) >>

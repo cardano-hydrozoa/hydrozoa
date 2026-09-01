@@ -135,7 +135,7 @@ object Serve {
             // `remoteLedgerUri`. Only the EUTXO ledger is also an EutxoL2LedgerReader, so only it
             // yields a reader for the server's L2-query endpoints (a remote node hands it None).
             l2 <- mkL2Ledger(nodeConfig, dataDir)
-            (l2Ledger, l2Screener, l2QueryReader) = l2
+            (l2Ledger, l2Screener, l2QueryReader, signalL2Shutdown) = l2
 
             // Per-peer persistence store. Default path; later milestones will surface this
             // through NodeConfig (P1 skeleton; see design §7). Open the RocksDB-backed
@@ -157,6 +157,14 @@ object Serve {
             }
 
             system <- ActorSystem[IO]("Hydrozoa Demo")
+
+            // ⛔ ORDER IS LOAD-BEARING. Resource finalizers run in reverse acquisition order, so
+            // acquiring this AFTER the ActorSystem makes it release BEFORE the system is torn down.
+            // A remote L2 ledger retries transport failure forever from inside a cats-actors message
+            // handler, and `ActorCell` wraps handlers in `.uncancelable` — so the system cannot stop
+            // that actor, and without this signal SIGTERM does not shut the node down at all. Move
+            // this line above the ActorSystem and the node stops exiting cleanly.
+            _ <- Resource.onFinalize(signalL2Shutdown)
 
             wsClient <- Resource.eval(JdkWSClient.simple[IO])
 
@@ -283,7 +291,7 @@ object Serve {
     private def mkL2Ledger(
         nodeConfig: NodeConfig,
         dataDir: Path,
-    ): Resource[IO, (L2Ledger[IO], L2Screener[IO], Option[EutxoL2LedgerReader[IO]])] =
+    ): Resource[IO, (L2Ledger[IO], L2Screener[IO], Option[EutxoL2LedgerReader[IO]], IO[Unit])] =
         nodeConfig.headConfig.l2Ledger match {
             case L2LedgerKind.CardanoEutxo =>
                 for {
@@ -292,7 +300,7 @@ object Serve {
                       dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/l2-rocksdb")
                     )
                     ledger <- Resource.eval(EutxoL2Ledger(nodeConfig, store))
-                } yield (ledger, EutxoL2Screener(nodeConfig), Some(ledger))
+                } yield (ledger, EutxoL2Screener(nodeConfig), Some(ledger), IO.unit)
             case L2LedgerKind.AnyRemote =>
                 val tracer = Slf4jTracer.sink.contramap(RemoteL2LedgerEventFormat.humanFormat)
                 val wsUri = nodeConfig.remoteLedgerUri.getOrElse(
@@ -308,7 +316,12 @@ object Serve {
                       tracer = tracer,
                     )
                     screener <- mkRemoteScreener(nodeConfig)
-                } yield (ledger, screener, Option.empty[EutxoL2LedgerReader[IO]])
+                } yield (
+                  ledger,
+                  screener,
+                  Option.empty[EutxoL2LedgerReader[IO]],
+                  ledger.signalShutdown
+                )
         }
 
     /** The screener for a remote-ledger node: the stateless check every request must pass before it
