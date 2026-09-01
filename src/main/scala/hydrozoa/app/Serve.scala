@@ -21,9 +21,10 @@ import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener, RemoteL2ScreenerEventFormat}
+import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Markers, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
@@ -176,6 +177,47 @@ object Serve {
             persistence <- Resource.eval {
                 given CardanoNetwork.Section = nodeConfig
                 Persistence.fromBackend(backendStore, persistenceTracer)
+            }
+
+            // ⛔ A transplant must contain the stack it is tagged with.
+            //
+            // `transplantStackNumber` names the stack this peer ELECTS TO ADOPT: everything at or
+            // below it is taken on trust from the donor committee and never verified, and only the
+            // stacks above it are checked. That makes the tag a partition of the store, chosen by
+            // the operator — any stack the store actually holds is a legitimate choice. A tag
+            // naming a stack the store does NOT hold is a different thing entirely: the config and
+            // the data have been mis-paired, and no amount of restarting will pair them.
+            //
+            // ⛔ This runs BEFORE the ActorSystem deliberately. The same verdict raised inside it
+            // escalates to the guardian, which terminates the system and exits 1 — and the unit's
+            // `RestartPreventExitStatus=2` does not catch a 1, so a mistyped tag would crash-loop.
+            // Here it is an ordinary `StartupRefusal` and exits 2. It needs nothing but the store
+            // and the config, so there is no reason for it to run any later.
+            //
+            // ⚠️ Reads `hardConfirmed` only — a plain `lastKey`, safe to derive more than once.
+            // NOT `hardAckedStack`, which is an interpretation the regime manager must derive
+            // exactly once and project into its children.
+            _ <- Resource.eval {
+                given CardanoNetwork.Section = nodeConfig
+                nodeConfig.transplantStackNumber.fold(IO.unit)(tag =>
+                    Markers
+                        .derive(persistence, nodeConfig.ownPeerId)
+                        .flatMap(markers =>
+                            IO.raiseUnless(
+                              markers.hardConfirmed.exists(Ordering[StackNumber].gteq(_, tag))
+                            )(
+                              StartupRefusal(
+                                s"transplantStackNumber is $tag, but the highest hard-confirmed " +
+                                    "stack in this store is " +
+                                    markers.hardConfirmed.fold("none — the store is empty")(
+                                      _.toString
+                                    ) +
+                                    ". A transplant must contain the stack it is tagged with; " +
+                                    "check that the store was copied and the tag read from that copy."
+                              )
+                            )
+                        )
+                )
             }
 
             system <- ActorSystem[IO]("Hydrozoa Demo")

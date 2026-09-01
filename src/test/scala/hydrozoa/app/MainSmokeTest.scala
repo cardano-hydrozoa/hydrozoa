@@ -56,9 +56,17 @@ class MainSmokeTest extends AnyFunSuite:
         // Both the inter-peer mesh server (which binds where the head config advertises this peer —
         // the test fixture uses port 0) and the HTTP admin server (httpPort) bind OS-ephemeral
         // ports, so the test doesn't collide with whatever holds the generator's defaults.
-        val peerPrivate = mnc
-            .nodePrivateConfigs(HeadPeerNumber(0))
-            .copy(httpPort = "0")
+        val generatedPrivate = mnc.nodePrivateConfigs(HeadPeerNumber(0))
+        // ⛔ Clear the transplant tag. `generateNodeOperationMultisigConfig` draws it from
+        // `Gen.option` on purpose — a codec round-trip has to cover both shapes of the field — but
+        // this test boots a NORMAL peer, and a normal peer carries no transplant tag. Left in, the
+        // config claims to be a transplant of a stack no empty store can hold, which is a refusal,
+        // and whether it appears at all depends on the generator seed.
+        val peerPrivate = generatedPrivate.copy(
+          httpPort = "0",
+          nodeOperationMultisigConfig = generatedPrivate.nodeOperationMultisigConfig
+              .copy(transplantStackNumber = None)
+        )
 
         val printer = Printer.spaces2.copy(dropNullValues = true)
 
@@ -149,6 +157,87 @@ class MainSmokeTest extends AnyFunSuite:
             // ⚠️ Do not await this. Cancelling a *live* node never returns, and `Fiber.cancel` is
             // itself uncancelable, so no timeout bounds it. The daemon threads go with the JVM.
             _ <- fiber.cancel.start.void
+        } yield ()
+
+        testIO.unsafeRunSync()
+    }
+
+    // A `transplantStackNumber` names the stack this peer elects to ADOPT: everything at or below it
+    // is taken on trust from the donor committee and never verified. So the tag has to name a stack
+    // the store actually holds. Here the store is empty, so no tag can be honoured -- the node must
+    // refuse rather than silently ignore the tag and boot as though none had been set.
+    //
+    // Asserting on the REASON, not just the type: this refusal has to be distinguishable from the
+    // other ways a node can refuse to start, or the test would pass on the wrong one.
+    test("Serve.runNode refuses a transplantStackNumber the store does not contain") {
+        val rootTmp = Files.createTempDirectory("hydrozoa-transplant-tag-")
+        val configDir = rootTmp.resolve("config")
+        val dataDir = rootTmp.resolve("data")
+        Files.createDirectories(configDir)
+        Files.createDirectories(dataDir)
+
+        val spec = defaultSpec.copy(outDir = configDir, nPeers = 1)
+        val headPath = configDir.resolve("head-config.json")
+        val privatePath = configDir.resolve("peer-0").resolve("private.json")
+        val mnc: MultiNodeConfig = MultiNodeConfig
+            .generate(testPeersSpec(spec))()
+            .pureApply(Gen.Parameters.default, org.scalacheck.rng.Seed(spec.generationSeed))
+        val peerPrivate = mnc.nodePrivateConfigs(HeadPeerNumber(0)).copy(httpPort = "0")
+        val printer = Printer.spaces2.copy(dropNullValues = true)
+        val (_, peerSigningKey) = TestPeers.deriveScalusKeypair(spec.seedPhrase.mnemonic, 0)
+        val runnablePrivateJson = peerPrivate.asJson
+            .deepMerge(
+              Json.obj(
+                "ownPeerPrivate" -> Json.obj(
+                  "ownHeadWallet" -> Json.obj(
+                    "signingKey" -> Json.fromString(
+                      scodec.bits.ByteVector(peerSigningKey.bytes).toHex
+                    )
+                  )
+                )
+              )
+            )
+            .deepMerge(
+              Json.obj(
+                "nodeOperationMultisigConfig" -> Json.obj(
+                  "transplantStackNumber" -> Json.fromInt(999999)
+                )
+              )
+            )
+
+        val testIO = for {
+            _ <- IO.blocking(Files.writeString(headPath, printer.print(mnc.headConfig.asJson)))
+            _ <- IO.blocking(Files.createDirectories(privatePath.getParent))
+            _ <- IO.blocking(Files.writeString(privatePath, printer.print(runnablePrivateJson)))
+            mockBackend <- CardanoBackendMock.mockIO(
+              MockState(initialUtxos =
+                  mnc.headConfig.initializationTx.resolvedUtxos.utxos
+                      ++ Map.from(mnc.headConfig.scriptReferenceUtxos.toList.map(_.toTuple))
+              )
+            )
+            outcome <- Serve
+                .runNode(headPath, privatePath, dataDir, backendOverride = Some(mockBackend))
+                .attempt
+                .timeoutTo(
+                  60.seconds,
+                  IO.raiseError(new AssertionError("runNode neither refused nor returned in 60s"))
+                )
+            _ <- outcome match {
+                case Left(r: StartupRefusal) if r.reason.contains("transplantStackNumber") =>
+                    IO.unit
+                case Left(r: StartupRefusal) =>
+                    IO.raiseError(
+                      new AssertionError(s"refused, but for another reason: ${r.reason}")
+                    )
+                case Left(other) =>
+                    IO.raiseError(new AssertionError(s"expected a StartupRefusal, got: $other"))
+                case Right(code) =>
+                    IO.raiseError(
+                      new AssertionError(
+                        s"expected a StartupRefusal, but the node started and exited $code"
+                      )
+                    )
+            }
         } yield ()
 
         testIO.unsafeRunSync()
