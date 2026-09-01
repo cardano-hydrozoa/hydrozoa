@@ -44,7 +44,7 @@ Point 3 is the one that cannot be fixed by moving the comparison. It needs a con
 | digest | over | taken by | when |
 |---|---|---|---|
 | `requestHash` | one user request as received | the peer that sequences it, and every peer that receives it | at `RequestId` assignment |
-| `blockHash` | the header fields and the ordered body | the block leader, and every follower re-deriving | at block cut |
+| `blockHash` | the header fields and the ordered body | the block leader, and every peer that rebuilds the block | at block cut |
 
 `blockHash` covers `requestHash`, not the request bytes: the body is a list of
 `(RequestId, requestHash, ValidityFlag)` triples, so the block commits to exactly which payload
@@ -75,6 +75,18 @@ Four reasons that is the right moment:
 way to check what it refers to. And only the leader would compute it, so a follower would be
 verifying the leader's arithmetic rather than its own.
 
+### The `RequestId` is not in the preimage
+
+`requestHash` is a hash of the request, not of the assignment: the same bytes produce the same
+digest regardless of which peer sequenced them or where they landed in that peer's sequence. So
+a submitter can compute it before submitting and recognize their own request in a block without
+trusting anyone's arithmetic, and two peers that received the same request agree on its hash
+without agreeing on anything else.
+
+The uniqueness a per-assignment hash would add is not needed. The block body carries the
+`RequestId` beside the hash, so the block's commitment names both which request and which
+position.
+
 ## `UserRequestBody.hash` already exists
 
 `UserRequest.scala` carries it: `blake2b_256`, with deposits hashed as
@@ -82,15 +94,15 @@ verifying the leader's arithmetic rather than its own.
 this keeps the hash injective rather than collapsing `hash(abc + def) == hash(ab + cdef)`.
 `UserRequestTest` pins two vectors. Nothing in production calls it.
 
-Two things to settle before it becomes load-bearing:
+It hashes the body and not the `RequestId`, which is exactly the shape decided above. One thing
+to fix before it becomes load-bearing:
 
 - **No variant tag.** `TransactionRequestBody(l2Payload)` hashes `l2Payload` directly, while
   `DepositRequestBody` hashes a 64-byte concatenation of two digests. A transaction request
   whose `l2Payload` happens to be exactly that 64-byte string hashes identically to the deposit.
   Domain-separate the variants, the way `HeadParamsHash` domain-tags its preimage.
-- **The `RequestId` is not in the preimage.** See open question 1.
 
-Both changes move the pinned vectors in `UserRequestTest`, which is free now and is not free
+That change moves the pinned vectors in `UserRequestTest`, which is free now and is not free
 once a hash has been handed to a user.
 
 ## What `blockHash` covers
@@ -103,7 +115,7 @@ preimage.
 blockHash = blake2b_256(
      "gummiworm-block-v1"
   || u8(blockType)                  -- Initial | Minor | Major | Final
-  -- header
+  -- header, EXCEPT blockHash itself
   || u32(blockNum)
   || u32(versionMajor)              || u32(versionMinor)
   || u64(startTime)                 || u64(endTime)
@@ -124,6 +136,10 @@ blockHash = blake2b_256(
 
 Notes on the layout:
 
+- **`blockHash` is excluded from its own preimage.** It is a `BlockHeader` field (below), so
+  every other header field goes in and this one does not. Missing that makes the definition
+  circular. It is the same exclusion `headParamsHash` makes for the initialization transaction,
+  which carries the digest it is an input to.
 - **The block type leads.** `BlockBody.Initial` has no fields, `Minor` and `Final` have no
   `depositsAbsorbed`, and `Major` has all three lists. Tagging the type first keeps the four
   shapes from colliding, and keeps the absent lists out of the preimage rather than encoding
@@ -136,9 +152,37 @@ Notes on the layout:
 - **The optional wakeup is flag-then-value**, so `None` and a present value can never produce
   the same bytes.
 
-## Where it lives and what compares it
+**The initial block gets one too.** `BlockBrief.Initial` has an empty body and a header already
+pinned by `headParamsHash` through the initialization transaction, so its hash proves nothing
+new — but hashing it keeps all four block types uniform, keeps `blockHash` total on
+`BlockBrief`, and removes a special case from every consumer. Its empty body encodes as three
+zero-length lists under the `Initial` type tag.
 
-**The soft-ack signs the block hash, with the two version components beside it.**
+## Where `blockHash` lives
+
+**A `BlockHeader` field, re-derived and compared wherever a block is rebuilt.**
+
+Stored, so it travels in the brief and lands in the `Block` journal — which is what lets a
+replayed brief be checked without re-reading the request payloads behind it. Never trusted: a
+stored hash is a claim, and every peer that rebuilds the block recomputes the digest from header
+and body and compares. That holds in both directions:
+
+- **On receipt.** A follower rebuilding block N from its own mempool computes `blockHash` and
+  compares it against the leader's brief. That is the divergence
+  `panicOnMismatchWithExpectedBrief` catches today, decided on one 32-byte value.
+- **On replay.** `ReplayActor` feeds persisted briefs back into `BlockWeaver` and
+  `FastConsensusActor`; `JointLedger` re-derives the block and checks the stored hash against
+  the recomputed one. A store whose briefs disagree with their own content fails there rather
+  than at the next signature.
+
+**Coil peers check it.** A coil peer authors no soft-ack, so it never signs a `blockHash` — but
+it rebuilds block bodies exactly as a head follower does, so it recomputes and compares on the
+same path. That extends the guarantee from head↔head to head↔coil, which is where it is most
+needed: a coil peer's divergence is otherwise invisible until its hard-ack fails to verify.
+
+## What the soft-ack signs
+
+**The block hash, with the two version components beside it.**
 
 ```scala
 SignedDigest(versionMajor, versionMinor, blockHash)
@@ -185,37 +229,33 @@ on-chain. Its only readers are `PeerWallet.mkHeaderSignature`, `JointLedger` (si
 and `FastConsensusActor` (verification, `:285`), and `Onchain` is a misleading name worth
 correcting alongside the shape change.
 
-**A running head cannot be upgraded across this change.** The signed bytes move, so acks from a
-peer on the old preimage fail to verify on the new one and the reverse. It applies to heads
-initialized afterwards, and belongs in the release notes of the release that ships it.
-
 **`JointLedger` compares hashes.** `panicOnMismatchWithExpectedBrief` compares one 32-byte value
 instead of two case-class trees. `briefMismatchSummary` stays: once the hashes differ, the
 field-level diff is what tells an operator *which* part flipped, and it is the only thing that
 can — a hash says they disagree, never how.
 
+## Migration
+
+**A running head cannot be upgraded across this change.** Two things move at once: the signed
+bytes, so acks from a peer on the old preimage fail to verify on the new one and the reverse;
+and the `Block` journal value and wire brief, which gain the `blockHash` field. It applies to
+heads initialized afterwards, and belongs in the release notes of the release that ships it.
+
+## Out of scope
+
+- **The HTTP surface.** `requestHash` reaches the submitter through the existing synchronous
+  reply, which is what makes the assignment-time choice above worth anything. Everything beyond
+  that — whether `GET /head/requests/{id}` returns the hash, whether the hash becomes a lookup
+  key in its own right, and the route and reverse index that would need — is a separate PR
+  against the API.
+- **Stack hashes.** The slow side needs the same commitment, following the same construction.
+  Separate work item.
+- **The two stale rule-based signposts** named above. Both live in `cardano-onchain` and neither
+  blocks this work.
+
 ## Open questions
 
-1. **Does `requestHash` cover the `RequestId`?** Excluding it means the same L2 transaction
-   submitted twice hashes identically, which makes the hash a content identifier a user can
-   compute independently before submitting. Including it makes every assignment distinct and ties
-   the hash to one position in the log. The block body carries the id next to the hash either
-   way, so the block's commitment is unambiguous under both. I lean **excluding** it — a content
-   hash the submitter can compute themselves is worth more than a uniqueness it does not need.
-2. **Is `blockHash` a stored field or a derived one?** Making the soft-ack preimage *be* the
-   hash mostly settles this: a verifier cannot take a claimed hash on trust, so it must recompute
-   from header and body to check any signature at all. A stored field would then be a claim every
-   peer recomputes anyway. Derived is the default, matching `EvacuationMap.digest`;
-   `headParamsHash` is stored only because it must reach a datum, and this one reaches no
-   transaction. What is left open is whether to memoize it on the brief — a `lazy val` on
-   `BlockBrief.Section`, computed once per brief rather than once per comparison.
-3. **What does the API return, and does the existing surface move?**
-   `GET /head/requests/{id}` resolves by id today. Returning `requestHash` from the submit path
-   is additive, but if the hash is also to be a lookup key that is a new route and a new index.
-4. **Does the initial block get a hash?** `BlockBrief.Initial` has an empty body and its header
-   is pinned by `headParamsHash` through the initialization transaction. Hashing it costs
-   nothing and keeps the four block types uniform; skipping it means one fewer field to define
-   for a block that is already pinned twice over.
-5. **Does this change what a coil peer verifies?** A coil peer authors no soft-ack, so it never
-   signs a `blockHash`. Whether it should *check* one — it re-derives block bodies, so it can —
-   decides whether this closes the head↔coil gap as well as the head↔head one.
+1. **Memoize `blockHash` on the brief?** As a stored `BlockHeader` field the value is present
+   without computation, but every rebuild recomputes it to compare. Whether that recomputed
+   value is worth caching — a `lazy val` on `BlockBrief.Section`, once per brief rather than
+   once per comparison — is a profiling question, not a design one.
