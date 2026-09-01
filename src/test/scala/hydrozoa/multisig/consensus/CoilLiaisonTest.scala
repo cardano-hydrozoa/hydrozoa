@@ -164,7 +164,10 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                 Persistence.fromBackend(backend, persistenceTracer).flatMap { persistence =>
                     ActorSystem[IO]("coil-liaison-test").use { system =>
                         for {
-                            headPending <- Deferred[IO, Either[Throwable, HeadMultisigRegimeManager.Connections]]
+                            headPending <- Deferred[IO, Either[
+                              Throwable,
+                              HeadMultisigRegimeManager.Connections
+                            ]]
                             hubSeen <- Ref[IO].of(Vector.empty[HardAck])
                             hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
                             sequencer <- system.actorOf(
@@ -181,7 +184,10 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         )
                                 }
                                 for {
-                                    pending <- Deferred[IO, Either[Throwable, HeadMultisigRegimeManager.Connections]]
+                                    pending <- Deferred[IO, Either[
+                                      Throwable,
+                                      HeadMultisigRegimeManager.Connections
+                                    ]]
                                     coilSeen <- Ref[IO].of(Vector.empty[HardAck])
                                     coilSlowConsensus <- system.actorOf(
                                       new HardAckRecorder(coilSeen)

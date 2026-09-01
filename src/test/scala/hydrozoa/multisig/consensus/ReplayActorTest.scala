@@ -21,17 +21,7 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, Block
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{
-  ArrivalStamp,
-  Cf,
-  InMemoryBackendStore,
-  JournalKey,
-  JournalValue,
-  Markers,
-  Persistence,
-  PersistenceEventFormat,
-  StoreKey
-}
+import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt

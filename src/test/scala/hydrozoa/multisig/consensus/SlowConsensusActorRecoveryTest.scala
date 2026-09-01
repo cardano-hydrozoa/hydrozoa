@@ -14,14 +14,7 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{
-  Cf,
-  InMemoryBackendStore,
-  Markers,
-  Persistence,
-  PersistenceEventFormat,
-  StoreKey
-}
+import hydrozoa.multisig.persistence.{Cf, InMemoryBackendStore, Markers, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt

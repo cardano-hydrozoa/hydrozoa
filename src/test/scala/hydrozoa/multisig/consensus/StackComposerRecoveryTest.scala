@@ -20,16 +20,7 @@ import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{
-  ArrivalStamp,
-  InMemoryBackendStore,
-  JournalKey,
-  JournalValue,
-  Markers,
-  Persistence,
-  PersistenceEventFormat,
-  StoreKey
-}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt

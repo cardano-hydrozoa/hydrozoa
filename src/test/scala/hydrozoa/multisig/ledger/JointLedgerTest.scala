@@ -35,12 +35,7 @@ import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{
-  InMemoryBackendStore,
-  Markers,
-  Persistence,
-  PersistenceEventFormat
-}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Markers, Persistence, PersistenceEventFormat}
 import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
 import org.scalacheck.*

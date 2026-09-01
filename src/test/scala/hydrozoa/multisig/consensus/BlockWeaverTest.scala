@@ -26,12 +26,7 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{
-  InMemoryBackendStore,
-  Markers,
-  Persistence,
-  PersistenceEventFormat
-}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Markers, Persistence, PersistenceEventFormat}
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Gen, Properties, PropertyM, Test}

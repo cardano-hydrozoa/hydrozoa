@@ -719,14 +719,14 @@ object MultiPeerHeadHarness:
             peerConnections <- Resource.eval(
               peerMrms.toList
                   .traverse { case (peerNum, peerMrm) =>
-                      peerMrm.mrm.connectionsDeferred.get.map(peerNum -> _)
+                      peerMrm.mrm.connectionsDeferred.get.flatMap(IO.fromEither).map(peerNum -> _)
                   }
                   .map(_.toMap)
             )
             coilConnections <- Resource.eval(
               coilMrms.toList
                   .traverse { case (coilNum, coilMrm) =>
-                      coilMrm.mrm.connectionsDeferred.get.map(coilNum -> _)
+                      coilMrm.mrm.connectionsDeferred.get.flatMap(IO.fromEither).map(coilNum -> _)
                   }
                   .map(_.toMap)
             )
@@ -805,7 +805,7 @@ object MultiPeerHeadHarness:
                         .allocated
                         .map(_._1)
                     (mrm, ref) = spawned
-                    conns <- mrm.connectionsDeferred.get
+                    conns <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
                     // Cancel the victim's previous tick (its CardanoLiaison is now stopped), then
                     // start a fresh supervised tick against the new connections.
                     _ <- headTicks.get.flatMap(_.getOrElse(peerNum, IO.unit))
@@ -849,7 +849,7 @@ object MultiPeerHeadHarness:
                         .allocated
                         .map(_._1)
                     (mrm, ref) = spawned
-                    conns <- mrm.connectionsDeferred.get
+                    conns <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
                     _ <- coilTicks.get.flatMap(_.getOrElse(coilNum, IO.unit))
                     tickFib <- tickSupervisor.supervise(
                       Ticks.tickLoop(coilPollingPeriodOf(coilNum), conns)
