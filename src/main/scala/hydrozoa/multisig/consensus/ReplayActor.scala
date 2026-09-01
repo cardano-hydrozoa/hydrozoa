@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
@@ -12,6 +13,7 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, JournalScan, RawJournalEntry, ReplayCursors}
 import hydrozoa.multisig.persistence.{JournalKey, Markers, Persistence, StoreKey}
+import scala.concurrent.duration.*
 import scalus.cardano.address.ShelleyAddress
 
 /** The boot-time replay seam (R3 §8 step 3). Not a long-lived cats-actors `Actor`: it is the
@@ -44,6 +46,11 @@ import scalus.cardano.address.ShelleyAddress
   * is the single place that re-feeds the consensus actors from the persisted lane tail.
   */
 object ReplayActor:
+
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(
+          Slf4jMsgFormat.humanFormat("hydrozoa.multisig.consensus.ReplayActor")
+        )
 
     /** The consensus actors the replay tail is routed into. `coilAckSequencer` is present only on a
       * hub — the boundary the received-but-unstamped coil-ack gap is re-fed to (see [[replay]]).
@@ -188,17 +195,54 @@ object ReplayActor:
           )
         )
 
-    /** Read L1 directly and send BlockWeaver the first [[PollResults]] (§5.5). */
+    /** Read L1 directly and send BlockWeaver the first [[PollResults]] (§5.5).
+      *
+      * ⛔ This is a GATE, and it must WAIT rather than fail. BlockWeaver starts at
+      * `PollResults.empty`, which is structurally indistinguishable from "polled, and the address
+      * is genuinely empty" — there is no `NeverPolled` state. A head peer classifies deposit
+      * existence from its OWN poll (`DepositsMap.Existence.FromPoll`), so acting on that empty
+      * value would reject every mature deposit as `NotInPollResults`: terminal, and DEBUG-only in
+      * the logs. The seed is queued before the start barrier opens precisely so that cannot happen.
+      *
+      * It previously raised on a failed L1 read, which closed the correctness hole but turned a
+      * transient Blockfrost blip into a failed boot — and `Restart=on-failure` turns a failed boot
+      * into an infinite restart loop that outlives the blip. Waiting is strictly better: the node
+      * is useless without this fact either way, and the retry is bounded by nothing but the
+      * operator's patience, which is what a dashboard is for.
+      *
+      * ⚠️ Safe to retry here ONLY because `replay` runs INLINE at the regime manager, on the app
+      * fiber, outside the actor system. The same loop inside a cats-actors message handler would be
+      * uncancelable (`ActorCell` wraps handlers in `.uncancelable`) and would make the process
+      * unkillable — measured. Do not move this into an actor.
+      */
     private def seedFirstPollResults(
         cardanoBackend: CardanoBackend[IO],
         treasuryAddress: ShelleyAddress,
         blockWeaver: BlockWeaver.Handle
-    ): IO[Unit] =
-        cardanoBackend.utxosAt(treasuryAddress).flatMap {
-            case Left(err) =>
-                IO.raiseError(new RuntimeException(s"ReplayActor L1 sample failed: $err"))
-            case Right(utxos) => blockWeaver ! PollResults(utxos.keySet)
-        }
+    ): IO[Unit] = {
+        def attempt(n: Int): IO[Unit] =
+            cardanoBackend.utxosAt(treasuryAddress).flatMap {
+                case Right(utxos) =>
+                    IO.whenA(n > 0)(
+                      log.info(
+                        s"boot L1 sample succeeded after ${n + 1} attempts; continuing start-up"
+                      )
+                    ) >> (blockWeaver ! PollResults(utxos.keySet))
+                case Left(err) =>
+                    val wait = l1SampleBackoff(n)
+                    log.warn(
+                      s"boot L1 sample failed (attempt ${n + 1}): $err. Cannot start consensus " +
+                          s"without it, so WAITING rather than failing the boot; retrying in $wait"
+                    ) >> IO.sleep(wait) >> attempt(n + 1)
+            }
+        attempt(0)
+    }
+
+    /** Backoff for the boot L1 sample: doubles from 1s, capped at 30s. Capped rather than unbounded
+      * so a node that has been waiting for hours still reacts promptly when L1 returns.
+      */
+    private def l1SampleBackoff(attempt: Int): FiniteDuration =
+        (1.second.toNanos * (1L << math.min(attempt, 5))).nanos.min(30.seconds)
 
     /** Reconstruct the handoff for the in-flight stack — the last own-acked stack, **iff** it is
       * not yet hard-confirmed (`hardConfirmed < hardAckedStack`). Its `Stack.Unsigned` was

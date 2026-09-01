@@ -207,12 +207,23 @@ object NodeConfig {
       * a process supervisor answers by starting it again, immediately, into the same failure. That
       * turns a brief loss of egress into a crash loop that outlives it.
       *
-      * The total wait is a little under two minutes. Long enough to ride out a DNS or upstream
-      * blip; short enough that a genuinely wrong config still fails while someone is watching the
-      * deploy.
+      * ⛔ UNBOUNDED, deliberately, and this is the whole point. The ladder used to stop after ~112
+      * seconds, which meant any loss of egress longer than two minutes ended in exactly the crash
+      * loop the paragraph above set out to prevent. A node that cannot reach Cardano cannot do
+      * anything useful, so exiting buys nothing and costs an endless restart cycle; waiting is
+      * strictly better and is visible on the dashboard.
+      *
+      * ⚠️ This does NOT make a wrong config wait: [[isWorthRetrying]] retries only
+      * `CardanoBackendError`. A malformed config or an unresolvable script UTxO still fails
+      * immediately, because re-reading the same bytes gives the same answer. That split is the
+      * difference between "the world is not ready yet" and "this node is misconfigured", and the
+      * two must never be treated alike.
+      *
+      * It backs off 2s, 5s, 15s, 30s and then every 60s forever — capped so a node that has been
+      * waiting for hours still reacts promptly when egress returns.
       */
-    private val backendReadRetryWaits: List[FiniteDuration] =
-        List(2.seconds, 5.seconds, 15.seconds, 30.seconds, 60.seconds)
+    private val backendReadRetryWaits: LazyList[FiniteDuration] =
+        LazyList(2.seconds, 5.seconds, 15.seconds, 30.seconds) #::: LazyList.continually(60.seconds)
 
     /** Whether a failed load is worth another attempt. Anything that reached the Cardano backend is
       * — including an error the backend classified, since a DNS failure surfaces as a resolve error
@@ -230,11 +241,11 @@ object NodeConfig {
       * can drive the same loop without waiting minutes.
       */
     private[node] def retryingBackendReads[A](
-        waits: List[FiniteDuration],
+        waits: LazyList[FiniteDuration],
         attempt: IO[Either[ScriptReferenceUtxos.Error | io.circe.Error, A]]
     ): IO[Either[ScriptReferenceUtxos.Error | io.circe.Error, A]] =
         def go(
-            remaining: List[FiniteDuration]
+            remaining: LazyList[FiniteDuration]
         ): IO[Either[ScriptReferenceUtxos.Error | io.circe.Error, A]] =
             // A raised throwable gets the same treatment as a backend error: building the backend
             // is itself a network operation, and it reports failure by raising rather than by a
@@ -251,10 +262,13 @@ object NodeConfig {
                         case Right(Left(e)) => isWorthRetrying(e)
                         case _              => false
                     (remaining, retryable) match
-                        case (wait :: rest, true) =>
+                        case (wait #:: rest, true) =>
+                            // ⛔ Do NOT report "attempts left" here: `remaining` is an
+                            // infinite LazyList in production and forcing its length hangs.
                             log.warn(
                               s"Config load failed against the Cardano backend ($reason); " +
-                                  s"retrying in $wait (${rest.length} attempts left after this)."
+                                  s"retrying in $wait. The node cannot start without this, so it " +
+                                  "WAITS rather than exiting into a restart loop."
                             ) >> IO.sleep(wait) >> go(rest)
                         case _ =>
                             other match
