@@ -332,8 +332,8 @@ Five checks, at four moments. Every one reuses a comparison point the code alrea
 | 4 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `l2ParamsHash` against the config's | refuse to boot |
 | 5 | every major block | every head and coil peer | the settlement tx's treasury datum `headParamsHash` against the local one | refuse to sign the block |
 
-Check 3 exists today. Checks 1 and 5 are built — they sit in `InitializationTx.Parse` and
-`SettlementTx`. Checks 2 and 4 are not yet.
+Check 3 exists today. Checks 1, 2 and 5 are built — `InitializationTx.Parse`, `StoreIdentity`,
+and `SettlementTx`. Check 4 is not yet.
 
 ### 1. The initialization transaction matches the hash
 
@@ -382,13 +382,14 @@ A node's persistent store is built for one head, under one configuration, by one
 at a different one and it does not fail — it proceeds on a store that means something else.
 
 The check is a **stamp in `Cf.Meta`**, written when a fresh store is initialized and compared on
-every subsequent open. Three keys, flat and name-keyed like the `store_version` key that is
+every subsequent open. Four keys, flat and name-keyed like the `store_version` key that is
 already there:
 
 | key | value | catches |
 |---|---|---|
 | `head_params_hash` | `raw(headParamsHash)` | a store built under a different configuration |
 | `head_id` | the head's treasury token name | a store built for a different head — and makes the error message actionable |
+| `head_address` | the head multisig address, bech32 | a store built for a different **roster** — the verification keys `headParamsHash` leaves out |
 | `own_peer_id` | `PeerId.toWireInt`, 4 bytes big-endian | a store built by a *different peer of the same head* |
 
 `own_peer_id` is the one that cannot come from `headParamsHash`, and the one whose absence is
@@ -403,13 +404,23 @@ inventing a second encoding.
 mismatch tells an operator nothing they can act on. "This store belongs to head `0134…6b10`,
 this config is head `8f2a…c401`" names the mistake.
 
-**Where it runs, and what it costs.** `RocksDbBackendStore.openInternal` already runs
+`head_address` is stamped for the same reason and covers what neither of the others does.
+`headParamsHash` deliberately omits the peer verification keys — they are pinned by
+construction, through the native script hash that becomes this address — and `head_id` is the
+beacon token *name*, not the policy id, so it identifies the head instance but not its roster.
+Without the address the stamp holds no record of who the peers are. `InitializationTx.Parse`
+already rejects a swapped key by comparing this same address, and runs before any store is
+opened, so this is defence in depth rather than the only guard. What it adds on its own is that
+a store handed over without its config still says which head, and which roster, it was written
+for.
+
+**Where it runs, and what it costs.** `RocksDbBackendStore.openInternal` runs
 `versionCheck` at open, and `StoreVersion.Check` already has the right three-way shape —
 `Fresh` / `Compatible` / `Incompatible`. The identity stamp is a sibling of that, with the same
 semantics: a writable open stamps a fresh store; a **read-only** open — the mode
 `hydrozoa evacuate` uses — treats a missing stamp as a hard error, because it cannot stamp and
 an unstamped store cannot be served; an incompatible stamp refuses the open, naming which of
-the three fields differs. It runs **after** the version check, because a store whose schema this
+the four fields differs. It runs **after** the version check, because a store whose schema this
 build does not understand should not have its metadata interpreted at all, and **before** any
 recovery read. The cost is one point lookup per key on an already-open handle at startup, the
 same as the version check.

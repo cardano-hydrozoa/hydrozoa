@@ -23,7 +23,7 @@ import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener, RemoteL2ScreenerEventFormat}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat, StoreIdentity}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
@@ -148,6 +148,12 @@ object Serve {
                 headPeers = nodeConfig.headConfig.headPeerNums.toList,
                 coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
                 hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+              ),
+              StoreIdentity(
+                headParamsHash = nodeConfig.headParamsHash,
+                headId = nodeConfig.headId,
+                headAddress = nodeConfig.headMultisigAddress,
+                ownPeerId = nodeConfig.ownPeerId
               ),
               persistenceTracer,
             )
