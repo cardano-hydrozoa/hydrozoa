@@ -3,6 +3,7 @@ package hydrozoa.config.node
 import cats.data.EitherT
 import cats.effect.*
 import cats.syntax.contravariant.*
+import hydrozoa.app.StartupRefusal
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.CoilPeers
@@ -195,7 +196,13 @@ object NodeConfig {
               NodeConfig.fromJson(headStr, privateStr, backendOverride).value
             ).flatMap {
                 case Left(err) =>
-                    IO.raiseError(new RuntimeException(s"Failed to load NodeConfig: $err"))
+                    // Reached only for a DETERMINISTIC failure: `isWorthRetrying` retries a
+                    // backend error forever, so anything arriving here is a malformed config or a
+                    // script reference UTxO that is not on chain. Re-deriving that verdict on a
+                    // supervisor restart loop teaches nobody anything.
+                    IO.raiseError(
+                      StartupRefusal(s"failed to load NodeConfig: $err")
+                    )
                 case Right(ok) => IO.pure(ok)
             }
         } yield loaded

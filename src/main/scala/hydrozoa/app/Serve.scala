@@ -61,7 +61,14 @@ object Serve {
         Command(
           name = "serve",
           header = "Run a Hydrozoa head node from a generated config"
-        )((headConfigPathArg, privateConfigPathArg).mapN((h, p) => runNode(h, p)))
+        )(
+          (headConfigPathArg, privateConfigPathArg).mapN((h, p) =>
+              // A deterministic refusal exits with a distinct code so the unit's
+              // `RestartPreventExitStatus=` can stop a supervisor from re-deriving the same
+              // verdict forever. Everything transient waits instead of exiting at all.
+              StartupRefusal.guard(runNode(h, p))
+          )
+        )
 
     /** Run a Hydrozoa head node from a loaded config.
       *
@@ -142,15 +149,30 @@ object Serve {
             // BackendStore (byte-level primitive), then wrap it in the typed Persistence the
             // actor topology consumes.
             persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-            backendStore <- RocksDbBackendStore.open(
-              dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/rocksdb"),
-              Cf.mkAll(
-                headPeers = nodeConfig.headConfig.headPeerNums.toList,
-                coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
-                hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
-              ),
-              persistenceTracer,
-            )
+            // A held LOCK means another instance owns this store. Deterministic: restarting
+            // re-derives the same answer for as long as the other process lives, so it is a
+            // refusal, not a crash. Measured: fails in ~3s with a clear message.
+            backendStore <- RocksDbBackendStore
+                .open(
+                  dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/rocksdb"),
+                  Cf.mkAll(
+                    headPeers = nodeConfig.headConfig.headPeerNums.toList,
+                    coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
+                    hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+                  ),
+                  persistenceTracer,
+                )
+                .handleErrorWith { case e: org.rocksdb.RocksDBException =>
+                    Resource.eval(
+                      IO.raiseError(
+                        StartupRefusal(
+                          s"cannot open the persistence store (${e.getMessage}). Another hydrozoa " +
+                              "instance is most likely holding it.",
+                          Some(e)
+                        )
+                      )
+                    )
+                }
             persistence <- Resource.eval {
                 given CardanoNetwork.Section = nodeConfig
                 Persistence.fromBackend(backendStore, persistenceTracer)
