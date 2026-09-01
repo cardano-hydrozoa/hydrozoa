@@ -138,20 +138,30 @@ Notes on the layout:
 
 ## Where it lives and what compares it
 
-**Into `SignedDigest.Onchain`.** `blockHash` becomes a fifth field, and the soft-ack then signs
-a commitment to the entire block rather than to four scalars. The peer-facing check moves from a
-structural comparison to signature verification, which is where it belongs: a follower that
-derives a different block produces a different `blockHash` and the leader's ack fails to verify
-against its own brief.
+**`SignedDigest.Onchain` becomes the hash.** Not a fifth field beside the four scalars —
+*instead* of them. `blockNum`, `startTime`, `versionMajor` and `versionMinor` are all already
+inside the `blockHash` preimage, so keeping them alongside commits the same bytes twice, once
+directly and once through the digest. The soft-ack then signs one 32-byte commitment to the
+entire block rather than to four scalars, and the peer-facing check moves from a structural
+comparison to signature verification, which is where it belongs: a follower that derives a
+different block produces a different `blockHash`, and the leader's ack fails to verify against
+its own brief.
+
+Nothing reads those four fields back. The only reference to `SignedDigest` outside
+`BlockHeader.scala` is a doc comment in `PeerWallet.scala`; the type is constructed, serialised,
+signed and verified as opaque bytes and never destructured. The rule-based coupling is nominal —
+`VoteTx`, `RatchetVoteTx` and `RuleBasedActor` use `BlockHeader.Minor.HeaderSignature` as the
+*type* of their SEC signatures, the aliasing the `BlockHeader.scala` TODO already wants untied,
+and none of them rebuilds the header preimage.
 
 **This costs no Plutus budget.** Despite the name, `SignedDigest.Onchain` is not consumed
 on-chain. Its only readers are `PeerWallet.mkHeaderSignature`, `JointLedger` (signing, `:719`)
 and `FastConsensusActor` (verification, `:285`). The on-chain signature check in
 `DisputeResolutionScript` verifies over `voteRedeemer.sec`, the standalone evacuation
 commitment; the `headerSerialized` member in `VoteState.scala` belongs to
-`StandaloneEvacuationCommitmentOnchain`, not to `BlockHeader`. So widening the soft-ack preimage
-is an off-chain change with no script cost — and `Onchain` is then a misleading name worth
-correcting in the same work item.
+`StandaloneEvacuationCommitmentOnchain`, not to `BlockHeader`. So this is an off-chain change
+with no script cost — and `Onchain` is then a misleading name worth correcting in the same work
+item.
 
 **`JointLedger` compares hashes.** `panicOnMismatchWithExpectedBrief` compares one 32-byte value
 instead of two case-class trees. `briefMismatchSummary` stays: once the hashes differ, the
@@ -166,11 +176,14 @@ can — a hash says they disagree, never how.
    the hash to one position in the log. The block body carries the id next to the hash either
    way, so the block's commitment is unambiguous under both. I lean **excluding** it — a content
    hash the submitter can compute themselves is worth more than a uniqueness it does not need.
-2. **Is `blockHash` a stored field or a derived one?** As a `BlockHeader` field it is carried on
-   the wire and in the journal, and a peer must check it rather than trust it. Derived on demand
-   from header and body, it cannot be stale, but every comparison recomputes it and the value
-   never appears in a persisted brief. `EvacuationMap.digest` is derived; `headParamsHash` is
-   stored, because it must reach a datum. This one reaches no transaction.
+2. **Is `blockHash` a stored field or a derived one?** Making the soft-ack preimage *be* the
+   hash mostly settles this: a verifier cannot take a claimed hash on trust, so it must recompute
+   from header and body to check any signature at all. A stored field would then be a claim every
+   peer recomputes anyway. Derived is the default, matching `EvacuationMap.digest`;
+   `headParamsHash` is stored only because it must reach a datum, and this one reaches no
+   transaction. What is left open is whether to memoize it on the brief — a `lazy val` on
+   `BlockBrief.Section`, computed once per brief rather than once per comparison.
+
 3. **What does the API return, and does the existing surface move?**
    `GET /head/requests/{id}` resolves by id today. Returning `requestHash` from the submit path
    is additive, but if the hash is also to be a lookup key that is a new route and a new index.
