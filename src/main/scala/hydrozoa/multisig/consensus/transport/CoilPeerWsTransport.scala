@@ -70,6 +70,15 @@ final class CoilPeerWsTransport private (
             case Left(err)                     => tracer.traceWith(DecodeError(err))
         }
 
+    /** How long one dial attempt may sit in the WebSocket handshake before it is abandoned. Long
+      * enough not to give up on an ordinarily slow hub, short enough that a stalled one does not
+      * stop this peer reconnecting.
+      */
+    private val handshakeBudget: FiniteDuration = 30.seconds
+
+    /** How long teardown waits for the dialer to acknowledge cancellation before proceeding. */
+    private val dialerCancelBudget: FiniteDuration = 5.seconds
+
     private def dialerLoop(client: WSClient[IO], hubUri: Uri): IO[Nothing] = {
         val request = WSRequest(hubUri)
 
@@ -87,14 +96,41 @@ final class CoilPeerWsTransport private (
             (once >> tracer.traceWith(DialerDisconnected(hubUri)))
                 .handleErrorWith(e => tracer.traceWith(DialerFailed(e)))
 
-        (attempt >> IO.sleep(1.second)).foreverM
+        // Bound each attempt and ABANDON a stalled one rather than awaiting it. `JdkWSClient`
+        // builds its socket inside `Resource.make`'s acquire, which is uncancelable, and
+        // `fromCompletableFuture` is cooperative-only — so a hub that accepts the TCP connection and
+        // never answers the handshake blocks `once` forever. Without this the loop never iterates
+        // and the peer stops reconnecting entirely: not slow to recover, never retrying.
+        //
+        // `race` cancels the losing `join`, not the attempt behind it, which is exactly what is
+        // wanted here — the stalled fiber is left to finish or not, and the loop moves on.
+        val bounded: IO[Unit] =
+            attempt.start.flatMap(f =>
+                IO.race(f.join, IO.sleep(handshakeBudget)).flatMap {
+                    case Left(_) => IO.unit
+                    case Right(_) =>
+                        tracer.traceWith(DialerHandshakeStalled(hubUri, handshakeBudget))
+                }
+            )
+
+        (bounded >> IO.sleep(1.second)).foreverM
     }
 
     /** Launch the hub dialer fiber; torn down when the resource is released. The hub URI is passed
       * at dial-start time so the caller can discover the hub's OS-assigned port after binding.
       */
     def startDialer(client: WSClient[IO], hubUri: Uri): Resource[IO, Unit] =
-        Resource.make(dialerLoop(client, hubUri).start)(_.cancel).void
+        Resource
+            .make(dialerLoop(client, hubUri).start)(fiber =>
+                // `cancel` waits for the fiber to finalize and is itself uncancelable, so a dialer
+                // stuck in an uncancelable handshake acquire would hang teardown — the same shape as
+                // the boot barriers. Run the cancel on its own fiber and bound the JOIN, which IS
+                // cancelable. A healthy dialer sits in `IO.sleep` and completes this immediately.
+                fiber.cancel.start
+                    .flatMap(_.join.timeoutTo(dialerCancelBudget, IO.unit))
+                    .void
+            )
+            .void
 }
 
 object CoilPeerWsTransport {

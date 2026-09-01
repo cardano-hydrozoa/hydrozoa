@@ -30,6 +30,11 @@ object CoilPeerWsTransportEventFormat:
                 // Class as well as message: getMessage is null for most connection exceptions,
                 // which made a live incident undiagnosable from the logs.
                 warn(s"dialer to hub failed: ${cause.getClass.getSimpleName}: ${cause.getMessage}")
+            case DialerHandshakeStalled(uri, after) =>
+                warn(
+                  s"dialer: handshake to hub at $uri stalled past $after and was abandoned; " +
+                      "the hub accepted the connection but never completed it — redialing"
+                )
             case DialerDisconnected(uri) =>
                 warn(s"dialer: disconnected from hub at $uri; redialing")
         }

@@ -126,7 +126,20 @@ final class WsPeerTransport private (
             (once >> tracer.traceWith(DialerDisconnected(remote, uri)))
                 .handleErrorWith(e => tracer.traceWith(DialerFailed(remote, e)))
 
-        (attempt >> IO.sleep(1.second)).foreverM
+        // Same bound as the coil dialer: `JdkWSClient` builds its socket in an uncancelable acquire,
+        // so a remote that accepts the connection and never answers the handshake blocks `once`
+        // forever and this loop stops retrying altogether. `race` cancels the losing join, not the
+        // attempt, so the stalled fiber is abandoned and the dialer moves on.
+        val bounded: IO[Unit] =
+            attempt.start.flatMap(f =>
+                IO.race(f.join, IO.sleep(handshakeBudget)).flatMap {
+                    case Left(_) => IO.unit
+                    case Right(_) =>
+                        tracer.traceWith(DialerHandshakeStalled(remote, uri, handshakeBudget))
+                }
+            )
+
+        (bounded >> IO.sleep(1.second)).foreverM
     }
 
     /** Server-side handler for an incoming WS connection. The first frame must be
@@ -178,6 +191,12 @@ final class WsPeerTransport private (
             serverHandler(wsb)
         }
 
+    /** How long one dial attempt may sit in the WebSocket handshake before it is abandoned. */
+    private val handshakeBudget: FiniteDuration = 30.seconds
+
+    /** How long teardown waits for a dialer to acknowledge cancellation before proceeding. */
+    private val dialerCancelBudget: FiniteDuration = 5.seconds
+
     /** Launch a dialer fiber for each remote with peerNum greater than ours (lower dials higher).
       * The fibers are torn down when the resource is released. URIs are passed at dial-start time
       * so the caller can bind on an OS-assigned ephemeral port and only build the URI map after
@@ -192,7 +211,13 @@ final class WsPeerTransport private (
             .traverse_ { case (rid, uri) =>
                 Resource
                     .make(dialerLoop(client, rid, uri).start)(fiber =>
-                        tracer.traceWith(DialerStopped(rid, uri)) >> fiber.cancel
+                        // Bounded for the same reason as the coil side: `cancel` waits for the
+                        // fiber to finalize and is itself uncancelable, so a dialer stuck in the
+                        // handshake would hang teardown. Bound the JOIN, which is cancelable.
+                        tracer.traceWith(DialerStopped(rid, uri)) >>
+                            fiber.cancel.start
+                                .flatMap(_.join.timeoutTo(dialerCancelBudget, IO.unit))
+                                .void
                     )
                     .void
             }

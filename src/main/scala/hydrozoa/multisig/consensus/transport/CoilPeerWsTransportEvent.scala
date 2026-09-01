@@ -2,6 +2,7 @@ package hydrozoa.multisig.consensus.transport
 
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import org.http4s.Uri
+import scala.concurrent.duration.FiniteDuration
 
 /** Typed events emitted by [[CoilPeerWsTransport]]. Pure data; formatters in
   * [[CoilPeerWsTransportEventFormat]] decide how each variant is rendered to a particular sink.
@@ -34,6 +35,16 @@ object CoilPeerWsTransportEvent:
 
     /** A dialer attempt to the hub failed. */
     final case class DialerFailed(cause: Throwable) extends CoilPeerWsTransportEvent
+
+    /** A dial attempt sat in the WebSocket handshake past its budget and was abandoned.
+      *
+      * Distinct from [[DialerFailed]] because nothing failed: the hub accepted the TCP connection
+      * and then never answered. That attempt cannot be cancelled (the client builds its socket in
+      * an uncancelable acquire), so it is left running and the dialer moves on — which is the only
+      * way this peer keeps reconnecting at all.
+      */
+    final case class DialerHandshakeStalled(uri: Uri, after: FiniteDuration)
+        extends CoilPeerWsTransportEvent
 
     /** The connection to the hub ended without error — the peer closed cleanly, or the receive side
       * reached end of stream. A read-deadline expiry is an **error** and surfaces as
