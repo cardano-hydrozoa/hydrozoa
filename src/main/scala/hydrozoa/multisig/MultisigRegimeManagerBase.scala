@@ -16,7 +16,7 @@ import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.{Markers, Persistence}
 import scala.concurrent.duration.DurationInt
 
 /** Shared scaffolding for [[HeadMultisigRegimeManager]] and [[CoilMultisigRegimeManager]]: the
@@ -145,10 +145,18 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
         l2Ledger: L2Ledger[IO],
         persistence: Persistence[IO],
         pendingConnections: Deferred[IO, Connections],
+        markers: Markers,
     ): IO[CoreActors] =
         for {
             blockWeaver <- context.actorOf(
-              BlockWeaver(config, pendingConnections, tracers.blockWeaver, metrics, persistence)
+              BlockWeaver(
+                config,
+                pendingConnections,
+                tracers.blockWeaver,
+                metrics,
+                persistence,
+                markers
+              )
             )
             cardanoLiaison <- context.actorOf(
               CardanoLiaison(
@@ -181,7 +189,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 l2Ledger,
                 tracers.jointLedger,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
             stackComposer <- context.actorOf(
@@ -190,7 +199,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 pendingConnections,
                 tracers.stackComposer,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
             slowConsensusActor <- context.actorOf(
@@ -199,7 +209,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 pendingConnections,
                 tracers.slowConsensusActor,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
         } yield CoreActors(

@@ -17,7 +17,7 @@ import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, Remot
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2Screener}
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.{Markers, Persistence}
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
 trait HeadMultisigRegimeManager(
@@ -50,12 +50,17 @@ trait HeadMultisigRegimeManager(
 
             pendingConnections <- Deferred[IO, HeadMultisigRegimeManager.Connections]
 
+            // Every recovery marker this peer boots from, derived ONCE here and projected into
+            // each child actor. Deriving per-actor let two paths interpret the same journal
+            // independently, which is how a seeded store could satisfy one and not the other.
+            markers <- Markers.derive(persistence, config.ownPeerId)(using config)
             core <- spawnCoreActors(
               config,
               cardanoBackend,
               l2Ledger,
               persistence,
               pendingConnections,
+              markers,
             )
 
             // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
@@ -82,7 +87,8 @@ trait HeadMultisigRegimeManager(
                 l2Screener,
                 tracers.eventSequencer,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
 
@@ -245,7 +251,8 @@ trait HeadMultisigRegimeManager(
               hubs = config.hubHeadPeerNumbers,
               coils = hubbedCoilPeers,
               treasuryAddress = config.initializationTx.treasuryProduced.address,
-              leadsFastBlock = config.canLeadFast
+              leadsFastBlock = config.canLeadFast,
+              markers = markers
             )(using config)
 
             _ <- pendingConnections.complete(connections)

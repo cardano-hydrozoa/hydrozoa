@@ -14,7 +14,14 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{Cf, InMemoryBackendStore, Persistence, PersistenceEventFormat, StoreKey}
+import hydrozoa.multisig.persistence.{
+  Cf,
+  InMemoryBackendStore,
+  Markers,
+  Persistence,
+  PersistenceEventFormat,
+  StoreKey
+}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -68,6 +75,11 @@ class SlowConsensusActorRecoveryTest extends AnyFunSuite:
                           StoreKey.HardConfirmation(StackNumber(confirmed)).encode,
                           Array[Byte](0)
                         )
+                        // Derived from the SEEDED store, not `Markers.cold`: the fixture writes a
+                        // HardConfirmation key above, and a cold bundle would leave `lastConfirmed`
+                        // None — the surplus guard under test would never arm and the suite would
+                        // pass while asserting nothing.
+                        markers <- Markers.derive(persistence, config.ownPeerId)
                         seen <- Ref.of[IO, Vector[SlowConsensusActorEvent]](Vector.empty)
                         tracer = ContraTracer[IO, SlowConsensusActorEvent](e => seen.update(_ :+ e))
                         sc <- system.actorOf(SinkActor[StackComposer.Request]())
@@ -78,7 +90,8 @@ class SlowConsensusActorRecoveryTest extends AnyFunSuite:
                             SlowConsensusActor.Connections(sc, cl, Nil),
                             tracer,
                             persistence,
-                            PeerMetrics.create(0L, Vector.empty)
+                            PeerMetrics.create(0L, Vector.empty),
+                            markers
                           )
                         )
                         _ <- sca ! remoteAck(peer = 1, stack = ackStack)

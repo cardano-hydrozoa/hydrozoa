@@ -15,7 +15,7 @@ import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
 import hydrozoa.multisig.consensus.transport.{CoilTransport, RemoteHubProxy}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.{Markers, Persistence}
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
 /** Coil-peer counterpart to [[HeadMultisigRegimeManager]]. A coil runs the same multisig-regime
@@ -66,12 +66,17 @@ trait CoilMultisigRegimeManager(
                 )
             pendingConnections <- Deferred[IO, Connections]
 
+            // Every recovery marker this peer boots from, derived ONCE here and projected into
+            // each child actor. Deriving per-actor let two paths interpret the same journal
+            // independently, which is how a seeded store could satisfy one and not the other.
+            markers <- Markers.derive(persistence, config.ownPeerId)(using config)
             core <- spawnCoreActors(
               config,
               cardanoBackend,
               l2Ledger,
               persistence,
               pendingConnections,
+              markers,
             )
 
             // Exactly one liaison, toward the hub head peer (§5.5) [doc-ref]. Register it on the
@@ -128,7 +133,8 @@ trait CoilMultisigRegimeManager(
               // CoilAckSequencer either — the gap step is a no-op).
               coils = Nil,
               treasuryAddress = config.initializationTx.treasuryProduced.address,
-              leadsFastBlock = config.canLeadFast
+              leadsFastBlock = config.canLeadFast,
+              markers = markers
             )(using config)
 
             _ <- pendingConnections.complete(connections)

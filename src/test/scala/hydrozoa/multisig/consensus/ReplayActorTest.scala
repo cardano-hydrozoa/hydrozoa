@@ -21,7 +21,17 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, Block
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat, StoreKey}
+import hydrozoa.multisig.persistence.{
+  ArrivalStamp,
+  Cf,
+  InMemoryBackendStore,
+  JournalKey,
+  JournalValue,
+  Markers,
+  Persistence,
+  PersistenceEventFormat,
+  StoreKey
+}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -221,6 +231,7 @@ class ReplayActorTest extends AnyFunSuite:
                         seqSink <- Ref.of[IO, Vector[CoilAckSequencer.Request]](Vector.empty)
                         seq <- system.actorOf(Recorder[CoilAckSequencer.Request](seqSink))
                         _ <- seed(persistence)
+                        markers <- Markers.derive(persistence, PeerId.Head(own))
                         outcome <- ReplayActor
                             .replay(
                               persistence,
@@ -231,7 +242,8 @@ class ReplayActorTest extends AnyFunSuite:
                               hubs,
                               coils,
                               treasuryAddress,
-                              leadsFastBlock = ownLeadsFastBlock
+                              leadsFastBlock = ownLeadsFastBlock,
+                              markers = markers
                             )
                             .attempt
                         _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
@@ -269,6 +281,7 @@ class ReplayActorTest extends AnyFunSuite:
                         sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
                         sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
                         _ <- seed(persistence)
+                        markers <- Markers.derive(persistence, PeerId.Coil(CoilPeerNumber(0)))
                         outcome <- ReplayActor
                             .replay(
                               persistence,
@@ -280,7 +293,8 @@ class ReplayActorTest extends AnyFunSuite:
                               Nil,
                               treasuryAddress,
                               // A coil peer never leads a fast block.
-                              leadsFastBlock = _ => false
+                              leadsFastBlock = _ => false,
+                              markers = markers
                             )
                             .attempt
                         _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes

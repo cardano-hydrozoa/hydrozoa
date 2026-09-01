@@ -51,7 +51,13 @@ final case class StackComposer(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | StackComposer.Connections,
     tracer: ContraTracer[IO, StackComposerEvent],
     persistence: Persistence[IO],
-    metrics: PeerMetrics
+    metrics: PeerMetrics,
+    /** The boot markers, derived once by the regime manager (§5.2). `hardAckedStack` in particular
+      * is projected, not re-derived: this actor and `ReplayActor` used to unpack it from the
+      * own-ack journal independently, so a store whose journal disagrees with its confirmations (a
+      * seeded one) could satisfy the replay gate and still anchor this actor at the wrong stack.
+      */
+    markers: Markers
 ) extends Actor[IO, StackComposer.Request] {
     import StackComposer.*
 
@@ -103,9 +109,12 @@ final case class StackComposer(
       */
     private def recoverOrBootstrap: IO[Unit] =
         for {
-            hardAcked <- Markers.recoverHardAcked(persistence.backend, config.ownPeerId)
-            hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
-            recovered <- State.recover(persistence, hardAcked, hardConfirmed, config.ownPeerId)
+            recovered <- State.recover(
+              persistence,
+              markers.hardAcked,
+              markers.hardConfirmed,
+              markers.hardAckedStack
+            )
             _ <- recovered match {
                 case Some(recoveredState) => state.set(recoveredState)
                 case None                 => bootstrapInitialStack
@@ -1042,18 +1051,16 @@ object StackComposer {
             persistence: Persistence[IO],
             hardAcked: Option[HardAckNumber],
             hardConfirmed: Option[StackNumber],
-            own: PeerId
+            hardAckedStack: Option[StackNumber]
         )(using config: HeadConfig.Bootstrap.Section): IO[Option[State]] =
-            hardAcked match
-                case None => IO.pure(None)
-                case Some(hardAckNum) =>
+            (hardAcked, hardAckedStack) match
+                case (None, _) | (_, None) => IO.pure(None)
+                case (Some(hardAckNum), Some(hardAckedStack)) =>
                     for {
-                        // No peer-type branch: the own hard-ack lives in the one `PeerId`-keyed
-                        // `HardAck` journal, and the closing stack's `lastBlockNum` comes from the
-                        // `UnsignedStack` every peer persists on every close (atomic with the
-                        // hard-ack, so always present for a hard-acked stack).
-                        lastHardAck <- persistence.getOrFail(JournalKey.HardAck(own, hardAckNum))
-                        hardAckedStack = lastHardAck.payload.stackNum
+                        // The closing stack's `lastBlockNum` comes from the `UnsignedStack` every
+                        // peer persists on every close (atomic with the hard-ack, so always present
+                        // for a stack this peer itself acked). `hardAckedStack` is projected from
+                        // the one marker bundle, so this anchor and the replay gate cannot disagree.
                         unsignedStack <- persistence.getOrFail(
                           StoreKey.UnsignedStack(hardAckedStack)
                         )

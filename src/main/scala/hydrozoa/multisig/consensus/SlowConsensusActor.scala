@@ -61,7 +61,11 @@ final case class SlowConsensusActor(
         SlowConsensusActor.Connections,
     tracer: ContraTracer[IO, SlowConsensusActorEvent],
     persistence: Persistence[IO],
-    metrics: PeerMetrics
+    metrics: PeerMetrics,
+    /** The boot markers, derived once by the regime manager (§5.2); this actor projects
+      * `hardConfirmed` rather than re-reading the spine `StackComposer` also reads.
+      */
+    markers: Markers
 ) extends Actor[IO, SlowConsensusActor.Request] {
     import SlowConsensusActor.*
 
@@ -118,8 +122,7 @@ final case class SlowConsensusActor(
                 // than dropped — orphans `clearOrphans` never reaches, since no cell is re-created
                 // for a confirmed stack. The hard-ack journals scan from key 0, so the buffer would
                 // retain every remote ack the head ever produced, on every restart.
-                hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
-                _ <- stateRef.update(_.withLastConfirmed(hardConfirmed))
+                _ <- stateRef.update(_.withLastConfirmed(markers.hardConfirmed))
             } yield ()
         case h: StackHandoff =>
             handleStackHandoff(h)

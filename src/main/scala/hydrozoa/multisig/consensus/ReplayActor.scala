@@ -75,16 +75,21 @@ object ReplayActor:
         hubs: List[HeadPeerNumber],
         coils: List[CoilPeerNumber],
         treasuryAddress: ShelleyAddress,
-        leadsFastBlock: BlockNumber => Boolean
+        leadsFastBlock: BlockNumber => Boolean,
+        markers: Markers
     )(using CardanoNetwork.Section): IO[Unit] =
         val backend = persistence.backend
+        // `hardAckedStack` is a marker like the rest now, and the bundle is the manager's, derived
+        // once: `StackComposer` reads the same value, so the two cannot disagree — which is the
+        // whole point, since an adjustment applied to the bundle has to reach both.
+        val hardAckedStack = markers.hardAckedStack
         for
-            markers <- Markers.derive(backend, own)
-            // The slow-side own-ack journal is the one `PeerId`-keyed `HardAck` journal — both the
-            // acked stack (the StackComposer/aggregator floor) and the in-flight handoff's own acks
-            // come from it, for either peer type (§10 Q10).
-            ownAck <- recoverOwnAck(persistence, own, markers.hardConfirmed, markers.hardAcked)
-            (hardAckedStack, inflight) = ownAck
+            inflight <- reconstructInflightHandoff(
+              persistence,
+              own,
+              markers.hardConfirmed,
+              hardAckedStack
+            )
             // Fail-safe (CR6/CR7): refuse to start on an inconsistent store (confirmed > acked).
             _ <- validateInvariants(
               markers.softConfirmed,
@@ -154,20 +159,6 @@ object ReplayActor:
       * so this avoids re-scanning the own `HardAck` CF. The own ack journal is the one
       * `PeerId`-keyed `HardAck` journal, so `own: PeerId` works for both peer types (§10 Q10).
       */
-    private def recoverOwnAck(
-        persistence: Persistence[IO],
-        own: PeerId,
-        hardConfirmed: Option[StackNumber],
-        hardAcked: Option[HardAckNumber]
-    )(using
-        CardanoNetwork.Section
-    ): IO[(Option[StackNumber], Option[SlowConsensusActor.StackHandoff])] =
-        for
-            hardAckedStack <- hardAcked.traverse(n =>
-                persistence.getOrFail(JournalKey.HardAck(own, n)).map(_.payload.stackNum)
-            )
-            inflight <- reconstructInflightHandoff(persistence, own, hardConfirmed, hardAckedStack)
-        yield (hardAckedStack, inflight)
 
     /** Boot-time consistency fail-safe (CR6/CR7): a confirmed mark must never exceed its acked mark
       * (`confirmed ≤ acked` — we confirm only what we have acked). A violation means a torn or
