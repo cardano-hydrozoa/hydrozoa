@@ -5,6 +5,7 @@ import cats.data.EitherT
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup, EvacuationMapHash}
+import scalus.cardano.ledger.Hash32
 
 /** Why [[L2Ledger.restoreTo]] could not reconstruct the committed state. Extends `Throwable` so the
   * one fatal caller (`JointLedger.State.recover`, at boot) can raise it directly; it is still a
@@ -39,6 +40,22 @@ object RestoreError:
     ) extends RestoreError {
         override def getMessage: String =
             s"L2 ledger evacuation map digest $actual does not match the configured $expected"
+    }
+
+    /** The ledger's agreed parameters are not the ones this node's head config pins.
+      *
+      * `l2ParamsHash` never moves, so this is comparable at every anchor, warm or cold, against a
+      * config value that is equally fixed. A mismatch means this node is driving a ledger the head
+      * was not built against — not repairable at runtime, for the same reason
+      * [[EvacuationMapMismatch]] is not.
+      */
+    final case class L2ParamsMismatch(
+        expected: Hash32,
+        actual: Hash32
+    ) extends RestoreError {
+        override def getMessage: String =
+            s"L2 ledger parameters digest ${actual.toHex} does not match the configured " +
+                s"${expected.toHex}"
     }
 
 /** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
@@ -191,5 +208,25 @@ trait L2Ledger[F[_]] {
       * that is the check that the head config's `initialEvacuationMap` is the one this ledger
       * actually starts from — see [[RestoreError.EvacuationMapMismatch]].
       */
-    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, EvacuationMapHash]
+    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, L2Ledger.Restored]
+}
+
+object L2Ledger {
+
+    /** What a ledger reports about itself at a [[L2Ledger.restoreTo]] anchor.
+      *
+      * The two digests answer different questions, which is why both are here. `evacuationMapHash`
+      * moves with every applied command, so at a warm anchor it says only that both sides hold the
+      * same *state*. `l2ParamsHash` never moves, so it is what keeps asking whether this is still
+      * the right *ledger*. See `design/head-params-hash.md`.
+      *
+      * @param l2ParamsHash
+      *   `None` from a remote ledger that does not report it yet. Transitional: the head then
+      *   cannot check which ledger it is driving, so it warns rather than failing. Remove the
+      *   `Option` once the remote side ships the field.
+      */
+    final case class Restored(
+        evacuationMapHash: EvacuationMapHash,
+        l2ParamsHash: Option[Hash32]
+    )
 }

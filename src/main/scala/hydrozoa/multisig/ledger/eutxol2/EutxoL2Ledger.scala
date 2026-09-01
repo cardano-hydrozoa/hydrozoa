@@ -13,19 +13,20 @@ import hydrozoa.multisig.ledger.eutxol2.store.{L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMap, EvacuationMapHash, evacuationKeyOrdering}
+import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
 import hydrozoa.multisig.ledger.l2.L2LedgerResponse.UnrecoverableError
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.bullet.borer.Cbor
+import java.nio.charset.StandardCharsets.UTF_8
 import monocle.syntax.all.*
 import scala.collection.immutable.TreeMap
 import scala.util.Try
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
-import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.{ByteString, platform}
 
 extension (ti: TransactionInput) {
     // Technically, this is partial -- but with the current cbor codec of TransactionInput
@@ -66,6 +67,26 @@ extension (em: EvacuationMap) {
 
 object EutxoL2Ledger {
     type Config = CardanoNetwork.Section & InitializationParameters.Section & HeadParameters.Section
+
+    /** This ledger's agreed-parameters digest, reported at every `restoreTo` anchor and pinned in
+      * the head config as `l2ParamsHash` (design/head-params-hash.md).
+      *
+      * A digest over the domain tag alone, because the built-in ledger has no negotiable
+      * parameters: its rules are the hydrozoa code, and its only agreed knobs —
+      * `identityIsomorphism` and the `headId` pin — already sit in [[HeadParameters]], so folding
+      * them in here would hash the configuration against itself. Following `EvacuationMap.digest`'s
+      * precedent for an empty input, an empty parameter set hashes to a defined value rather than
+      * an absence.
+      *
+      * The tag carries a version so it can move when this ledger's rules do: bumping it stops two
+      * peers on builds with divergent L2 semantics from booting against the same head. Nothing
+      * enforces the bump — it is a deliberate act.
+      */
+    val l2ParamsHash: Hash32 = Hash32.fromByteString(
+      platform.blake2b_256(
+        ByteString.fromArray("gummiworm-l2-params-cardano-eutxo-v1".getBytes(UTF_8))
+      )
+    )
 
     case class State(
         activeUtxos: Utxos,
@@ -383,7 +404,7 @@ case class EutxoL2Ledger private (
       */
     override def restoreTo(
         commandNumber: L2CommandNumber
-    ): EitherT[IO, RestoreError, EvacuationMapHash] =
+    ): EitherT[IO, RestoreError, L2Ledger.Restored] =
         for {
             tip <- EitherT.right(store.getTip.map(_.getOrElse(L2CommandNumber.zero)))
             _ <- EitherT.cond[IO](
@@ -432,7 +453,7 @@ case class EutxoL2Ledger private (
                   .map(violation => RestoreError.OtherError(violation.toString))
                   .map(_.digest)
             )
-        } yield digest
+        } yield L2Ledger.Restored(digest, Some(EutxoL2Ledger.l2ParamsHash))
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
       * `transientTokens`, `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).

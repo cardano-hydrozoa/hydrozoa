@@ -332,8 +332,14 @@ Five checks, at four moments. Every one reuses a comparison point the code alrea
 | 4 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `l2ParamsHash` against the config's | refuse to boot |
 | 5 | every major block | every head and coil peer | the settlement tx's treasury datum `headParamsHash` against the local one | refuse to sign the block |
 
-Check 3 exists today. Checks 1, 2 and 5 are built — `InitializationTx.Parse`, `StoreIdentity`,
-and `SettlementTx`. Check 4 is not yet.
+Check 3 existed already. All five are now built: `InitializationTx.Parse`, `StoreIdentity`,
+`JointLedger.State.recover`, and `SettlementTx`.
+
+Check 4 has one transitional gap: a remote ledger that does not yet report `l2ParamsHash` is let
+through with a warning (`JointLedgerEvent.L2ParamsHashUnreported`), because a remote that
+predates the field cannot be told apart from a wrong one and failing closed would refuse every
+deployed sidecar. The `Option` on `L2Ledger.Restored.l2ParamsHash` — and this branch — go away
+once the remote side ships it.
 
 ### 1. The initialization transaction matches the hash
 

@@ -30,8 +30,8 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
-import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
+import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationMap}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
@@ -375,12 +375,19 @@ object Bootstrap:
           blockConfig = bhp.blockConfig,
           rateLimits = bhp.rateLimits,
           coilQuorum = bhp.coilQuorum,
-          // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
-          // a zero hash rather than empty bytes (which fail the length check).
-          // TODO: per design/head-params-hash.md every backend reports this through the same
-          //  `L2Ledger` contract — a digest over the ledger's own parameters, never over its
-          //  state. A zero hash makes every head agree on nothing.
-          l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
+          // The L2 ledger reports this at every `restoreTo` anchor and JointLedger checks it
+          // against this value (design/head-params-hash.md). Bootstrap has no ledger running, so
+          // it sources the value rather than asking: the built-in ledger's digest is a code
+          // constant.
+          // TODO: a remote ledger's digest has to come from the operator (the ledger prints it
+          //  out-of-band, as it already does for the initial evacuation map). Until that config
+          //  field exists, a remote head carries a zero hash and the remote reports nothing, so
+          //  the check warns instead of comparing.
+          l2ParamsHash = l2Ledger match {
+              case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.l2ParamsHash
+              case L2LedgerKind.AnyRemote =>
+                  Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32)))
+          },
           l2Ledger = l2Ledger,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
           identityIsomorphism = false,
