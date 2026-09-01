@@ -138,29 +138,31 @@ Notes on the layout:
 
 ## Where it lives and what compares it
 
-**The soft-ack signs the two version components and the hash.**
+**The soft-ack signs the block hash, with `blockNum` and the versions beside it.**
 
 ```scala
-SignedDigest(versionMajor, versionMinor, blockHash)
+SignedDigest(blockNum, versionMajor, versionMinor, blockHash)
 ```
 
-`blockNum` and `startTime` go: both are inside the `blockHash` preimage, and nothing needs to
-read either out of the signed bytes. The versions stay, deliberately duplicated, because a
-ratchet must read them without recomputing a hash — `versionMajor` for equality against the
-treasury datum, `versionMinor` for the strict increase. A digest gives an ordering on nothing;
-it can only say two things differ.
+Only `startTime` goes. It is inside the `blockHash` preimage and nothing reads it out of the
+signed bytes.
 
-That is the one place where redundancy earns its bytes. Eight bytes in an off-chain signed
-message buys a signed statement that remains self-describing: a verifier holding the message and
-a candidate block can order two of them, not merely tell them apart.
+The other three stay, each duplicated in the preimage on purpose:
 
-**Everything else collapses.** The check moves from a structural comparison to signature
-verification, which is where it belongs — a follower that derives a different block produces a
-different `blockHash`, and the leader's ack fails to verify against its own brief. The domain
-tag inside the preimage keeps those signed bytes separable from any other digest the protocol
-signs.
+- `versionMajor` and `versionMinor`, because a ratchet must read them without recomputing a
+  hash — major for equality, minor for the strict increase. A digest gives an ordering on
+  nothing; it can only say two things differ.
+- `blockNum`, because it names what the signature is about. A signed blob that says only "some
+  block, version 3.7" is worse to hold, log and diagnose than one that names the block, and the
+  cost is four bytes in an off-chain message.
 
-**What this does not touch: the rule-based ratchet.** It reads neither of these fields.
+**Everything else collapses into the hash.** The check moves from a structural comparison to
+signature verification, which is where it belongs — a follower that derives a different block
+produces a different `blockHash`, and the leader's ack fails to verify against its own brief.
+The domain tag inside the preimage keeps those signed bytes separable from any other digest the
+protocol signs.
+
+**What this does not touch: the rule-based ratchet.** It reads none of these fields.
 `DisputeResolutionScript` compares `voteRedeemer.sec.versionMinor > prevVersionMinor` and
 verifies signatures over `voteRedeemer.sec.toData |> serialiseData` — the standalone evacuation
 commitment, whose `Onchain` shape carries `headId`, `versionMajor`, `versionMinor` and
@@ -203,7 +205,6 @@ can — a hash says they disagree, never how.
    `headParamsHash` is stored only because it must reach a datum, and this one reaches no
    transaction. What is left open is whether to memoize it on the brief — a `lazy val` on
    `BlockBrief.Section`, computed once per brief rather than once per comparison.
-
 3. **What does the API return, and does the existing surface move?**
    `GET /head/requests/{id}` resolves by id today. Returning `requestHash` from the submit path
    is additive, but if the hash is also to be a lookup key that is a new route and a new index.
