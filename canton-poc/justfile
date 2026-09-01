@@ -1,0 +1,24 @@
+#!/usr/bin/env just --justfile
+#
+# Hydrozoa-on-Canton PoC recipes. Run from canton-poc/ inside the repo dev shell
+# (`nix develop`), which puts `daml` and `canton` on PATH. See README.md and
+# ../design/hydrozoa-on-canton.md. `just` runs these from this directory, so all
+# paths are relative to canton-poc/.
+
+conf := "canton/topology.conf"
+
+# Compile the custody package to a Daml-LF 2.1 DAR (.daml/dist/custody-0.1.0.dar).
+build:
+  daml build
+
+# Run the Daml Script tests (exit flow, conservation, nullifier, bad-sig).
+test: build
+  daml test
+
+# Boot a local Canton (BFT synchronizer + 3 participants) and cross-participant ping.
+smoke:
+  canton run canton/smoke.canton -c {{conf}} --no-tty </dev/null
+
+# Live-Canton OQ-1/OQ-2 test: upload the DAR, set up parties, drive ClaimPayout.
+oq: build
+  canton run canton/oq-test.canton -c {{conf}} --no-tty </dev/null

@@ -39,12 +39,13 @@ enclave signature, monotonicity, and conservation are the only constraints.
 
 ## Build & test
 
-From the repo root, inside the dev shell (`nix develop`):
+From `canton-poc/`, inside the dev shell (`nix develop`) — recipes live in this
+directory's `justfile`:
 
 ```bash
 cd canton-poc
-daml build   # → .daml/dist/custody-0.1.0.dar
-daml test    # runs daml/CustodyTest.daml
+just build   # daml build → .daml/dist/custody-0.1.0.dar
+just test    # daml test (runs daml/CustodyTest.daml)
 ```
 
 All five scripts pass: `testExitFlow` (happy path + nullifier replay +
@@ -83,11 +84,12 @@ synchronizer (sequencer + mediator) plus three participants, in-memory storage.
 | `canton/smoke.canton` | boot + connect + cross-participant ping |
 | `canton/oq-test.canton` | upload DAR, set up parties, create Custody, drive ClaimPayout |
 
-Run headless from the repo root inside the dev shell (build the DAR first):
+Run headless from `canton-poc/` inside the dev shell:
 
 ```bash
-cd canton-poc && daml build && cd ..
-canton run canton-poc/canton/oq-test.canton -c canton-poc/canton/topology.conf --no-tty </dev/null
+cd canton-poc
+just smoke   # boot + cross-participant ping
+just oq      # build DAR, set up parties, create Custody, drive ClaimPayout
 ```
 
 **Result — OQ-1 ✓.** The `settlementAgent` (a *different* party from `custodian`)

@@ -36,7 +36,7 @@ participants.local.foreach(_.synchronizers.connect_local(sequencer1, alias = "da
 utils.retry_until_true { participant2.synchronizers.active("da") && participant3.synchronizers.active("da") }
 
 phase("upload DAR to all three participants")
-val darPath = "canton-poc/.daml/dist/custody-0.1.0.dar"
+val darPath = ".daml/dist/custody-0.1.0.dar" // relative to canton-poc/ (run via its justfile)
 Seq(participant1, participant2, participant3).foreach(_.dars.upload(darPath))
 
 phase("enable parties (settlementAgent + alice on p1; custodian seeded on p1)")
