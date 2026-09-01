@@ -4,15 +4,15 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO}
 import hydrozoa.config.GenerateSampleConfig.{defaultSpec, testPeersSpec}
 import hydrozoa.config.head.HeadConfig.headConfigEncoder
-import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.config.node.NodePrivateConfig.nodePrivateConfigEncoder
+import hydrozoa.config.node.{MultiNodeConfig, PrivateSecrets}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.server.HydrozoaHttpEvent
 import io.circe.syntax.*
 import io.circe.{Json, Printer}
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -90,10 +90,7 @@ class MainSmokeTest extends AnyFunSuite:
             _ <- IO.blocking(
               Files.writeString(headPath, printer.print(mnc.headConfig.asJson))
             )
-            _ <- IO.blocking(Files.createDirectories(privatePath.getParent))
-            _ <- IO.blocking(
-              Files.writeString(privatePath, printer.print(runnablePrivateJson))
-            )
+            _ <- IO.blocking(writePrivatePair(runnablePrivateJson, privatePath))
 
             mockBackend <- CardanoBackendMock.mockIO(
               MockState(initialUtxos =
@@ -162,6 +159,46 @@ class MainSmokeTest extends AnyFunSuite:
         testIO.unsafeRunSync()
     }
 
+    /** Split a private config into the file a node reads and the credentials beside it.
+      *
+      * Credentials no longer live in `private.json` — the node reads them from the environment or
+      * from a `private.env` sibling — so a test that writes a runnable config has to write both
+      * halves. Doing it here rather than hand-rolling per test keeps every test on the real path.
+      */
+    private def writePrivatePair(json: Json, privatePath: Path): Unit = {
+        val walletField =
+            if json.hcursor.downField("ownPeerPrivate").downField("ownHeadWallet").succeeded then
+                "ownHeadWallet"
+            else "ownCoilWallet"
+        val paths = List(
+          "HYDROZOA_SIGNING_KEY" -> List("ownPeerPrivate", walletField, "signingKey"),
+          "HYDROZOA_RULE_BASED_SIGNING_KEY" ->
+              List("nodeOperationEvacuationConfig", "ruleBasedWallet", "signingKey"),
+          "HYDROZOA_BLOCKFROST_API_KEY" -> List("blockfrostApiKey"),
+          "HYDROZOA_ADMIN_PASSWORD" -> List("adminPassword")
+        )
+        def get(j: Json, path: List[String]): Option[String] =
+            path.foldLeft(Option(j))((acc, k) => acc.flatMap(_.asObject).flatMap(_.apply(k)))
+                .flatMap(_.asString)
+        def drop(j: Json, path: List[String]): Json = path match {
+            case Nil         => j
+            case last :: Nil => j.asObject.fold(j)(o => Json.fromJsonObject(o.remove(last)))
+            case head :: rest =>
+                j.asObject.fold(j)(o =>
+                    Json.fromJsonObject(o.add(head, drop(o(head).getOrElse(Json.obj()), rest)))
+                )
+        }
+        val found = paths.flatMap((env, path) => get(json, path).map(env -> _))
+        val stripped = paths.foldLeft(json)((acc, kv) => drop(acc, kv._2))
+        val printer = Printer.spaces2.copy(dropNullValues = true)
+        Files.createDirectories(privatePath.getParent)
+        Files.writeString(privatePath, printer.print(stripped))
+        Files.writeString(
+          privatePath.resolveSibling(PrivateSecrets.defaultFileName),
+          found.map((k, v) => s"$k=$v").mkString("", "\n", "\n")
+        )
+    }
+
     // A `transplantStackNumber` names the stack this peer elects to ADOPT: everything at or below it
     // is taken on trust from the donor committee and never verified. So the tag has to name a stack
     // the store actually holds. Here the store is empty, so no tag can be honoured -- the node must
@@ -207,8 +244,7 @@ class MainSmokeTest extends AnyFunSuite:
 
         val testIO = for {
             _ <- IO.blocking(Files.writeString(headPath, printer.print(mnc.headConfig.asJson)))
-            _ <- IO.blocking(Files.createDirectories(privatePath.getParent))
-            _ <- IO.blocking(Files.writeString(privatePath, printer.print(runnablePrivateJson)))
+            _ <- IO.blocking(writePrivatePair(runnablePrivateJson, privatePath))
             mockBackend <- CardanoBackendMock.mockIO(
               MockState(initialUtxos =
                   mnc.headConfig.initializationTx.resolvedUtxos.utxos
@@ -276,8 +312,7 @@ class MainSmokeTest extends AnyFunSuite:
 
         val testIO = for {
             _ <- IO.blocking(Files.writeString(headPath, printer.print(mnc.headConfig.asJson)))
-            _ <- IO.blocking(Files.createDirectories(privatePath.getParent))
-            _ <- IO.blocking(Files.writeString(privatePath, printer.print(runnablePrivateJson)))
+            _ <- IO.blocking(writePrivatePair(runnablePrivateJson, privatePath))
 
             // No `reportedParams`: the mock falls back to scalus's `UtxoEnv.testMainnet` fixture,
             // which matches no real network's `CardanoInfo`. That IS the mismatch under test.

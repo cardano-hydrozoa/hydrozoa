@@ -4,12 +4,13 @@ import cats.data.NonEmptyMap
 import hydrozoa.bootstrap.GenerateKeyPair.Role
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
-import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.config.node.NodePrivateConfig.nodePrivateConfigDecoder
 import hydrozoa.config.node.owninfo.{OwnCoilPeerPrivate, OwnHeadPeerPrivate}
+import hydrozoa.config.node.{NodePrivateConfig, PrivateSecrets}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import io.circe.parser
 import java.nio.file.{Files, Path}
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.http4s.Uri
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.immutable.SortedMap
@@ -25,10 +26,24 @@ import scalus.uplc.builtin.ByteString
   */
 class GenerateKeyPairOutputsTest extends AnyFunSuite {
 
+    /** A signing key: an arbitrary but valid 32-byte Ed25519 seed. */
     private def hex(digit: Char): String = digit.toString * 64
 
+    /** The verification key that ACTUALLY belongs to `hex(digit)`.
+      *
+      * Derived rather than invented, because the config loader re-derives it and refuses a pair
+      * that does not agree. A fixture pairing an arbitrary "vkey" with an unrelated "skey" builds a
+      * config no node would accept, and would test the decoder against something unreachable.
+      */
+    private def vkeyHex(digit: Char): String =
+        Ed25519PrivateKeyParameters(ByteString.fromHex(hex(digit)).bytes, 0)
+            .generatePublicKey()
+            .getEncoded
+            .map("%02x".format(_))
+            .mkString
+
     private def vkey(digit: Char): VerificationKey =
-        VerificationKey.unsafeFromByteString(ByteString.fromHex(hex(digit)))
+        VerificationKey.unsafeFromByteString(ByteString.fromHex(vkeyHex(digit)))
 
     private val wsUri: Uri = Uri.unsafeFromString("ws://head-0:4001")
 
@@ -94,12 +109,19 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
         given HeadPeers = headPeers
         given CoilPeers = coilPeers
 
-        val filled = GenerateKeyPair
-            .fillPrivateConfig(template, Role.Head, hex('1'), hex('a'))
+        // The round trip the split creates: `fillPrivateConfig` writes the config and the
+        // credentials as a pair, and the loader reassembles them. Decoding the config alone is
+        // supposed to be impossible now, which the dedicated test below asserts.
+        val (filled, secrets) = GenerateKeyPair
+            .fillPrivateConfig(template, Role.Head, vkeyHex('1'), hex('1'))
             .fold(e => fail(s"fill failed: $e"), identity)
 
+        val reassembled = PrivateSecrets
+            .applySecrets(filled, secrets, "test")
+            .fold(e => fail(s"credentials rejected: ${e.reason}"), identity)
+
         val decoded = parser
-            .decode[NodePrivateConfig](filled.spaces2)(using nodePrivateConfigDecoder)
+            .decode[NodePrivateConfig](reassembled.spaces2)(using nodePrivateConfigDecoder)
             .fold(e => fail(s"decode failed: $e"), identity)
 
         decoded.ownPeerPrivate match {
@@ -114,11 +136,13 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
 
     test("the screener uri survives a head fill and is dropped from a coil's") {
         val head = GenerateKeyPair
-            .fillPrivateConfig(template, Role.Head, hex('1'), hex('a'))
+            .fillPrivateConfig(template, Role.Head, vkeyHex('1'), hex('1'))
             .fold(e => fail(s"fill failed: $e"), identity)
+            ._1
         val coil = GenerateKeyPair
-            .fillPrivateConfig(template, Role.Coil, hex('3'), hex('a'))
+            .fillPrivateConfig(template, Role.Coil, vkeyHex('3'), hex('3'))
             .fold(e => fail(s"fill failed: $e"), identity)
+            ._1
 
         // The template has to carry it, or the head check passes vacuously.
         val inTemplate = template.hcursor.downField("remoteScreenerUri").succeeded
@@ -134,12 +158,16 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
         given HeadPeers = headPeers
         given CoilPeers = coilPeers
 
-        val filled = GenerateKeyPair
-            .fillPrivateConfig(template, Role.Coil, hex('3'), hex('a'))
+        val (filled, secrets) = GenerateKeyPair
+            .fillPrivateConfig(template, Role.Coil, vkeyHex('3'), hex('3'))
             .fold(e => fail(s"fill failed: $e"), identity)
 
+        val reassembled = PrivateSecrets
+            .applySecrets(filled, secrets, "test")
+            .fold(e => fail(s"credentials rejected: ${e.reason}"), identity)
+
         val decoded = parser
-            .decode[NodePrivateConfig](filled.spaces2)(using nodePrivateConfigDecoder)
+            .decode[NodePrivateConfig](reassembled.spaces2)(using nodePrivateConfigDecoder)
             .fold(e => fail(s"decode failed: $e"), identity)
 
         decoded.ownPeerPrivate match {

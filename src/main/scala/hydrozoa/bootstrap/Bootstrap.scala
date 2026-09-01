@@ -19,7 +19,7 @@ import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
-import hydrozoa.config.node.NodeConfig
+import hydrozoa.config.node.{NodeConfig, PrivateSecrets}
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
@@ -37,8 +37,9 @@ import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.syntax.*
-import io.circe.{Decoder, DecodingFailure, Encoder, Json, parser}
+import io.circe.{Decoder, DecodingFailure, Encoder, Json, JsonObject, parser}
 import java.nio.charset.StandardCharsets
+import java.nio.file.attribute.PosixFilePermissions
 import java.nio.file.{Files, Path}
 import java.security.SecureRandom
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
@@ -817,14 +818,22 @@ object GenerateKeyPair:
     ): IO[Unit] = for {
         templateStr <- IO.blocking(Files.readString(templatePath))
         template <- IO.fromEither(parser.parse(templateStr))
-        filled <- IO.fromEither(
+        result <- IO.fromEither(
           fillPrivateConfig(template, role, vKeyHex, sKeyHex).left.map(
             new IllegalArgumentException(_)
           )
         )
+        (filled, secrets) = result
+        envPath = outPath.resolveSibling(PrivateSecrets.defaultFileName)
         _ <- IO.blocking {
             Option(outPath.getParent).foreach(Files.createDirectories(_))
             Files.writeString(outPath, filled.spaces2)
+            Files.writeString(
+              envPath,
+              secrets.map((k, v) => s"$k=$v").toList.sorted.mkString("", "\n", "\n")
+            )
+            // The config beside it is meant to be shareable; this file is the reason that is safe.
+            Files.setPosixFilePermissions(envPath, PosixFilePermissions.fromString("rw-------"))
         }
     } yield ()
 
@@ -839,24 +848,52 @@ object GenerateKeyPair:
         role: Role,
         vKeyHex: String,
         sKeyHex: String
-    ): Either[String, Json] = {
-        def mkWallet(v: String, s: String): Json = Json.obj(
-          "verificationKey" -> Json.fromString(v),
-          "signingKey" -> Json.fromString(s)
-        )
+    ): Either[String, (Json, Map[String, String])] = {
         val walletField = role match {
             case Role.Head => "ownHeadWallet"
             case Role.Coil => "ownCoilWallet"
         }
+        // The generated signing key never enters the config; only its public half does, and the
+        // node re-pairs the two at boot and refuses if they disagree.
+        val ownWallet = Json.obj("verificationKey" -> Json.fromString(vKeyHex))
+
+        /** Lift a secret the template still carries out of the config and into the env map. */
+        def lift(obj: JsonObject, field: String): (JsonObject, Option[String]) =
+            obj(field).flatMap(_.asString) match
+                case Some(v) if v.nonEmpty => (obj.remove(field), Some(v))
+                case _                     => (obj, None)
+
         for {
             obj <- template.asObject.toRight("template is not a JSON object")
-            withWallet = obj
-                .add("ownPeerPrivate", Json.obj(walletField -> mkWallet(vKeyHex, sKeyHex)))
-            filled = role match {
+            withWallet = obj.add("ownPeerPrivate", Json.obj(walletField -> ownWallet))
+            roleFixed = role match {
                 case Role.Head => withWallet
                 case Role.Coil => withWallet.remove("remoteScreenerUri")
             }
-        } yield Json.fromJsonObject(filled)
+            (noBlockfrost, bfKey) = lift(roleFixed, "blockfrostApiKey")
+            (noAdmin, adminPw) = lift(noBlockfrost, "adminPassword")
+            evac = noAdmin("nodeOperationEvacuationConfig").flatMap(_.asObject)
+            ruleBased = evac.flatMap(_.apply("ruleBasedWallet")).flatMap(_.asObject)
+            ruleKey = ruleBased
+                .flatMap(_.apply("signingKey"))
+                .flatMap(_.asString)
+                .filter(_.nonEmpty)
+            cleaned = (evac, ruleBased) match
+                case (Some(e), Some(rb)) =>
+                    noAdmin.add(
+                      "nodeOperationEvacuationConfig",
+                      Json.fromJsonObject(
+                        e.add("ruleBasedWallet", Json.fromJsonObject(rb.remove("signingKey")))
+                      )
+                    )
+                case _ => noAdmin
+            secrets = List(
+              Some("HYDROZOA_SIGNING_KEY" -> sKeyHex),
+              bfKey.map("HYDROZOA_BLOCKFROST_API_KEY" -> _),
+              adminPw.map("HYDROZOA_ADMIN_PASSWORD" -> _),
+              ruleKey.map("HYDROZOA_RULE_BASED_SIGNING_KEY" -> _)
+            ).flatten.toMap
+        } yield (Json.fromJsonObject(cleaned), secrets)
     }
 
     private def mkHex(bytes: Array[Byte]): String = bytes.map("%02x".format(_)).mkString

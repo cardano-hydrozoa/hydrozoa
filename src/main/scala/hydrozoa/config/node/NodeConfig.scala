@@ -190,7 +190,20 @@ object NodeConfig {
     ): IO[(NodeConfig, CardanoBackend[IO])] =
         for {
             headStr <- IO.blocking(Files.readString(headConfigPath))
-            privateStr <- IO.blocking(Files.readString(privateConfigPath))
+            privateRaw <- IO.blocking(Files.readString(privateConfigPath))
+            // Credentials come from the environment, not from the config file, so they are spliced
+            // in before decoding and the decoders below are unchanged. A missing or mismatched one
+            // is a `StartupRefusal` raised here — deliberately ahead of the backend reads, since it
+            // is a verdict about this node alone and no amount of retrying changes it.
+            privateJson <- IO.fromEither(
+              io.circe.parser
+                  .parse(privateRaw)
+                  .left
+                  .map(e =>
+                      StartupRefusal(s"$privateConfigPath is not valid JSON: ${e.getMessage}")
+                  )
+            )
+            privateStr <- PrivateSecrets.overlay(privateConfigPath, privateJson).map(_.noSpaces)
             loaded <- retryingBackendReads(
               backendReadRetryWaits,
               NodeConfig.fromJson(headStr, privateStr, backendOverride).value
