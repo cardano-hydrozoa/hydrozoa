@@ -106,6 +106,9 @@ object ReplayActor:
             )
             // 1. First L1 sample → BlockWeaver, so deposit decisions don't wait on the poll tick.
             _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
+            // Same gate, same place: an L1 fact established once, on the app fiber, before the
+            // start barrier opens.
+            _ <- verifyProtocolParams(cardanoBackend)
             // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA.
             _ <- inflight.traverse_(targets.slowConsensusActor ! _)
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
@@ -233,6 +236,54 @@ object ReplayActor:
                     log.warn(
                       s"boot L1 sample failed (attempt ${n + 1}): $err. Cannot start consensus " +
                           s"without it, so WAITING rather than failing the boot; retrying in $wait"
+                    ) >> IO.sleep(wait) >> attempt(n + 1)
+            }
+        attempt(0)
+    }
+
+    /** Compare the chain's live protocol parameters against the ones this head's config asserts.
+      *
+      * ⛔ Nothing did this before: `getStartupParams` existed with **zero callers**, so a head built
+      * every L1 transaction — settlements, fallbacks, rollouts, refunds — against parameters it
+      * merely assumed, and would keep doing so across a parameter update it never noticed. Those
+      * parameters decide fees, `maxTxSize` and execution-unit budgets, so a drift shows up as
+      * transactions the chain rejects, at the worst possible moment.
+      *
+      * ⚠️ **Reports, does not refuse — deliberately, and this is a decision to revisit.** A refusal
+      * needs a comparison we trust, and we do not yet know which fields differ benignly in practice
+      * (a config may legitimately pin a subset, or lag a harmless update). Refusing on a brittle
+      * equality check would brick every node on the first benign difference, which is far worse
+      * than the gap it closes. So this establishes the signal first: match ⇒ one INFO line; drift ⇒
+      * a loud WARN carrying both values, which is what tells us what a safe comparison should be. ⇒
+      * Escalating to a `StartupRefusal` (and gating hard-confirmation on it) is the intended next
+      * step, once real drift has been observed.
+      *
+      * Unreachable is NOT drift: it retries like the L1 sample, because "cannot ask" and "asked and
+      * the answer is wrong" are the two classes this whole start-up path is built to separate.
+      */
+    private def verifyProtocolParams(
+        cardanoBackend: CardanoBackend[IO]
+    )(using net: CardanoNetwork.Section): IO[Unit] = {
+        def attempt(n: Int): IO[Unit] =
+            cardanoBackend.fetchLatestParams.flatMap {
+                case Right(onChain) =>
+                    val assumed = net.cardanoProtocolParams
+                    if onChain == assumed then
+                        log.info("protocol parameters on chain match the ones this config asserts")
+                    else
+                        log.warn(
+                          "PROTOCOL PARAMETER DRIFT: the chain's parameters differ from the ones " +
+                              "this head's config asserts. Every L1 transaction this node builds " +
+                              "uses the config's values, so a real drift will surface as txs the " +
+                              "chain rejects.\n" +
+                              s"  on chain: $onChain\n" +
+                              s"  config:   $assumed"
+                        )
+                case Left(err) =>
+                    val wait = l1SampleBackoff(n)
+                    log.warn(
+                      s"could not read protocol parameters (attempt ${n + 1}): $err. " +
+                          s"Retrying in $wait."
                     ) >> IO.sleep(wait) >> attempt(n + 1)
             }
         attempt(0)
