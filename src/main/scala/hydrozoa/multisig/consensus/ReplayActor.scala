@@ -2,8 +2,9 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.IO
 import cats.syntax.all.*
+import hydrozoa.app.StartupRefusal
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
@@ -249,14 +250,19 @@ object ReplayActor:
       * parameters decide fees, `maxTxSize` and execution-unit budgets, so a drift shows up as
       * transactions the chain rejects, at the worst possible moment.
       *
-      * ⚠️ **Reports, does not refuse — deliberately, and this is a decision to revisit.** A refusal
-      * needs a comparison we trust, and we do not yet know which fields differ benignly in practice
-      * (a config may legitimately pin a subset, or lag a harmless update). Refusing on a brittle
-      * equality check would brick every node on the first benign difference, which is far worse
-      * than the gap it closes. So this establishes the signal first: match ⇒ one INFO line; drift ⇒
-      * a loud WARN carrying both values, which is what tells us what a safe comparison should be. ⇒
-      * Escalating to a `StartupRefusal` (and gating hard-confirmation on it) is the intended next
-      * step, once real drift has been observed.
+      * ⛔ **A mismatch REFUSES the boot** (George, 2026-09-01): *"it should raise an escalated error
+      * if protocol parameters don't match, because it likely means that the head can't produce
+      * valid L1 txs in some cases."* A head building transactions against parameters the chain has
+      * moved past emits txs the chain rejects — silently, at settlement time, under load.
+      *
+      * It is a `StartupRefusal` rather than a generic crash because it is **deterministic**: the
+      * config asserts what it asserts, and a restart re-derives the same verdict, so a supervisor
+      * loop would learn nothing. ⇒ Operationally, an on-chain parameter update stops every peer
+      * until its config is updated. That is intended: the alternative is peers quietly emitting
+      * invalid transactions. ⚠️ Measured on preview 2026-09-01: the config's parameters equal the
+      * chain's **exactly**, so this is not a hair-trigger. If a benign field ever proves to differ
+      * in practice, narrow the comparison to the fields that govern tx validity — do not weaken it
+      * back to a warning.
       *
       * Unreachable is NOT drift: it retries like the L1 sample, because "cannot ask" and "asked and
       * the answer is wrong" are the two classes this whole start-up path is built to separate.
@@ -271,13 +277,18 @@ object ReplayActor:
                     if onChain == assumed then
                         log.info("protocol parameters on chain match the ones this config asserts")
                     else
-                        log.warn(
-                          "PROTOCOL PARAMETER DRIFT: the chain's parameters differ from the ones " +
-                              "this head's config asserts. Every L1 transaction this node builds " +
-                              "uses the config's values, so a real drift will surface as txs the " +
-                              "chain rejects.\n" +
+                        log.error(
+                          "PROTOCOL PARAMETER MISMATCH: the chain's parameters differ from the " +
+                              "ones this head's config asserts. Refusing to start.\n" +
                               s"  on chain: $onChain\n" +
                               s"  config:   $assumed"
+                        ) >> IO.raiseError(
+                          StartupRefusal(
+                            "the chain's protocol parameters differ from the ones this head's " +
+                                "config asserts, so the L1 transactions it builds may be rejected " +
+                                "by the chain. Update the config to the chain's current parameters " +
+                                "(both values are on the ERROR line above)."
+                          )
                         )
                 case Left(err) =>
                     val wait = l1SampleBackoff(n)

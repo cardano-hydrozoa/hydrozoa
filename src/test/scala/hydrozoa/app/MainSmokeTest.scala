@@ -91,7 +91,12 @@ class MainSmokeTest extends AnyFunSuite:
               MockState(initialUtxos =
                   mnc.headConfig.initializationTx.resolvedUtxos.utxos
                       ++ Map.from(mnc.headConfig.scriptReferenceUtxos.toList.map(_.toTuple))
-              )
+              ),
+              // The node refuses to start when the chain's protocol parameters differ from the ones
+              // its config asserts, so the mock must report the config's. Without this it reports
+              // scalus's `UtxoEnv.testMainnet` fixture, which matches no real network's CardanoInfo
+              // -- the boot then refuses, correctly, on an incoherent fixture.
+              reportedParams = Some(mnc.headConfig.cardanoProtocolParams)
             )
 
             startedD <- Deferred[IO, Unit]
@@ -144,6 +149,76 @@ class MainSmokeTest extends AnyFunSuite:
             // ⚠️ Do not await this. Cancelling a *live* node never returns, and `Fiber.cancel` is
             // itself uncancelable, so no timeout bounds it. The daemon threads go with the JVM.
             _ <- fiber.cancel.start.void
+        } yield ()
+
+        testIO.unsafeRunSync()
+    }
+
+    // The positive test above hands the mock the config's own protocol parameters, so the boot-time
+    // comparison always agrees. That would leave the REFUSAL path untested -- a check that cannot
+    // fail is not a check -- so this is its negative control: the same node, booted against a chain
+    // that reports DIFFERENT parameters, must refuse rather than start and quietly build L1
+    // transactions the chain may reject.
+    test("Serve.runNode refuses to start when the chain's protocol parameters differ") {
+        val rootTmp = Files.createTempDirectory("hydrozoa-pparams-mismatch-")
+        val configDir = rootTmp.resolve("config")
+        val dataDir = rootTmp.resolve("data")
+        Files.createDirectories(configDir)
+        Files.createDirectories(dataDir)
+
+        val spec = defaultSpec.copy(outDir = configDir, nPeers = 1)
+        val headPath = configDir.resolve("head-config.json")
+        val privatePath = configDir.resolve("peer-0").resolve("private.json")
+        val mnc: MultiNodeConfig = MultiNodeConfig
+            .generate(testPeersSpec(spec))()
+            .pureApply(Gen.Parameters.default, org.scalacheck.rng.Seed(spec.generationSeed))
+        val peerPrivate = mnc.nodePrivateConfigs(HeadPeerNumber(0)).copy(httpPort = "0")
+        val printer = Printer.spaces2.copy(dropNullValues = true)
+        val (_, peerSigningKey) = TestPeers.deriveScalusKeypair(spec.seedPhrase.mnemonic, 0)
+        val runnablePrivateJson = peerPrivate.asJson.deepMerge(
+          Json.obj(
+            "ownPeerPrivate" -> Json.obj(
+              "ownHeadWallet" -> Json.obj(
+                "signingKey" -> Json.fromString(scodec.bits.ByteVector(peerSigningKey.bytes).toHex)
+              )
+            )
+          )
+        )
+
+        val testIO = for {
+            _ <- IO.blocking(Files.writeString(headPath, printer.print(mnc.headConfig.asJson)))
+            _ <- IO.blocking(Files.createDirectories(privatePath.getParent))
+            _ <- IO.blocking(Files.writeString(privatePath, printer.print(runnablePrivateJson)))
+
+            // No `reportedParams`: the mock falls back to scalus's `UtxoEnv.testMainnet` fixture,
+            // which matches no real network's `CardanoInfo`. That IS the mismatch under test.
+            mockBackend <- CardanoBackendMock.mockIO(
+              MockState(initialUtxos =
+                  mnc.headConfig.initializationTx.resolvedUtxos.utxos
+                      ++ Map.from(mnc.headConfig.scriptReferenceUtxos.toList.map(_.toTuple))
+              )
+            )
+
+            outcome <- Serve
+                .runNode(headPath, privatePath, dataDir, backendOverride = Some(mockBackend))
+                .attempt
+                .timeoutTo(
+                  60.seconds,
+                  IO.raiseError(new AssertionError("runNode neither refused nor returned in 60s"))
+                )
+            _ <- outcome match {
+                case Left(_: StartupRefusal) => IO.unit
+                case Left(other) =>
+                    IO.raiseError(
+                      new AssertionError(s"expected a StartupRefusal, got: $other")
+                    )
+                case Right(code) =>
+                    IO.raiseError(
+                      new AssertionError(
+                        s"expected a StartupRefusal, but the node started and exited $code"
+                      )
+                    )
+            }
         } yield ()
 
         testIO.unsafeRunSync()

@@ -209,7 +209,14 @@ class ReplayActorTest extends AnyFunSuite:
                 ActorSystem[IO]("replay-test").use(system =>
                     for {
                         persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        cardanoBackend <- CardanoBackendMock.mockIO(MockState(Map.empty))
+                        cardanoBackend <- CardanoBackendMock.mockIO(
+                          MockState(Map.empty),
+                          // `replay` now verifies the chain's protocol parameters against the
+                          // config's and REFUSES on a mismatch, so the mock must report the
+                          // config's. Its default is scalus's `UtxoEnv.testMainnet` fixture, which
+                          // matches no real network's `CardanoInfo`.
+                          reportedParams = Some(config.cardanoProtocolParams)
+                        )
                         bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
                         fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
                         scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
@@ -261,7 +268,14 @@ class ReplayActorTest extends AnyFunSuite:
                 ActorSystem[IO]("replay-coil-test").use(system =>
                     for {
                         persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        cardanoBackend <- CardanoBackendMock.mockIO(MockState(Map.empty))
+                        cardanoBackend <- CardanoBackendMock.mockIO(
+                          MockState(Map.empty),
+                          // `replay` now verifies the chain's protocol parameters against the
+                          // config's and REFUSES on a mismatch, so the mock must report the
+                          // config's. Its default is scalus's `UtxoEnv.testMainnet` fixture, which
+                          // matches no real network's `CardanoInfo`.
+                          reportedParams = Some(config.cardanoProtocolParams)
+                        )
                         bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
                         fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
                         scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
