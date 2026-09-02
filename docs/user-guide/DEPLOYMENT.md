@@ -124,13 +124,13 @@ under it. Then load the CLI alias and check you are on the version you expect:
 source ./hydrozoa.sh   # sets the `hydrozoa` alias + HYDROZOA_HOME (this folder, an absolute path)
 
 hydrozoa version       # verify the image you are running
-#   hydrozoa 0.1.12
-#   git:   v0.1.12
+#   hydrozoa 0.1.13
+#   git:   v0.1.13
 #   built: 2026-07-28 14:00:37.834-0600
 ```
 
-(The `git:` line is `git describe` provenance; a published image built from the `v0.1.12` tag reads a
-clean `v0.1.12`. A locally built image between releases shows the distance from the newest tag, e.g.
+(The `git:` line is `git describe` provenance; a published image built from the `v0.1.13` tag reads a
+clean `v0.1.13`. A locally built image between releases shows the distance from the newest tag, e.g.
 `v0.1.0-10-gaa9d7c69`.)
 
 Need a version that isn't in the registry? Build it from this repo — see §3.
@@ -425,8 +425,8 @@ finalization) appears in the same section as the head progresses.
 build (§3) is already tagged `…:latest`, so it is picked up without either:
 
 ```bash
-HYDROZOA_VERSION=0.1.12 just head-up                          # a specific published release
-HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.12 just head-up  # a specific/other image name
+HYDROZOA_VERSION=0.1.13 just head-up                          # a specific published release
+HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.13 just head-up  # a specific/other image name
 ```
 
 **Another head** — each head directory carries its own `docker-compose.yml`, so switch heads by
