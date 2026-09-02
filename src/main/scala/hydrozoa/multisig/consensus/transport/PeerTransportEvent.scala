@@ -49,6 +49,12 @@ object PeerTransportEvent:
     final case class DialerHandshakeStalled(remote: HeadPeerId, uri: Uri, after: FiniteDuration)
         extends PeerTransportEvent
 
+    /** An abandoned dial attempt completed its handshake after the loop had given up on it, and
+      * dropped the socket instead of using it. The pair to [[DialerHandshakeStalled]]: both for one
+      * attempt means the remote is merely slower than `handshakeBudget`, not black-holing.
+      */
+    final case class DialerHandshakeLate(remote: HeadPeerId, uri: Uri) extends PeerTransportEvent
+
     /** A frame received on an active dialer connection could not be decoded. */
     final case class ClientDecodeError(remote: HeadPeerId, cause: Throwable)
         extends PeerTransportEvent

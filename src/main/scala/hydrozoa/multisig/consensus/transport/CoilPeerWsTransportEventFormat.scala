@@ -35,6 +35,11 @@ object CoilPeerWsTransportEventFormat:
                   s"dialer: handshake to hub at $uri stalled past $after and was abandoned; " +
                       "the hub accepted the connection but never completed it — redialing"
                 )
+            case DialerHandshakeLate(uri) =>
+                warn(
+                  s"dialer: handshake to hub at $uri completed after it was abandoned; " +
+                      "dropping the socket"
+                )
             case DialerDisconnected(uri) =>
                 warn(s"dialer: disconnected from hub at $uri; redialing")
         }

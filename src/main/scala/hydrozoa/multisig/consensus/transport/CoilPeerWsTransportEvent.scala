@@ -46,6 +46,15 @@ object CoilPeerWsTransportEvent:
     final case class DialerHandshakeStalled(uri: Uri, after: FiniteDuration)
         extends CoilPeerWsTransportEvent
 
+    /** An abandoned dial attempt completed its handshake after the loop had given up on it, and
+      * dropped the socket instead of using it.
+      *
+      * The pair to [[DialerHandshakeStalled]]: seeing both for one attempt means the hub is merely
+      * slower than `handshakeBudget`, not black-holing, and the budget is the thing to raise.
+      * Seeing the stall alone means the handshake never landed at all.
+      */
+    final case class DialerHandshakeLate(uri: Uri) extends CoilPeerWsTransportEvent
+
     /** The connection to the hub ended without error — the peer closed cleanly, or the receive side
       * reached end of stream. A read-deadline expiry is an **error** and surfaces as
       * [[DialerFailed]], not here.

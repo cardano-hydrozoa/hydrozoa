@@ -37,6 +37,11 @@ object PeerTransportEventFormat:
                       s"$after and was abandoned; the remote accepted the connection but never " +
                       "completed it — redialing"
                 )
+            case DialerHandshakeLate(remote, uri) =>
+                warn(
+                  s"dialer: handshake to remote=${remote.peerNum: Int} at $uri completed after " +
+                      "it was abandoned; dropping the socket"
+                )
             case ClientDecodeError(remote, cause) =>
                 warn(
                   s"failed to decode frame from remote=${remote.peerNum: Int}: ${cause.getMessage}"
