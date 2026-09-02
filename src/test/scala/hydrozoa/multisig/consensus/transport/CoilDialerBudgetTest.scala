@@ -80,7 +80,7 @@ class CoilDialerBudgetTest extends AnyFunSuite {
         val (attempts, events) = dial(Resource.eval(pinging(10.seconds)), 10.minutes)
         assert(
           (attempts, stalls(events)) == (1, 0),
-          s"the link never dropped, so the dialer must neither redial nor report a stall; " +
+          "the link never dropped, so the dialer must neither redial nor report a stall; " +
               s"dialed $attempts times, traced $events"
         )
     }
@@ -90,7 +90,7 @@ class CoilDialerBudgetTest extends AnyFunSuite {
         val (attempts, events) = dial(Resource.eval(IO.never[WSConnection[IO]]), 65.seconds)
         assert(
           (attempts, stalls(events)) == (3, 2),
-          s"expected a redial per expired budget, each announced; " +
+          "expected a redial per expired budget, each announced; " +
               s"dialed $attempts times, traced $events"
         )
     }
@@ -110,7 +110,7 @@ class CoilDialerBudgetTest extends AnyFunSuite {
             events.count(_.isInstanceOf[DialerHandshakeLate]),
             events.count(_.isInstanceOf[DialerConnected])
           ) == (2, 1, 1, 0),
-          s"the budget expired once and the late handshake disowned itself; " +
+          "the budget expired once and the late handshake disowned itself; " +
               s"dialed $attempts times, traced $events"
         )
     }
