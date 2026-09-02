@@ -31,6 +31,18 @@ object PeerTransportEventFormat:
                 warn(s"dialer: disconnected from remote=${remote.peerNum: Int} at $uri; redialing")
             case DialerStopped(remote, uri) =>
                 info(s"dialer: stopped for remote=${remote.peerNum: Int} at $uri")
+            case DialerHandshakeStalled(remote, uri, after) =>
+                warn(
+                  s"dialer: handshake to remote=${remote.peerNum: Int} at $uri stalled past " +
+                      s"$after and was abandoned; the remote accepted the connection but never " +
+                      "completed it — redialing"
+                )
+            case DialerHandshakeStalled(remote, uri, after) =>
+                warn(
+                  s"dialer: handshake to remote=${remote.peerNum: Int} at $uri stalled past " +
+                      s"$after and was abandoned; the remote accepted the connection but never " +
+                      "completed it — redialing"
+                )
             case ClientDecodeError(remote, cause) =>
                 warn(
                   s"failed to decode frame from remote=${remote.peerNum: Int}: ${cause.getMessage}"
