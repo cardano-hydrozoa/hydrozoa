@@ -114,8 +114,9 @@ preimage.
 ```
 blockHash = blake2b_256(
      "gummiworm-block-v1"
+  || raw(previousBlockHash)         -- headParamsHash for block 0
   || u8(blockType)                  -- Initial | Minor | Major | Final
-  -- header, EXCEPT blockHash itself
+  -- header
   || u32(blockNum)
   || u32(versionMajor)              || u32(versionMinor)
   || u64(startTime)                 || u64(endTime)
@@ -136,14 +137,14 @@ blockHash = blake2b_256(
 
 Notes on the layout:
 
-- **`blockHash` is excluded from its own preimage.** It is a `BlockHeader` field (below), so
-  every other header field goes in and this one does not. Missing that makes the definition
+- **`blockHash` is excluded from its own preimage.** It is a `BlockBrief` field (below), so every
+  other field of the brief goes in and this one does not. Missing that makes the definition
   circular. It is the same exclusion `headParamsHash` makes for the initialization transaction,
   which carries the digest it is an input to.
-- **The block type leads.** `BlockBody.Initial` has no fields, `Minor` and `Final` have no
-  `depositsAbsorbed`, and `Major` has all three lists. Tagging the type first keeps the four
-  shapes from colliding, and keeps the absent lists out of the preimage rather than encoding
-  them as empty.
+- **The block type leads the block's own fields.** `BlockBody.Initial` has no fields, `Minor` and
+  `Final` have no `depositsAbsorbed`, and `Major` has all three lists. Tagging the type first
+  keeps the four shapes from colliding, and keeps the absent lists out of the preimage rather
+  than encoding them as empty.
 - **Order is the list's own order**, not sorted. The ordered request list is what the leader
   chose and what every follower must reproduce; sorting would hide a reordering, which is a real
   disagreement about block content.
@@ -158,22 +159,75 @@ new — but hashing it keeps all four block types uniform, keeps `blockHash` tot
 `BlockBrief`, and removes a special case from every consumer. Its empty body encodes as three
 zero-length lists under the `Initial` type tag.
 
+## Chaining to the previous block
+
+`previousBlockHash` is in the preimage, so each block's hash commits to its whole history, and
+block 0's predecessor is `headParamsHash` — the chain roots in the agreed configuration rather
+than in a zero constant.
+
+**Be clear about what it does not buy here.** Hydrozoa is not a fork-choice system. Every block
+carries an all-peer soft-confirmation, so there is no competing history to arbitrate and no work
+saved at verification time: checking a chained hash still means recomputing every block from its
+content, which a peer rebuilding ledger state does anyway. And divergence is already caught at
+the *first* differing block — `panicOnMismatchWithExpectedBrief` fires on block N+1 the moment
+two peers' states differ at block N, so chaining detects nothing earlier on the live path.
+
+**What it does buy is integrity where blocks are trusted rather than rebuilt** — and that case
+exists, in two places that matter:
+
+- **Replay below the fast anchor.** `ReplayActor` routes a brief below `fastBlockMark` to
+  `FastConsensusActor` only: *"already accepted, so JointLedger never re-handles it."* Those
+  blocks are read back from the store and believed. Nothing recomputes them.
+- **A transplanted store.** Seeding a peer from another peer's database means adopting its whole
+  block history on the strength of what is written there.
+
+Without chaining, each block's signature attests only to that block. Splice a different block 5
+into a store and the signatures on blocks 6 through 50 remain valid, because none of them
+mentions block 5 — and if the splice sits below `fastBlockMark`, nothing ever re-derives it. With
+chaining, block 5's substitution changes every subsequent hash, so the tip no longer matches the
+signatures over it, and one comparison at the tip detects it.
+
+That is the whole argument: the signature stops being evidence about one block and becomes
+evidence about a history. It costs 32 bytes in the preimage, one field on the brief, and one
+more field in `JointLedger.State`, which already carries `previousBlockHeader` for exactly this
+kind of chaining and would carry `previousBlockHash` beside it.
+
 ## Where `blockHash` lives
 
-**A `BlockHeader` field, re-derived and compared wherever a block is rebuilt.**
+**A `BlockBrief` field** — not a `BlockHeader` one, which cannot work.
 
-Stored, so it travels in the brief and lands in the `Block` journal — which is what lets a
-replayed brief be checked without re-reading the request payloads behind it. Never trusted: a
-stored hash is a claim, and every peer that rebuilds the block recomputes the digest from header
-and body and compares. That holds in both directions:
+`BlockHeader` is used standalone in three places, none of which has a body:
+
+| use | why no body |
+|---|---|
+| `nextHeaderMinor` / `nextHeaderMajor` / `nextHeaderIntermediate` / `nextHeaderFinal` | they derive block N+1's header from N's header plus timing, **before N+1's body exists** |
+| `JointLedger.State.previousBlockHeader` | block chaining needs only the previous scalars |
+| `StandaloneEvacuationCommitment.Onchain(headId, h, kzg)` | commits to the evacuation map, not the body |
+
+The first is decisive. Those methods return `F[BlockHeader.Minor]` and friends from timing alone;
+a header field covering the body could not be filled at the point a header is constructed. The
+other two would carry a body commitment they have no use for.
+
+`BlockBrief` is where header and body meet, and `BlockBrief.Section` already extends both
+`BlockHeader.Section` and `BlockBody.Section`, so the preimage needs no new plumbing. It is also
+what actually travels and persists — the block lane carries briefs, and `JournalKey.Block` stores
+one — so the storage and wire story is unchanged by the choice.
+
+`signingBytes` moves from `BlockHeader.Section` to `BlockBrief.Section` with it. Both call sites
+already hold a brief: `JointLedger` (`:719`) and `FastConsensusActor` (`:285`) each write
+`brief.header.signingBytes` today and become `brief.signingBytes`.
+
+**Stored, and never trusted.** The brief carries the hash on the wire and into the `Block`
+journal, but a stored hash is a claim: every peer that rebuilds the block recomputes the digest
+from header and body and compares. That holds in both directions:
 
 - **On receipt.** A follower rebuilding block N from its own mempool computes `blockHash` and
   compares it against the leader's brief. That is the divergence
   `panicOnMismatchWithExpectedBrief` catches today, decided on one 32-byte value.
 - **On replay.** `ReplayActor` feeds persisted briefs back into `BlockWeaver` and
-  `FastConsensusActor`; `JointLedger` re-derives the block and checks the stored hash against
-  the recomputed one. A store whose briefs disagree with their own content fails there rather
-  than at the next signature.
+  `FastConsensusActor`; where `JointLedger` re-derives the block it checks the stored hash
+  against the recomputed one. Below `fastBlockMark` nothing re-derives, which is what the chained
+  `previousBlockHash` above is there to cover.
 
 **Coil peers check it.** A coil peer authors no soft-ack, so it never signs a `blockHash` — but
 it rebuilds block bodies exactly as a head follower does, so it recomputes and compares on the
@@ -241,6 +295,11 @@ bytes, so acks from a peer on the old preimage fail to verify on the new one and
 and the `Block` journal value and wire brief, which gain the `blockHash` field. It applies to
 heads initialized afterwards, and belongs in the release notes of the release that ships it.
 
+Chaining makes that boundary sharper rather than softer. A head's block hashes root in its
+`headParamsHash`, so a store written before the change carries no chain at all and one written
+after cannot be continued by a build that computes the preimage differently. There is no partial
+adoption: the first block a peer hashes fixes the chain every later block extends.
+
 ## Out of scope
 
 - **The HTTP surface.** `requestHash` reaches the submitter through the existing synchronous
@@ -248,14 +307,14 @@ heads initialized afterwards, and belongs in the release notes of the release th
   that — whether `GET /head/requests/{id}` returns the hash, whether the hash becomes a lookup
   key in its own right, and the route and reverse index that would need — is a separate PR
   against the API.
-- **Stack hashes.** The slow side needs the same commitment, following the same construction.
-  Separate work item.
+- **Stack hashes.** The slow side needs the same commitment, following the same construction —
+  chaining included, where a stack's predecessor is the stack it follows. Separate work item.
 - **The two stale rule-based signposts** named above. Both live in `cardano-onchain` and neither
   blocks this work.
 
 ## Open questions
 
-1. **Memoize `blockHash` on the brief?** As a stored `BlockHeader` field the value is present
+1. **Memoize `blockHash` on the brief?** As a stored `BlockBrief` field the value is present
    without computation, but every rebuild recomputes it to compare. Whether that recomputed
    value is worth caching — a `lazy val` on `BlockBrief.Section`, once per brief rather than
    once per comparison — is a profiling question, not a design one.
