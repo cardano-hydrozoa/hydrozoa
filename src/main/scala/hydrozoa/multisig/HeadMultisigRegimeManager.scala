@@ -17,7 +17,6 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2Screener}
-import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{Markers, Persistence}
 import hydrozoa.rulebased.RuleBasedRegimeManager

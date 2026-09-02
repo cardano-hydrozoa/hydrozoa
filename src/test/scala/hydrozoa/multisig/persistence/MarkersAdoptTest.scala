@@ -23,7 +23,8 @@ class MarkersAdoptTest extends AnyFunSuite {
         // The regression. The boot gate lets this through, so adoption must too — a tag is a
         // partition of the store chosen by the operator, and any stack the store holds is a
         // legitimate choice.
-        val adopted = Markers.adopt(store(hardConfirmed = 100, hardAckedStack = None), Some(StackNumber(42)))
+        val adopted =
+            Markers.adopt(store(hardConfirmed = 100, hardAckedStack = None), Some(StackNumber(42)))
         assert(
           adopted.hardAckedStack.contains(StackNumber(42)),
           s"a below-tip tag must raise the floor; got ${adopted.hardAckedStack}"
@@ -31,7 +32,8 @@ class MarkersAdoptTest extends AnyFunSuite {
     }
 
     test("a tag EQUAL to the store's tip is adopted") {
-        val adopted = Markers.adopt(store(hardConfirmed = 42, hardAckedStack = None), Some(StackNumber(42)))
+        val adopted =
+            Markers.adopt(store(hardConfirmed = 42, hardAckedStack = None), Some(StackNumber(42)))
         assert(adopted.hardAckedStack.contains(StackNumber(42)))
     }
 
@@ -53,7 +55,9 @@ class MarkersAdoptTest extends AnyFunSuite {
         // A peer mid-flight has acked one stack beyond its confirmation; clamping that down to the
         // tag would discard the in-flight handoff ReplayActor rebuilds from it.
         val ahead = store(hardConfirmed = 100, hardAckedStack = Some(101))
-        assert(Markers.adopt(ahead, Some(StackNumber(42))).hardAckedStack.contains(StackNumber(101)))
+        assert(
+          Markers.adopt(ahead, Some(StackNumber(42))).hardAckedStack.contains(StackNumber(101))
+        )
     }
 
     test("adoption is idempotent — a tag left in the config after the fact changes nothing") {

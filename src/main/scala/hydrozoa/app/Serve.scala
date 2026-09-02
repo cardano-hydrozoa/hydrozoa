@@ -506,11 +506,11 @@ object Serve {
     /** Compare the chain's live protocol parameters against the ones this head's config asserts,
       * and REFUSE to start on a mismatch.
       *
-      * ⛔ Nothing verified this at start-up before, so a head built
-      * every L1 transaction — settlements, fallbacks, rollouts, refunds — against parameters it
-      * merely assumed, and would keep doing so across a parameter update it never noticed. Those
-      * parameters decide fees, `maxTxSize` and execution-unit budgets, so a drift shows up as
-      * transactions the chain rejects, at the worst possible moment.
+      * ⛔ Nothing verified this at start-up before, so a head built every L1 transaction —
+      * settlements, fallbacks, rollouts, refunds — against parameters it merely assumed, and would
+      * keep doing so across a parameter update it never noticed. Those parameters decide fees,
+      * `maxTxSize` and execution-unit budgets, so a drift shows up as transactions the chain
+      * rejects, at the worst possible moment.
       *
       * ⚠️ Not to be confused with `CardanoBackendBlockfrost.getStartupParams`, which is alive and
       * called from `integration/…/stage1/Suite.scala` — it returns the **compiled-in** constant

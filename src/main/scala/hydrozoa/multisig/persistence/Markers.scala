@@ -51,12 +51,12 @@ object Markers:
     /** Apply a `transplantStackNumber` to a freshly derived marker bundle, raising this peer's
       * trusted-history floor to the stack the transplant was tagged with.
       *
-      * ⛔ The comparison is **`hardConfirmed >= tag`**, deliberately the same one
-      * `Serve`'s boot gate uses. It used to be exact equality here while the gate accepted `>=`, so
-      * a tag naming any stack BELOW the store's tip passed the gate and was then **silently
-      * dropped** — the operator got no adoption and no error. A tag is a partition of the store
-      * chosen by the operator, and any stack the store actually holds is a legitimate choice, so
-      * below-tip must adopt. (George's ruling, 2026-09-02.)
+      * ⛔ The comparison is **`hardConfirmed >= tag`**, deliberately the same one `Serve`'s boot
+      * gate uses. It used to be exact equality here while the gate accepted `>=`, so a tag naming
+      * any stack BELOW the store's tip passed the gate and was then **silently dropped** — the
+      * operator got no adoption and no error. A tag is a partition of the store chosen by the
+      * operator, and any stack the store actually holds is a legitimate choice, so below-tip must
+      * adopt. (George's ruling, 2026-09-02.)
       *
       * It RAISES the floor and never lowers it: a peer mid-flight has acked one stack beyond its
       * confirmation, and clamping that down to the tag would discard the in-flight handoff

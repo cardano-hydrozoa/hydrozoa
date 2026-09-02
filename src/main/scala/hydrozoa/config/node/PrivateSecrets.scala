@@ -1,7 +1,7 @@
 package hydrozoa.config.node
 
 import cats.effect.IO
-import hydrozoa.app.StartupRefusal
+import hydrozoa.lib.StartupRefusal
 import io.circe.{Json, JsonObject}
 import java.nio.file.{Files, Path}
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
