@@ -135,7 +135,7 @@ blockHash = blake2b_256(
   || u64(forcedMajorBlockWakeupTime)
   || bool(mDepositDecisionWakeupTime.isDefined)
   || u64(mDepositDecisionWakeupTime)          -- present only when the flag is true
-  -- state after the body is applied (brief fields, like `blockHash` itself)
+  -- state after the body is applied (header fields, filled by the finalizer)
   || raw(evacuationMapHash)                   -- 32 bytes
   || raw(l2StateHash)                         -- 32 bytes
   -- body
@@ -178,7 +178,7 @@ zero-length lists under the `Initial` type tag.
 ## The two state digests
 
 `blockHash` as described so far commits to a block's **inputs**: which requests, in what order,
-with which validity flags. Two more `BlockBrief` fields make it commit to the **output** as
+with which validity flags. Two more header fields make it commit to the **output** as
 well — the state those inputs produce.
 
 | field | over | why it alone is not enough |
@@ -196,15 +196,29 @@ by every peer on every block, so they take the same `blake2b_256` construction a
 digest here — `EvacuationMap.digest` already produces exactly this value, defined over bytes the
 head and a remote L2 ledger both already hold, and pinned to a shared golden with Sugar Rush.
 
-**They sit on the brief, for the reason `blockHash` does.** Both describe state *after* the
-block's requests are applied, so both are known only at block cut. `BlockHeader` cannot hold
-them: `nextHeaderMinor` and friends derive block N+1's header from N's header plus timing,
-before N+1 has a body to apply — a header carrying a post-application digest could not be
-filled at the point a header is constructed. `BlockBrief` is where header, body and the state
-they produce meet, which is the same argument that puts `blockHash` there.
+**They are header fields, and the header is built in two stages.** A block header describes the
+block; the state its body produces is part of that description, and every layered chain design
+puts the state commitment there for the same reason.
 
-They are ordered between the header fields and the body in the preimage, which is a layout
-choice rather than a claim about where they live.
+Today's header happens to be buildable in one step — `nextHeaderMinor` and friends derive block
+N+1's header from N's header plus timing, before N+1 has a body. That is a property of the
+current fields rather than a constraint on the type. Splitting the construction keeps it:
+
+```
+nextHeaderMinor(prev, timing)  ->  the fields knowable before the body exists
+                                   (blockNum, versions, the four times)
+        + apply the body, read the ledger
+finalize(draft, evacuationMapHash, l2StateHash)  ->  BlockHeader
+```
+
+The draft is what timing alone can produce and what the weaver carries while a block is open;
+the finalized header is what a brief holds, what travels, and what a signature covers. Only the
+second exists downstream, so nothing outside the weaver handles a header with an absent digest —
+the same explicit-stage split the slow side already uses for `Stack.Unsigned`, in preference to
+an `Option` field that every reader would have to defend against.
+
+`blockHash` stays a `BlockBrief` field regardless, because it covers the body and no header
+can.
 
 **Every peer recomputes them.** A follower rebuilding block N applies the same requests to its
 own ledger and derives both digests, so a divergence in *state* is caught by the same comparison
@@ -291,6 +305,10 @@ Constant work, whatever `N` is. Step 4 is what makes steps 1–3 mean anything: 
 fields of a header the peers signed, so matching them is matching what the head agreed the state
 was. A donor that fabricates either half has to produce a signature set over the fabrication.
 
+Step 4 needs block N's **brief**, since `blockHash` covers the body and the seeding peer has to
+recompute it to check a signature against it. Block N's body, and no other. Open question 3 asks
+whether a `bodyHash` in the header should reduce that to the header alone.
+
 **Every block, not only majors.** The KZG commitment in the treasury datum pins the evacuation
 map at major-block settlement, which is a real anchor and a stronger one — it is on L1 rather
 than under peer keys. It is also as sparse as the head's major cadence, which some deployments
@@ -304,9 +322,11 @@ trust. Settling that is the work item this design unblocks rather than one it co
 
 ## Where `blockHash` lives
 
-**A `BlockBrief` field** — not a `BlockHeader` one, which cannot work. The same holds for
-`evacuationMapHash` and `l2StateHash`, and for the same reason: all three are known only once a
-body has been applied.
+**A `BlockBrief` field** — not a `BlockHeader` one, which cannot work.
+
+This is where `blockHash` parts company with the two state digests. All three are known only
+after a body is applied, and the header's two-stage construction handles that much. What a
+header cannot do is *cover* a body it does not hold.
 
 `BlockHeader` is used standalone in three places, none of which has a body:
 
@@ -316,9 +336,9 @@ body has been applied.
 | `JointLedger.State.previousBlockHeader` | block chaining needs only the previous scalars |
 | `StandaloneEvacuationCommitment.Onchain(headId, h, kzg)` | commits to the evacuation map, not the body |
 
-The first is decisive. Those methods return `F[BlockHeader.Minor]` and friends from timing alone;
-a header field covering the body could not be filled at the point a header is constructed. The
-other two would carry a body commitment they have no use for.
+The first is decisive. Those methods return `F[BlockHeader.Minor]` and friends from timing alone,
+and the finalizer that fills the state digests has a ledger to read but still no body to hash.
+The other two would carry a body commitment they have no use for.
 
 `BlockBrief` is where header and body meet, and `BlockBrief.Section` already extends both
 `BlockHeader.Section` and `BlockBody.Section`, so the preimage needs no new plumbing. It is also
@@ -453,11 +473,21 @@ cannot drive a ledger on the old one.
    sees the other's representation. Whether that is a root over the L2 UTxO set, or a digest
    defined the way `EvacuationMap.digest` is — over bytes both sides already exchange — decides
    how much of `l2-ledger-command-coordination.md` moves.
-3. **Memoize `blockHash` on the brief?** As a stored `BlockBrief` field the value is present
+3. **Should the header carry a `bodyHash`, so a seeding peer needs headers only?** With the
+   state digests in the header, the header describes the whole block except its body. Add a
+   digest over the ordered body and it describes all of it — `blockHash` becomes a hash of the
+   header alone, the soft-ack signature covers the header, and a peer seeding from a snapshot
+   verifies headers plus signatures without fetching a single request list. A follower rebuilding
+   a block checks `bodyHash` against the body it derived, which is the check `blockHash` performs
+   today, one level down. That is the layered shape the rest of this design already follows, and
+   it is the arrangement every header-based chain converges on for exactly this reason. It costs
+   a second digest per block and a preimage rewrite in this document; it is a larger change than
+   the two state digests and wants deciding before either is implemented.
+4. **Memoize `blockHash` on the brief?** As a stored `BlockBrief` field the value is present
    without computation, but every rebuild recomputes it to compare. Whether that recomputed
    value is worth caching — a `lazy val` on `BlockBrief.Section`, once per brief rather than
    once per comparison — is a profiling question, not a design one.
-4. **Does `transplantStackNumber` come out in the same work item?** It declares a trust boundary
+5. **Does `transplantStackNumber` come out in the same work item?** It declares a trust boundary
    — everything at or below the tag is taken from the donor and never verified — which is the
    hole the two state digests close. The seeding path this design enables replaces it rather
    than sitting beside it, and shipping both leaves two ways to seed a peer, one of them
