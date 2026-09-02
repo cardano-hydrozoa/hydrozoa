@@ -48,6 +48,35 @@ object Markers:
       */
     val cold: Markers = Markers(None, None, None, None, RequestNumber(0), None, None)
 
+    /** Apply a `transplantStackNumber` to a freshly derived marker bundle, raising this peer's
+      * trusted-history floor to the stack the transplant was tagged with.
+      *
+      * ⛔ The comparison is **`hardConfirmed >= tag`**, deliberately the same one
+      * `Serve`'s boot gate uses. It used to be exact equality here while the gate accepted `>=`, so
+      * a tag naming any stack BELOW the store's tip passed the gate and was then **silently
+      * dropped** — the operator got no adoption and no error. A tag is a partition of the store
+      * chosen by the operator, and any stack the store actually holds is a legitimate choice, so
+      * below-tip must adopt. (George's ruling, 2026-09-02.)
+      *
+      * It RAISES the floor and never lowers it: a peer mid-flight has acked one stack beyond its
+      * confirmation, and clamping that down to the tag would discard the in-flight handoff
+      * `ReplayActor` rebuilds from it. So once the peer has moved past the tag the `max` is a
+      * no-op, which is what keeps a tag left in the config after adoption harmless.
+      *
+      * Applied to the ONE bundle, so the gate, the replay cursors, the in-flight handoff and the
+      * stack composer all move together — the alternative is the divergence that made this
+      * necessary. Lives here rather than in each regime manager because it was duplicated verbatim
+      * in both, which is how the comparison came to disagree with the gate in the first place.
+      */
+    def adopt(derived: Markers, tag: Option[StackNumber]): Markers =
+        tag
+            .filter(t => derived.hardConfirmed.exists(Ordering[StackNumber].gteq(_, t)))
+            .fold(derived)(t =>
+                derived.copy(hardAckedStack = Some(derived.hardAckedStack.fold(t) { own =>
+                    if Ordering[StackNumber].gteq(own, t) then own else t
+                }))
+            )
+
     /** Read all five markers from `backend`, scoping the `hardAcked` and `nextRequestNumber`
       * derivations to `own`. With the per-author CF split each satellite CF holds exactly one
       * author's journal, so the own `hardAcked` mark is just `lastKey` of the own-author `HardAck`

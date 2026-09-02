@@ -75,22 +75,12 @@ trait CoilMultisigRegimeManager(
             // each child actor. Deriving per-actor let two paths interpret the same journal
             // independently, which is how a seeded store could satisfy one and not the other.
             derived <- Markers.derive(persistence, config.ownPeerId)
-            // Adopting a store seeded from another peer. The tag names the stack it was seeded at
-            // and the floor applies only while that is still this store's `hardConfirmed`, so it
-            // matches on the adopting boot and is inert ever after (`hardConfirmed` is monotonic).
-            // Applied to the ONE bundle, so the gate, the replay cursors, the in-flight handoff and
-            // the stack composer all move together — the alternative is the divergence that made
-            // this necessary.
-            // It RAISES the floor and never lowers it: a peer mid-flight has acked one stack beyond
-            // its confirmation, and clamping that down to the tag would discard the in-flight
-            // handoff `ReplayActor` rebuilds from it.
-            markers = config.transplantStackNumber
-                .filter(tag => derived.hardConfirmed.contains(tag))
-                .fold(derived)(tag =>
-                    derived.copy(hardAckedStack = Some(derived.hardAckedStack.fold(tag) { own =>
-                        if Ordering[StackNumber].gteq(own, tag) then own else tag
-                    }))
-                )
+            // Adopting a store seeded from another peer: raise the trusted-history floor to the
+            // stack the transplant was tagged with. Applied to the ONE bundle, so the gate, the
+            // replay cursors, the in-flight handoff and the stack composer all move together — the
+            // alternative is the divergence that made this necessary. See `Markers.adopt` for the
+            // comparison and why it must be the same one `Serve`'s boot gate uses.
+            markers = Markers.adopt(derived, config.transplantStackNumber)
             core <- spawnCoreActors(
               config,
               cardanoBackend,

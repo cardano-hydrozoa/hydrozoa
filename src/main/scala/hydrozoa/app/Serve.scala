@@ -506,11 +506,18 @@ object Serve {
     /** Compare the chain's live protocol parameters against the ones this head's config asserts,
       * and REFUSE to start on a mismatch.
       *
-      * ⛔ Nothing did this before: `getStartupParams` existed with zero callers, so a head built
+      * ⛔ Nothing verified this at start-up before, so a head built
       * every L1 transaction — settlements, fallbacks, rollouts, refunds — against parameters it
       * merely assumed, and would keep doing so across a parameter update it never noticed. Those
       * parameters decide fees, `maxTxSize` and execution-unit budgets, so a drift shows up as
       * transactions the chain rejects, at the worst possible moment.
+      *
+      * ⚠️ Not to be confused with `CardanoBackendBlockfrost.getStartupParams`, which is alive and
+      * called from `integration/…/stage1/Suite.scala` — it returns the **compiled-in** constant
+      * (`provider.cardanoInfo.protocolParams`), where this gate reads the **chain** via
+      * `fetchLatestParams`. Different questions; do not delete it. (An earlier note here claimed it
+      * had zero callers. It was written from a search of `src/` only, and `integration` is a
+      * separate sbt project.)
       *
       * It is a [[StartupRefusal]] rather than a generic crash because it is deterministic: the
       * config asserts what it asserts, and a restart re-derives the same verdict.
