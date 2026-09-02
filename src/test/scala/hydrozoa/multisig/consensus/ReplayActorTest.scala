@@ -13,7 +13,6 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Slf4jTracer
-import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -201,7 +200,6 @@ class ReplayActorTest extends AnyFunSuite:
     ): Captured =
         val own = ownNum
         val peers = config.headPeerIds.map(_.peerNum).toList
-        val treasuryAddress = config.initializationTx.treasuryProduced.address
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
         InMemoryBackendStore
             .open(persistenceTracer)
@@ -209,14 +207,6 @@ class ReplayActorTest extends AnyFunSuite:
                 ActorSystem[IO]("replay-test").use(system =>
                     for {
                         persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        cardanoBackend <- CardanoBackendMock.mockIO(
-                          MockState(Map.empty),
-                          // `replay` now verifies the chain's protocol parameters against the
-                          // config's and REFUSES on a mismatch, so the mock must report the
-                          // config's. Its default is scalus's `UtxoEnv.testMainnet` fixture, which
-                          // matches no real network's `CardanoInfo`.
-                          reportedParams = Some(config.cardanoProtocolParams)
-                        )
                         bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
                         fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
                         scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
@@ -232,13 +222,12 @@ class ReplayActorTest extends AnyFunSuite:
                         outcome <- ReplayActor
                             .replay(
                               persistence,
-                              cardanoBackend,
+                              PollResults.empty,
                               ReplayActor.Targets(bw, fca, sca, sc, Some(seq)),
                               PeerId.Head(own),
                               peers,
                               hubs,
                               coils,
-                              treasuryAddress,
                               leadsFastBlock = ownLeadsFastBlock,
                               markers = markers
                             )
@@ -260,7 +249,6 @@ class ReplayActorTest extends AnyFunSuite:
     private def runReplayCoil(seed: Persistence[IO] => IO[Unit]): Captured =
         val peers = config.headPeerIds.map(_.peerNum).toList
         val hubs = List(HeadPeerNumber(1))
-        val treasuryAddress = config.initializationTx.treasuryProduced.address
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
         InMemoryBackendStore
             .open(persistenceTracer)
@@ -268,14 +256,6 @@ class ReplayActorTest extends AnyFunSuite:
                 ActorSystem[IO]("replay-coil-test").use(system =>
                     for {
                         persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        cardanoBackend <- CardanoBackendMock.mockIO(
-                          MockState(Map.empty),
-                          // `replay` now verifies the chain's protocol parameters against the
-                          // config's and REFUSES on a mismatch, so the mock must report the
-                          // config's. Its default is scalus's `UtxoEnv.testMainnet` fixture, which
-                          // matches no real network's `CardanoInfo`.
-                          reportedParams = Some(config.cardanoProtocolParams)
-                        )
                         bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
                         fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
                         scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
@@ -289,13 +269,12 @@ class ReplayActorTest extends AnyFunSuite:
                         outcome <- ReplayActor
                             .replay(
                               persistence,
-                              cardanoBackend,
+                              PollResults.empty,
                               ReplayActor.Targets(bw, fca, sca, sc),
                               PeerId.Coil(CoilPeerNumber(0)),
                               peers,
                               hubs,
                               Nil,
-                              treasuryAddress,
                               // A coil peer never leads a fast block.
                               leadsFastBlock = _ => false,
                               markers = markers

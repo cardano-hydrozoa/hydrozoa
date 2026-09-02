@@ -6,6 +6,7 @@ import hydrozoa.config.GenerateSampleConfig.{defaultSpec, testPeersSpec}
 import hydrozoa.config.head.HeadConfig.headConfigEncoder
 import hydrozoa.config.node.NodePrivateConfig.nodePrivateConfigEncoder
 import hydrozoa.config.node.{MultiNodeConfig, PrivateSecrets}
+import hydrozoa.lib.StartupRefusal
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -297,7 +298,17 @@ class MainSmokeTest extends AnyFunSuite:
         val mnc: MultiNodeConfig = MultiNodeConfig
             .generate(testPeersSpec(spec))()
             .pureApply(Gen.Parameters.default, org.scalacheck.rng.Seed(spec.generationSeed))
-        val peerPrivate = mnc.nodePrivateConfigs(HeadPeerNumber(0)).copy(httpPort = "0")
+        val generatedPrivate = mnc.nodePrivateConfigs(HeadPeerNumber(0))
+        // ⛔ Clear the transplant tag, for the same reason the positive test does — and here it is
+        // load-bearing rather than tidy. The generator draws it from `Gen.option`, this store is
+        // empty, and the transplant gate runs in `Serve` BEFORE the parameter comparison. Left in,
+        // this test would refuse for the wrong reason and pass while never exercising the gate it
+        // exists to cover.
+        val peerPrivate = generatedPrivate.copy(
+          httpPort = "0",
+          nodeOperationMultisigConfig = generatedPrivate.nodeOperationMultisigConfig
+              .copy(transplantStackNumber = None)
+        )
         val printer = Printer.spaces2.copy(dropNullValues = true)
         val (_, peerSigningKey) = TestPeers.deriveScalusKeypair(spec.seedPhrase.mnemonic, 0)
         val runnablePrivateJson = peerPrivate.asJson.deepMerge(
@@ -331,7 +342,13 @@ class MainSmokeTest extends AnyFunSuite:
                   IO.raiseError(new AssertionError("runNode neither refused nor returned in 60s"))
                 )
             _ <- outcome match {
-                case Left(_: StartupRefusal) => IO.unit
+                // On the REASON, not the type: a node has several ways to refuse, and the whole
+                // point of this control is that it fails for this one.
+                case Left(r: StartupRefusal) if r.reason.contains("protocol parameters") => IO.unit
+                case Left(r: StartupRefusal) =>
+                    IO.raiseError(
+                      new AssertionError(s"refused, but for another reason: ${r.reason}")
+                    )
                 case Left(other) =>
                     IO.raiseError(
                       new AssertionError(s"expected a StartupRefusal, got: $other")

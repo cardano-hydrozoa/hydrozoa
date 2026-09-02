@@ -1,6 +1,7 @@
-package hydrozoa.app
+package hydrozoa.lib
 
-import cats.effect.{ExitCode, IO}
+// `_root_.` because `hydrozoa.lib.cats` shadows the top-level `cats` package from here.
+import _root_.cats.effect.{ExitCode, IO}
 
 /** A deliberate, deterministic refusal to start: something about THIS node is wrong, and starting
   * it again will reach the same conclusion.

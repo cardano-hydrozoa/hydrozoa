@@ -13,6 +13,7 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterControl}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2Screener}
@@ -24,6 +25,10 @@ import hydrozoa.rulebased.RuleBasedRegimeManager
 trait HeadMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
+    /** The first L1 sample, read by `Serve` before the actor system exists. See
+      * [[ReplayActor.replay]] for why the read cannot happen inside this actor.
+      */
+    firstPollResults: PollResults,
     l2Ledger: L2Ledger[IO],
     l2Screener: L2Screener[IO],
     persistence: Persistence[IO],
@@ -253,7 +258,7 @@ trait HeadMultisigRegimeManager(
             // L1 sample.
             _ <- ReplayActor.replay(
               persistence,
-              cardanoBackend,
+              firstPollResults,
               ReplayActor.Targets(
                 blockWeaver = core.blockWeaver,
                 fastConsensusActor = core.consensusActor,
@@ -265,7 +270,6 @@ trait HeadMultisigRegimeManager(
               peers = config.headPeerIds.map(_.peerNum).toList,
               hubs = config.hubHeadPeerNumbers,
               coils = hubbedCoilPeers,
-              treasuryAddress = config.initializationTx.treasuryProduced.address,
               leadsFastBlock = config.canLeadFast,
               markers = markers
             )(using config)
@@ -386,6 +390,7 @@ object HeadMultisigRegimeManager {
     def resource(
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
+        firstPollResults: PollResults,
         virtualLedger: L2Ledger[IO],
         l2Screener: L2Screener[IO],
         persistence: Persistence[IO],
@@ -403,6 +408,7 @@ object HeadMultisigRegimeManager {
                 new HeadMultisigRegimeManager(
                   config,
                   cardanoBackend,
+                  firstPollResults,
                   virtualLedger,
                   l2Screener,
                   persistence,

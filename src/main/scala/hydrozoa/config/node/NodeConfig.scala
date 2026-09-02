@@ -3,7 +3,7 @@ package hydrozoa.config.node
 import cats.data.EitherT
 import cats.effect.*
 import cats.syntax.contravariant.*
-import hydrozoa.app.StartupRefusal
+import hydrozoa.lib.StartupRefusal
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.CoilPeers

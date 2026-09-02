@@ -2,10 +2,7 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.IO
 import cats.syntax.all.*
-import hydrozoa.app.StartupRefusal
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
-import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -14,8 +11,6 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, JournalScan, RawJournalEntry, ReplayCursors}
 import hydrozoa.multisig.persistence.{JournalKey, Markers, Persistence, StoreKey}
-import scala.concurrent.duration.*
-import scalus.cardano.address.ShelleyAddress
 
 /** The boot-time replay seam (R3 §8 step 3). Not a long-lived cats-actors `Actor`: it is the
   * one-shot routine `HeadMultisigRegimeManager` runs **inline** after spawning the consensus actors
@@ -27,9 +22,10 @@ import scalus.cardano.address.ShelleyAddress
   *
   * What it does, in order:
   *
-  *   1. Sample L1 directly (`CardanoBackend.utxosAt(treasuryAddress)`) and seed BlockWeaver's first
-  *      [[PollResults]], so deposit decisions proceed immediately rather than waiting on
-  *      CardanoLiaison's poll cadence (§5.5).
+  *   1. Seed BlockWeaver's first [[PollResults]], so deposit decisions proceed immediately rather
+  *      than waiting on CardanoLiaison's poll cadence (§5.5). The value is read from L1 by `Serve`
+  *      before the actor system exists and handed in — see [[replay]] for why the read cannot
+  *      happen here.
   *   2. Reconstruct the in-flight acked-but-unconfirmed stack — at most one (single-flight; the §9
   *      "crash mid-stack" case) — from its persisted `Stack.Unsigned` + this peer's hard-acks, and
   *      hand it to `SlowConsensusActor` so it re-forms its cell and re-aggregates. StackComposer
@@ -48,11 +44,6 @@ import scalus.cardano.address.ShelleyAddress
   */
 object ReplayActor:
 
-    private val log: ContraTracer[IO, Slf4jMsg] =
-        Slf4jTracer.sink.contramap(
-          Slf4jMsgFormat.humanFormat("hydrozoa.multisig.consensus.ReplayActor")
-        )
-
     /** The consensus actors the replay tail is routed into. `coilAckSequencer` is present only on a
       * hub — the boundary the received-but-unstamped coil-ack gap is re-fed to (see [[replay]]).
       */
@@ -64,25 +55,30 @@ object ReplayActor:
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None
     )
 
-    /** Run the boot replay (see the object docstring), for either peer type. Pure over the store +
-      * a one-shot L1 read; all effects are mailbox sends to `targets`. The fast side and the slow
-      * side are now common to both peer types: the slow-side own-ack journal is the one
-      * `PeerId`-keyed `HardAck` journal, so `own: PeerId` flows straight into
-      * `JournalKey.HardAck(own, n)` with no peer-type branch (§10 Q10). `peers` is every head peer
-      * (own included on a head peer), `hubs` every hub head peer (their `HubHardAck` journals carry
-      * the coil quorum SCA aggregates, read by both peer types), `coils` the hubbed coils whose ack
-      * gap a hub re-feeds (`Nil` off a hub). `own`, `treasuryAddress` and `leadsFastBlock` — the
-      * fast-cycle leadership predicate, always false on a coil — come from the node config.
+    /** Run the boot replay (see the object docstring), for either peer type. Pure over the store;
+      * all effects are mailbox sends to `targets`. The fast side and the slow side are now common
+      * to both peer types: the slow-side own-ack journal is the one `PeerId`-keyed `HardAck`
+      * journal, so `own: PeerId` flows straight into `JournalKey.HardAck(own, n)` with no peer-type
+      * branch (§10 Q10). `peers` is every head peer (own included on a head peer), `hubs` every hub
+      * head peer (their `HubHardAck` journals carry the coil quorum SCA aggregates, read by both
+      * peer types), `coils` the hubbed coils whose ack gap a hub re-feeds (`Nil` off a hub). `own`
+      * and `leadsFastBlock` — the fast-cycle leadership predicate, always false on a coil — come
+      * from the node config.
+      *
+      * `firstPollResults` is read from L1 by the caller, NOT here. This runs inside an uncancelable
+      * actor message handler, so a read that retries would be uninterruptible; `Serve` establishes
+      * the fact on the app fiber and hands it down. Queuing it is still this function's job: it has
+      * to reach BlockWeaver's mailbox before the start barrier opens, or the weaver acts on
+      * `PollResults.empty` and rejects every mature deposit as `NotInPollResults`.
       */
     def replay(
         persistence: Persistence[IO],
-        cardanoBackend: CardanoBackend[IO],
+        firstPollResults: PollResults,
         targets: Targets,
         own: PeerId,
         peers: List[HeadPeerNumber],
         hubs: List[HeadPeerNumber],
         coils: List[CoilPeerNumber],
-        treasuryAddress: ShelleyAddress,
         leadsFastBlock: BlockNumber => Boolean,
         markers: Markers
     )(using CardanoNetwork.Section): IO[Unit] =
@@ -106,10 +102,7 @@ object ReplayActor:
               hardAckedStack
             )
             // 1. First L1 sample → BlockWeaver, so deposit decisions don't wait on the poll tick.
-            _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
-            // Same gate, same place: an L1 fact established once, on the app fiber, before the
-            // start barrier opens.
-            _ <- verifyProtocolParams(cardanoBackend)
+            _ <- targets.blockWeaver ! firstPollResults
             // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA.
             _ <- inflight.traverse_(targets.slowConsensusActor ! _)
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
@@ -198,109 +191,6 @@ object ReplayActor:
                 s"fastBlockMark=$fastBlockMark, hardAckedStack=$hardAckedStack"
           )
         )
-
-    /** Read L1 directly and send BlockWeaver the first [[PollResults]] (§5.5).
-      *
-      * ⛔ This is a GATE, and it must WAIT rather than fail. BlockWeaver starts at
-      * `PollResults.empty`, which is structurally indistinguishable from "polled, and the address
-      * is genuinely empty" — there is no `NeverPolled` state. A head peer classifies deposit
-      * existence from its OWN poll (`DepositsMap.Existence.FromPoll`), so acting on that empty
-      * value would reject every mature deposit as `NotInPollResults`: terminal, and DEBUG-only in
-      * the logs. The seed is queued before the start barrier opens precisely so that cannot happen.
-      *
-      * It previously raised on a failed L1 read, which closed the correctness hole but turned a
-      * transient Blockfrost blip into a failed boot — and `Restart=on-failure` turns a failed boot
-      * into an infinite restart loop that outlives the blip. Waiting is strictly better: the node
-      * is useless without this fact either way, and the retry is bounded by nothing but the
-      * operator's patience, which is what a dashboard is for.
-      *
-      * ⚠️ Safe to retry here ONLY because `replay` runs INLINE at the regime manager, on the app
-      * fiber, outside the actor system. The same loop inside a cats-actors message handler would be
-      * uncancelable (`ActorCell` wraps handlers in `.uncancelable`) and would make the process
-      * unkillable — measured. Do not move this into an actor.
-      */
-    private def seedFirstPollResults(
-        cardanoBackend: CardanoBackend[IO],
-        treasuryAddress: ShelleyAddress,
-        blockWeaver: BlockWeaver.Handle
-    ): IO[Unit] = {
-        def attempt(n: Int): IO[Unit] =
-            cardanoBackend.utxosAt(treasuryAddress).flatMap {
-                case Right(utxos) =>
-                    IO.whenA(n > 0)(
-                      log.info(
-                        s"boot L1 sample succeeded after ${n + 1} attempts; continuing start-up"
-                      )
-                    ) >> (blockWeaver ! PollResults(utxos.keySet))
-                case Left(err) =>
-                    val wait = l1SampleBackoff(n)
-                    log.warn(
-                      s"boot L1 sample failed (attempt ${n + 1}): $err. Cannot start consensus " +
-                          s"without it, so WAITING rather than failing the boot; retrying in $wait"
-                    ) >> IO.sleep(wait) >> attempt(n + 1)
-            }
-        attempt(0)
-    }
-
-    /** Compare the chain's live protocol parameters against the ones this head's config asserts.
-      *
-      * ⛔ Nothing did this before: `getStartupParams` existed with **zero callers**, so a head built
-      * every L1 transaction — settlements, fallbacks, rollouts, refunds — against parameters it
-      * merely assumed, and would keep doing so across a parameter update it never noticed. Those
-      * parameters decide fees, `maxTxSize` and execution-unit budgets, so a drift shows up as
-      * transactions the chain rejects, at the worst possible moment.
-      *
-      * ⛔ **A mismatch REFUSES the boot.** A head building transactions against parameters the chain
-      * has moved past emits txs the chain rejects — silently, at settlement time, under load.
-      *
-      * It is a `StartupRefusal` rather than a generic crash because it is **deterministic**: the
-      * config asserts what it asserts, and a restart re-derives the same verdict, so a supervisor
-      * loop would learn nothing. ⇒ Operationally, an on-chain parameter update stops every peer
-      * until its config is updated. That is intended: the alternative is peers quietly emitting
-      * invalid transactions. If a benign field ever proves to differ in practice, narrow the
-      * comparison to the fields that govern tx validity — do not weaken it back to a warning.
-      *
-      * Unreachable is NOT drift: it retries like the L1 sample, because "cannot ask" and "asked and
-      * the answer is wrong" are the two classes this whole start-up path is built to separate.
-      */
-    private def verifyProtocolParams(
-        cardanoBackend: CardanoBackend[IO]
-    )(using net: CardanoNetwork.Section): IO[Unit] = {
-        def attempt(n: Int): IO[Unit] =
-            cardanoBackend.fetchLatestParams.flatMap {
-                case Right(onChain) =>
-                    val assumed = net.cardanoProtocolParams
-                    if onChain == assumed then
-                        log.info("protocol parameters on chain match the ones this config asserts")
-                    else
-                        log.error(
-                          "PROTOCOL PARAMETER MISMATCH: the chain's parameters differ from the " +
-                              "ones this head's config asserts. Refusing to start.\n" +
-                              s"  on chain: $onChain\n" +
-                              s"  config:   $assumed"
-                        ) >> IO.raiseError(
-                          StartupRefusal(
-                            "the chain's protocol parameters differ from the ones this head's " +
-                                "config asserts, so the L1 transactions it builds may be rejected " +
-                                "by the chain. Update the config to the chain's current parameters " +
-                                "(both values are on the ERROR line above)."
-                          )
-                        )
-                case Left(err) =>
-                    val wait = l1SampleBackoff(n)
-                    log.warn(
-                      s"could not read protocol parameters (attempt ${n + 1}): $err. " +
-                          s"Retrying in $wait."
-                    ) >> IO.sleep(wait) >> attempt(n + 1)
-            }
-        attempt(0)
-    }
-
-    /** Backoff for the boot L1 sample: doubles from 1s, capped at 30s. Capped rather than unbounded
-      * so a node that has been waiting for hours still reacts promptly when L1 returns.
-      */
-    private def l1SampleBackoff(attempt: Int): FiniteDuration =
-        (1.second.toNanos * (1L << math.min(attempt, 5))).nanos.min(30.seconds)
 
     /** Reconstruct the handoff for the in-flight stack — the last own-acked stack, **iff** it is
       * not yet hard-confirmed (`hardConfirmed < hardAckedStack`). Its `Stack.Unsigned` was

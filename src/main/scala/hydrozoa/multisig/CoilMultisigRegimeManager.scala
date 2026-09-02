@@ -12,6 +12,7 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{CoilTransport, RemoteHubProxy}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -33,6 +34,10 @@ import hydrozoa.rulebased.RuleBasedRegimeManager
 trait CoilMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
+    /** The first L1 sample, read by `Serve` before the actor system exists. See
+      * [[ReplayActor.replay]] for why the read cannot happen inside this actor.
+      */
+    firstPollResults: PollResults,
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
     override protected val metrics: PeerMetrics,
@@ -135,7 +140,7 @@ trait CoilMultisigRegimeManager(
             // and drains in order once the barrier opens. Cold store ⇒ near-no-op.
             _ <- ReplayActor.replay(
               persistence,
-              cardanoBackend,
+              firstPollResults,
               ReplayActor.Targets(
                 blockWeaver = core.blockWeaver,
                 fastConsensusActor = core.consensusActor,
@@ -148,7 +153,6 @@ trait CoilMultisigRegimeManager(
               // A coil peer is never a hub, so it re-feeds no coil-ack gap (its Targets carries no
               // CoilAckSequencer either — the gap step is a no-op).
               coils = Nil,
-              treasuryAddress = config.initializationTx.treasuryProduced.address,
               leadsFastBlock = config.canLeadFast,
               markers = markers
             )(using config)
@@ -209,6 +213,7 @@ object CoilMultisigRegimeManager {
     def resource(
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
+        firstPollResults: PollResults,
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
         metrics: PeerMetrics,
@@ -221,6 +226,7 @@ object CoilMultisigRegimeManager {
                 new CoilMultisigRegimeManager(
                   config,
                   cardanoBackend,
+                  firstPollResults,
                   virtualLedger,
                   persistence,
                   metrics,
