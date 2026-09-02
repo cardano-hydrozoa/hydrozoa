@@ -50,6 +50,12 @@ Point 3 is the one that cannot be fixed by moving the comparison. It needs a con
 `(RequestId, requestHash, ValidityFlag)` triples, so the block commits to exactly which payload
 sits at each position without carrying any payload.
 
+That is the shape the whole design follows — **each layer commits to the one below by hash, and
+nothing chains sideways within a layer.** The slow side extends it: a `stackHash` covers the
+ordered `blockHash`es of the blocks a stack closed over, the same way a `blockHash` covers the
+ordered `requestHash`es of its body. Stacks are a separate work item; the construction is fixed
+here.
+
 ## When a request is hashed: at assignment
 
 In `RequestSequencer`, between `val newId = RequestId(ownHeadPeerNum, newNum)` and the CR1
@@ -114,7 +120,6 @@ preimage.
 ```
 blockHash = blake2b_256(
      "gummiworm-block-v1"
-  || raw(previousBlockHash)         -- headParamsHash for block 0
   || u8(blockType)                  -- Initial | Minor | Major | Final
   -- header
   || u32(blockNum)
@@ -159,38 +164,34 @@ new — but hashing it keeps all four block types uniform, keeps `blockHash` tot
 `BlockBrief`, and removes a special case from every consumer. Its empty body encodes as three
 zero-length lists under the `Initial` type tag.
 
-## Chaining to the previous block
+## Why the preimage does not chain to the previous block
 
-`previousBlockHash` is in the preimage, so each block's hash commits to its whole history, and
-block 0's predecessor is `headParamsHash` — the chain roots in the agreed configuration rather
-than in a zero constant.
+Considered and rejected. A `previousBlockHash` field would make each block's hash commit to its
+whole history, the way a blockchain does. Here it buys almost nothing, because the reasons
+blockchains chain are the reasons hydrozoa does not need to.
 
-**Be clear about what it does not buy here.** Hydrozoa is not a fork-choice system. Every block
-carries an all-peer soft-confirmation, so there is no competing history to arbitrate and no work
-saved at verification time: checking a chained hash still means recomputing every block from its
-content, which a peer rebuilding ledger state does anyway. And divergence is already caught at
-the *first* differing block — `panicOnMismatchWithExpectedBrief` fires on block N+1 the moment
-two peers' states differ at block N, so chaining detects nothing earlier on the live path.
+Chaining is a **substitute for identity**. It is what you build when no fixed set of signers can
+vouch for a block: work accumulates along a chain so that rewriting block 5 costs redoing 5 to
+the tip; "heaviest chain" is only a well-defined fork-choice rule if there is a chain; depth
+means something only because reversal is expensive. Every one of those solves the absence of a
+known signer set.
 
-**What it does buy is integrity where blocks are trusted rather than rebuilt** — and that case
-exists, in two places that matter:
+Hydrozoa has the thing chaining substitutes for. Membership is fixed in the head config and
+pinned by the treasury address, and every block carries an all-peer soft-confirmation. There is
+no work to accumulate — rewriting block 5 is not expensive, it is impossible without keys. There
+is no fork to choose: a block either has every signature or is not confirmed. There is no
+depth-based finality; finality is explicit, soft then hard.
 
-- **Replay below the fast anchor.** `ReplayActor` routes a brief below `fastBlockMark` to
-  `FastConsensusActor` only: *"already accepted, so JointLedger never re-handles it."* Those
-  blocks are read back from the store and believed. Nothing recomputes them.
-- **A transplanted store.** Seeding a peer from another peer's database means adopting its whole
-  block history on the strength of what is written there.
+The one benefit that survives is amortized validation — check one signature at a tip plus a
+rehash, rather than every block's signature set. That is real but modest, and the store is
+already checkpointed externally at a coarser grain: every major block's settlement writes the
+evacuation map's KZG commitment into the treasury datum, so a store can be validated against L1,
+which beats any self-referential chain.
 
-Without chaining, each block's signature attests only to that block. Splice a different block 5
-into a store and the signatures on blocks 6 through 50 remain valid, because none of them
-mentions block 5 — and if the splice sits below `fastBlockMark`, nothing ever re-derives it. With
-chaining, block 5's substitution changes every subsequent hash, so the tip no longer matches the
-signatures over it, and one comparison at the tip detects it.
-
-That is the whole argument: the signature stops being evidence about one block and becomes
-evidence about a history. It costs 32 bytes in the preimage, one field on the brief, and one
-more field in `JointLedger.State`, which already carries `previousBlockHeader` for exactly this
-kind of chaining and would carry `previousBlockHash` beside it.
+What remains uncovered is the block run between two majors, where nothing external attests and
+the only check is per-block signatures. That is a known limit, recorded here rather than
+designed around: a store whose blocks below `fastBlockMark` were altered is caught by verifying
+those blocks' stored signatures, and nothing does that today.
 
 ## Where `blockHash` lives
 
@@ -226,8 +227,8 @@ from header and body and compares. That holds in both directions:
   `panicOnMismatchWithExpectedBrief` catches today, decided on one 32-byte value.
 - **On replay.** `ReplayActor` feeds persisted briefs back into `BlockWeaver` and
   `FastConsensusActor`; where `JointLedger` re-derives the block it checks the stored hash
-  against the recomputed one. Below `fastBlockMark` nothing re-derives, which is what the chained
-  `previousBlockHash` above is there to cover.
+  against the recomputed one. Below `fastBlockMark` nothing re-derives — those blocks are read
+  back and believed, and their stored signatures are the only thing that would catch a change.
 
 **Coil peers check it.** A coil peer authors no soft-ack, so it never signs a `blockHash` — but
 it rebuilds block bodies exactly as a head follower does, so it recomputes and compares on the
@@ -295,11 +296,6 @@ bytes, so acks from a peer on the old preimage fail to verify on the new one and
 and the `Block` journal value and wire brief, which gain the `blockHash` field. It applies to
 heads initialized afterwards, and belongs in the release notes of the release that ships it.
 
-Chaining makes that boundary sharper rather than softer. A head's block hashes root in its
-`headParamsHash`, so a store written before the change carries no chain at all and one written
-after cannot be continued by a build that computes the preimage differently. There is no partial
-adoption: the first block a peer hashes fixes the chain every later block extends.
-
 ## Out of scope
 
 - **The HTTP surface.** `requestHash` reaches the submitter through the existing synchronous
@@ -307,8 +303,10 @@ adoption: the first block a peer hashes fixes the chain every later block extend
   that — whether `GET /head/requests/{id}` returns the hash, whether the hash becomes a lookup
   key in its own right, and the route and reverse index that would need — is a separate PR
   against the API.
-- **Stack hashes.** The slow side needs the same commitment, following the same construction —
-  chaining included, where a stack's predecessor is the stack it follows. Separate work item.
+- **Stack hashes.** The slow side needs the same commitment, built the same way: a `stackHash`
+  over the stack brief's own fields and the ordered `blockHash`es of the blocks it closed over,
+  exactly as a `blockHash` covers the ordered `requestHash`es of its body. Three layers, each
+  committing to the one below by hash. Separate work item.
 - **The two stale rule-based signposts** named above. Both live in `cardano-onchain` and neither
   blocks this work.
 
