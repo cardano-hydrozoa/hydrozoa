@@ -52,7 +52,7 @@ trait HeadMultisigRegimeManager(
             // Every recovery marker this peer boots from, derived ONCE here and projected into
             // each child actor. Deriving per-actor let two paths interpret the same journal
             // independently, which is how a seeded store could satisfy one and not the other.
-            derived <- Markers.derive(persistence, config.ownPeerId)(using config)
+            derived <- Markers.derive(persistence, config.ownPeerId)
             // Adopting a store seeded from another peer. The tag names the stack it was seeded at
             // and the floor applies only while that is still this store's `hardConfirmed`, so it
             // matches on the adopting boot and is inert ever after (`hardConfirmed` is monotonic).

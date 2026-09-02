@@ -554,7 +554,7 @@ case class Suite(
                   // Derived from this peer's own store rather than assumed cold, so the actor
                   // recovers from whatever the suite has put there — the same bundle the regime
                   // manager would hand it in production.
-                  markers <- Markers.derive(persistence, nodeConfig.ownPeerId)(using nodeConfig)
+                  markers <- Markers.derive(persistence, nodeConfig.ownPeerId)
                   jointLedger <- system.actorOf(
                     JointLedger(
                       nodeConfig,

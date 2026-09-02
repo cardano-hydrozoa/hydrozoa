@@ -3,7 +3,6 @@ package hydrozoa.multisig.persistence
 import cats.effect.IO
 import cats.syntax.parallel.*
 import cats.syntax.traverse.*
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.ack.HardAckNumber
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -56,9 +55,7 @@ object Markers:
       * covers both peer types, and `nextRequestNumber` is `RequestNumber(0)` on a coil peer (the
       * user-request surface is head-only).
       */
-    def derive(persistence: Persistence[IO], own: PeerId)(using
-        CardanoNetwork.Section
-    ): IO[Markers] =
+    def derive(persistence: Persistence[IO], own: PeerId): IO[Markers] =
         val backend = persistence.backend
         val nextRequest = own match
             case PeerId.Head(n) => recoverNextRequestNumber(backend, n)
