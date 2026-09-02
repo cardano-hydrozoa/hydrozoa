@@ -517,18 +517,17 @@ object RemoteL2Ledger {
         // An expiry here is terminal: `restoreTo` is deliberately not retried (a retry restarts
         // the rebuild), and every boot calls it, so the node simply fails to start.
         //
-        // ⚠️ This value was sized when a Restore replayed the remote's **whole** event log, which
-        // grew linearly with the head's lifetime — measured 2026-08-20 at ~8 minutes over ~42M
-        // events. That is no longer how it works: the remote now seeds from its newest snapshot
-        // and replays only the commands above it, capped by its snapshot interval (20,000 by
-        // default), so a rebuild is seconds and does not grow with the head's age. Measured
-        // 2026-09-01: 9,096 commands in 15 ms.
+        // ⚠️ This value was sized when a Restore replayed the remote's **whole** event log, so the
+        // rebuild grew linearly with the head's lifetime. That is no longer how it works: the remote
+        // seeds from its newest snapshot and replays only the commands above it, capped by its
+        // snapshot interval (20,000 by default), so a rebuild does not grow with the head's age.
         //
-        // ⇒ The bound is therefore now enormously oversized rather than marginal. It is left as-is
+        // ⇒ The bound is therefore enormously oversized rather than marginal. It is left as-is
         // deliberately: it costs nothing when nothing is wrong, and the failure it guards against
-        // (a boot that never completes) is worse than a boot that takes too long to give up. Do not
-        // re-derive a rebuild estimate from the old figure — that is how a stale constant in a
-        // comment produced a stale conclusion two steps away.
+        // (a boot that never completes) is worse than a boot that takes too long to give up.
+        // ⛔ Do not re-derive a rebuild estimate from any figure quoted near this constant: the
+        // rebuild cost depends on the snapshot interval and the state's size, and a number measured
+        // on one head does not transfer to another.
         restoreTimeout: FiniteDuration = 60.minutes,
         initialBackoff: FiniteDuration = 1.second,
         maxBackoff: FiniteDuration = 30.seconds,
