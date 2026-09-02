@@ -45,9 +45,9 @@ class PrivateSecretsTest extends AnyFunSuite {
               .downField("ownHeadWallet")
               .downField("signingKey")
               .as[String] == Right(skey('1'))
-        )
-        assert(c.downField("blockfrostApiKey").as[String] == Right("previewXXXX"))
-        assert(c.downField("adminPassword").as[String] == Right("hunter2"))
+        ): Unit
+        assert(c.downField("blockfrostApiKey").as[String] == Right("previewXXXX")): Unit
+        assert(c.downField("adminPassword").as[String] == Right("hunter2")): Unit
     }
 
     test("a missing credential is refused, and the message names it") {
@@ -60,7 +60,7 @@ class PrivateSecretsTest extends AnyFunSuite {
             )
             .swap
             .fold(_ => fail("expected a refusal"), identity)
-        assert(refusal.reason.contains("HYDROZOA_ADMIN_PASSWORD"))
+        assert(refusal.reason.contains("HYDROZOA_ADMIN_PASSWORD")): Unit
     }
 
     // The check that earns this module its place: the two halves of a keypair now arrive from
@@ -72,8 +72,8 @@ class PrivateSecretsTest extends AnyFunSuite {
             .applySecrets(json, credentials(skey('9'), skey('2')), "test")
             .swap
             .fold(_ => fail("expected a refusal"), identity)
-        assert(refusal.reason.contains("derives verification key"))
-        assert(refusal.reason.contains("ownPeerPrivate.ownHeadWallet"))
+        assert(refusal.reason.contains("derives verification key")): Unit
+        assert(refusal.reason.contains("ownPeerPrivate.ownHeadWallet")): Unit
     }
 
     test("the rule-based wallet is paired too, not just the peer's own") {
@@ -82,7 +82,7 @@ class PrivateSecretsTest extends AnyFunSuite {
             .applySecrets(json, credentials(skey('1'), skey('9')), "test")
             .swap
             .fold(_ => fail("expected a refusal"), identity)
-        assert(refusal.reason.contains("ruleBasedWallet"))
+        assert(refusal.reason.contains("ruleBasedWallet")): Unit
     }
 
     // The whole point of the split is that the config file becomes shareable. A live key left in
@@ -94,7 +94,7 @@ class PrivateSecretsTest extends AnyFunSuite {
             .applySecrets(json, credentials(skey('1'), skey('2')), "test")
             .swap
             .fold(_ => fail("expected a refusal"), identity)
-        assert(refusal.reason.contains("blockfrostApiKey"))
+        assert(refusal.reason.contains("blockfrostApiKey")): Unit
     }
 
     // The encoder writes an all-zeros stand-in where a signing key would go. That is not a leak
@@ -116,7 +116,7 @@ class PrivateSecretsTest extends AnyFunSuite {
               .downField("ownHeadWallet")
               .downField("signingKey")
               .as[String] == Right(skey('1'))
-        )
+        ): Unit
     }
 
     test("a config with no rule-based wallet does not demand its key") {
@@ -130,7 +130,7 @@ class PrivateSecretsTest extends AnyFunSuite {
           "HYDROZOA_BLOCKFROST_API_KEY" -> "previewXXXX",
           "HYDROZOA_ADMIN_PASSWORD" -> "hunter2"
         )
-        assert(PrivateSecrets.applySecrets(json, creds, "test").isRight)
+        assert(PrivateSecrets.applySecrets(json, creds, "test").isRight): Unit
     }
 
     test("a malformed signing key is refused rather than parsed into nonsense") {
@@ -139,7 +139,7 @@ class PrivateSecretsTest extends AnyFunSuite {
             .applySecrets(json, credentials("nothex", skey('2')), "test")
             .swap
             .fold(_ => fail("expected a refusal"), identity)
-        assert(refusal.reason.contains("32 bytes of hex"))
+        assert(refusal.reason.contains("32 bytes of hex")): Unit
     }
 
     test("the env file parser handles comments, quotes, blanks and export") {
@@ -153,14 +153,14 @@ class PrivateSecretsTest extends AnyFunSuite {
           |not a pair
           |""".stripMargin)
 
-        assert(parsed("HYDROZOA_SIGNING_KEY") == "abc123")
-        assert(parsed("HYDROZOA_ADMIN_PASSWORD") == "quoted value")
-        assert(parsed("HYDROZOA_BLOCKFROST_API_KEY") == "single")
-        assert(parsed("SPACED") == "padded")
-        assert(!parsed.contains("not a pair"))
+        assert(parsed("HYDROZOA_SIGNING_KEY") == "abc123"): Unit
+        assert(parsed("HYDROZOA_ADMIN_PASSWORD") == "quoted value"): Unit
+        assert(parsed("HYDROZOA_BLOCKFROST_API_KEY") == "single"): Unit
+        assert(parsed("SPACED") == "padded"): Unit
+        assert(!parsed.contains("not a pair")): Unit
     }
 
     test("a value containing '=' survives the split") {
-        assert(PrivateSecrets.parseEnvFile("K=a=b=c")("K") == "a=b=c")
+        assert(PrivateSecrets.parseEnvFile("K=a=b=c")("K") == "a=b=c"): Unit
     }
 }

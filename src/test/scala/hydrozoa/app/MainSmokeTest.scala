@@ -88,7 +88,7 @@ class MainSmokeTest extends AnyFunSuite:
 
         val testIO = for {
             _ <- IO.blocking(
-              Files.writeString(headPath, printer.print(mnc.headConfig.asJson))
+              Files.writeString(headPath, printer.print(mnc.headConfig.asJson)): Unit
             )
             _ <- IO.blocking(writePrivatePair(runnablePrivateJson, privatePath))
 
@@ -192,11 +192,11 @@ class MainSmokeTest extends AnyFunSuite:
         val stripped = paths.foldLeft(json)((acc, kv) => drop(acc, kv._2))
         val printer = Printer.spaces2.copy(dropNullValues = true)
         Files.createDirectories(privatePath.getParent)
-        Files.writeString(privatePath, printer.print(stripped))
+        Files.writeString(privatePath, printer.print(stripped)): Unit
         Files.writeString(
           privatePath.resolveSibling(PrivateSecrets.defaultFileName),
           found.map((k, v) => s"$k=$v").mkString("", "\n", "\n")
-        )
+        ): Unit
     }
 
     // A `transplantStackNumber` names the stack this peer elects to ADOPT: everything at or below it
