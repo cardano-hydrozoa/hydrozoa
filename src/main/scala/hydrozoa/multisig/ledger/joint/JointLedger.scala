@@ -49,7 +49,11 @@ final case class JointLedger(
     l2Ledger: L2Ledger[IO],
     tracer: ContraTracer[IO, JointLedgerEvent],
     persistence: Persistence[IO],
-    metrics: PeerMetrics
+    metrics: PeerMetrics,
+    /** The boot markers, derived once by the regime manager (§5.2): this actor projects
+      * `fastBlockMark` and `evacuationMapMark` rather than re-reading the store.
+      */
+    markers: Markers
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
@@ -123,7 +127,7 @@ final case class JointLedger(
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
-                _connections <- x.get
+                _connections <- x.get.flatMap(IO.fromEither)
                 _ <- connections.set(
                   Some(
                     Connections(
@@ -200,12 +204,12 @@ final case class JointLedger(
             // fast anchor is `fastBlockMark = max(BlockResult)` (§6), shared by head and coil peers:
             // on a head peer it coincides with `max(own SoftAck)` (both written in the same atomic
             // per-block batch); a coil peer authors no soft-ack and anchors on it directly.
-            fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
             recovered <- State.recover(
               persistence,
               l2Ledger,
-              fastBlockMark,
-              config.initialEvacuationMap
+              markers.fastBlockMark,
+              config.initialEvacuationMap,
+              markers.evacuationMapMark
             )
             _ <- recovered match {
                 case Some(done) =>
@@ -1078,7 +1082,8 @@ object JointLedger {
             persistence: Persistence[IO],
             l2Ledger: L2Ledger[IO],
             fastBlockMark: Option[BlockNumber],
-            initialEvacuationMap: EvacuationMap
+            initialEvacuationMap: EvacuationMap,
+            evacuationMapMark: Option[BlockNumber]
         )(using CardanoNetwork.Section): IO[Option[Done]] =
             fastBlockMark match
                 case None =>
@@ -1102,7 +1107,12 @@ object JointLedger {
                             .restoreTo(done.commandNumber)
                             .value
                             .flatMap(IO.fromEither)
-                        expected <- evacuationMapAt(persistence, blockNum, initialEvacuationMap)
+                        expected <- evacuationMapAt(
+                          persistence,
+                          blockNum,
+                          initialEvacuationMap,
+                          evacuationMapMark
+                        )
                         _ <- IO.raiseUnless(actual == expected.digest)(
                           RestoreError.EvacuationMapMismatch(
                             expected = expected.digest,
@@ -1128,10 +1138,10 @@ object JointLedger {
         private def evacuationMapAt(
             persistence: Persistence[IO],
             blockNum: BlockNumber,
-            initialEvacuationMap: EvacuationMap
+            initialEvacuationMap: EvacuationMap,
+            mapMark: Option[BlockNumber]
         ): IO[EvacuationMap] =
             for {
-                mapMark <- Markers.recoverEvacuationMapMark(persistence.backend)
                 base <- mapMark.fold(IO.pure(BlockNumber.zero -> initialEvacuationMap))(mark =>
                     persistence.getOrFail(StoreKey.EvacuationMap(mark)).map(mark -> _)
                 )

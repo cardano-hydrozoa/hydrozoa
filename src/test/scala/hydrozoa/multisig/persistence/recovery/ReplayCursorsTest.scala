@@ -68,7 +68,9 @@ class ReplayCursorsTest extends AnyFunSuite:
           hardConfirmed = Some(StackNumber(3)),
           hardAcked =
               Some(HardAckNumber(4)), // the counter — derive ignores it; acked stack is a param
-          nextRequestNumber = RequestNumber(0)
+          nextRequestNumber = RequestNumber(0),
+          evacuationMapMark = None,
+          hardAckedStack = None
         )
         val hw = Map(HeadPeerNumber(0) -> RequestNumber(7), HeadPeerNumber(1) -> RequestNumber(2))
         val cursors =
@@ -139,7 +141,9 @@ class ReplayCursorsTest extends AnyFunSuite:
           fastBlockMark = Some(BlockNumber(5)),
           hardConfirmed = None,
           hardAcked = Some(HardAckNumber(5)),
-          nextRequestNumber = RequestNumber(0)
+          nextRequestNumber = RequestNumber(0),
+          evacuationMapMark = None,
+          hardAckedStack = None
         )
         val cursors =
             ReplayCursors.derive(
@@ -164,7 +168,7 @@ class ReplayCursorsTest extends AnyFunSuite:
     }
 
     test("derive: empty store (all None, no acked stack) yields index-0 floors everywhere") {
-        val markers = Markers(None, None, None, None, RequestNumber(0))
+        val markers = Markers(None, None, None, None, RequestNumber(0), None, None)
         val cursors = ReplayCursors.derive(
           markers,
           peers,
@@ -188,7 +192,7 @@ class ReplayCursorsTest extends AnyFunSuite:
     test("scanFloors enumerates exactly 2 + 3N journals (no hubs; spines collapse to confirmed)") {
         val cursors =
             ReplayCursors.derive(
-              Markers(None, None, None, None, RequestNumber(0)),
+              Markers(None, None, None, None, RequestNumber(0), None, None),
               peers,
               Nil,
               Map.empty,
@@ -205,7 +209,7 @@ class ReplayCursorsTest extends AnyFunSuite:
         val hubs = List(HeadPeerNumber(0), HeadPeerNumber(1))
         val cursors =
             ReplayCursors.derive(
-              Markers(None, None, None, None, RequestNumber(0)),
+              Markers(None, None, None, None, RequestNumber(0), None, None),
               peers,
               hubs,
               Map.empty,
@@ -227,7 +231,7 @@ class ReplayCursorsTest extends AnyFunSuite:
         val own = PeerId.Coil(CoilPeerNumber(0))
         val cursors =
             ReplayCursors.derive(
-              Markers(None, None, None, None, RequestNumber(0)),
+              Markers(None, None, None, None, RequestNumber(0), None, None),
               peers,
               hubs,
               Map.empty,

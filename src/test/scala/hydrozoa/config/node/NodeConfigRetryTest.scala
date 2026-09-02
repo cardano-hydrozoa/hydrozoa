@@ -23,7 +23,9 @@ class NodeConfigRetryTest extends AnyFunSuite {
     private val badConfig: io.circe.Error =
         io.circe.DecodingFailure("not a config", Nil)
 
-    private val waits = List(1.milli, 1.milli, 1.milli)
+    // Finite on purpose: production passes an INFINITE ladder (a transient backend failure must
+    // never end in an exit), so the "gives up" cases below can only be expressed with a bounded one.
+    private val waits = LazyList(1.milli, 1.milli, 1.milli)
 
     /** An attempt that fails `failures` times with `error`, then succeeds. */
     private def failing(

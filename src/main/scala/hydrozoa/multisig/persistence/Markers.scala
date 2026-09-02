@@ -2,6 +2,7 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import cats.syntax.parallel.*
+import cats.syntax.traverse.*
 import hydrozoa.multisig.consensus.ack.HardAckNumber
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -30,10 +31,52 @@ final case class Markers(
     fastBlockMark: Option[BlockNumber],
     hardConfirmed: Option[StackNumber],
     hardAcked: Option[HardAckNumber],
-    nextRequestNumber: RequestNumber
+    nextRequestNumber: RequestNumber,
+    evacuationMapMark: Option[BlockNumber],
+    /** The stack this peer's last own hard-ack covers — `hardAcked` dereferenced into the journal
+      * and unpacked. Unlike the six marks around it this is an *interpretation*, not a `lastKey`,
+      * which is exactly why it belongs here: derived twice it can be adjusted once and disagree
+      * everywhere. `None` on an empty own-ack journal.
+      */
+    hardAckedStack: Option[StackNumber]
 )
 
 object Markers:
+    /** The marker set of an empty store: every anchor absent, the request counter at zero. What
+      * [[derive]] returns for a cold store, spelled out so a caller that has no store to derive
+      * from (a test wiring an actor against an empty backend) need not fabricate one.
+      */
+    val cold: Markers = Markers(None, None, None, None, RequestNumber(0), None, None)
+
+    /** Apply a `transplantStackNumber` to a freshly derived marker bundle, raising this peer's
+      * trusted-history floor to the stack the transplant was tagged with.
+      *
+      * ⛔ The comparison is **`hardConfirmed >= tag`**, deliberately the same one `Serve`'s boot
+      * gate uses. It used to be exact equality here while the gate accepted `>=`, so a tag naming
+      * any stack BELOW the store's tip passed the gate and was then **silently dropped** — the
+      * operator got no adoption and no error. A tag is a partition of the store chosen by the
+      * operator, and any stack the store actually holds is a legitimate choice, so below-tip must
+      * adopt. (George's ruling, 2026-09-02.)
+      *
+      * It RAISES the floor and never lowers it: a peer mid-flight has acked one stack beyond its
+      * confirmation, and clamping that down to the tag would discard the in-flight handoff
+      * `ReplayActor` rebuilds from it. So once the peer has moved past the tag the `max` is a
+      * no-op, which is what keeps a tag left in the config after adoption harmless.
+      *
+      * Applied to the ONE bundle, so the gate, the replay cursors, the in-flight handoff and the
+      * stack composer all move together — the alternative is the divergence that made this
+      * necessary. Lives here rather than in each regime manager because it was duplicated verbatim
+      * in both, which is how the comparison came to disagree with the gate in the first place.
+      */
+    def adopt(derived: Markers, tag: Option[StackNumber]): Markers =
+        tag
+            .filter(t => derived.hardConfirmed.exists(Ordering[StackNumber].gteq(_, t)))
+            .fold(derived)(t =>
+                derived.copy(hardAckedStack = Some(derived.hardAckedStack.fold(t) { own =>
+                    if Ordering[StackNumber].gteq(own, t) then own else t
+                }))
+            )
+
     /** Read all five markers from `backend`, scoping the `hardAcked` and `nextRequestNumber`
       * derivations to `own`. With the per-author CF split each satellite CF holds exactly one
       * author's journal, so the own `hardAcked` mark is just `lastKey` of the own-author `HardAck`
@@ -41,17 +84,27 @@ object Markers:
       * covers both peer types, and `nextRequestNumber` is `RequestNumber(0)` on a coil peer (the
       * user-request surface is head-only).
       */
-    def derive(backend: BackendStore[IO], own: PeerId): IO[Markers] =
+    def derive(persistence: Persistence[IO], own: PeerId): IO[Markers] =
+        val backend = persistence.backend
         val nextRequest = own match
             case PeerId.Head(n) => recoverNextRequestNumber(backend, n)
             case PeerId.Coil(_) => IO.pure(RequestNumber(0))
-        (
-          backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum)),
-          recoverFastBlockMark(backend),
-          backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum)),
-          backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard)),
-          nextRequest
-        ).parMapN(Markers.apply)
+        for {
+            base <- (
+              backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum)),
+              recoverFastBlockMark(backend),
+              backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum)),
+              backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard)),
+              nextRequest,
+              recoverEvacuationMapMark(backend)
+            ).parTupled
+            (soft, fast, hardConf, hardAck, nextReq, evacMark) = base
+            // Sequenced after the parallel block: it is keyed BY `hardAcked`, so it cannot be read
+            // alongside the mark it depends on.
+            ackedStack <- hardAck.traverse(n =>
+                persistence.getOrFail(JournalKey.HardAck(own, n)).map(_.payload.stackNum)
+            )
+        } yield Markers(soft, fast, hardConf, hardAck, nextReq, evacMark, ackedStack)
 
     /** The next request number this peer will assign after recovery: `max(own Request) + 1`, or
       * `RequestNumber(0)` for an empty store — the last key of the own-author `Request` CF (an

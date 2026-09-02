@@ -13,16 +13,21 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterControl}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2Screener}
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.{Markers, Persistence}
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
 trait HeadMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
+    /** The first L1 sample, read by `Serve` before the actor system exists. See
+      * [[ReplayActor.replay]] for why the read cannot happen inside this actor.
+      */
+    firstPollResults: PollResults,
     l2Ledger: L2Ledger[IO],
     l2Screener: L2Screener[IO],
     persistence: Persistence[IO],
@@ -48,14 +53,23 @@ trait HeadMultisigRegimeManager(
         for {
             _ <- tracer.traceWith(StartingActors)
 
-            pendingConnections <- Deferred[IO, HeadMultisigRegimeManager.Connections]
-
+            // Every recovery marker this peer boots from, derived ONCE here and projected into
+            // each child actor. Deriving per-actor let two paths interpret the same journal
+            // independently, which is how a seeded store could satisfy one and not the other.
+            derived <- Markers.derive(persistence, config.ownPeerId)
+            // Adopting a store seeded from another peer: raise the trusted-history floor to the
+            // stack the transplant was tagged with. Applied to the ONE bundle, so the gate, the
+            // replay cursors, the in-flight handoff and the stack composer all move together — the
+            // alternative is the divergence that made this necessary. See `Markers.adopt` for the
+            // comparison and why it must be the same one `Serve`'s boot gate uses.
+            markers = Markers.adopt(derived, config.transplantStackNumber)
             core <- spawnCoreActors(
               config,
               cardanoBackend,
               l2Ledger,
               persistence,
               pendingConnections,
+              markers,
             )
 
             // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
@@ -82,7 +96,8 @@ trait HeadMultisigRegimeManager(
                 l2Screener,
                 tracers.eventSequencer,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
 
@@ -232,7 +247,7 @@ trait HeadMultisigRegimeManager(
             // L1 sample.
             _ <- ReplayActor.replay(
               persistence,
-              cardanoBackend,
+              firstPollResults,
               ReplayActor.Targets(
                 blockWeaver = core.blockWeaver,
                 fastConsensusActor = core.consensusActor,
@@ -244,12 +259,12 @@ trait HeadMultisigRegimeManager(
               peers = config.headPeerIds.map(_.peerNum).toList,
               hubs = config.hubHeadPeerNumbers,
               coils = hubbedCoilPeers,
-              treasuryAddress = config.initializationTx.treasuryProduced.address,
-              leadsFastBlock = config.canLeadFast
+              leadsFastBlock = config.canLeadFast,
+              markers = markers
             )(using config)
 
-            _ <- pendingConnections.complete(connections)
-            _ <- connectionsDeferred.complete(connections)
+            _ <- pendingConnections.complete(Right(connections))
+            _ <- connectionsDeferred.complete(Right(connections))
 
             _ <- tracer.traceWith(WatchingActors)
 
@@ -359,11 +374,12 @@ object HeadMultisigRegimeManager {
         coilPeerLiaisons: List[liaison.PeerLiaisonHubToCoil.Handle] = Nil,
     )
 
-    type PendingConnections = Deferred[IO, Connections]
+    type PendingConnections = Deferred[IO, Either[Throwable, Connections]]
 
     def resource(
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
+        firstPollResults: PollResults,
         virtualLedger: L2Ledger[IO],
         l2Screener: L2Screener[IO],
         persistence: Persistence[IO],
@@ -381,6 +397,7 @@ object HeadMultisigRegimeManager {
                 new HeadMultisigRegimeManager(
                   config,
                   cardanoBackend,
+                  firstPollResults,
                   virtualLedger,
                   l2Screener,
                   persistence,

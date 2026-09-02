@@ -55,23 +55,25 @@ abstract class PeerLiaisonCoilToHub(
     private def resolveConnections: IO[PeerLiaisonCoilToHub.Connections] =
         pendingConnections match {
             case shared: HeadMultisigRegimeManager.PendingConnections =>
-                shared.get.flatMap(s =>
-                    s.remoteHubLiaison.fold(
-                      IO.raiseError(
-                        IllegalStateException("Coil→hub liaison requires a hub liaison handle.")
-                      )
-                    )(hub =>
-                        IO.pure(
-                          PeerLiaisonCoilToHub.Connections(
-                            blockWeaver = s.blockWeaver,
-                            consensusActor = s.consensusActor,
-                            stackComposer = s.stackComposer,
-                            slowConsensusActor = s.slowConsensusActor,
-                            remote = hub
+                shared.get
+                    .flatMap(IO.fromEither)
+                    .flatMap(s =>
+                        s.remoteHubLiaison.fold(
+                          IO.raiseError(
+                            IllegalStateException("Coil→hub liaison requires a hub liaison handle.")
                           )
+                        )(hub =>
+                            IO.pure(
+                              PeerLiaisonCoilToHub.Connections(
+                                blockWeaver = s.blockWeaver,
+                                consensusActor = s.consensusActor,
+                                stackComposer = s.stackComposer,
+                                slowConsensusActor = s.slowConsensusActor,
+                                remote = hub
+                              )
+                            )
                         )
                     )
-                )
             case own: PeerLiaisonCoilToHub.Connections => IO.pure(own)
         }
 

@@ -37,7 +37,11 @@ trait RequestSequencer(
     l2Screener: L2Screener[IO],
     tracer: ContraTracer[IO, EventSequencerEvent],
     persistence: Persistence[IO],
-    metrics: PeerMetrics
+    metrics: PeerMetrics,
+    /** The boot markers, derived once by the regime manager (§5.2); this actor projects
+      * `nextRequestNumber` rather than re-reading its own Request spine.
+      */
+    markers: Markers
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[RequestSequencer.Connections]](None)
     private val state = State()
@@ -68,7 +72,7 @@ trait RequestSequencer(
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
-                _connections <- x.get
+                _connections <- x.get.flatMap(IO.fromEither)
                 _ <- connections.set(
                   Some(
                     Connections(
@@ -186,7 +190,7 @@ trait RequestSequencer(
             _ <- initializeConnections
             // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
             // empty store -> RequestNumber(0), the same cold value.
-            next <- Markers.recoverNextRequestNumber(persistence.backend, ownHeadPeerNum)
+            next = markers.nextRequestNumber
             _ <- state.seedNextRequestNum(next)
             // Seed the confirmed high-water from the highest already-assigned own request (next - 1).
             // Treating assigned-as-confirmed opens the backpressure window optimistically after a
@@ -253,7 +257,8 @@ object RequestSequencer {
         l2Screener: L2Screener[IO],
         tracer: ContraTracer[IO, EventSequencerEvent],
         persistence: Persistence[IO],
-        metrics: PeerMetrics
+        metrics: PeerMetrics,
+        markers: Markers
     ): IO[RequestSequencer] =
         IO(
           new RequestSequencer(
@@ -262,7 +267,8 @@ object RequestSequencer {
             l2Screener,
             tracer,
             persistence,
-            metrics
+            metrics,
+            markers
           ) {}
         )
 

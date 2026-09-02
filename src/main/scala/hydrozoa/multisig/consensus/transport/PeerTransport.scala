@@ -1,10 +1,11 @@
 package hydrozoa.multisig.consensus.transport
 
 import cats.effect.std.Queue
-import cats.effect.{IO, Ref, Resource}
+import cats.effect.{Deferred, FiberIO, IO, Ref, Resource}
 import cats.syntax.all.*
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHeadToHead}
 import hydrozoa.multisig.consensus.peer.HeadPeerId
@@ -114,19 +115,56 @@ final class WsPeerTransport private (
 
         // Low-level `connect`, not `connectHighLevel`: the dialer needs to see the remote's
         // keep-alive Ping to know the link is alive (see WsDuplex).
-        def once: IO[Unit] =
-            client.connect(request).use { conn =>
+        // `handshook` arbitrates between this attempt and the loop's budget — see the coil dialer
+        // in `CoilPeerWsTransport` for the full rationale; the shape here is identical.
+        def once(handshook: Deferred[IO, Unit]): IO[Unit] =
+            QuietRelease(client.connect(request)).use { conn =>
                 val helloLine = HeadFrame.encode(HeadFrame.Hello(ownPeerId.peerNum))
-                tracer.traceWith(DialerConnected(remote, uri)) >>
-                    conn.send(WSFrame.Text(helloLine)) >>
-                    WsDuplex.run(conn, outboxes(remote), onLine(remote))
+                handshook.complete(()).flatMap {
+                    case true =>
+                        tracer.traceWith(DialerConnected(remote, uri)) >>
+                            conn.send(WSFrame.Text(helloLine)) >>
+                            WsDuplex.run(conn, outboxes(remote), onLine(remote))
+                    // Lost the claim: the budget expired and the loop has already redialed. Return
+                    // instead, so `use` closes this socket rather than leaving a second live
+                    // connection draining this remote's outbox.
+                    case false => tracer.traceWith(DialerHandshakeLate(remote, uri))
+                }
             }
 
-        val attempt: IO[Unit] =
-            (once >> tracer.traceWith(DialerDisconnected(remote, uri)))
+        def attempt(handshook: Deferred[IO, Unit]): IO[Unit] =
+            (once(handshook) >> tracer.traceWith(DialerDisconnected(remote, uri)))
                 .handleErrorWith(e => tracer.traceWith(DialerFailed(remote, e)))
 
-        (attempt >> IO.sleep(1.second)).foreverM
+        // `onCancel` is what keeps teardown closing the socket: the attempt runs on its own fiber,
+        // so cancelling this loop cancels the JOIN and not the attempt behind it. Safe past the
+        // claim and only there — by then the uncancelable acquire has finished.
+        def own(f: FiberIO[Unit]): IO[Unit] = f.join.void.onCancel(f.cancel)
+
+        // Same bound as the coil dialer, and bounding the same thing: the HANDSHAKE only.
+        // `JdkWSClient` builds its socket in an uncancelable acquire, so a remote that accepts the
+        // connection and never answers blocks the attempt forever and this loop stops retrying
+        // altogether. But `WsDuplex.run` holds the attempt for the whole life of a healthy link, so
+        // bounding the attempt as a whole abandons working connections on a timer instead.
+        val bounded: IO[Unit] =
+            for {
+                handshook <- Deferred[IO, Unit]
+                f <- attempt(handshook).start
+                _ <- IO.race(IO.race(handshook.get, f.join), IO.sleep(handshakeBudget)).flatMap {
+                    case Left(Left(_))  => own(f)
+                    case Left(Right(_)) => IO.unit
+                    case Right(_) =>
+                        handshook.complete(()).flatMap {
+                            case true =>
+                                tracer.traceWith(
+                                  DialerHandshakeStalled(remote, uri, handshakeBudget)
+                                )
+                            case false => own(f)
+                        }
+                }
+            } yield ()
+
+        (bounded >> IO.sleep(1.second)).foreverM
     }
 
     /** Server-side handler for an incoming WS connection. The first frame must be
@@ -178,6 +216,12 @@ final class WsPeerTransport private (
             serverHandler(wsb)
         }
 
+    /** How long one dial attempt may sit in the WebSocket handshake before it is abandoned. */
+    private val handshakeBudget: FiniteDuration = 30.seconds
+
+    /** How long teardown waits for a dialer to acknowledge cancellation before proceeding. */
+    private val dialerCancelBudget: FiniteDuration = 5.seconds
+
     /** Launch a dialer fiber for each remote with peerNum greater than ours (lower dials higher).
       * The fibers are torn down when the resource is released. URIs are passed at dial-start time
       * so the caller can bind on an OS-assigned ephemeral port and only build the URI map after
@@ -192,7 +236,13 @@ final class WsPeerTransport private (
             .traverse_ { case (rid, uri) =>
                 Resource
                     .make(dialerLoop(client, rid, uri).start)(fiber =>
-                        tracer.traceWith(DialerStopped(rid, uri)) >> fiber.cancel
+                        // Bounded for the same reason as the coil side: `cancel` waits for the
+                        // fiber to finalize and is itself uncancelable, so a dialer stuck in the
+                        // handshake would hang teardown. Bound the JOIN, which is cancelable.
+                        tracer.traceWith(DialerStopped(rid, uri)) >>
+                            fiber.cancel.start
+                                .flatMap(_.join.timeoutTo(dialerCancelBudget, IO.unit))
+                                .void
                     )
                     .void
             }
