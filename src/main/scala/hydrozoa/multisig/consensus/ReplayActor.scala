@@ -250,19 +250,15 @@ object ReplayActor:
       * parameters decide fees, `maxTxSize` and execution-unit budgets, so a drift shows up as
       * transactions the chain rejects, at the worst possible moment.
       *
-      * ⛔ **A mismatch REFUSES the boot** (George, 2026-09-01): *"it should raise an escalated error
-      * if protocol parameters don't match, because it likely means that the head can't produce
-      * valid L1 txs in some cases."* A head building transactions against parameters the chain has
-      * moved past emits txs the chain rejects — silently, at settlement time, under load.
+      * ⛔ **A mismatch REFUSES the boot.** A head building transactions against parameters the chain
+      * has moved past emits txs the chain rejects — silently, at settlement time, under load.
       *
       * It is a `StartupRefusal` rather than a generic crash because it is **deterministic**: the
       * config asserts what it asserts, and a restart re-derives the same verdict, so a supervisor
       * loop would learn nothing. ⇒ Operationally, an on-chain parameter update stops every peer
       * until its config is updated. That is intended: the alternative is peers quietly emitting
-      * invalid transactions. ⚠️ Measured on preview 2026-09-01: the config's parameters equal the
-      * chain's **exactly**, so this is not a hair-trigger. If a benign field ever proves to differ
-      * in practice, narrow the comparison to the fields that govern tx validity — do not weaken it
-      * back to a warning.
+      * invalid transactions. If a benign field ever proves to differ in practice, narrow the
+      * comparison to the fields that govern tx validity — do not weaken it back to a warning.
       *
       * Unreachable is NOT drift: it retries like the L1 sample, because "cannot ask" and "asked and
       * the answer is wrong" are the two classes this whole start-up path is built to separate.

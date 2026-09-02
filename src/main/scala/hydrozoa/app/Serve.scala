@@ -152,7 +152,7 @@ object Serve {
             persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
             // A held LOCK means another instance owns this store. Deterministic: restarting
             // re-derives the same answer for as long as the other process lives, so it is a
-            // refusal, not a crash. Measured: fails in ~3s with a clear message.
+            // refusal, not a crash. It fails fast, with a message naming the holder.
             backendStore <- RocksDbBackendStore
                 .open(
                   dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/rocksdb"),
@@ -198,7 +198,6 @@ object Serve {
             // NOT `hardAckedStack`, which is an interpretation the regime manager must derive
             // exactly once and project into its children.
             _ <- Resource.eval {
-                given CardanoNetwork.Section = nodeConfig
                 nodeConfig.transplantStackNumber.fold(IO.unit)(tag =>
                     Markers
                         .derive(persistence, nodeConfig.ownPeerId)
