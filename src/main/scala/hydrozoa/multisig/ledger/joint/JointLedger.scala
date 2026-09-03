@@ -549,8 +549,8 @@ final case class JointLedger(
                   rejectedDeposits = decisions.rejected.requestIds
                 )
 
-            // The command number the deposit-decisions command takes when this block issues it
-            // (regular/major only); the number is carried unchanged when no command is issued.
+            // The command number the deposit-decisions command takes when a block issues it;
+            // carried unchanged when none is issued.
             assigned = p.commandNumber.increment
 
             // Block header
@@ -581,13 +581,16 @@ final case class JointLedger(
                     } yield (newJLState, headerIntermediate, evacDiffs)
                 else {
                     for {
-                        newL2State <- applyDepositDecisionsOrPanic(
-                          p,
-                          assigned,
-                          depositRequestDecisions
-                        )
-                        evacDiffs = newL2State.diffs
-                        newJLState = p.setL2LedgerState(newL2State).incrementCommandNumber
+                        // Also reached for a block made major by a withdrawal, which has no
+                        // decisions to apply -- and applying two empty lists is a no-op that
+                        // would still consume a command number.
+                        newJLState <-
+                            if decisions.absorbed.isEmpty && decisions.rejected.isEmpty
+                            then IO.pure(p)
+                            else
+                                applyDepositDecisionsOrPanic(p, assigned, depositRequestDecisions)
+                                    .map(s => p.setL2LedgerState(s).incrementCommandNumber)
+                        evacDiffs = newJLState.l2LedgerState.diffs
 
                         headerIntermediate <- previousHeader.nextHeaderMajor(bhTracer)(
                           txTiming,
