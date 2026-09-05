@@ -230,11 +230,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                         totalEquity = config.initialEquityContributed
                       )
                     )
-                val parsedMetadata = MD.Initialization.parse(
-                  AuxiliaryData.Metadata(
-                    iTx.tx.auxiliaryData.get.value.getMetadata
-                  ): AuxiliaryData.Metadata
-                )
+                val parsedMetadata = MD.Initialization.parse(iTx.tx.auxiliaryData.get.value)
 
                 s"Metadata parsing failed: $parsedMetadata" |:
                     (parsedMetadata == expectedMetadata)
