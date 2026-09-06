@@ -146,3 +146,21 @@ class PrometheusFormatTest extends AnyFunSuite:
               out.contains("hydrozoa_block_gate_drains_total 313"),
           out
         )
+
+    // The exposition format allows at most one HELP and one TYPE line per metric name; a second one
+    // is a parse error, and Prometheus rejects the whole scrape, not just the offending family.
+    test("each metric name declares HELP and TYPE exactly once"):
+        val out = PrometheusFormat.render(sample)
+        def dupes(keyword: String): Seq[(String, Int)] =
+            out.linesIterator
+                .filter(_.startsWith(s"# $keyword "))
+                .map(_.split(" ")(2))
+                .toSeq
+                .groupBy(identity)
+                .view
+                .mapValues(_.size)
+                .filter(_._2 > 1)
+                .toSeq
+                .sortBy(_._1)
+        val _ = assert(dupes("TYPE").isEmpty, s"repeated TYPE lines: ${dupes("TYPE")}")
+        assert(dupes("HELP").isEmpty, s"repeated HELP lines: ${dupes("HELP")}")
