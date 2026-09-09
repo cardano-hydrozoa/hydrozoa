@@ -322,8 +322,7 @@ and `TxSignature`, verified against the statically configured verification keys,
 at the wrong address cannot forge a hard acknowledgement or a settlement signature. What it
 does not have is connection authentication — `CoilFrame.Hello` carries a bare `coilNum` and
 `HubWsTransport` accepts it on nothing more than "is this a coil peer I hub". Closing that is a
-signed handshake over the already-pinned verification keys, and is tracked separately from this
-document.
+signed handshake over the already-pinned verification keys, tracked in GUM-322.
 
 ## The checks
 
@@ -338,8 +337,16 @@ Five checks, at four moments. Every one reuses a comparison point the code alrea
 | 4 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `l2ParamsHash` against the config's | refuse to boot |
 | 5 | every major block | every head and coil peer | the settlement tx's treasury datum `headParamsHash` against the local one | refuse to sign the block |
 
-Check 3 exists today. Checks 1, 2 and 5 are built — `InitializationTx.Parse`, `StoreIdentity`,
-and `SettlementTx`. Check 4 is not yet.
+The four sites that implement them are `InitializationTx.Parse` (1), `StoreIdentity` (2),
+`JointLedger.State.recover` (3, 4), and `SettlementTx` (5).
+
+**Check 4 has a gap on `any-remote`.** A remote ledger that reports no `l2ParamsHash` is let
+through with a warning (`JointLedgerEvent.L2ParamsHashUnreported`), because a remote that does
+not carry the field is indistinguishable from one carrying a wrong value, and failing closed
+would refuse every deployed sidecar. So check 4 is enforced against the built-in EUTXO ledger
+and advisory against a remote one, and `L2Ledger.Restored.l2ParamsHash` is an `Option` to say
+so. Closing the gap needs the remote side to report the value and the bootstrap to obtain it;
+GUM-327 carries both questions.
 
 ### 1. The initialization transaction matches the hash
 
@@ -504,7 +511,7 @@ forever.
 - **The initialization transaction's witnesses.** `Parse` establishes structure; signatures are
   collected and verified by initial-block consensus.
 
-### Migration
+### Datum compatibility
 
 Adding a field to `MultisigTreasuryUtxo.Datum` changes its `Data` arity, so
 `Data.fromData[MultisigTreasuryUtxo.Datum]` fails on every datum written before the change —

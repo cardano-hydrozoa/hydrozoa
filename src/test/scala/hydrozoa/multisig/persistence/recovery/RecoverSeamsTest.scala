@@ -10,7 +10,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEnd
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaison, StackComposer}
@@ -30,7 +30,7 @@ import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
-import scalus.cardano.ledger.Value
+import scalus.cardano.ledger.{Hash32, Value}
 import scalus.uplc.builtin.ByteString
 
 /** Tests for the R2-fast recover seams — the pure-over-store reconstruction of `JointLedger`'s and
@@ -85,7 +85,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                   ledger,
                   None,
                   config.initialEvacuationMap,
-                  emm
+                  emm,
+                  config.l2ParamsHash,
+                  ContraTracer.nullTracer
                 )
                 viaState <- JointLedger.State.recoverState(p, None)
             yield assert(viaRecover.isEmpty && viaState.isEmpty)
@@ -139,7 +141,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                   ledger,
                   Some(BlockNumber(2)),
                   config.initialEvacuationMap,
-                  emm
+                  emm,
+                  config.l2ParamsHash,
+                  ContraTracer.nullTracer
                 )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(done.isDefined && anchored == L2CommandNumber(2L))
@@ -178,7 +182,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                   ledger,
                   Some(BlockNumber(2)),
                   config.initialEvacuationMap,
-                  emm
+                  emm,
+                  config.l2ParamsHash,
+                  ContraTracer.nullTracer
                 )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(
@@ -458,9 +464,50 @@ class RecoverSeamsTest extends AnyFunSuite:
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
                 r <- JointLedger.State
-                    .recover(p, ledger, None, config.initialEvacuationMap, None)
+                    .recover(
+                      p,
+                      ledger,
+                      None,
+                      config.initialEvacuationMap,
+                      None,
+                      config.l2ParamsHash,
+                      ContraTracer.nullTracer
+                    )
                     .attempt
             yield assert(r == Right(None))
+        }
+    }
+
+    /** Unlike the evacuation map digest, `l2ParamsHash` never moves, so it is what keeps asking
+      * whether this is still the right *ledger* rather than merely one holding the right state.
+      */
+    test("JointLedger.recover refuses to boot when the L2 ledger reports different params") {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                foreign = Hash32.fromByteString(
+                  ByteString.fromArray(Array.fill[Byte](32)(0x5a))
+                )
+                r <- JointLedger.State
+                    .recover(
+                      p,
+                      ledger,
+                      None,
+                      config.initialEvacuationMap,
+                      None,
+                      foreign,
+                      ContraTracer.nullTracer
+                    )
+                    .attempt
+            yield assert(
+              r.swap.toOption.exists {
+                  case RestoreError.L2ParamsMismatch(expected, actual) =>
+                      expected == foreign && actual == EutxoL2Ledger.l2ParamsHash
+                  case _ => false
+              },
+              s"expected an L2ParamsMismatch, got $r"
+            )
         }
     }
 
@@ -473,7 +520,17 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // or against a different configuration of this one. Dropping one entry is enough —
                 // the check is on the digest of the whole map.
                 divergent = EvacuationMap.from(config.initialEvacuationMap.drop(1))
-                r <- JointLedger.State.recover(p, ledger, None, divergent, None).attempt
+                r <- JointLedger.State
+                    .recover(
+                      p,
+                      ledger,
+                      None,
+                      divergent,
+                      None,
+                      config.l2ParamsHash,
+                      ContraTracer.nullTracer
+                    )
+                    .attempt
             yield assert(
               r.swap.toOption.exists {
                   case RestoreError.EvacuationMapMismatch(expected, actual) =>
@@ -512,7 +569,15 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // divergence these tests assert on would quietly stop being exercised.
                 emm <- Markers.recoverEvacuationMapMark(p.backend)
                 r <- JointLedger.State
-                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap, emm)
+                    .recover(
+                      p,
+                      ledger,
+                      Some(BlockNumber(2)),
+                      config.initialEvacuationMap,
+                      emm,
+                      config.l2ParamsHash,
+                      ContraTracer.nullTracer
+                    )
                     .attempt
             yield assert(r.map(_.isDefined) == Right(true))
         }
@@ -543,7 +608,15 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // divergence these tests assert on would quietly stop being exercised.
                 emm <- Markers.recoverEvacuationMapMark(p.backend)
                 r <- JointLedger.State
-                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap, emm)
+                    .recover(
+                      p,
+                      ledger,
+                      Some(BlockNumber(2)),
+                      config.initialEvacuationMap,
+                      emm,
+                      config.l2ParamsHash,
+                      ContraTracer.nullTracer
+                    )
                     .attempt
             yield assert(
               r.swap.toOption.exists(_.isInstanceOf[RestoreError.EvacuationMapMismatch])
@@ -564,7 +637,15 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // divergence these tests assert on would quietly stop being exercised.
                 emm <- Markers.recoverEvacuationMapMark(p.backend)
                 r <- JointLedger.State
-                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap, emm)
+                    .recover(
+                      p,
+                      ledger,
+                      Some(BlockNumber(2)),
+                      config.initialEvacuationMap,
+                      emm,
+                      config.l2ParamsHash,
+                      ContraTracer.nullTracer
+                    )
                     .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
         }
