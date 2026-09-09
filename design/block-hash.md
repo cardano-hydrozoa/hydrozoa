@@ -424,9 +424,12 @@ done — see *What the soft-ack signs*.
 what actually travels and persists — the block lane carries briefs, and `JournalKey.Block` stores
 one — so the storage and wire story is unchanged by the choice.
 
-`signingBytes` moves from `BlockHeader.Section` to `BlockBrief.Section` with it. Both call sites
-already hold a brief: `JointLedger` (`:719`) and `FastConsensusActor` (`:285`) each write
-`brief.header.signingBytes` today and become `brief.signingBytes`.
+`signingBytes` moves from `BlockHeader.Section` to `BlockBrief.Section` with it, and stops being
+a value on the section: the preimage names a result the brief does not hold, so it takes one —
+`BlockBrief.Section.signingBytes(blockResultHash)`. Both call sites already hold a brief.
+`JointLedger` (`:719`) passes the result it just computed, because it is signing its own ack.
+`FastConsensusActor` (`:285`) passes the result each ack states, because it is verifying somebody
+else's — see below.
 
 **Stored, and never trusted.** The brief carries the hash on the wire and into the `Block`
 journal, but a stored hash is a claim: every peer that rebuilds the block recomputes the digest
@@ -440,10 +443,15 @@ from header and body and compares. That holds in both directions:
   against the recomputed one. Below `fastBlockMark` nothing re-derives — those blocks are read
   back and believed, and their stored signatures are the only thing that would catch a change.
 
-**Coil peers check it.** A coil peer authors no soft-ack, so it never signs a `blockHash` — but
-it rebuilds block bodies exactly as a head follower does, so it recomputes and compares on the
-same path. That extends the guarantee from head↔head to head↔coil, which is where it is most
-needed: a coil peer's divergence is otherwise invisible until its hard-ack fails to verify.
+**Coil peers check both digests.** A coil peer authors no soft-ack, so it signs neither — but it
+rebuilds block bodies exactly as a head follower does, so it recomputes `blockHash` and compares
+on the same path. It also *receives* the head peers' acks: `SoftAck` is a `CoilRelay.Artifact`,
+relayed over `PeerLiaisonHubToCoil` alongside briefs and hard-acks. So a coil compares its own
+`blockResultHash` against the value each ack states, exactly as a head peer does, and reaches the
+same verdict without contributing a signature to it.
+
+That extends both guarantees from head↔head to head↔coil, which is where they are most needed: a
+coil peer's divergence is otherwise invisible until its hard-ack fails to verify.
 
 ## What the soft-ack signs
 
@@ -470,16 +478,33 @@ execution divergence nameable rather than merely visible.
 SoftAck(ackId, blockNum, blockResultHash, headerSignature, finalizationRequested)
 ```
 
-A verifier recomputes the digest from its own applied state and compares that first; the
-signature check follows. Carrying the value rather than leaving it implicit in the preimage costs
-32 bytes per ack per block and buys the diagnosis — a peer whose result differs from mine has
-diverged in execution, and a bare signature failure cannot be told apart from a wrong key or a
-mangled message.
+Carrying the value costs 32 bytes per ack per block and buys the diagnosis. Left implicit in the
+preimage, a peer that computed a different result is indistinguishable from one signing with the
+wrong key or one whose message arrived mangled — three failures, one symptom. Stated, the result
+is a claim that can be compared before any signature is checked.
 
-**Verifying an ack follows applying the block.** The preimage names a state only the verifier can
-compute, so an ack that arrives before the local apply finishes waits for it. `blockHash` is
-unaffected: it is checkable the moment the brief lands, which is the first of the two stages
-below.
+**Verification becomes per-ack, and compares before it verifies.**
+`FastConsensusActor.completeCell` (`:284`) computes one `msg` from the brief today and checks
+every signature against it. Two things change:
+
+1. **A preimage per ack**, built from the `blockResultHash` that ack states rather than from one
+   value shared across all of them.
+2. **An equality pass first** — every ack's `blockResultHash` against the peer's own — and only
+   then the signature pass.
+
+Building each preimage from the *verifier's* own result would catch a divergence too, as a
+signature failure. Comparing first is what makes the divergence nameable: the comparison says
+which peer computed what, and the verification then confirms that peer really claimed it rather
+than being misquoted by whoever relayed the ack.
+
+**The ordering this needs is already there.** The new preimage cannot be built before the
+verifier has applied the block. `completeCell` runs only on a saturated cell, `isSaturated`
+requires an ack from every head peer including the local one, and `JointLedger` (`:716`) authors
+that ack only after applying. So no ack is verified before the local apply today, and none has to
+start waiting.
+
+`blockHash` is unaffected: it is checkable the moment the brief lands, which is the first of the
+two stages below.
 
 **The same shape lets deposit decisions follow later**, without redesigning any of this. If a
 decision stops riding the brief, it needs a carrier that travels after the leader has observed
