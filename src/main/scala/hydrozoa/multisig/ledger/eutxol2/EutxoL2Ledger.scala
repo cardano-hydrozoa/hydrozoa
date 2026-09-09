@@ -69,7 +69,7 @@ object EutxoL2Ledger {
     type Config = CardanoNetwork.Section & InitializationParameters.Section & HeadParameters.Section
 
     /** This ledger's agreed-parameters digest, reported at every `restoreTo` anchor and pinned in
-      * the head config as `l2ParamsHash` (design/head-params-hash.md).
+      * the head config as `l2ParamsHash` (docs/spec/head-params-hash.md).
       *
       * A digest over the domain tag alone, because the built-in ledger has no negotiable
       * parameters: its rules are the hydrozoa code, and its only agreed knobs —

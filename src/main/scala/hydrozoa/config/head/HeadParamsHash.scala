@@ -11,7 +11,8 @@ import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, ScriptHash, TransactionInput}
 import scalus.uplc.builtin.{ByteString, platform}
 
-/** The digest that pins a head's agreed configuration, as defined in `design/head-params-hash.md`.
+/** The digest that pins a head's agreed configuration, as defined in
+  * `docs/spec/head-params-hash.md`.
   *
   * It takes the bootstrap context and block zero's header rather than a whole
   * [[HeadConfig.Section]] because it must be computable **before** the initialization transaction
@@ -38,7 +39,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   * codec tweak that silently moved this value — once it is written into a treasury datum — would
   * leave a live head unable to parse its own initialization transaction.
   *
-  * See `design/head-params-hash.md` for what each field is doing here, what is deliberately left
+  * See `docs/spec/head-params-hash.md` for what each field is doing here, what is deliberately left
   * out, and the checks that compare this value.
   */
 object HeadParamsHash {
@@ -93,7 +94,7 @@ object HeadParamsHash {
         out.u32(config.backpressureCoefficient.convert)
 
         // `rateLimits` is deliberately absent: it is node-local, and nothing a follower validates
-        // depends on it. See design/head-params-hash.md, "What is deliberately excluded".
+        // depends on it. See docs/spec/head-params-hash.md, "What is deliberately excluded".
 
         // -- HeadParameters: the rest
         out.u32(config.coilQuorum)

@@ -218,7 +218,7 @@ object L2Ledger {
       * The two digests answer different questions, which is why both are here. `evacuationMapHash`
       * moves with every applied command, so at a warm anchor it says only that both sides hold the
       * same *state*. `l2ParamsHash` never moves, so it is what keeps asking whether this is still
-      * the right *ledger*. See `design/head-params-hash.md`.
+      * the right *ledger*. See `docs/spec/head-params-hash.md`.
       *
       * @param l2ParamsHash
       *   `None` from a remote ledger that does not report it yet. Transitional: the head then

@@ -41,7 +41,7 @@ import scalus.cardano.ledger.Hash32
   * defence in depth rather than the only guard; what it adds on its own is that a store handed over
   * without its config still says which head, and which roster, it was written for.
   *
-  * See `design/head-params-hash.md`.
+  * See `docs/spec/head-params-hash.md`.
   */
 final case class StoreIdentity(
     headParamsHash: Hash32,

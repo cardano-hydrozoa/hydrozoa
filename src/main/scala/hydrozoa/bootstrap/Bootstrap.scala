@@ -350,7 +350,7 @@ object Bootstrap:
           blockConfig = bhp.blockConfig,
           coilQuorum = bhp.coilQuorum,
           // The L2 ledger reports this at every `restoreTo` anchor and JointLedger checks it
-          // against this value (design/head-params-hash.md). Bootstrap has no ledger running, so
+          // against this value (docs/spec/head-params-hash.md). Bootstrap has no ledger running, so
           // it sources the value rather than asking: the built-in ledger's digest is a code
           // constant.
           // TODO: a remote ledger's digest has to come from the operator (the ledger prints it

@@ -1142,7 +1142,7 @@ object JointLedger {
           * A ledger that does not report the digest is let through with a warning: a remote that
           * predates the field cannot be distinguished from a wrong one, and failing closed would
           * refuse every currently-deployed sidecar. Remove this branch once the remote side ships
-          * it. See `design/head-params-hash.md`.
+          * it. See `docs/spec/head-params-hash.md`.
           */
         private def checkL2Params(
             restored: L2Ledger.Restored,
