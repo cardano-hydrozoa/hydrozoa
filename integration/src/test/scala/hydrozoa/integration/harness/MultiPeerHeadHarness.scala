@@ -36,7 +36,7 @@ import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat, StoreIdentity}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
@@ -1145,6 +1145,7 @@ object MultiPeerHeadHarness:
             peerNum: HeadPeerNumber,
             mode: Mode,
             cfs: List[Cf],
+            identity: StoreIdentity,
             tracer: ContraTracer[IO, PersistenceEvent],
         ): Resource[IO, BackendStore[IO]] =
             mode match
@@ -1152,7 +1153,7 @@ object MultiPeerHeadHarness:
                 case Mode.RocksDb(root) =>
                     val dir = root.resolve(s"peer-${peerNum: Int}")
                     Resource.eval(IO.blocking(Files.createDirectories(dir))) >>
-                        RocksDbBackendStore.open(dir, cfs, tracer)
+                        RocksDbBackendStore.open(dir, cfs, identity, tracer)
 
     // ===================================
     // Transport — per-mode bring-up
@@ -1527,6 +1528,12 @@ object MultiPeerHeadHarness:
                     headPeers = multiNodeConfig.headConfig.headPeerNums.toList,
                     coilPeers = multiNodeConfig.headConfig.coilPeers.coilPeerNumbers,
                     hubs = multiNodeConfig.headConfig.coilPeers.hubHeadPeerNumbers,
+                  ),
+                  StoreIdentity(
+                    headParamsHash = nodeConfig.headParamsHash,
+                    headId = nodeConfig.headId,
+                    headAddress = nodeConfig.headMultisigAddress,
+                    ownPeerId = nodeConfig.ownPeerId
                   ),
                   persistenceTracer,
                 )
