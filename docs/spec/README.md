@@ -12,6 +12,7 @@ graduate here once built). For project-wide conventions, start with the style gu
 |---|---|
 | [codecs.md](codecs.md) | Conventions for wire/storage codecs (working notes). |
 | [coil-network.md](coil-network.md) | Coil-ready peers: the follower-only node type, the hub fan-out actors (`CoilRelay`, `CoilAckSequencer`), the threshold multisig, and the head↔coil liaison lanes. |
+| [crash-recovery-testing.md](crash-recovery-testing.md) | How recovery is exercised: the single `Persistence` decorator seam, the three decorators over it (`CrashingPersistence`, `DurabilityOrderOracle`, `SlowPersistence`), the restart primitives and what survives them, and what the link-recovery paths still do not cover. |
 | [effect-tracking.md](effect-tracking.md) | Linking blocks and requests to their L1 effects: effect identity (`l1TxId`), the reverse-index CFs, per-block decomposition, `relatedEffects`, and consensus-safe withdrawal-effect tracking (the `payoutRequestIds` side-channel + forward-contiguous payout packing + the finalization payout fix). |
 | [evacuate-command.md](evacuate-command.md) | The `hydrozoa evacuate` subcommand: start the rule-based regime standalone from a left-over database — `RuleBasedRegimeManager` owning its own `CardanoLiaison` + `RuleBasedActor`, a read-only store open, and the shared handoff-vs-standalone actor topology. |
 | [fast-consensus.md](fast-consensus.md) | The fast cycle: per-peer soft-confirmation of block headers, eager signature collection, BlockWeaver / JointLedger / FastConsensusActor roles. |
