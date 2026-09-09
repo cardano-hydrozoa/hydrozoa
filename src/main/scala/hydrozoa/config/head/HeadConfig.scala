@@ -253,7 +253,7 @@ object HeadConfig {
         def headConfig: HeadConfig
 
         /** The digest pinning this whole configuration — see [[HeadParamsHash]] and
-          * `design/head-params-hash.md`.
+          * `docs/spec/head-params-hash.md`.
           */
         override def headParamsHash: Hash32 = headConfig.headParamsHash
 
@@ -266,7 +266,7 @@ object HeadConfig {
       */
     // TODO: the L2 parameters hash is `HeadParameters.l2ParamsHash` and is documented there.
     //  Keep that single name — `l2Params` is not a field of anything. See
-    //  design/head-params-hash.md for what the hash covers per backend.
+    //  docs/spec/head-params-hash.md for what the hash covers per backend.
     final case class Bootstrap private[head] (
         override val cardanoNetwork: CardanoNetwork,
         override val headParameters: HeadParameters,

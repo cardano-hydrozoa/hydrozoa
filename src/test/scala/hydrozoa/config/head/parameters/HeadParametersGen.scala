@@ -6,8 +6,8 @@ import hydrozoa.config.head.multisig.fallback.{FallbackContingency, generateFall
 import hydrozoa.config.head.multisig.settlement.{SettlementConfig, generateSettlementConfig}
 import hydrozoa.config.head.multisig.timing.{TxTiming, generateDefaultTxTiming}
 import hydrozoa.config.head.rulebased.dispute.{DisputeResolutionConfig, generateDisputeResolutionConfig}
-import org.scalacheck.{Arbitrary, Gen}
-import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_Hash
+import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
+import org.scalacheck.Gen
 import scalus.cardano.ledger.Hash32
 import test.{GenWithTestPeers, given}
 
@@ -19,7 +19,9 @@ def generateHeadParameters(
         generateDisputeResolutionConfig,
     generateSettlementConfig: Gen[SettlementConfig] = generateSettlementConfig,
     generateBlockConfig: Gen[BlockConfig] = generateBlockConfig,
-    generateL2ParamsHash: Gen[Hash32] = Arbitrary.arbitrary[Hash32],
+    // The built-in ledger reports its own digest at every `restoreTo` anchor and JointLedger
+    // checks the config against it, so a random value here would fail every eutxo boot.
+    generateL2ParamsHash: Gen[Hash32] = Gen.const(EutxoL2Ledger.l2ParamsHash),
     generateL2Ledger: Gen[L2LedgerKind] = Gen.const(L2LedgerKind.CardanoEutxo),
     // Default identity-isomorphism ON (headId pin NOT enforced) so generated L2 txs, which carry no
     // headId metadatum, are accepted. Pin-enforcing suites override this to `false`.

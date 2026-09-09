@@ -97,7 +97,7 @@ object InitializationTx {
           *   the digest of the reader's own head config, passed in already computed rather than
           *   derived from [[Config]]: computing it needs nearly the whole head config, and this
           *   parser deliberately asks for only the five sections it uses. See
-          *   `design/head-params-hash.md`.
+          *   `docs/spec/head-params-hash.md`.
           */
         final case class Parse(config: Config)(
             blockCreationEndTime: BlockCreationEndTime,
@@ -242,7 +242,7 @@ object InitializationTx {
                         )
                 // The configuration-agreement gate. Peers never compare configs with each other;
                 // they each compare against this one transaction, so agreeing with it is agreeing
-                // with each other (design/head-params-hash.md).
+                // with each other (docs/spec/head-params-hash.md).
                 _ <-
                     if decodedTreasuryDatum.headParamsHash == expectedTreasuryDatum.headParamsHash
                     then Right(())
