@@ -50,6 +50,8 @@ final case class HeadConfig private (
 ) extends HeadConfig.Section {
     override transparent inline def headConfig: HeadConfig = this
 
+    override lazy val headParamsHash: Hash32 = HeadParamsHash(this)
+
     override def headConfigBootstrap: HeadConfig.Bootstrap = {
         val initTx = initialBlock.effects.initializationTx
 
@@ -242,16 +244,21 @@ object HeadConfig {
     trait Section extends HeadConfig.Bootstrap.Section, InitialBlock.Section {
         def headConfig: HeadConfig
 
+        /** The digest pinning this whole configuration — see [[HeadParamsHash]] and
+          * `design/head-params-hash.md`.
+          */
+        def headParamsHash: Hash32 = headConfig.headParamsHash
+
         override def headConfigBootstrap: Bootstrap = headConfig.headConfigBootstrap
         def initialBlockSection: InitialBlock = headConfig.initialBlockSection
     }
 
     /** @param coilPeers
       *   The coil peers keyed by explicit [[CoilPeerNumber]] (verification key + hub head peer).
-      * @param l2Params
-      *   a black-box, L2-specific blake2b-256 hash of parameters that the peers must agree on
-      *   before initialization.
       */
+    // TODO: the L2 parameters hash is `HeadParameters.l2ParamsHash` and is documented there.
+    //  Keep that single name — `l2Params` is not a field of anything. See
+    //  design/head-params-hash.md for what the hash covers per backend.
     final case class Bootstrap private[head] (
         override val cardanoNetwork: CardanoNetwork,
         override val headParameters: HeadParameters,
