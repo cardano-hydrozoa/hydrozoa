@@ -93,11 +93,15 @@ above.
 
 ## Three digests
 
-| digest | over | taken by | when |
-|---|---|---|---|
-| `requestHash` | one user request as received | the peer that sequences it, and every peer that receives it | at `RequestId` assignment |
-| `blockHash` | the header fields and the ordered request sequence | the block leader, and every peer that rebuilds the block | at block cut, **before applying anything** |
-| `blockResultHash` | the outcome of applying that sequence | every peer, independently | after applying the body |
+| digest | over | taken by | when | carried on |
+|---|---|---|---|---|
+| `requestHash` | one user request as received | the peer that sequences it, and every peer that receives it | at `RequestId` assignment | the block body, beside its `RequestId` |
+| `blockHash` | the header fields and the ordered request sequence | the block leader, and every peer that rebuilds the block | at block cut, **before applying anything** | the block brief |
+| `blockResultHash` | the outcome of applying that sequence | every peer, independently | after applying the body | the soft-ack |
+
+**Each digest travels on the message that is ready when it is.** The brief is announced at the
+cut, so it carries what the cut decided; the ack is produced after applying, so it carries what
+applying produced.
 
 `blockHash` covers `requestHash`, not the request bytes: the body is a list of
 `(RequestId, requestHash)` pairs, so the block commits to exactly which payload sits at each
@@ -372,11 +376,13 @@ Constant work, whatever `N` is. Step 5 is what makes steps 1–4 mean anything: 
 what the peers signed, so matching them is matching what the head agreed the state was. A donor
 that fabricates either half has to produce a signature set over the fabrication.
 
-Splitting the digest does not weaken this. The state commitments moved from the header into
-`blockResultHash`, and the ack signs that too — so the seeding peer verifies the same claim, from
-the ack rather than from the header. What it now needs alongside the state is the block's brief
-(for step 3) and its validity flags (for step 4); both are already in the `Block` journal beside
-the confirmation. Open question 3 asks whether a `bodyHash` reduces step 3 to the header alone.
+Splitting the digest does not weaken this. The state commitments sit in `blockResultHash` and the
+ack signs it, so the seeding peer verifies the same claim from the ack. What it needs alongside
+the state is the block's brief (for step 3) and its validity flags (for step 4); both are in the
+`Block` journal beside the confirmation. Each ack also states the `blockResultHash` its signature
+covers, so step 4 is a comparison before it is a verification, and a donor with a stale or
+fabricated state is named as such rather than merely failing a signature check. Open question 3
+asks whether a `bodyHash` reduces step 3 to the header alone.
 
 **Every block, not only majors.** The KZG commitment in the treasury datum pins the evacuation
 map at major-block settlement, which is a real anchor and a stronger one — it is on L1 rather
@@ -389,9 +395,9 @@ cover the ledger state and the evacuation map; the rest of the recovery base (§
 spines) is not covered by either, and a seeded peer either re-derives it or is handed it on
 trust. Settling that is the work item this design unblocks rather than one it completes.
 
-## Where `blockHash` lives
+## Where the digests live
 
-**A `BlockBrief` field** — not a `BlockHeader` one, which cannot work.
+**`blockHash` is a `BlockBrief` field** — not a `BlockHeader` one, which cannot work.
 
 `blockHash` is known at the cut, but a header still cannot *cover* a body it does not hold.
 
@@ -406,10 +412,12 @@ trust. Settling that is the work item this design unblocks rather than one it co
 The first is decisive. Those methods return `F[BlockHeader.Minor]` and friends from timing alone,
 with no body to hash. The other two would carry a body commitment they have no use for.
 
-**`blockResultHash` is a `BlockBrief` field too**, filled once the block has been applied. It is
-the one field of the brief that is not available at the cut — which is fine, because it is also
-the one field nobody needs in order to *announce*: the leader sends the brief without it, and
-each peer fills in its own. What travels between peers is the ack, not this field.
+**`blockResultHash` is not a brief field. It is a `SoftAck` field.** The brief is the
+announcement and the announcement is made at the cut, so a brief field that exists only after
+applying puts back, in the type, the ordering the opening section takes out. The result is also
+not the leader's to state: every peer derives its own, and the leader's is one of `N` rather than
+the one the others copy. So it rides the per-peer message that already travels after the work is
+done — see *What the soft-ack signs*.
 
 `BlockBrief` is where header and body meet, and `BlockBrief.Section` already extends both
 `BlockHeader.Section` and `BlockBody.Section`, so the preimage needs no new plumbing. It is also
@@ -455,9 +463,27 @@ attests to two things in one signature: *this is the block I was given* and *thi
 from applying it*. Neither statement is weaker than before, and their separation is what makes an
 execution divergence nameable rather than merely visible.
 
-It is also the reason deposit decisions can follow later without redesigning any of this. If a
-decision stops riding the brief, it needs a carrier that travels after the leader has observed L1
-— which is the shape the ack already has.
+**The ack carries `blockResultHash` as a field**, on the same terms the brief carries
+`blockHash`: stored, and never trusted.
+
+```scala
+SoftAck(ackId, blockNum, blockResultHash, headerSignature, finalizationRequested)
+```
+
+A verifier recomputes the digest from its own applied state and compares that first; the
+signature check follows. Carrying the value rather than leaving it implicit in the preimage costs
+32 bytes per ack per block and buys the diagnosis — a peer whose result differs from mine has
+diverged in execution, and a bare signature failure cannot be told apart from a wrong key or a
+mangled message.
+
+**Verifying an ack follows applying the block.** The preimage names a state only the verifier can
+compute, so an ack that arrives before the local apply finishes waits for it. `blockHash` is
+unaffected: it is checkable the moment the brief lands, which is the first of the two stages
+below.
+
+**The same shape lets deposit decisions follow later**, without redesigning any of this. If a
+decision stops riding the brief, it needs a carrier that travels after the leader has observed
+L1 — which is what the ack already is.
 
 `blockNum` and `startTime` go. Both are inside the `blockHash` preimage, so dropping them
 unbinds nothing — a signature made over block N still cannot be replayed as block M. `SoftAck`
@@ -508,22 +534,28 @@ and `FastConsensusActor` (verification, `:285`), and `Onchain` is a misleading n
 correcting alongside the shape change.
 
 **`JointLedger` compares hashes.** `panicOnMismatchWithExpectedBrief` compares 32-byte values
-instead of case-class trees, and now compares them in two stages: `blockHash` on receipt of the
-brief, `blockResultHash` after applying. The first is checkable before any work is done, which
-is worth having on its own — a divergent block is rejected without being applied.
+instead of case-class trees, in two stages and against two different sources: `blockHash` against
+the leader's brief on receipt, and `blockResultHash` against each peer's ack once the block has
+been applied. The first is checkable before any work is done, which is worth having on its own —
+a divergent block is rejected without being applied.
 
 `briefMismatchSummary` stays: once the hashes differ, the field-level diff is what tells an
 operator *which* part flipped, and it is the only thing that can — a hash says they disagree,
 never how. What the split adds is that the operator is told *which kind* of disagreement it is
 before reading the diff.
 
+It explains a `blockHash` mismatch only, because a brief is all it holds. A `blockResultHash`
+mismatch has no field-level diff behind it — the two peers hold different ledger states rather
+than different messages — so what an operator gets is the ack's peer number and the two digests,
+and the state comparison that would say more is a diagnostic tool this design does not build.
+
 ## Migration
 
 **A running head cannot be upgraded across this change.** Three things move at once: the signed
-bytes, so acks from a peer on the old preimage fail to verify on the new one and the reverse;
-the wire brief, which gains `blockHash`; and the `Block` journal value, which gains both digests.
-It applies to heads initialized afterwards, and belongs in the release notes of the release that
-ships it.
+bytes, so acks from a peer on the old preimage fail to verify on the new one and the reverse; the
+brief, on the wire and as the `Block` journal value, which gains `blockHash`; and the ack, on the
+wire and as the `SoftAck` journal value, which gains `blockResultHash`. It applies to heads
+initialized afterwards, and belongs in the release notes of the release that ships it.
 
 The block header is **unchanged** by this design. An earlier draft added `evacuationMapHash` and
 `l2StateHash` to it; putting them in `blockResultHash` instead leaves `BlockHeader` and its
