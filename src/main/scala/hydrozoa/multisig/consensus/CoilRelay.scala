@@ -75,7 +75,9 @@ abstract class CoilRelay(
 ) extends Actor[IO, CoilRelay.Request] {
     private def resolveConnections: IO[CoilRelay.Connections] = pendingConnections match {
         case shared: HeadMultisigRegimeManager.PendingConnections =>
-            shared.get.map(s => CoilRelay.Connections(coilPeerLiaisons = s.coilPeerLiaisons))
+            shared.get
+                .flatMap(IO.fromEither)
+                .map(s => CoilRelay.Connections(coilPeerLiaisons = s.coilPeerLiaisons))
         case own: CoilRelay.Connections => IO.pure(own)
     }
 

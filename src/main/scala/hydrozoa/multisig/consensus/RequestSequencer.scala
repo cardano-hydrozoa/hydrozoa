@@ -37,7 +37,11 @@ trait RequestSequencer(
     l2Screener: L2Screener[IO],
     tracer: ContraTracer[IO, EventSequencerEvent],
     persistence: Persistence[IO],
-    metrics: PeerMetrics
+    metrics: PeerMetrics,
+    /** The boot markers, derived once by the regime manager (§5.2); this actor projects
+      * `nextRequestNumber` rather than re-reading its own Request spine.
+      */
+    markers: Markers
 ) extends Actor[IO, Request] {
     private val state = State()
 
@@ -169,11 +173,12 @@ trait RequestSequencer(
             )
     }
 
-    private def preStartLocal: IO[Unit] =
+    private def preStartLocal: IO[Unit] = {
+        // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
+        // empty store -> RequestNumber(0), the same cold value. Projected from the manager's
+        // marker bundle rather than re-read, so every actor anchors on the one derivation.
+        val next = markers.nextRequestNumber
         for {
-            // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
-            // empty store -> RequestNumber(0), the same cold value.
-            next <- Markers.recoverNextRequestNumber(persistence.backend, ownHeadPeerNum)
             _ <- state.seedNextRequestNum(next)
             // Seed the confirmed high-water from the highest already-assigned own request (next - 1).
             // Treating assigned-as-confirmed opens the backpressure window optimistically after a
@@ -181,6 +186,7 @@ trait RequestSequencer(
             _ <- state.seedConfirmedHighWater(next.previousOrZero)
             _ <- reportBackpressure(config.backpressureCoefficient * config.maxRequestsPerBlock)
         } yield ()
+    }
 
     /** Publish the current backpressure headroom (space left in the
       * `backpressureCoefficient * maxRequestsPerBlock` window) to [[metrics]] — see
@@ -240,7 +246,8 @@ object RequestSequencer {
         l2Screener: L2Screener[IO],
         tracer: ContraTracer[IO, EventSequencerEvent],
         persistence: Persistence[IO],
-        metrics: PeerMetrics
+        metrics: PeerMetrics,
+        markers: Markers
     ): IO[RequestSequencer] =
         IO(
           new RequestSequencer(
@@ -249,7 +256,8 @@ object RequestSequencer {
             l2Screener,
             tracer,
             persistence,
-            metrics
+            metrics,
+            markers
           ) {}
         )
 

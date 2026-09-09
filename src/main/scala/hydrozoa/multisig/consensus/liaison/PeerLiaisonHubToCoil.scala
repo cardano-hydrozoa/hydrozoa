@@ -44,6 +44,8 @@ abstract class PeerLiaisonHubToCoil(
     persistence: Persistence[IO]
 ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
 
+    // `Env extends CardanoNetwork.Section`, so this given also supplies the section the
+    // inbound-lane `WriteBatch` codec in `persistInbound` needs.
     private given env: Env = Env(config, tracer, persistence)
 
     private val headPeerNums: List[HeadPeerNumber] = config.headPeerNums.toList

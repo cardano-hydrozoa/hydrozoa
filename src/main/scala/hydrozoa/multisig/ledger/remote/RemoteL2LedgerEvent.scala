@@ -17,6 +17,14 @@ object RemoteL2LedgerEvent:
     /** A WebSocket connection to the remote ledger succeeded. */
     final case class Connected(uri: Uri) extends RemoteL2LedgerEvent
 
+    /** The WebSocket handshake did not complete within [[budget]], so the attempt was ABANDONED
+      * rather than awaited. A remote that accepts the TCP connection and never answers the upgrade
+      * would otherwise block the connect forever: `JdkWSClient` builds its socket inside
+      * `Resource.make`'s acquire, which is uncancelable, so neither a `timeout` nor a `poll` can
+      * interrupt it and the retry ladder never engages.
+      */
+    final case class HandshakeStalled(uri: Uri, budget: FiniteDuration) extends RemoteL2LedgerEvent
+
     /** A request errored; reconnecting after [[backoff]] on attempt [[attempt]] (zero-indexed). */
     final case class ConnectionError(attempt: Int, backoff: FiniteDuration, cause: Throwable)
         extends RemoteL2LedgerEvent

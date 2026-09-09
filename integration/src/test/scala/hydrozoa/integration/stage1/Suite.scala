@@ -32,7 +32,7 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Markers, Persistence, PersistenceEventFormat}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.util.Pretty
@@ -551,6 +551,10 @@ case class Suite(
                     headPeerLiaisons = List(),
                   )
                   l2Ledger <- InMemoryL2Store.ledger(nodeConfig)
+                  // Derived from this peer's own store rather than assumed cold, so the actor
+                  // recovers from whatever the suite has put there — the same bundle the regime
+                  // manager would hand it in production.
+                  markers <- Markers.derive(persistence, nodeConfig.ownPeerId)
                   jointLedger <- system.actorOf(
                     JointLedger(
                       nodeConfig,
@@ -558,7 +562,8 @@ case class Suite(
                       l2Ledger,
                       Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(headPeerNum)),
                       persistence,
-                      PeerMetrics.create(0L, Vector.empty)
+                      PeerMetrics.create(0L, Vector.empty),
+                      markers
                     )
                   )
                   _ <- jointLedgerD.complete(jointLedger)

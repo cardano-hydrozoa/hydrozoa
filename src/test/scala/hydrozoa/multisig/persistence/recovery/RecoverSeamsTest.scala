@@ -79,11 +79,13 @@ class RecoverSeamsTest extends AnyFunSuite:
             for
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
+                emm <- Markers.recoverEvacuationMapMark(p.backend)
                 viaRecover <- JointLedger.State.recover(
                   p,
                   ledger,
                   None,
-                  config.initialEvacuationMap
+                  config.initialEvacuationMap,
+                  emm
                 )
                 viaState <- JointLedger.State.recoverState(p, None)
             yield assert(viaRecover.isEmpty && viaState.isEmpty)
@@ -131,11 +133,13 @@ class RecoverSeamsTest extends AnyFunSuite:
                         p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
                     )
                 )
+                emm <- Markers.recoverEvacuationMapMark(p.backend)
                 done <- JointLedger.State.recover(
                   p,
                   ledger,
                   Some(BlockNumber(2)),
-                  config.initialEvacuationMap
+                  config.initialEvacuationMap,
+                  emm
                 )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(done.isDefined && anchored == L2CommandNumber(2L))
@@ -168,11 +172,13 @@ class RecoverSeamsTest extends AnyFunSuite:
                         p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
                     )
                 )
+                emm <- Markers.recoverEvacuationMapMark(p.backend)
                 recovered <- JointLedger.State.recover(
                   p,
                   ledger,
                   Some(BlockNumber(2)),
-                  config.initialEvacuationMap
+                  config.initialEvacuationMap,
+                  emm
                 )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(
@@ -188,7 +194,7 @@ class RecoverSeamsTest extends AnyFunSuite:
     test("StackComposer.recover returns None for an empty store (no own hard-ack)") {
         withStore { p =>
             StackComposer.State
-                .recover(p, None, None, PeerId.Head(HeadPeerNumber(0)))
+                .recover(p, None, None, None)
                 .map(s => assert(s.isEmpty))
         }
     }
@@ -212,18 +218,23 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
                 _ <- p.put(StoreKey.Treasury)(balancedTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
-                markers = Markers(
-                  softConfirmed = None,
-                  fastBlockMark = None,
-                  hardConfirmed = Some(StackNumber(stackN)), // stack 2 hard-confirmed → gate armed
-                  hardAcked = Some(HardAckNumber(hardAckNum)),
-                  nextRequestNumber = RequestNumber(0)
+                // DERIVED, not hand-built: `hardAckedStack` is unpacked from the hard-ack VALUE
+                // inside `Markers.derive`, and that unpacking is what this test exists to check —
+                // passing it in by hand would assert the fixture, not the code. Only
+                // `hardConfirmed` is overridden, because no HardConfirmation is seeded and this
+                // case wants the gate armed.
+                markers <- Markers
+                    .derive(p, PeerId.Head(own))
+                    .map(_.copy(hardConfirmed = Some(StackNumber(stackN))))
+                _ = assert(
+                  markers.hardAckedStack == Some(StackNumber(stackN)),
+                  s"ack $hardAckNum must unpack to stack $stackN, got ${markers.hardAckedStack}"
                 )
                 recovered <- StackComposer.State.recover(
                   p,
                   markers.hardAcked,
                   markers.hardConfirmed,
-                  PeerId.Head(own)
+                  markers.hardAckedStack
                 )
             yield assert(
               recovered.exists { s =>
@@ -267,18 +278,16 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(StoreKey.BlockResult(BlockNumber(5)))(br5.persisted)
                 _ <- p.put(JournalKey.Block(BlockNumber(4)))(JournalValue(stamp, br4.brief))
                 _ <- p.put(JournalKey.Block(BlockNumber(5)))(JournalValue(stamp, br5.brief))
-                markers = Markers(
-                  softConfirmed = None,
-                  fastBlockMark = None,
-                  hardConfirmed = Some(StackNumber(0)), // below stack 1 → gate disarmed
-                  hardAcked = Some(HardAckNumber(0)),
-                  nextRequestNumber = RequestNumber(0)
-                )
+                // Derived for the same reason as above; `hardConfirmed` overridden to keep the
+                // gate disarmed, which is what this case is about.
+                markers <- Markers
+                    .derive(p, PeerId.Head(own))
+                    .map(_.copy(hardConfirmed = Some(StackNumber(0))))
                 recovered <- StackComposer.State.recover(
                   p,
                   markers.hardAcked,
                   markers.hardConfirmed,
-                  PeerId.Head(own)
+                  markers.hardAckedStack
                 )
             yield assert(
               recovered.exists { s =>
@@ -329,11 +338,16 @@ class RecoverSeamsTest extends AnyFunSuite:
                       Timestamped(stamp, softConfirmedOf(br))
                     )
                 )
+                // Derived so the acked stack comes from the seeded ack VALUE (stack 1 here, not
+                // the ack number 0); `hardConfirmed` is pinned below it to keep the gate disarmed.
+                markers <- Markers
+                    .derive(p, PeerId.Head(own))
+                    .map(_.copy(hardConfirmed = Some(StackNumber(0))))
                 recovered <- StackComposer.State.recover(
                   p,
-                  Some(HardAckNumber(0)),
-                  Some(StackNumber(0)),
-                  PeerId.Head(own)
+                  markers.hardAcked,
+                  markers.hardConfirmed,
+                  markers.hardAckedStack
                 )
             yield assert(
               recovered.exists { s =>
@@ -351,7 +365,7 @@ class RecoverSeamsTest extends AnyFunSuite:
     test("StackComposer.recover (coil) returns None for an empty store (no own coil hard-ack)") {
         withStore { p =>
             StackComposer.State
-                .recover(p, None, None, PeerId.Coil(CoilPeerNumber(0)))
+                .recover(p, None, None, None)
                 .map(r => assert(r.isEmpty))
         }
     }
@@ -406,7 +420,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   p,
                   Some(HardAckNumber(hardAckNum)),
                   Some(StackNumber(stackN)), // stack 2 hard-confirmed → gate armed
-                  PeerId.Coil(coil)
+                  Some(StackNumber(stackN))
                 )
             yield assert(
               recovered.exists { s =>
@@ -444,7 +458,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
                 r <- JointLedger.State
-                    .recover(p, ledger, None, config.initialEvacuationMap)
+                    .recover(p, ledger, None, config.initialEvacuationMap, None)
                     .attempt
             yield assert(r == Right(None))
         }
@@ -459,7 +473,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // or against a different configuration of this one. Dropping one entry is enough —
                 // the check is on the digest of the whole map.
                 divergent = EvacuationMap.from(config.initialEvacuationMap.drop(1))
-                r <- JointLedger.State.recover(p, ledger, None, divergent).attempt
+                r <- JointLedger.State.recover(p, ledger, None, divergent, None).attempt
             yield assert(
               r.swap.toOption.exists {
                   case RestoreError.EvacuationMapMismatch(expected, actual) =>
@@ -493,8 +507,12 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // A stack closed at block 1, so its stored map — not the config's initial one — is
                 // the base, and only block 2's diffs are folded on top.
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(1)))(config.initialEvacuationMap)
+                // Derived: these cases seed EvacuationMap(1) so the STORED map is the fold base.
+                // A hard-coded None would restore the config's initial map instead, and the
+                // divergence these tests assert on would quietly stop being exercised.
+                emm <- Markers.recoverEvacuationMapMark(p.backend)
                 r <- JointLedger.State
-                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap)
+                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap, emm)
                     .attempt
             yield assert(r.map(_.isDefined) == Right(true))
         }
@@ -520,8 +538,12 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // The stack-close base disagrees with what the ledger holds, and the blocks folded
                 // on top carry no diffs to reconcile it — so the anchor maps differ.
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(1)))(EvacuationMap.empty)
+                // Derived: these cases seed EvacuationMap(1) so the STORED map is the fold base.
+                // A hard-coded None would restore the config's initial map instead, and the
+                // divergence these tests assert on would quietly stop being exercised.
+                emm <- Markers.recoverEvacuationMapMark(p.backend)
                 r <- JointLedger.State
-                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap)
+                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap, emm)
                     .attempt
             yield assert(
               r.swap.toOption.exists(_.isInstanceOf[RestoreError.EvacuationMapMismatch])
@@ -537,8 +559,12 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 // L2CommandNumber intentionally not written
+                // Derived: these cases seed EvacuationMap(1) so the STORED map is the fold base.
+                // A hard-coded None would restore the config's initial map instead, and the
+                // divergence these tests assert on would quietly stop being exercised.
+                emm <- Markers.recoverEvacuationMapMark(p.backend)
                 r <- JointLedger.State
-                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap)
+                    .recover(p, ledger, Some(BlockNumber(2)), config.initialEvacuationMap, emm)
                     .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
         }
@@ -554,15 +580,18 @@ class RecoverSeamsTest extends AnyFunSuite:
                 )
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(us)
                 // Treasury intentionally not written
-                markers = Markers(
-                  None,
-                  None,
-                  Some(StackNumber(1)),
-                  Some(HardAckNumber(0)),
-                  RequestNumber(0)
-                )
+                // Derived, so the ack-value unpacking stays under test; only `hardConfirmed` is
+                // pinned, since no HardConfirmation is seeded here.
+                markers <- Markers
+                    .derive(p, PeerId.Head(own))
+                    .map(_.copy(hardConfirmed = Some(StackNumber(1))))
                 r <- StackComposer.State
-                    .recover(p, markers.hardAcked, markers.hardConfirmed, PeerId.Head(own))
+                    .recover(
+                      p,
+                      markers.hardAcked,
+                      markers.hardConfirmed,
+                      markers.hardAckedStack
+                    )
                     .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
         }

@@ -307,7 +307,7 @@ final case class RuleBasedActor(
         versionMajor: BigInt
     ): IO[List[StandaloneEvacuationCommitment.MultiSigned]] =
         for {
-            markers <- Markers.derive(persistence.backend, config.ownPeerId)
+            markers <- Markers.derive(persistence, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
@@ -347,7 +347,7 @@ final case class RuleBasedActor(
       */
     private[rulebased] def loadEvacuationInputs(versionMajor: BigInt): IO[EvacuationInputs] =
         for {
-            markers <- Markers.derive(persistence.backend, config.ownPeerId)
+            markers <- Markers.derive(persistence, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
@@ -452,7 +452,7 @@ final case class RuleBasedActor(
             )
         else
             for {
-                markers <- Markers.derive(persistence.backend, config.ownPeerId)
+                markers <- Markers.derive(persistence, config.ownPeerId)
                 latest <- markers.hardConfirmed.liftTo[IO](
                   MissingState("no hard-confirmed stack on disk")
                 )

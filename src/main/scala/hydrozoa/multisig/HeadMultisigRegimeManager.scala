@@ -13,16 +13,21 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterControl}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2Screener}
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.{Markers, Persistence}
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
 trait HeadMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
+    /** The first L1 sample, read by `Serve` before the actor system exists. See
+      * [[ReplayActor.replay]] for why the read cannot happen inside this actor.
+      */
+    firstPollResults: PollResults,
     l2Ledger: L2Ledger[IO],
     l2Screener: L2Screener[IO],
     persistence: Persistence[IO],
@@ -48,14 +53,23 @@ trait HeadMultisigRegimeManager(
         for {
             _ <- tracer.traceWith(StartingActors)
 
-            pendingConnections <- Deferred[IO, HeadMultisigRegimeManager.Connections]
-
+            // Every recovery marker this peer boots from, derived ONCE here and projected into
+            // each child actor. Deriving per-actor let two paths interpret the same journal
+            // independently, which is how a seeded store could satisfy one and not the other.
+            derived <- Markers.derive(persistence, config.ownPeerId)
+            // Adopting a store seeded from another peer: raise the trusted-history floor to the
+            // stack the transplant was tagged with. Applied to the ONE bundle, so the gate, the
+            // replay cursors, the in-flight handoff and the stack composer all move together — the
+            // alternative is the divergence that made this necessary. See `Markers.adopt` for the
+            // comparison and why it must be the same one `Serve`'s boot gate uses.
+            markers = Markers.adopt(derived, config.transplantStackNumber)
             core <- spawnCoreActors(
               config,
               cardanoBackend,
               l2Ledger,
               persistence,
               pendingConnections,
+              markers,
             )
 
             // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
@@ -82,7 +96,8 @@ trait HeadMultisigRegimeManager(
                 l2Screener,
                 tracers.eventSequencer,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
 
@@ -228,7 +243,7 @@ trait HeadMultisigRegimeManager(
             // L1 sample.
             _ <- ReplayActor.replay(
               persistence,
-              cardanoBackend,
+              firstPollResults,
               ReplayActor.Targets(
                 blockWeaver = core.blockWeaver,
                 fastConsensusActor = core.consensusActor,
@@ -240,8 +255,8 @@ trait HeadMultisigRegimeManager(
               peers = config.headPeerIds.map(_.peerNum).toList,
               hubs = config.hubHeadPeerNumbers,
               coils = hubbedCoilPeers,
-              treasuryAddress = config.initializationTx.treasuryProduced.address,
-              leadsFastBlock = config.canLeadFast
+              leadsFastBlock = config.canLeadFast,
+              markers = markers
             )(using config)
 
             // Opening the barrier here is what makes every actor's `receive` reject-before-PreStart
@@ -249,8 +264,8 @@ trait HeadMultisigRegimeManager(
             // so `PreStart` is already mailbox message #1 and no real message can precede it. An
             // actor spawned mid-life — handed a resolved ref before its own `preStart` runs — would
             // break that ordering and trip the guard at runtime; spawn it before this line instead.
-            _ <- pendingConnections.complete(connections)
-            _ <- connectionsDeferred.complete(connections)
+            _ <- pendingConnections.complete(Right(connections))
+            _ <- connectionsDeferred.complete(Right(connections))
 
             _ <- tracer.traceWith(WatchingActors)
 
@@ -360,7 +375,7 @@ object HeadMultisigRegimeManager {
         coilPeerLiaisons: List[liaison.PeerLiaisonHubToCoil.Handle] = Nil,
     )
 
-    type PendingConnections = Deferred[IO, Connections]
+    type PendingConnections = Deferred[IO, Either[Throwable, Connections]]
 
     /** Resolve an actor's start-barrier: await the shared regime [[Connections]] and project them
       * into the actor's own `C` via `project`, or use a directly-supplied `C` (test wiring) as-is.
@@ -369,20 +384,23 @@ object HeadMultisigRegimeManager {
         // `@unchecked`: only the `Deferred` class is tested at runtime (its type args erase); no
         // actor `Connections` is ever a `Deferred`, so the barrier and direct arms stay disjoint.
         pending match
-            case shared: PendingConnections @unchecked => shared.get.map(project)
-            case direct                                => IO.pure(direct.asInstanceOf[C])
+            case shared: PendingConnections @unchecked =>
+                shared.get.flatMap(IO.fromEither).map(project)
+            case direct => IO.pure(direct.asInstanceOf[C])
 
     /** As [[resolveConnections]], but with an effectful projection (e.g. one that can fail). */
     def resolveConnectionsF[C](pending: PendingConnections | C)(
         project: Connections => IO[C]
     ): IO[C] =
         pending match
-            case shared: PendingConnections @unchecked => shared.get.flatMap(project)
-            case direct                                => IO.pure(direct.asInstanceOf[C])
+            case shared: PendingConnections @unchecked =>
+                shared.get.flatMap(IO.fromEither).flatMap(project)
+            case direct => IO.pure(direct.asInstanceOf[C])
 
     def resource(
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
+        firstPollResults: PollResults,
         virtualLedger: L2Ledger[IO],
         l2Screener: L2Screener[IO],
         persistence: Persistence[IO],
@@ -400,6 +418,7 @@ object HeadMultisigRegimeManager {
                 new HeadMultisigRegimeManager(
                   config,
                   cardanoBackend,
+                  firstPollResults,
                   virtualLedger,
                   l2Screener,
                   persistence,

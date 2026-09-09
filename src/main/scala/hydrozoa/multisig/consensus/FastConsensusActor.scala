@@ -176,6 +176,8 @@ class FastConsensusActor(
 ) extends Actor[IO, FastConsensusActor.Request]:
     import FastConsensusActor.*
 
+    // `Env extends CardanoNetwork.Section`, so this given also supplies the section the typed
+    // `SoftConfirmation` `WriteBatch.put` in [[completeCell]] needs.
     private given env: Env = Env(config, persistence, tracer, metrics)
 
     override def preStart: IO[Unit] = context.self ! FastConsensusActor.PreStart

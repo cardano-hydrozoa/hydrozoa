@@ -97,7 +97,10 @@ class JournalScanTest extends AnyFunSuite:
               fastBlockMark = None,
               hardConfirmed = Some(StackNumber(1)), // stack floor 2
               hardAcked = Some(HardAckNumber(4)),
-              nextRequestNumber = RequestNumber(0)
+              nextRequestNumber = RequestNumber(0),
+              // Neither is read by cursor derivation; present only to complete the bundle.
+              evacuationMapMark = None,
+              hardAckedStack = None
             )
             val highWater = Map(
               HeadPeerNumber(0) -> RequestNumber(4), // request floor 5

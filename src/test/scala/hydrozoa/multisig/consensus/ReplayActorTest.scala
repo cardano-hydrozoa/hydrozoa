@@ -13,7 +13,6 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Slf4jTracer
-import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -21,7 +20,7 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, Block
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -201,7 +200,6 @@ class ReplayActorTest extends AnyFunSuite:
     ): Captured =
         val own = ownNum
         val peers = config.headPeerIds.map(_.peerNum).toList
-        val treasuryAddress = config.initializationTx.treasuryProduced.address
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
         InMemoryBackendStore
             .open(persistenceTracer)
@@ -209,7 +207,6 @@ class ReplayActorTest extends AnyFunSuite:
                 ActorSystem[IO]("replay-test").use(system =>
                     for {
                         persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        cardanoBackend <- CardanoBackendMock.mockIO(MockState(Map.empty))
                         bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
                         fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
                         scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
@@ -221,17 +218,18 @@ class ReplayActorTest extends AnyFunSuite:
                         seqSink <- Ref.of[IO, Vector[CoilAckSequencer.Request]](Vector.empty)
                         seq <- system.actorOf(Recorder[CoilAckSequencer.Request](seqSink))
                         _ <- seed(persistence)
+                        markers <- Markers.derive(persistence, PeerId.Head(own))
                         outcome <- ReplayActor
                             .replay(
                               persistence,
-                              cardanoBackend,
+                              PollResults.empty,
                               ReplayActor.Targets(bw, fca, sca, sc, Some(seq)),
                               PeerId.Head(own),
                               peers,
                               hubs,
                               coils,
-                              treasuryAddress,
-                              leadsFastBlock = ownLeadsFastBlock
+                              leadsFastBlock = ownLeadsFastBlock,
+                              markers = markers
                             )
                             .attempt
                         _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
@@ -251,7 +249,6 @@ class ReplayActorTest extends AnyFunSuite:
     private def runReplayCoil(seed: Persistence[IO] => IO[Unit]): Captured =
         val peers = config.headPeerIds.map(_.peerNum).toList
         val hubs = List(HeadPeerNumber(1))
-        val treasuryAddress = config.initializationTx.treasuryProduced.address
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
         InMemoryBackendStore
             .open(persistenceTracer)
@@ -259,7 +256,6 @@ class ReplayActorTest extends AnyFunSuite:
                 ActorSystem[IO]("replay-coil-test").use(system =>
                     for {
                         persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        cardanoBackend <- CardanoBackendMock.mockIO(MockState(Map.empty))
                         bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
                         fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
                         scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
@@ -269,18 +265,19 @@ class ReplayActorTest extends AnyFunSuite:
                         sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
                         sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
                         _ <- seed(persistence)
+                        markers <- Markers.derive(persistence, PeerId.Coil(CoilPeerNumber(0)))
                         outcome <- ReplayActor
                             .replay(
                               persistence,
-                              cardanoBackend,
+                              PollResults.empty,
                               ReplayActor.Targets(bw, fca, sca, sc),
                               PeerId.Coil(CoilPeerNumber(0)),
                               peers,
                               hubs,
                               Nil,
-                              treasuryAddress,
                               // A coil peer never leads a fast block.
-                              leadsFastBlock = _ => false
+                              leadsFastBlock = _ => false,
+                              markers = markers
                             )
                             .attempt
                         _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes

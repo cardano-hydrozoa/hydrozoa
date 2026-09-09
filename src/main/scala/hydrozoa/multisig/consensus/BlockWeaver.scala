@@ -35,6 +35,10 @@ final case class BlockWeaver(
       * block to resume on, and whether its predecessor is confirmed — and reads it in `PreStart`.
       */
     persistence: Persistence[IO],
+    /** The boot markers, derived once by the regime manager (§5.2). This actor projects
+      * `fastBlockMark` and `softConfirmed` out of them rather than re-reading the store.
+      */
+    markers: Markers,
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
@@ -64,9 +68,10 @@ final case class BlockWeaver(
                 // Suspends on the start barrier, so the base below is in place before any
                 // replayed journal entry is processed (§5.6, §8).
                 given Env.Connected <- initializeConnections
-                // Same anchor as `JointLedger.preStartLocal`: the two step the spine in lockstep.
-                fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
-                recovered <- State.recover(fastBlockMark)
+                // Same anchor as `JointLedger.preStartLocal`: the two step the spine in lockstep —
+                // guaranteed, because both project the one marker bundle rather than each
+                // re-reading the store.
+                recovered <- State.recover(markers.fastBlockMark, markers.softConfirmed)
                 // `None`: the store says this head finalized, so the weaver retires rather than
                 // opening a block, as on the live path.
                 _ <- recovered.fold(context.self.stop)(become)
@@ -79,7 +84,7 @@ final case class BlockWeaver(
         val connections: IO[BlockWeaver.Connections] = pendingConnections match {
             case pc: HeadMultisigRegimeManager.PendingConnections =>
                 for {
-                    c <- pc.get
+                    c <- pc.get.flatMap(IO.fromEither)
                 } yield BlockWeaver.Connections(
                   blockWeaver = context.self,
                   jointLedger = c.jointLedger,
@@ -268,11 +273,11 @@ object BlockWeaver {
           * `FastConsensusActor` re-derives it from the replayed tail, so this is a no-op.
           */
         def recover(
-            fastBlockMark: Option[BlockNumber]
+            fastBlockMark: Option[BlockNumber],
+            softConfirmed: Option[BlockNumber]
         )(using env: Env.Connected): IO[Option[Reactive]] = {
             import env.*
             for {
-                softConfirmed <- Markers.recoverSoftConfirmed(persistence.backend)
                 opening <- start(fastBlockMark)
                 // `filter(softConfirmed.contains)` is the "confirmed everything it applied" test.
                 resumed <- fastBlockMark
