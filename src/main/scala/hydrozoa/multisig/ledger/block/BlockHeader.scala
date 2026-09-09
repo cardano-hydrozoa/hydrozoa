@@ -23,10 +23,9 @@ sealed trait BlockHeader extends BlockHeader.Section {
 object BlockHeader {
 
     final case class Initial(
-        // Creation start time: when did the peers start negotiating the head config, moderated by peer 0.
-        override val startTime: BlockCreationStartTime,
-        // Creation end time: when did the moderator (peer 0) receive all the information
-        // to create the head config and broadcast it to the peers.
+        /** Creation end time: when the moderator (head peer 0) received all the information to
+          * create the head config and broadcast it to the peers.
+          */
         override val endTime: BlockCreationEndTime,
         override val fallbackTxStartTime: FallbackTxStartTime,
         override val forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime,
@@ -37,6 +36,11 @@ object BlockHeader {
         override transparent inline def blockNum: BlockNumber = Initial.blockNum
         override transparent inline def blockVersion: BlockVersion.Full = Initial.blockVersion
         override transparent inline def header: BlockHeader.Initial = this
+
+        /** Block zero has no creation window: it skips the fast cycle entirely, so there is no
+          * moment at which its weaving started. The start time is the end time.
+          */
+        override def startTime: BlockCreationStartTime = BlockCreationStartTime(endTime.convert)
     }
 
     given (using CardanoNetwork.Section): Codec[BlockHeader.Minor] = deriveCodec[BlockHeader.Minor]
@@ -286,6 +290,25 @@ object BlockHeader {
         final transparent inline def blockNum: BlockNumber = BlockNumber.zero
         final transparent inline def blockVersion: BlockVersion.Full = BlockVersion.Full.zero
 
+        /** Block zero's header, derived in full from its end time.
+          *
+          * Every field is fixed: the initialization transaction pins `endTime` through its validity
+          * end, `fallbackTxStartTime` and `forcedMajorBlockWakeupTime` follow from it through
+          * [[TxTiming]], and `mDepositDecisionWakeupTime` is absent because block zero absorbs no
+          * deposits. Bootstrap builds the header with this, and `HeadConfig`'s decoder rebuilds it
+          * to check the one it was handed.
+          */
+        def derive(
+            endTime: BlockCreationEndTime
+        )(using txTiming: TxTiming): BlockHeader.Initial =
+            val fallbackTxStartTime = txTiming.newFallbackStartTime(endTime)
+            BlockHeader.Initial(
+              endTime = endTime,
+              fallbackTxStartTime = fallbackTxStartTime,
+              forcedMajorBlockWakeupTime = txTiming.forcedMajorBlockWakeupTime(fallbackTxStartTime),
+              mDepositDecisionWakeupTime = None
+            )
+
         given blockHeaderInitialEncoder: Encoder[BlockHeader.Initial] with {
             def helper(f: BlockHeader.Initial => QuantizedInstant)(using
                 bh: BlockHeader.Initial
@@ -296,7 +319,6 @@ object BlockHeader {
                 given BlockHeader.Initial = initBH
 
                 Json.obj(
-                  "startTime" -> helper(_.startTime),
                   "endTime" -> helper(_.endTime),
                   "fallbackTxStartTime" -> helper(_.fallbackTxStartTime),
                   "forcedMajorBlockWakeupTime" -> helper(_.forcedMajorBlockWakeupTime),
@@ -325,7 +347,6 @@ object BlockHeader {
                     } yield res
 
                 for {
-                    startTime <- helper("startTime")
                     endTime <- helper("endTime")
                     fbtx <- helper("fallbackTxStartTime")
                     fmbt <- c.downField("forcedMajorBlockWakeupTime").as[ForcedMajorBlockWakeupTime]
@@ -333,7 +354,6 @@ object BlockHeader {
                         .downField("depositDecisionWakeupTime")
                         .as[Option[DepositDecisionWakeupTime]]
                 } yield BlockHeader.Initial(
-                  BlockCreationStartTime(startTime),
                   BlockCreationEndTime(endTime),
                   FallbackTxStartTime(fbtx),
                   fmbt,

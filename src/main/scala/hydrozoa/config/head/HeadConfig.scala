@@ -24,7 +24,7 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
@@ -152,6 +152,27 @@ object HeadConfig {
                             .as[Utxos]
                             .map(ResolvedUtxos(_))
                         hcBootstrap <- c.as[HeadConfig.Bootstrap]
+
+                        // Block zero's header is fully determined by its end time, which the
+                        // initialization transaction pins through its validity end. Rebuild it and
+                        // reject a config whose stored header disagrees, rather than running on
+                        // timings a hand edit could have moved out from under the transaction.
+                        _ <- {
+                            val derived =
+                                BlockHeader.Initial.derive(brief.endTime)(using
+                                  hcBootstrap.txTiming
+                                )
+                            Either.cond(
+                              brief.header == derived,
+                              (),
+                              io.circe.DecodingFailure(
+                                "Block zero's header does not match the one its end time " +
+                                    s"${brief.endTime.convert.instant} determines: stored " +
+                                    s"${brief.header}, derived $derived",
+                                c.history
+                              )
+                            )
+                        }
 
                         // Parse the stored init tx (honouring its bytes) rather than re-building it.
                         // The fallback is protocol-derived, so we build it from the parsed init tx.

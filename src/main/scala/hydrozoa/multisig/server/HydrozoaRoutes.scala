@@ -817,6 +817,12 @@ class HydrozoaRoutes(
       * from the records' arrival stamps: the soft-confirmation record, and — through the block →
       * stack index — the hard-confirmation record. Each moment is present exactly when this peer
       * holds that record (`wallClockOf` is total), so it also serves as the rung discriminant.
+      *
+      * Block zero is the exception. It skips the fast cycle entirely (`Initial` is not a
+      * `BlockType.Next`), so no `SoftConfirmation(0)` is ever written and a stored read would land
+      * on `(None, Some(hard))` for a block that is in fact hard-confirmed. Its soft-confirmation
+      * moment is its creation end time and is derived here rather than persisted — there is no
+      * reason to store a value the config already fixes.
       */
     private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
         for {
@@ -826,9 +832,15 @@ class HydrozoaRoutes(
                 case None    => IO.pure(None)
                 case Some(s) => consensusReader.hardConfirmation(s)
             }
-            softAt <- soft.traverse(t => consensusReader.wallClockOf(t.stamp))
+            storedSoftAt <- soft.traverse(t => consensusReader.wallClockOf(t.stamp))
+            softAt =
+                if num == BlockNumber.zero then Some(initialBlockEndTime) else storedSoftAt
             hardAt <- hard.traverse(t => consensusReader.wallClockOf(t.stamp))
         } yield (softAt, hardAt)
+
+    /** Block zero's creation end time, which is also its derived soft-confirmation moment. */
+    private def initialBlockEndTime: Instant =
+        headConfig.initialBlock.blockBrief.header.endTime.convert.instant
 
     /** The request-details body for a request id, or a 404 when the head has assigned no such id.
       * The lifecycle status resolves through the request → block index and the block's confirmation

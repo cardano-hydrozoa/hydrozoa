@@ -131,8 +131,9 @@ object HeadParamsHash {
         out.scriptHash(HydrozoaBlueprint.disputeScriptHash)
         out.transactionInput(config.setupLadderAnchor)
 
-        // -- initialBlockTiming. Only `startTime` and `endTime` reach the initialization
-        // transaction's validity end; the other three reach no transaction at all.
+        // -- initialBlockTiming. Only `endTime` reaches a transaction — the initialization tx's
+        // validity end. `startTime` repeats it (block zero has no creation window) and the other
+        // three reach no transaction at all, so the digest is what pins them.
         val header = initialBlockHeader
         out.instant(header.startTime.convert)
         out.instant(header.endTime.convert)

@@ -279,6 +279,27 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             .unsafeRunSync()
     }
 
+    test("GET /head/blocks/0 reports a soft-confirmation moment even with no stored record") {
+        mkMinorBrief1
+            .flatMap(brief =>
+                IO(withRoutes(stubReader(brief, soft = false, hard = false)) { app =>
+                    get(app, "/head/blocks/0").map { (status, body) =>
+                        // Block zero never runs the fast cycle, so the store holds no
+                        // SoftConfirmation(0). The rung is derived from its creation end time
+                        // instead of reading as "proposed" for a block the head has long confirmed.
+                        val expected =
+                            headConfig.initialBlock.blockBrief.header.endTime.convert.instant
+                        val c = body.hcursor.downField("status")
+                        val _ = assert(status == Status.Ok)
+                        val _ = assert(c.get[String]("type") == Right("SOFT_CONFIRMED"))
+                        val _ = assert(c.get[String]("softConfirmedAt") == Right(expected.toString))
+                        ()
+                    }
+                })
+            )
+            .unsafeRunSync()
+    }
+
     test("GET /head/blocks/1/body returns the block's content") {
         mkMinorBrief1
             .flatMap(brief =>
