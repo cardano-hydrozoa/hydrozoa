@@ -19,9 +19,10 @@ import io.circe.{Decoder, Encoder}
   */
 object HydrozoaLocalCodecs:
 
-    /** Codec for [[MultisigTreasuryUtxo.Datum]] = `(commit: KzgCommitment, versionMajor: BigInt)`.
-      * `commit` rides through the CIP-116 ByteString codec (hex string); `versionMajor` rides
-      * through Circe's built-in BigInt support (JSON number string).
+    /** Codec for [[MultisigTreasuryUtxo.Datum]] =
+      * `(commit: KzgCommitment, versionMajor: BigInt, headParamsHash: ByteString)`. `commit` and
+      * `headParamsHash` ride through the CIP-116 ByteString codec (hex string); `versionMajor`
+      * rides through Circe's built-in BigInt support (JSON number string).
       */
     given datumEncoder: Encoder[MultisigTreasuryUtxo.Datum] =
         deriveEncoder[MultisigTreasuryUtxo.Datum]

@@ -47,10 +47,21 @@ folded in as an opaque leaf.
 ### Where it lives
 
 The digest needs `initialEquityContributions`, `blockBrief`, `coilPeers`, and
-`scriptReferenceUtxos` as well as `HeadParameters`, so it lives on `HeadConfig.Section` — a
+`scriptReferenceUtxos` as well as `HeadParameters`, so it is exposed on `HeadConfig.Section` — a
 `lazy val` on the `HeadConfig` case class, delegated to by the trait. The layout itself is
 `config/head/HeadParamsHash.scala`; `HeadParamsHashTest` mutates every covered field one at a
 time and asserts the digest moves, and asserts it does **not** move for `webSocketAddress`.
+
+`HeadParamsHash.apply` takes `(HeadConfig.Bootstrap.Section, BlockHeader.Initial)` rather than a
+whole `HeadConfig.Section`, and that narrowing is load-bearing rather than tidiness: the digest
+has to be computable **before** the initialization transaction is parsed, because `HeadConfig`'s
+decoder is what hands it to `InitializationTx.Parse`. Only block zero's *header* is in the
+preimage — never the transaction — so the bootstrap context plus that header is exactly what the
+digest needs and nothing more.
+
+Readers that only have to carry the value take `HeadParamsHash.Section`, which grants
+`headParamsHash` and its `headParamsHashBytes` datum form without dragging in the config. The
+transaction builders that write it into a treasury datum ask for that and nothing else.
 
 `InitializationTx.Parse` must **not** compute it. Its `Config` is a deliberately minimal
 intersection —
@@ -311,8 +322,7 @@ and `TxSignature`, verified against the statically configured verification keys,
 at the wrong address cannot forge a hard acknowledgement or a settlement signature. What it
 does not have is connection authentication — `CoilFrame.Hello` carries a bare `coilNum` and
 `HubWsTransport` accepts it on nothing more than "is this a coil peer I hub". Closing that is a
-signed handshake over the already-pinned verification keys, and is tracked separately from this
-document.
+signed handshake over the already-pinned verification keys, tracked in GUM-322.
 
 ## The checks
 
@@ -327,33 +337,46 @@ Five checks, at four moments. Every one reuses a comparison point the code alrea
 | 4 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `l2ParamsHash` against the config's | refuse to boot |
 | 5 | every major block | every head and coil peer | the settlement tx's treasury datum `headParamsHash` against the local one | refuse to sign the block |
 
-Check 3 exists today. The rest are new, but checks 1 and 2 slot into comparison points that
-already exist — `InitializationTx.Parse`'s datum equality and `RocksDbBackendStore`'s
-`versionCheck`.
+The four sites that implement them are `InitializationTx.Parse` (1), `StoreIdentity` (2),
+`JointLedger.State.recover` (3, 4), and `SettlementTx` (5).
+
+**Check 4 has a gap on `any-remote`.** A remote ledger that reports no `l2ParamsHash` is let
+through with a warning (`JointLedgerEvent.L2ParamsHashUnreported`), because a remote that does
+not carry the field is indistinguishable from one carrying a wrong value, and failing closed
+would refuse every deployed sidecar. So check 4 is enforced against the built-in EUTXO ledger
+and advisory against a remote one, and `L2Ledger.Restored.l2ParamsHash` is an `Option` to say
+so. Closing the gap needs the remote side to report the value and the bootstrap to obtain it;
+GUM-327 carries both questions.
 
 ### 1. The initialization transaction matches the hash
 
-The load-bearing one. `InitializationTx.Parse` already rebuilds the expected treasury datum
-from local config and compares it whole:
+The load-bearing one. `InitializationTx.Parse` rebuilds the expected treasury datum from local
+config and compares it **field by field** — a whole-datum equality would report one opaque
+message for three unrelated operator problems:
 
 ```scala
-expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(config.initialEvacuationMap)
-...
-if decodedTreasuryDatum == expectedTreasuryDatum then Right(()) else Left(InvalidTransactionError(...))
+expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
+  config.initialEvacuationMap,
+  ByteString.fromArray(headParamsHash.bytes)
+)
 ```
 
-Adding `headParamsHash` to the datum makes that comparison cover the whole configuration for
-free. Everything folded into the preimage becomes self-verifying against a value committed
+`headParamsHash` in the datum makes that comparison cover the whole configuration. Everything folded into the preimage becomes self-verifying against a value committed
 on-chain: a peer whose `depositMaturityDuration`, `maxRequestsPerBlock`, fallback contingency
 split, hub topology, or setup-ladder anchor differs from the one the initialization transaction
 was built for cannot parse that transaction, so it never signs block zero and the head does not
 start split.
 
-**Split the comparison into per-field checks.** A whole-datum equality reports
-`"actual treasury datum does not match the expected initial treasury datum"` for three
-completely different operator problems: a wrong initial evacuation map (`commit`), a stale
-version (`versionMajor`), and a configuration disagreement (`headParamsHash`). The third is the
-one an operator can actually act on, and it needs to say so.
+The three fields fail for three unrelated reasons — a wrong initial evacuation map (`commit`), a
+stale version (`versionMajor`), and a configuration disagreement (`headParamsHash`) — and only
+the third is something an operator can act on, so each carries its own message naming the two
+digests.
+
+`Parse` takes the digest as an already-computed `Hash32` rather than deriving it: computing it
+needs nearly the whole head config, and `Parse` deliberately asks for only the five sections it
+uses. `HeadConfig`'s decoder computes it, as does `Bootstrap.mkSharedHeadConfig` — which builds
+block zero's header **before** the transactions for exactly this reason, since the header is part
+of the preimage and the init tx's datum carries the result.
 
 Two properties fall out of where this check sits, and both are worth relying on deliberately:
 
@@ -372,13 +395,14 @@ A node's persistent store is built for one head, under one configuration, by one
 at a different one and it does not fail — it proceeds on a store that means something else.
 
 The check is a **stamp in `Cf.Meta`**, written when a fresh store is initialized and compared on
-every subsequent open. Three keys, flat and name-keyed like the `store_version` key that is
+every subsequent open. Four keys, flat and name-keyed like the `store_version` key that is
 already there:
 
 | key | value | catches |
 |---|---|---|
 | `head_params_hash` | `raw(headParamsHash)` | a store built under a different configuration |
 | `head_id` | the head's treasury token name | a store built for a different head — and makes the error message actionable |
+| `head_address` | the head multisig address, bech32 | a store built for a different **roster** — the verification keys `headParamsHash` leaves out |
 | `own_peer_id` | `PeerId.toWireInt`, 4 bytes big-endian | a store built by a *different peer of the same head* |
 
 `own_peer_id` is the one that cannot come from `headParamsHash`, and the one whose absence is
@@ -393,13 +417,23 @@ inventing a second encoding.
 mismatch tells an operator nothing they can act on. "This store belongs to head `0134…6b10`,
 this config is head `8f2a…c401`" names the mistake.
 
-**Where it runs, and what it costs.** `RocksDbBackendStore.openInternal` already runs
+`head_address` is stamped for the same reason and covers what neither of the others does.
+`headParamsHash` deliberately omits the peer verification keys — they are pinned by
+construction, through the native script hash that becomes this address — and `head_id` is the
+beacon token *name*, not the policy id, so it identifies the head instance but not its roster.
+Without the address the stamp holds no record of who the peers are. `InitializationTx.Parse`
+already rejects a swapped key by comparing this same address, and runs before any store is
+opened, so this is defence in depth rather than the only guard. What it adds on its own is that
+a store handed over without its config still says which head, and which roster, it was written
+for.
+
+**Where it runs, and what it costs.** `RocksDbBackendStore.openInternal` runs
 `versionCheck` at open, and `StoreVersion.Check` already has the right three-way shape —
 `Fresh` / `Compatible` / `Incompatible`. The identity stamp is a sibling of that, with the same
 semantics: a writable open stamps a fresh store; a **read-only** open — the mode
 `hydrozoa evacuate` uses — treats a missing stamp as a hard error, because it cannot stamp and
 an unstamped store cannot be served; an incompatible stamp refuses the open, naming which of
-the three fields differs. It runs **after** the version check, because a store whose schema this
+the four fields differs. It runs **after** the version check, because a store whose schema this
 build does not understand should not have its metadata interpreted at all, and **before** any
 recovery read. The cost is one point lookup per key on an already-open handle at startup, the
 same as the version check.
@@ -455,11 +489,13 @@ wrong one. Same rule the evacuation map digest already follows.
 `SettlementTx` builds a fresh treasury datum for every major block:
 
 ```scala
-datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced)
+datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced, config.headParamsHashBytes)
 ```
 
-With a third field it must carry `headParamsHash` forward unchanged, and every peer verifies a
-settlement transaction before signing it. So the configuration agreement is re-checked once per
+The digest comes from the builder's **own config**, not from the spent treasury's datum. Carrying
+it forward would make every peer reproduce whatever was already there and check nothing; taking
+it from config means a peer whose config diverged produces a datum the others reject. Every peer
+verifies a settlement transaction before signing it. So the configuration agreement is re-checked once per
 major block for the life of the head, by the machinery that already verifies settlements — a
 peer whose configuration drifts after initialization stops being able to get blocks signed.
 
@@ -475,7 +511,7 @@ forever.
 - **The initialization transaction's witnesses.** `Parse` establishes structure; signatures are
   collected and verified by initial-block consensus.
 
-### Migration
+### Datum compatibility
 
 Adding a field to `MultisigTreasuryUtxo.Datum` changes its `Data` arity, so
 `Data.fromData[MultisigTreasuryUtxo.Datum]` fails on every datum written before the change —

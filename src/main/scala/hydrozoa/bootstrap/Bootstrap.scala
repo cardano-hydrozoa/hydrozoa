@@ -6,7 +6,6 @@ import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.config.ScriptReferenceUtxos
-import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.block.BlockConfig
@@ -19,6 +18,7 @@ import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
+import hydrozoa.config.head.{HeadConfig, HeadParamsHash}
 import hydrozoa.config.node.{NodeConfig, PrivateSecrets}
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
@@ -30,8 +30,8 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
-import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
+import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationMap}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
@@ -349,9 +349,19 @@ object Bootstrap:
           settlementConfig = bhp.settlementConfig,
           blockConfig = bhp.blockConfig,
           coilQuorum = bhp.coilQuorum,
-          // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
-          // a zero hash rather than empty bytes (which fail the length check).
-          l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
+          // The L2 ledger reports this at every `restoreTo` anchor and JointLedger checks it
+          // against this value (docs/spec/head-params-hash.md). Bootstrap has no ledger running, so
+          // it sources the value rather than asking: the built-in ledger's digest is a code
+          // constant.
+          // TODO: a remote ledger's digest has to come from the operator (the ledger prints it
+          //  out-of-band, as it already does for the initial evacuation map). Until that config
+          //  field exists, a remote head carries a zero hash and the remote reports nothing, so
+          //  the check warns instead of comparing.
+          l2ParamsHash = l2Ledger match {
+              case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.l2ParamsHash
+              case L2LedgerKind.AnyRemote =>
+                  Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32)))
+          },
           l2Ledger = l2Ledger,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
           identityIsomorphism = false,
@@ -529,30 +539,34 @@ object Bootstrap:
           )
         )(IO.pure)
 
+        // Block zero's header is built before the transactions, not read back off them: the init
+        // tx's treasury datum carries `headParamsHash`, and the header is part of that digest's
+        // preimage. Every field here is derived from the config and `blockCreationEndTime`, which
+        // is exactly what `InitializationTxSeq.Build` derives the fallback's start time from.
+        fallbackTxStartTime = headParams.txTiming.newFallbackStartTime(blockCreationEndTime)
+        forcedMajorBlockWakeupTime = headParams.txTiming.forcedMajorBlockWakeupTime(
+          fallbackTxStartTime
+        )
+        initialBlockHeader = BlockHeader.Initial(
+          startTime = blockCreationStartTime,
+          endTime = blockCreationEndTime,
+          fallbackTxStartTime = fallbackTxStartTime,
+          forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
+          mDepositDecisionWakeupTime = None,
+        )
+        headParamsHash = HeadParamsHash(bootstrap, initialBlockHeader)
+
         initTxSeq <- InitializationTxSeq
-            .Build(bootstrap, funding)(blockCreationEndTime)
+            .Build(bootstrap, funding)(blockCreationEndTime, headParamsHash)
             .result
             .fold(
               e => logger.error(e.toString) >> IO.raiseError(e),
               IO.pure
             )
 
-        fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
-        forcedMajorBlockWakeupTime = headParams.txTiming.forcedMajorBlockWakeupTime(
-          fallbackTxStartTime
-        )
-
         initialBlock = InitialBlock(
           Block.Unsigned.Initial(
-            blockBrief = BlockBrief.Initial(
-              BlockHeader.Initial(
-                startTime = blockCreationStartTime,
-                endTime = blockCreationEndTime,
-                fallbackTxStartTime = fallbackTxStartTime,
-                forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
-                mDepositDecisionWakeupTime = None,
-              )
-            ),
+            blockBrief = BlockBrief.Initial(initialBlockHeader),
             // Unsigned init+fallback — slow consensus's stack-0 hard-ack flow signs them at boot.
             effects = BlockEffects.Unsigned.Initial(
               initializationTx = initTxSeq.initializationTx,
