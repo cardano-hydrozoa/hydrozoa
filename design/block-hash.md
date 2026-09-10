@@ -230,8 +230,24 @@ Two things to fix before it carries that weight:
 - **It is not specified anywhere a client can read.** Once a submitter has to reproduce this
   digest to get a request accepted, the construction is a public interface: the domain tag, the
   field order, and the deposit two-digest rule all have to be written down in
-  `docs/user-guide/`, with the pinned vectors from `UserRequestTest` as worked examples. A hash
-  a client cannot independently compute is a hash the client cannot supply.
+  `docs/user-guide/REQUEST-HASH.md`, with the pinned vectors from `UserRequestTest` as worked
+  examples. A hash a client cannot independently compute is a hash the client cannot supply.
+
+With the tag mixed in, the construction is:
+
+```
+requestHash = blake2b_256(
+     "gummiworm-request-v1"
+  || u8(variant)                                    -- 0 deposit | 1 transaction
+  || deposit:     blake2b_256(l1Payload) || blake2b_256(l2Payload)
+  || transaction: l2Payload
+)
+```
+
+The variant tag leads the payload, so neither arm needs length framing: a deposit contributes two
+fixed-width digests and a transaction one trailing payload, and the tag already separates them.
+The two-digest rule stays for the reason its comment gives — hashing the deposit's payloads raw
+would collapse `hash(abc + def) == hash(ab + cdef)`.
 
 Both changes move the pinned vectors in `UserRequestTest`, which is free now and is not free once
 a client has shipped against them.
@@ -239,25 +255,25 @@ a client has shipped against them.
 ## What `blockHash` covers
 
 The same construction as `EvacuationMap.digest` and `HeadParamsHash`: an ASCII domain tag,
-fixed-width fields unframed, variable-length fields length-framed, `blake2b_256` over the whole
-preimage.
+fixed-width fields unframed, lists behind a `u32` count, `blake2b_256` over the whole preimage.
 
 ```
 blockHash = blake2b_256(
      "gummiworm-block-v1"
-  || u8(blockType)                  -- Initial | Minor | Major | Final
+  || u8(blockType)                  -- 0 Initial | 1 Minor | 2 Major | 3 Final
   -- header
   || u32(blockNum)
   || u32(versionMajor)              || u32(versionMinor)
   || u64(startTime)                 || u64(endTime)
-  || u64(fallbackTxStartTime)
-  || u64(forcedMajorBlockWakeupTime)
-  || bool(mDepositDecisionWakeupTime.isDefined)
-  || u64(mDepositDecisionWakeupTime)          -- present only when the flag is true
-  -- body: the leader's decision, and nothing derived from applying it
+  || non-final block types only:               -- a final header holds none of these
+       u64(fallbackTxStartTime)
+    || u64(forcedMajorBlockWakeupTime)
+    || bool(mDepositDecisionWakeupTime.isDefined)
+    || u64(mDepositDecisionWakeupTime)         -- present only when the flag is true
+  -- body: every block type writes all three lists, absent ones as length zero
   || u32(requests.length)
   || for each, in list order:
-       u32(peerNum) || u64(requestNum) || raw(requestHash)
+       u32(peerNum) || u64(requestNum) || raw(requestHash) || u8(validityFlag)
   || u32(depositsAbsorbed.length)
   || for each, in list order: u32(peerNum) || u64(requestNum)
   || u32(depositsRejected.length)
@@ -265,8 +281,11 @@ blockHash = blake2b_256(
 )
 ```
 
-Every field above is available the instant the leader cuts the block, so `blockHash` is
-computable at the cut and the brief can go out before a single request has been applied.
+Every field above except the validity flags is available the instant the leader cuts the block,
+and the flags are the whole of what stands between this preimage and a brief that can go out
+before a single request has been applied. Take them out of `BlockBody` and `blockHash` becomes
+computable at the cut, with no other change to the layout. That removal is *Out of scope* here,
+so the brief is announced after applying, as it is today.
 
 Notes on the layout:
 
@@ -274,10 +293,16 @@ Notes on the layout:
   other field of the brief goes in and this one does not. Missing that makes the definition
   circular. It is the same exclusion `headParamsHash` makes for the initialization transaction,
   which carries the digest it is an input to.
-- **The block type leads the block's own fields.** `BlockBody.Initial` has no fields, `Minor` and
-  `Final` have no `depositsAbsorbed`, and `Major` has all three lists. Tagging the type first
-  keeps the four shapes from colliding, and keeps the absent lists out of the preimage rather
-  than encoding them as empty.
+- **The block type leads the block's own fields**, and it is what keeps the four shapes from
+  colliding. They differ on both sides: `BlockHeader.Final` carries none of the forward times —
+  a final block schedules no fallback, no forced major and no deposit decision — while
+  `BlockBody.Initial` has no fields, `Minor` and `Final` have no `depositsAbsorbed`, and `Major`
+  has all three lists.
+- **Absent header times are absent; absent body lists encode as length zero.** A final header has
+  no field to read, while every body exposes all three lists through `BlockBody.Section` and an
+  absent one reads as empty — so writing the lists uniformly costs nothing and keeps the body
+  branch-free. Neither choice is what makes the encoding injective: the type tag has already
+  separated the shapes.
 - **Order is the list's own order**, not sorted. The ordered request list is what the leader
   chose and what every follower must reproduce; sorting would hide a reordering, which is a real
   disagreement about block content.
@@ -285,10 +310,10 @@ Notes on the layout:
   `getLong`), unlike the 4-byte soft/hard-ack indices.
 - **The optional wakeup is flag-then-value**, so `None` and a present value can never produce
   the same bytes.
-- **`ValidityFlag` beside each request.** The flags are a result, not a decision, so the target
-  shape keeps them out — but they stay in `BlockBody` for now (see *Scope*), and the preimage
-  covers the brief as it stands. Taking them out later changes the preimage and therefore the
-  domain tag.
+- **`ValidityFlag` rides beside each request**, one byte after its digest: `0` valid, `1`
+  invalid. The flags are a result, not a decision, so the target shape keeps them out — but they
+  stay in `BlockBody` for now (see *Scope*), and the preimage covers the brief as it stands.
+  Taking them out later changes the preimage and therefore the domain tag.
 
 **The initial block gets one too.** `BlockBrief.Initial` has an empty body and a header already
 pinned by `headParamsHash` through the initialization transaction, so its hash proves nothing
