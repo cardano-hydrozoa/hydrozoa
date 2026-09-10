@@ -117,10 +117,13 @@ the pattern the new field follows.
 The remote side owes two fields rather than one: that frame does not carry `l2ParamsHash` today
 either, which is the gap GUM-327 tracks.
 
-That carries one implication for `EutxoL2Ledger`: its `restoreTo` re-folds from the latest snapshot,
-so a call at the anchor the ledger is already at is not free. Either that path gets a cheap
-same-anchor case, or the digest is maintained incrementally — the efficiency requirement above, seen
-from the other side.
+**`restoreTo` at the current tip is a no-op**, so a per-partition call costs only the digest.
+`EutxoL2Ledger` keeps `State.commandNumber` in lock-step with the store's tip on both paths —
+`persist` after an applied command, `rejectAndAdvance` after a rejected one — so a target equal to
+the tip needs no snapshot load, no re-fold, and no write: read the live state, digest it, return.
+The current implementation re-folds from the latest snapshot whatever the target, so that
+short-circuit is a small addition, and what remains after it is the digest itself. Which is the
+efficiency requirement above, seen from the other side.
 
 ## The two changes
 
