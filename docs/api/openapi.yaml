@@ -1539,12 +1539,18 @@ components:
       required:
       - blockNumber
       - secOnchainSerialized
+      - kzgCommitment
+      - l2StateHash
       - type
       properties:
         blockNumber:
           type: integer
           format: int32
         secOnchainSerialized:
+          type: string
+        kzgCommitment:
+          type: string
+        l2StateHash:
           type: string
         headSignatures:
           type: array
@@ -1564,6 +1570,8 @@ components:
       - l1TxId
       - blockNumber
       - secOnchainSerialized
+      - kzgCommitment
+      - l2StateHash
       properties:
         l1TxId:
           type: string
@@ -1571,6 +1579,10 @@ components:
           type: integer
           format: int32
         secOnchainSerialized:
+          type: string
+        kzgCommitment:
+          type: string
+        l2StateHash:
           type: string
         headSignatures:
           type: array

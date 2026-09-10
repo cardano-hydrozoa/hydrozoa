@@ -32,7 +32,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerInteractionState, L2LedgerResponse, RestoreError}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerInteractionState, L2LedgerResponse, L2StateHash, RestoreError}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
@@ -210,6 +210,7 @@ final case class JointLedger(
               l2Ledger,
               markers.fastBlockMark,
               config.initialEvacuationMap,
+              config.initialL2StateHash,
               markers.evacuationMapMark,
               config.l2ParamsHash,
               tracer
@@ -1089,6 +1090,7 @@ object JointLedger {
             l2Ledger: L2Ledger[IO],
             fastBlockMark: Option[BlockNumber],
             initialEvacuationMap: EvacuationMap,
+            initialL2StateHash: L2StateHash,
             evacuationMapMark: Option[BlockNumber],
             l2ParamsHash: Hash32,
             tracer: ContraTracer[IO, JointLedgerEvent]
@@ -1108,6 +1110,7 @@ object JointLedger {
                             actual = restored.evacuationMapHash
                           )
                         )
+                        _ <- checkInitialL2State(restored, initialL2StateHash)
                         _ <- checkL2Params(restored, l2ParamsHash, tracer)
                     } yield None
                 case Some(blockNum) =>
@@ -1144,6 +1147,29 @@ object JointLedger {
           * refuse every currently-deployed sidecar. Remove this branch once the remote side ships
           * it. See `docs/spec/head-params-hash.md`.
           */
+        /** Compare the ledger's state digest at a **cold** start against the opening state the head
+          * config declares.
+          *
+          * This is the [[RestoreError.EvacuationMapMismatch]] check one layer down: the map says
+          * both sides agree about the L1-bound payouts, this says they agree about the L2 state
+          * behind them, which the initialization transaction has already certified on L1. Cold only
+          * — past a cold start the head keeps no L2 state of its own to compare against, and what
+          * the ledger reports is instead what the next settlement or SEC will certify.
+          *
+          * A ledger that does not report the digest is let through: it is the same transitional
+          * absence `l2ParamsHash` has, and a head driving such a ledger certifies no L2 state at
+          * all rather than a wrong one.
+          */
+        private def checkInitialL2State(
+            restored: L2Ledger.Digests,
+            expected: L2StateHash
+        ): IO[Unit] =
+            restored.l2StateHash.traverse_(actual =>
+                IO.raiseUnless(actual == expected)(
+                  RestoreError.InitialL2StateMismatch(expected = expected, actual = actual)
+                )
+            )
+
         private def checkL2Params(
             restored: L2Ledger.Digests,
             expected: Hash32,

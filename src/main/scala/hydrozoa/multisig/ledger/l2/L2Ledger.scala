@@ -58,6 +58,22 @@ object RestoreError:
                 s"${expected.toHex}"
     }
 
+    /** The ledger's state at a cold start is not the opening state the head config declares.
+      *
+      * The counterpart of [[EvacuationMapMismatch]] one layer down: that one says the two sides
+      * disagree about the L1-bound payouts, this one that they disagree about the L2 state behind
+      * them. The initialization transaction has already certified the configured value on L1
+      * (`design/l2-state-certificate.md`), so running on would mean certifying, at every
+      * settlement, a state nobody agreed to.
+      */
+    final case class InitialL2StateMismatch(
+        expected: L2StateHash,
+        actual: L2StateHash
+    ) extends RestoreError {
+        override def getMessage: String =
+            s"L2 ledger initial state digest $actual does not match the configured $expected"
+    }
+
 /** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
   * Ledger).
   *

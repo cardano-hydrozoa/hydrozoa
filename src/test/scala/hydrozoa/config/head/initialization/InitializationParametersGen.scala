@@ -16,10 +16,7 @@ import hydrozoa.lib.math.Distribution.unsafeNormalizeWeights
 import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
-import hydrozoa.multisig.ledger.eutxol2.{
-  EutxoL2Ledger,
-  toEvacuationKey
-}
+import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationKey}
 import hydrozoa.multisig.ledger.joint.given
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}

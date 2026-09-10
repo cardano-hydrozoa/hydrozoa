@@ -85,6 +85,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   ledger,
                   None,
                   config.initialEvacuationMap,
+                  config.initialL2StateHash,
                   emm,
                   config.l2ParamsHash,
                   ContraTracer.nullTracer
@@ -141,6 +142,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   ledger,
                   Some(BlockNumber(2)),
                   config.initialEvacuationMap,
+                  config.initialL2StateHash,
                   emm,
                   config.l2ParamsHash,
                   ContraTracer.nullTracer
@@ -182,6 +184,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   ledger,
                   Some(BlockNumber(2)),
                   config.initialEvacuationMap,
+                  config.initialL2StateHash,
                   emm,
                   config.l2ParamsHash,
                   ContraTracer.nullTracer
@@ -470,6 +473,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       None,
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       None,
                       config.l2ParamsHash,
                       ContraTracer.nullTracer
@@ -496,6 +500,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       None,
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       None,
                       foreign,
                       ContraTracer.nullTracer
@@ -508,6 +513,41 @@ class RecoverSeamsTest extends AnyFunSuite:
                   case _ => false
               },
               s"expected an L2ParamsMismatch, got $r"
+            )
+        }
+    }
+
+    /** The evacuation-map check one layer down: the map is only the L1-compatible projection of the
+      * L2 state, so two ledgers can project the same payouts from different states. The
+      * initialization transaction has already certified the configured digest on L1
+      * (`design/l2-state-certificate.md`), so booting on would certify a state nobody agreed to.
+      */
+    test("JointLedger.recover refuses to boot when the L2 ledger holds a different initial state") {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                foreign = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5a)))
+                r <- JointLedger.State
+                    .recover(
+                      p,
+                      ledger,
+                      None,
+                      config.initialEvacuationMap,
+                      foreign,
+                      None,
+                      config.l2ParamsHash,
+                      ContraTracer.nullTracer
+                    )
+                    .attempt
+            yield assert(
+              r.swap.toOption.exists {
+                  case RestoreError.InitialL2StateMismatch(expected, actual) =>
+                      expected == foreign
+                      && actual == EutxoL2Ledger.initialStateHash(config.initialEvacuationMap)
+                  case _ => false
+              },
+              s"expected an InitialL2StateMismatch, got $r"
             )
         }
     }
@@ -527,6 +567,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       None,
                       divergent,
+                      config.initialL2StateHash,
                       None,
                       config.l2ParamsHash,
                       ContraTracer.nullTracer
@@ -575,6 +616,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       Some(BlockNumber(2)),
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       emm,
                       config.l2ParamsHash,
                       ContraTracer.nullTracer
@@ -614,6 +656,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       Some(BlockNumber(2)),
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       emm,
                       config.l2ParamsHash,
                       ContraTracer.nullTracer
@@ -643,6 +686,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       Some(BlockNumber(2)),
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       emm,
                       config.l2ParamsHash,
                       ContraTracer.nullTracer

@@ -969,6 +969,8 @@ object ApiDto {
         final case class SecView(
             blockNumber: Int,
             secOnchainSerialized: String,
+            kzgCommitment: String,
+            l2StateHash: String,
             headSignatures: List[String],
             coilSignatures: List[String]
         ) extends EffectView
@@ -984,11 +986,19 @@ object ApiDto {
     /** A standalone evacuation commitment (SEC) effect — the block-scoped `sec` endpoint's
       * response. Carries its `l1TxId` (the synthetic hash), on-chain bytes, and split hard-ack
       * signatures.
+      *
+      * Those bytes plus those signatures are the block's **L2 state certificate**
+      * (`design/l2-state-certificate.md`): a signed statement of the state at that block, checkable
+      * against the head peer verification keys a reader already holds from config. `kzgCommitment`
+      * and `l2StateHash` are the two commitments it carries, decoded out of the on-chain bytes so a
+      * reader needs no Plutus decoder to see them.
       */
     final case class SecEffectView(
         l1TxId: String,
         blockNumber: Int,
         secOnchainSerialized: String,
+        kzgCommitment: String,
+        l2StateHash: String,
         headSignatures: List[String],
         coilSignatures: List[String]
     )
@@ -1065,6 +1075,8 @@ object ApiDto {
             EffectView.SecView(
               sec.blockNumber.convert,
               secOnchainHex(sec),
+              sec.commitment.commitment.kzgCommitment.toHex,
+              sec.commitment.commitment.l2StateHash.toHex,
               headSignatures,
               coilSignatures
             )
@@ -1080,6 +1092,8 @@ object ApiDto {
           sec.l1TxId.toHex,
           sec.blockNumber.convert,
           secOnchainHex(sec),
+          sec.commitment.commitment.kzgCommitment.toHex,
+          sec.commitment.commitment.l2StateHash.toHex,
           headSignatures,
           coilSignatures
         )
