@@ -163,6 +163,11 @@ consumed, and the submitter retries with the request they meant.
 function, used by the submitter to produce the value and by the head to verify it; a second
 implementation would be a second thing to disagree about.
 
+**The reply is unchanged.** `UserRequest` keeps returning
+`Either[UserRequest.Rejected, RequestId]`. There is nothing to add to it: the submitter computed
+the hash, so returning it would hand back a value they already hold. Only the request grows a
+field, and a mismatch travels as a reason string in the `Rejected` the channel already carries.
+
 ## When the head hashes: at assignment
 
 In `RequestSequencer`, between `val newId = RequestId(ownHeadPeerNum, newNum)` and the CR1 persist
@@ -380,9 +385,8 @@ ledger state at `N`, and the evacuation map at `N`. Two halves, verified very di
   `N`'s brief and check the head peers' soft-ack signatures over it. Constant work, whatever `N`
   is, and a donor that fabricates the brief has to produce a signature set over the fabrication.
 - **The state is not.** Nothing signed covers the ledger state or the evacuation map, so both
-  halves of the snapshot rest on the donor. That is the trust boundary `transplantStackNumber`
-  declares today, and `blockHash` narrows it — the block a peer is seeded at is now provably the
-  block the head agreed on — without closing it.
+  halves of the snapshot rest on the donor. `blockHash` narrows that — the block a peer is seeded
+  at is now provably the block the head agreed on — without closing it.
 
 **Closing it is what the L2 state certificate is for** — a signed statement of the L2 state and
 the evacuation map, designed in `design/l2-state-certificate.md`. That is exactly what a seeding
@@ -526,55 +530,41 @@ the release that ships it.
 The block header is **unchanged** by this design, and so is `SoftAck` beyond what it signs.
 
 **The L2 coordination protocol is untouched by cycle 3.** It moves only when the state commitment
-does (open questions 1-3): the protocol would gain a state digest landing in
+does (`design/l2-state-certificate.md`): the protocol would gain a state digest landing in
 `sugar-rush-ledger/types/src/types/coordination/` and `hydrozoa/multisig/ledger/remote/` in the
 same work item, with the golden pins on both sides moved together. Nothing here obliges the Sugar
 Rush side to do anything yet.
 
 ## Out of scope
 
-- **The HTTP surface.** `requestHash` reaches the submitter through the existing synchronous
-  reply, which is what makes the assignment-time choice above worth anything. Everything beyond
-  that — whether `GET /head/requests/{id}` returns the hash, whether the hash becomes a lookup
-  key in its own right, and the route and reverse index that would need — is a separate PR
-  against the API.
 - **L2 state certificates.** The state commitment, with its own design in
   `design/l2-state-certificate.md`. Independent of this work item in both directions.
 - **Removing `ValidityFlag` from `BlockBody`.** The flags are derivable, so carrying them in the
-  brief is redundant rather than wrong, and this design already keeps them out of `blockHash`.
-  Deleting the field is a change to the block type, the wire brief, the journal value and every
-  consumer that reads a flag off a body instead of computing it — worth doing, not worth
-  entangling here.
+  brief is redundant rather than wrong. Deleting the field is a change to the block type, the wire
+  brief, the journal value and every consumer that reads a flag off a body instead of computing
+  it — worth doing, not worth entangling here. Until it happens the flags stay in `blockHash`.
 - **Moving deposit decisions out of the brief.** The larger of the two. A decision would need a
   carrier that travels after the leader has observed L1, which is the shape the ack already has,
   and a rule for when a block is complete without one. Until then absorption lists stay in
   `blockHash`, where the leader's decision belongs.
 - **The two stale rule-based signposts** named above. Both live in `cardano-onchain` and neither
   blocks this work.
+- **Whether the leader can apply its own block on the follower path.** It matters only for the
+  deferred cut-time split, which is what would let the leader announce and then apply alongside
+  everyone else. Whether `BlockWeaver` and `JointLedger` allow that today decides how much of the
+  latency win is available without further restructuring — a question for whoever takes the
+  split, and one to answer before it is used to justify a throughput claim.
 
-## Open questions
+## Settled, and why
 
-1. **Should the header carry a `bodyHash`, so a seeding peer needs headers only?** Add a digest
-   over the ordered body to the header and `blockHash` becomes a hash of the header alone, so a
-   peer seeding from a snapshot verifies a header plus signatures without fetching a single
-   request list. A follower rebuilding a block checks `bodyHash` against the body it derived,
-   which is the check `blockHash` performs today, one level down. That is the layered shape the
-   rest of this design already follows.
+**No `bodyHash` on the header.** It was considered as a way to let a seeding peer verify headers
+alone, and it fails twice. The mechanism cannot work, for the same reason `blockHash` is not a
+header field: `nextHeaderMinor` and friends derive block N+1's header from N's header plus timing,
+*before N+1's body exists*, so a header digest over the body could never be filled. And the
+benefit is not there either — briefs are what travel on the block lane and what `JournalKey.Block`
+stores, so a seeding peer has briefs, not bare headers. There is no headers-only path to optimize.
 
-   It costs a second digest per block and a preimage rewrite in this document, and wants deciding
-   before implementation starts — a peer seeded on headers alone is the case it buys.
-2. **Memoize `blockHash` on the brief?** As a stored `BlockBrief` field the value is present
-   without computation, but every rebuild recomputes it to compare. Whether that recomputed
-   value is worth caching — a `lazy val` on `BlockBrief.Section`, once per brief rather than
-   once per comparison — is a profiling question, not a design one.
-3. ~~**Does `transplantStackNumber` come out in the same work item?**~~ **Settled: it comes out.**
-   It declares a trust boundary — everything at or below the tag is taken from the donor and never
-   verified — which is the hole the state digests close. The seeding path this design enables
-   replaces it rather than sitting beside it. Tracked as GUM-320, decided 2026-09-08; the ordering
-   between the two work items is the only thing left.
-4. **Does the leader apply its own block on the same path as a follower?** The point of the split
-   is that it can — announce at the cut, then apply alongside everyone else. Whether
-   `BlockWeaver` and `JointLedger` actually allow that today, or whether the leader's apply is
-   entangled with producing the brief, decides how much of the latency win is available without
-   further restructuring. Worth checking before this design is used to justify a throughput
-   claim.
+**Memoizing `blockHash` is not a design question.** The stored value is already a field; what
+gets recomputed on every rebuild has to be recomputed, because a stored hash is a claim (see
+*Where `blockHash` lives*). Whether the recomputation is cached anywhere is an implementation
+call.
