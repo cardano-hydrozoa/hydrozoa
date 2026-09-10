@@ -2,6 +2,7 @@ package hydrozoa.multisig.persistence.codec
 
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
@@ -43,6 +44,7 @@ object SecCodec:
               "blockNum" -> sec.blockNum.asJson,
               "blockVersion" -> sec.blockVersion.asJson,
               "kzgCommitment" -> (sec.kzgCommitment: ByteString).asJson,
+              "l2StateHash" -> sec.l2StateHash.asJson,
               "header" -> sec.header.asJson
             )
         }
@@ -53,6 +55,7 @@ object SecCodec:
                 blockNum <- c.downField("blockNum").as[BlockNumber]
                 blockVersion <- c.downField("blockVersion").as[BlockVersion.Full]
                 kzg <- c.downField("kzgCommitment").as[ByteString]
+                l2StateHash <- c.downField("l2StateHash").as[L2StateHash]
                 header <- c
                     .downField("header")
                     .as[StandaloneEvacuationCommitment.Onchain.Serialized]
@@ -60,6 +63,7 @@ object SecCodec:
               blockNum = blockNum,
               blockVersion = blockVersion,
               kzgCommitment = kzg,
+              l2StateHash = l2StateHash,
               header = header
             )
         }

@@ -10,9 +10,11 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, Persistence, PersistenceEventFormat, StoreKey, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.testL2StateHash
 import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEventFormat}
 import org.scalacheck.{Gen, Properties}
 import test.Generators.Hydrozoa.genEvacuationMap
@@ -45,13 +47,15 @@ object EvacuationInputsTest extends Properties("Evacuation Inputs Test") {
           headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
           versionMajor = versionMajor,
           versionMinor = versionMinor,
-          commitment = minorMap.kzgCommitment
+          commitment = minorMap.kzgCommitment,
+          l2StateHash = testL2StateHash
         )
         val multiSigned = StandaloneEvacuationCommitment.MultiSigned(
           commitment = StandaloneEvacuationCommitment(
             blockNum = BlockNumber(1),
             blockVersion = BlockVersion.Full(versionMajor.toInt, versionMinor.toInt),
             kzgCommitment = minorMap.kzgCommitment,
+            l2StateHash = L2StateHash(testL2StateHash),
             header = StandaloneEvacuationCommitmentOnchain(blockHeader),
           ),
           headerMultiSigned = env.multisignHeaderSparse(blockHeader),

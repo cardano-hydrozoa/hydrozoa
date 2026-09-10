@@ -130,7 +130,8 @@ object InitializationTx {
 
                 expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
                   config.initialEvacuationMap,
-                  ByteString.fromArray(headParamsHash.bytes)
+                  ByteString.fromArray(headParamsHash.bytes),
+                  config.initialL2StateHash
                 )
 
                 actualOutputs = tx.body.value.outputs.map(_.value)

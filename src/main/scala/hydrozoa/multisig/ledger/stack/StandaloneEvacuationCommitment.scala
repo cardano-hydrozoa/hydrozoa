@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.stack
 
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import scalus.cardano.onchain.plutus.v3.TokenName
 
@@ -19,10 +20,11 @@ import scalus.cardano.onchain.plutus.v3.TokenName
   * effect and goes to L1 immediately on execution; only minor blocks have a *standalone* one.)
   *
   * Per spec the on-L1 record is `(headId, blockVersion, kzgCommitment)`, with `blockVersion`
-  * flattened to `(versionMajor, versionMinor)` in the datum encoding — so [[Onchain]] below carries
-  * four fields: `(headId, versionMajor, versionMinor, commitment)`. `headId` is fixed per head (the
-  * `HYDR` token asset name) and pins the SEC to this head for the dispute-resolution script's
-  * cross-head-contamination check. It is supplied at SEC construction time from the head's
+  * flattened to `(versionMajor, versionMinor)` in the datum encoding, and `l2StateHash` added
+  * beside the commitment (`design/l2-state-certificate.md`) — so [[Onchain]] below carries five
+  * fields: `(headId, versionMajor, versionMinor, commitment, l2StateHash)`. `headId` is fixed per
+  * head (the `HYDR` token asset name) and pins the SEC to this head for the dispute-resolution
+  * script's cross-head-contamination check. It is supplied at SEC construction time from the head's
   * `headTokenNames.treasuryTokenName`. `blockNum` is kept on the *offchain* effect (below) so the
   * slow side can key the hard-ack header signature (the consensus artifact paired with this record
   * at dispute time) by block number, but it is NOT carried on-chain.
@@ -40,6 +42,9 @@ import scalus.cardano.onchain.plutus.v3.TokenName
   *   that block's full version
   * @param kzgCommitment
   *   the dormant record's KZG commitment (spec content)
+  * @param l2StateHash
+  *   the L2 ledger's digest of the state that block leaves behind — what this SEC certifies. It is
+  *   the minor-only stack's counterpart to the settlement datum's field of the same name.
   * @param header
   *   the committed minor block's serialized header — the SEC signing bytes
   */
@@ -47,6 +52,7 @@ final case class StandaloneEvacuationCommitment(
     blockNum: BlockNumber,
     blockVersion: BlockVersion.Full,
     kzgCommitment: KzgCommitment,
+    l2StateHash: L2StateHash,
     header: StandaloneEvacuationCommitmentOnchain.Serialized
 )
 
@@ -86,6 +92,9 @@ object StandaloneEvacuationCommitment {
       * @param commitment
       *   the SEC's KZG commitment (spec content) — read by the dispute script as the value to vote
       *   on.
+      * @param l2StateHash
+      *   the L2 state digest this SEC certifies. Not read by the dispute script; it is signed
+      *   because the script verifies over `serialiseData(sec.toData)`.
       */
     type Onchain = StandaloneEvacuationCommitmentOnchain
 
@@ -99,22 +108,24 @@ object StandaloneEvacuationCommitment {
             export StandaloneEvacuationCommitmentOnchain.*
         }
 
-        /** Build the on-chain SEC datum from this head's `headId`, the offchain block header, and
-          * the KZG commitment of the evacuation map at that block. KZG is passed explicitly (not
-          * read from the header) because as of step 4 it's a slow-cycle concern, computed in
-          * [[StackEffectsBuilder]] from the cumulative evacuation map state — the header itself no
-          * longer carries it.
+        /** Build the on-chain SEC datum from this head's `headId`, the offchain block header, the
+          * KZG commitment of the evacuation map at that block, and the L2 state digest at it. KZG
+          * is passed explicitly (not read from the header) because as of step 4 it's a slow-cycle
+          * concern, computed in [[StackEffectsBuilder]] from the cumulative evacuation map state —
+          * the header itself no longer carries it.
           */
         def apply(
             headId: TokenName,
             offchainHeader: BlockHeader.Section,
-            kzgCommitment: KzgCommitment
+            kzgCommitment: KzgCommitment,
+            l2StateHash: L2StateHash
         ): Onchain =
             StandaloneEvacuationCommitmentOnchain(
               headId = headId,
               versionMajor = BigInt(offchainHeader.blockVersion.major.convert),
               versionMinor = BigInt(offchainHeader.blockVersion.minor.convert),
-              commitment = kzgCommitment
+              commitment = kzgCommitment,
+              l2StateHash = l2StateHash.byteString
             )
     }
 }

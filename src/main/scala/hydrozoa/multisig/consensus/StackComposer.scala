@@ -18,6 +18,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult, BlockVer
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.l2.{L2StateHash, L2StateReader}
 import hydrozoa.multisig.ledger.stack.*
 import hydrozoa.multisig.metrics.{PeerMetrics, StackComposerPhase}
 import hydrozoa.multisig.persistence.recovery.{BlockResultScan, SoftConfirmationScan}
@@ -51,6 +52,11 @@ final case class StackComposer(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | StackComposer.Connections,
     tracer: ContraTracer[IO, StackComposerEvent],
     persistence: Persistence[IO],
+    /** The L2 ledger, narrowed to its read-only slice: every carrier this actor derives certifies
+      * the L2 state at its block (`design/l2-state-certificate.md`), and reading that state is the
+      * only thing the slow side asks of the ledger. JointLedger remains its sole driver.
+      */
+    l2StateReader: L2StateReader[IO],
     metrics: PeerMetrics,
     /** The boot markers, derived once by the regime manager (§5.2). `hardAckedStack` in particular
       * is projected, not re-derived: this actor and `ReplayActor` used to unpack it from the
@@ -528,31 +534,67 @@ final case class StackComposer(
     ): IO[ComposedStack] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val partitions = StackPartition.partition(results)
-        // Derivation runs to completion inside this one actor message — nothing else in the
-        // composer is processed meanwhile — so the phase is set before the fold, not during it.
-        metrics.onComposerPhase(StackComposerPhase.Deriving, System.currentTimeMillis())
-        StackEffectsBuilder.mkEffectsRegular(
-          config,
-          treasury,
-          partitions,
-          evacuationMap,
-          onPartitionDerived = metrics.onPartitionDerived,
-          onDerivationStarted = metrics.onDerivationStarted
-        ) match {
-            case Right((effects, newTreasury, newMap, withdrawalTracking)) =>
-                IO.pure(
-                  ComposedStack(
-                    Stack.Unsigned(brief, effects),
-                    newTreasury,
-                    newMap,
-                    partitions,
-                    withdrawalTracking
-                  )
-                )
-            case Left(err) =>
-                IO.raiseError(err)
-        }
+        for {
+            l2StateHashes <- l2StateHashesFor(partitions)
+            // Derivation runs to completion inside this one actor message — nothing else in the
+            // composer is processed meanwhile — so the phase is set before the fold, not during it.
+            _ <- IO(
+              metrics.onComposerPhase(StackComposerPhase.Deriving, System.currentTimeMillis())
+            )
+            composed <- StackEffectsBuilder.mkEffectsRegular(
+              config,
+              treasury,
+              partitions,
+              evacuationMap,
+              l2StateHashes,
+              onPartitionDerived = metrics.onPartitionDerived,
+              onDerivationStarted = metrics.onDerivationStarted
+            ) match {
+                case Right((effects, newTreasury, newMap, withdrawalTracking)) =>
+                    IO.pure(
+                      ComposedStack(
+                        Stack.Unsigned(brief, effects),
+                        newTreasury,
+                        newMap,
+                        partitions,
+                        withdrawalTracking
+                      )
+                    )
+                case Left(err) =>
+                    IO.raiseError(err)
+            }
+        } yield composed
     }
+
+    /** Ask the L2 ledger what its state digests to at every block this stack's effects certify
+      * ([[StackEffectsBuilder.certifiedBlocks]]).
+      *
+      * Each block's L2 command number comes from the per-block `L2CommandNumber` row written in the
+      * same atomic bundle as its `BlockResult`, so the anchor is the one the fast side actually
+      * reached — the composer never converts a block number to a command number itself. The
+      * ledger's own position is untouched; see [[L2StateReader.stateAt]] for why it cannot be
+      * `restoreTo`.
+      *
+      * A ledger that does not report an `l2StateHash` yields no entry, and
+      * [[StackEffectsBuilder.mkEffectsRegular]] then fails the stack with
+      * `Error.L2StateHashMissing` rather than certifying a value nobody computed.
+      */
+    private def l2StateHashesFor(
+        partitions: NonEmptyList[StackPartition]
+    ): IO[Map[BlockNumber, L2StateHash]] =
+        StackEffectsBuilder
+            .certifiedBlocks(partitions)
+            .distinct
+            .traverse(blockNum =>
+                for {
+                    commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
+                    digests <- l2StateReader
+                        .stateAt(commandNumber)
+                        .value
+                        .flatMap(IO.fromEither)
+                } yield digests.l2StateHash.map(blockNum -> _)
+            )
+            .map(_.flatten.toMap)
 
     /** Sign this peer's own hard-acks for every round the stack will need, allocating monotonic
       * `HardAckNumber`s from the local counter. Bundles `(unsigned, ownAcks)` into a

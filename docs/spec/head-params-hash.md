@@ -357,7 +357,8 @@ message for three unrelated operator problems:
 ```scala
 expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
   config.initialEvacuationMap,
-  ByteString.fromArray(headParamsHash.bytes)
+  ByteString.fromArray(headParamsHash.bytes),
+  config.initialL2StateHash
 )
 ```
 
@@ -367,10 +368,10 @@ split, hub topology, or setup-ladder anchor differs from the one the initializat
 was built for cannot parse that transaction, so it never signs block zero and the head does not
 start split.
 
-The three fields fail for three unrelated reasons — a wrong initial evacuation map (`commit`), a
-stale version (`versionMajor`), and a configuration disagreement (`headParamsHash`) — and only
-the third is something an operator can act on, so each carries its own message naming the two
-digests.
+The fields fail for unrelated reasons — a wrong initial evacuation map (`commit`), a stale version
+(`versionMajor`), a configuration disagreement (`headParamsHash`), and a wrong opening L2 state
+(`l2StateHash`, see `design/l2-state-certificate.md`) — and only the configuration one is
+something an operator can act on, so each carries its own message naming the two digests.
 
 `Parse` takes the digest as an already-computed `Hash32` rather than deriving it: computing it
 needs nearly the whole head config, and `Parse` deliberately asks for only the five sections it
@@ -489,7 +490,8 @@ wrong one. Same rule the evacuation map digest already follows.
 `SettlementTx` builds a fresh treasury datum for every major block:
 
 ```scala
-datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced, config.headParamsHashBytes)
+datum = MultisigTreasuryUtxo
+  .Datum(kzgCommitment, majorVersionProduced, config.headParamsHashBytes, l2StateHash.byteString)
 ```
 
 The digest comes from the builder's **own config**, not from the spent treasury's datum. Carrying
@@ -516,9 +518,9 @@ forever.
 Adding a field to `MultisigTreasuryUtxo.Datum` changes its `Data` arity, so
 `Data.fromData[MultisigTreasuryUtxo.Datum]` fails on every datum written before the change —
 on-chain and in persisted state alike. **A running head cannot be upgraded across this
-change.** It applies to heads initialized afterwards; existing heads keep the two-field datum
-and the build that understands it. This belongs in the release notes of the release that ships
-it, with the configuration-change procedure below.
+change.** It applies to heads initialized afterwards; existing heads keep the datum arity they
+were initialized with and the build that understands it. This belongs in the release notes of the
+release that ships it, with the configuration-change procedure below.
 
 ## Changing any of this
 

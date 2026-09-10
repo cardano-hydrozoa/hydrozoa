@@ -14,7 +14,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_TransactionInput
 import scalus.cardano.ledger.{Coin, Transaction, TransactionInput, Value}
 import scalus.uplc.builtin.ByteString
-import test.Generators.Hydrozoa.genKnownValuePayoutObligationWithMinAdaEnsured
+import test.Generators.Hydrozoa.{genKnownValuePayoutObligationWithMinAdaEnsured, testL2StateHash}
 import test.TestPeersSpec
 
 /** Pins the payout-obligation layout the withdrawal-effect tracking depends on: the settlement /
@@ -58,7 +58,8 @@ class RolloutPayoutOrderingTest extends AnyFunSuite:
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(7),
-            ByteString.fromArray(Array.fill[Byte](32)(0))
+            ByteString.fromArray(Array.fill[Byte](32)(0)),
+            testL2StateHash.byteString
           ),
           value = totalPayoutValue + Value(equity.coin),
           equity = equity
@@ -68,6 +69,7 @@ class RolloutPayoutOrderingTest extends AnyFunSuite:
         val seq = SettlementTxSeq
             .Build(config)(
               kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              l2StateHash = testL2StateHash,
               majorVersionProduced = BlockVersion.Major(8),
               depositsToSpend = Nil,
               payoutObligationsRemaining = obligations,

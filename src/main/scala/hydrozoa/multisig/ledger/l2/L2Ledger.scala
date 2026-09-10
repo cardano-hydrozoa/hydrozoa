@@ -147,7 +147,31 @@ object L2LedgerInteractionState:
   *   A monad in which the "transport" runs. This will be IO for most implementations (for network
   *   or unix socket access, etc), but can also be something like [[State]] for pure implementations
   */
-trait L2Ledger[F[_]] {
+/** The read-only slice of an [[L2Ledger]]: what its state at a command number digests to, with no
+  * power to move it. The slow side takes only this, so nothing outside JointLedger — the sole,
+  * single-message-at-a-time driver of the mutation path — can be handed a ledger it could advance
+  * or rewind.
+  */
+trait L2StateReader[F[_]] {
+
+    /** The digests of the ledger's state as of `commandNumber`, **without moving the ledger**: read
+      * the state, digest it, discard it.
+      *
+      * This is what certifies state (`design/l2-state-certificate.md`). The slow side asks at each
+      * partition boundary of a closed stack, and by then the fast side has cut further blocks, so
+      * the ledger's tip is ahead of the boundary — [[L2Ledger.restoreTo]] there would rewind a live
+      * ledger out from under block production. Every peer derives its own effect bodies and
+      * `HardAckSignatureVerifier` checks signatures against them, so this must answer the same
+      * value on every peer for the same `commandNumber`, which is why it addresses a command number
+      * rather than "now".
+      *
+      * At `commandNumber` equal to the ledger's tip this is only the digest — no snapshot load, no
+      * re-fold, no write.
+      */
+    def stateAt(commandNumber: L2CommandNumber): EitherT[F, RestoreError, L2Ledger.Digests]
+}
+
+trait L2Ledger[F[_]] extends L2StateReader[F] {
     implicit def monadF: Monad[F]
 
     /** See:
@@ -209,22 +233,6 @@ trait L2Ledger[F[_]] {
       * actually starts from — see [[RestoreError.EvacuationMapMismatch]].
       */
     def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, L2Ledger.Digests]
-
-    /** The same [[L2Ledger.Digests]] `restoreTo` reports, **without moving the ledger**: read the
-      * state as of `commandNumber`, digest it, discard it.
-      *
-      * This is what certifies state (`design/l2-state-certificate.md`). The slow side asks at each
-      * partition boundary of a closed stack, and by then the fast side has cut further blocks, so
-      * the ledger's tip is ahead of the boundary — `restoreTo` there would rewind a live ledger out
-      * from under block production. Every peer derives its own effect bodies and
-      * `HardAckSignatureVerifier` checks signatures against them, so this must answer the same
-      * value on every peer for the same `commandNumber`, which is why it addresses a command number
-      * rather than "now".
-      *
-      * At `commandNumber` equal to the ledger's tip this is only the digest — no snapshot load, no
-      * re-fold, no write.
-      */
-    def stateAt(commandNumber: L2CommandNumber): EitherT[F, RestoreError, L2Ledger.Digests]
 }
 
 object L2Ledger {

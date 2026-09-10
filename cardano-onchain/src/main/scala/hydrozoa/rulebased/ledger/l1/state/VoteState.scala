@@ -108,12 +108,20 @@ end VoteState
   *
   * Lives in `cardano-onchain` so the validator can reference it without a back-dependency on core.
   * Core keeps `StandaloneEvacuationCommitment.Onchain` as a type alias pointing here.
+  *
+  * `l2StateHash` is the L2 ledger's own digest of the state the committed minor block leaves
+  * behind, beside `commitment`'s evacuation map — the same pair the settlement's treasury datum
+  * carries, so that minor-only stacks (which produce no settlement) also certify their state
+  * (`design/l2-state-certificate.md`). The dispute-resolution script does not read it; it is here
+  * because the script verifies the peers' signatures over `serialiseData(sec.toData)`, and that is
+  * what makes the field a signed statement rather than a hint.
   */
 final case class StandaloneEvacuationCommitmentOnchain(
     headId: TokenName,
     versionMajor: BigInt,
     versionMinor: BigInt,
-    commitment: VoteState.KzgCommitment
+    commitment: VoteState.KzgCommitment,
+    l2StateHash: ByteString
 )
 
 object StandaloneEvacuationCommitmentOnchain:

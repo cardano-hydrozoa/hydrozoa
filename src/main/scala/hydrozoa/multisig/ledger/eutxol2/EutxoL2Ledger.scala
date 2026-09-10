@@ -88,6 +88,23 @@ object EutxoL2Ledger {
       )
     )
 
+    /** The [[hydrozoa.multisig.ledger.l2.L2StateHash]] of the state this ledger opens a head in:
+      * `initialEvacuationMap` as its utxo set, both other compartments empty.
+      *
+      * Derivable from the bootstrap config alone, without a store or a running ledger, which is
+      * what lets the initialization transaction's treasury datum certify the opening L2 state and
+      * lets every peer check that datum while parsing the transaction. At a cold boot the ledger's
+      * own `stateAt(0)` is compared against it — the same check `initialEvacuationMap` already
+      * gets, one layer down.
+      */
+    def initialStateHash(initialEvacuationMap: EvacuationMap): L2StateHash =
+        L2Snapshot(
+          commandNumber = L2CommandNumber.zero,
+          activeUtxos = initialEvacuationMap.toUtxos,
+          transientTokens = TransientTokens.empty,
+          pendingDeposits = Map.empty
+        ).stateHash
+
     case class State(
         activeUtxos: Utxos,
         /** The transient-token compartment overlaying `activeUtxos` (the main compartment). Only

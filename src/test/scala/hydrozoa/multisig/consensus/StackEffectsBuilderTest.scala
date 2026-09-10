@@ -13,6 +13,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup, EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.tx.{FinalizationTx, genDepositUtxo}
 import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackPartition}
 import org.scalacheck.rng.Seed
 import org.scalacheck.{Arbitrary, Gen}
@@ -21,7 +22,7 @@ import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_TransactionInput
 import scalus.cardano.ledger.{Coin, TransactionInput, Value}
 import scalus.uplc.builtin.ByteString
-import test.Generators.Hydrozoa.genKnownValuePayoutObligationWithMinAdaEnsured
+import test.Generators.Hydrozoa.{genKnownValuePayoutObligationWithMinAdaEnsured, testL2StateHash}
 
 /** [[StackEffectsBuilder.mkEffectsRegular]] — the Final partition (finalization) and the
   * per-command conservation check (no account over- or under-credited by deposits, L2 transactions,
@@ -30,6 +31,15 @@ import test.Generators.Hydrozoa.genKnownValuePayoutObligationWithMinAdaEnsured
   * [[hydrozoa.multisig.ledger.l1.txseq.SettlementTxSeqBuilderTest]]).
   */
 class StackEffectsBuilderTest extends AnyFunSuite {
+
+    /** A stand-in digest for every block a stack certifies. These tests are about the effects, not
+      * about which state they commit to, so one value everywhere is enough — what matters is that
+      * the builder gets an entry for each block [[StackEffectsBuilder.certifiedBlocks]] names.
+      */
+    private def certifyAll(
+        partitions: NonEmptyList[StackPartition]
+    ): Map[BlockNumber, L2StateHash] =
+        StackEffectsBuilder.certifiedBlocks(partitions).map(_ -> testL2StateHash).toMap
 
     private val config: NodeConfig =
         MultiNodeConfig.generateDefault
@@ -97,7 +107,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0))
+            ByteString.fromArray(Array.fill[Byte](32)(0)),
+            testL2StateHash.byteString
           ),
           // Generous ADA so the build succeeds even under the buggy (double-counting) path — the
           // regression then shows up as `payoutCount == 2`, not an opaque build failure.
@@ -109,7 +120,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           config = headConfig,
           initialTreasury = treasury,
           partitions = partitions,
-          initialEvacuationMap = initialMap
+          initialEvacuationMap = initialMap,
+          l2StateHashes = certifyAll(partitions)
         )
 
         val (effects, _, _, rows) = result match {
@@ -184,7 +196,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0))
+            ByteString.fromArray(Array.fill[Byte](32)(0)),
+            testL2StateHash.byteString
           ),
           value = treasuryValue + treasuryTokenValue,
           equity = Equity(Coin(5_000_000L)).get
@@ -193,7 +206,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           config = headConfig,
           initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(minorBlock)),
-          initialEvacuationMap = initialMap
+          initialEvacuationMap = initialMap,
+          l2StateHashes = certifyAll(StackPartition.partition(NonEmptyList.one(minorBlock)))
         )
     }
 
@@ -259,7 +273,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0))
+            ByteString.fromArray(Array.fill[Byte](32)(0)),
+            testL2StateHash.byteString
           ),
           value = Value(Coin(2_000_000_000L)) + treasuryTokenValue,
           equity = Equity(Coin(1_000_000_000L)).get
@@ -268,7 +283,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           config = headConfig,
           initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(majorBlock)),
-          initialEvacuationMap = EvacuationMap.empty
+          initialEvacuationMap = EvacuationMap.empty,
+          l2StateHashes = certifyAll(StackPartition.partition(NonEmptyList.one(majorBlock)))
         )
     }
 
@@ -308,7 +324,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0))
+            ByteString.fromArray(Array.fill[Byte](32)(0)),
+            testL2StateHash.byteString
           ),
           value = Value(Coin(2_000_000_000L)) + treasuryTokenValue,
           equity = Equity(Coin(1_000_000_000L)).get
@@ -317,7 +334,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           config = headConfig,
           initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(finalBlock)),
-          initialEvacuationMap = initialMap
+          initialEvacuationMap = initialMap,
+          l2StateHashes = certifyAll(StackPartition.partition(NonEmptyList.one(finalBlock)))
         )
     }
 
@@ -424,7 +442,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0))
+            ByteString.fromArray(Array.fill[Byte](32)(0)),
+            testL2StateHash.byteString
           ),
           value = Value(Coin(120_000_000L)) + treasuryTokenValue,
           equity = Equity(Coin(100_000_000L)).get
@@ -433,7 +452,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           config = headConfig,
           initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(majorBlock)),
-          initialEvacuationMap = initialMap
+          initialEvacuationMap = initialMap,
+          l2StateHashes = certifyAll(StackPartition.partition(NonEmptyList.one(majorBlock)))
         )
         result match {
             case Right((_, newTreasury, newMap, _)) =>

@@ -169,13 +169,15 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
           treasuryTokenName = config.headTokenNames.treasuryTokenName,
           utxoId = utxoId,
           address = config.headMultisigAddress,
-          datum = MultisigTreasuryUtxo.Datum(kzg, majorVersion, config.headParamsHashBytes),
+          datum = MultisigTreasuryUtxo
+              .Datum(kzg, majorVersion, config.headParamsHashBytes, testL2StateHash.byteString),
           value = treasuryValue,
           equity = equity
         )
 
     } yield SettlementTxSeq.Build(config)(
       kzgCommitment = kzg,
+      l2StateHash = testL2StateHash,
       majorVersionProduced = BlockVersion.Major(majorVersion),
       depositsToSpend = deposits.toList,
       payoutObligationsRemaining = Vector.from(payouts.toList),
@@ -238,6 +240,7 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
     } yield (
       SettlementTxSeq.Build(config)(
         kzgCommitment = kzg,
+        l2StateHash = testL2StateHash,
         majorVersionProduced = BlockVersion.Major(majorVersion),
         depositsToSpend = deposits.toList,
         payoutObligationsRemaining = infimum,

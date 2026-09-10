@@ -9,6 +9,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import io.circe.generic.semiauto.*
 import io.circe.{Decoder, Encoder}
 import scala.annotation.unused
@@ -25,6 +26,16 @@ import spire.math.Rational
   *   ledger it is the initial utxo set). It is an explicit, agreed field of the bootstrap config:
   *   the init tx commits to it on-chain (treasury value + datum KZG) and every node verifies that,
   *   so it cannot be derived-and-forgotten.
+  * @param initialL2StateHash
+  *   the head's opening L2 state as the L2 ledger's own digest of it
+  *   ([[hydrozoa.multisig.ledger.l2.L2StateHash]]) — the state *behind* the evacuation map, which
+  *   is only its L1-compatible projection. Explicit and agreed for the same reason: the init tx
+  *   commits to it in the treasury datum and every node verifies that
+  *   (`design/l2-state-certificate.md`). Its construction is the backend's, so a `cardano-eutxo`
+  *   head derives it from [[initialEvacuationMap]]
+  *   ([[hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger.initialStateHash]]) and an `any-remote` head
+  *   takes it from what that ledger reports about its own initial state, the same route
+  *   [[initialEvacuationMap]] arrives by.
   * @param initialEquityContributions
   *   the ADA amounts (if any) that each peer contributed to the head's equity. The total ADA
   *   contributed must be sufficient for the initialization tx fee, and will also be used for all
@@ -36,6 +47,7 @@ import spire.math.Rational
   */
 final case class InitializationParameters(
     override val initialEvacuationMap: EvacuationMap,
+    override val initialL2StateHash: L2StateHash,
     override val initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     override val headId: InitializationParameters.HeadId,
 ) extends InitializationParameters.Section {
@@ -55,6 +67,7 @@ object InitializationParameters {
         def initializationParameters: InitializationParameters
 
         def initialEvacuationMap: EvacuationMap = initializationParameters.initialEvacuationMap
+        def initialL2StateHash: L2StateHash = initializationParameters.initialL2StateHash
         def initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin] =
             initializationParameters.initialEquityContributions
         def headId: HeadId = initializationParameters.headId

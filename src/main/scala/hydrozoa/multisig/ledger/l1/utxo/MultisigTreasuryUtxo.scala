@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.l1.utxo
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import scalus.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{AssetName, Coin, TransactionInput, TransactionOutput, Utxo, Value}
@@ -76,22 +77,39 @@ object MultisigTreasuryUtxo {
       *   (`hydrozoa.config.head.HeadParamsHash`). Written by the initialization tx and carried
       *   forward unchanged by every settlement: peers rebuild a settlement before signing it, so a
       *   peer whose configuration drifts stops being able to get blocks signed.
+      * @param l2StateHash
+      *   the L2 ledger's digest of the state this datum's block leaves behind
+      *   ([[hydrozoa.multisig.ledger.l2.L2StateHash]]). Where `commit` commits to the evacuation
+      *   map — the L1-compatible *projection* of that state — this commits to the state itself, so
+      *   two peers that agree on every evacuable payout and still diverged in the ledger that
+      *   produced them do not both get their settlement signed. The datum is N-of-N multisigned by
+      *   the hard-ack flow and lands on L1, which makes settlement the head's strongest state
+      *   anchor and as sparse as its major cadence (`design/l2-state-certificate.md`).
+      *
+      * Unlike `headParamsHash` it moves with every settlement, which is why it earns a seat on a
+      * datum copied to L1 each time.
+      *
+      * No validator reads this datum — the multisig treasury sits under a native script — so the
+      * enforcement is entirely off-chain, in the peers' rebuild-before-signing.
       */
     final case class Datum(
         commit: KzgCommitment,
         versionMajor: BigInt,
-        headParamsHash: ByteString
+        headParamsHash: ByteString,
+        l2StateHash: ByteString
     ) derives FromData,
           ToData
 
     def mkInitMultisigTreasuryDatum(
         initialEvacuationMap: EvacuationMap,
-        headParamsHash: ByteString
+        headParamsHash: ByteString,
+        initialL2StateHash: L2StateHash
     ): Datum =
         Datum(
           initialEvacuationMap.kzgCommitment,
           BigInt(BlockVersion.Major(0).toLong),
-          headParamsHash
+          headParamsHash,
+          initialL2StateHash.byteString
         )
 
 }

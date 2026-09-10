@@ -144,7 +144,8 @@ object InitializationTxBuilder {
                     private[bootstrap] val treasuryDatum =
                         MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
                           config.initialEvacuationMap,
-                          ByteString.fromArray(headParamsHash.bytes)
+                          ByteString.fromArray(headParamsHash.bytes),
+                          config.initialL2StateHash
                         )
 
                     private val treasuryOutput = Babbage(

@@ -35,6 +35,7 @@ import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationMap}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json, JsonObject, parser}
@@ -507,8 +508,22 @@ object Bootstrap:
           )
         )(IO.pure)
 
+        // The opening L2 state's own digest, which the init tx's treasury datum certifies
+        // (design/l2-state-certificate.md). Its construction is the backend's, so bootstrap sources
+        // it the same way it sources `l2ParamsHash`: the built-in ledger's is derivable from the
+        // opening evacuation map without a ledger running.
+        // TODO: a remote ledger's has to come from the operator, printed out-of-band beside the
+        //  initial evacuation map. Until that config field exists, a remote head certifies a zero
+        //  hash on its init tx.
+        initialL2StateHash = l2Ledger match {
+            case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.initialStateHash(evacMap)
+            case L2LedgerKind.AnyRemote =>
+                L2StateHash(ByteString.fromArray(new Array[Byte](32)))
+        }
+
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
+          initialL2StateHash = initialL2StateHash,
           initialEquityContributions = initialEquityContributions,
           headId = funding.headId
         )

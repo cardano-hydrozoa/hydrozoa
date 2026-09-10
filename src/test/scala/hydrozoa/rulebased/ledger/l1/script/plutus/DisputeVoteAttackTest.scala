@@ -15,7 +15,7 @@ import hydrozoa.rulebased.ledger.l1.DisputeTestFixtures.mkRegimeUtxoPure
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, VoteRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{genCollateralUtxo, testL2StateHash}
 import hydrozoa.rulebased.ledger.l1.tx.VoteTx
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import org.scalacheck.{Arbitrary, Gen, Properties, Test}
@@ -232,7 +232,8 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
           headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
           versionMajor = versionMajor,
           versionMinor = versionMinor,
-          commitment = evacMap.kzgCommitment
+          commitment = evacMap.kzgCommitment,
+          l2StateHash = testL2StateHash
         )
         signatures = env.multisignHeader(sec).toList
         coilSignatures = env.multisignHeaderCoil(sec)

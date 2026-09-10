@@ -19,6 +19,7 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
@@ -456,6 +457,7 @@ class ReplayActorTest extends AnyFunSuite:
               blockNum = BlockNumber(0),
               blockVersion = BlockVersion.Full(0, 0),
               kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              l2StateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
               header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
                 Array.fill[Byte](32)(7)
               )

@@ -22,7 +22,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand, RestoreError}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand, L2StateHash, RestoreError}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey, Timestamped}
@@ -389,6 +389,7 @@ class RecoverSeamsTest extends AnyFunSuite:
               blockNum = BlockNumber(lastBlock),
               blockVersion = BlockVersion.Full(0, 0),
               kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              l2StateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
               header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
                 Array.fill[Byte](32)(7)
               )
@@ -687,6 +688,7 @@ class RecoverSeamsTest extends AnyFunSuite:
               blockNum = BlockNumber(1),
               blockVersion = BlockVersion.Full(0, 0),
               kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              l2StateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
               header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
                 Array.fill[Byte](32)(7)
               )
@@ -921,6 +923,7 @@ class RecoverSeamsTest extends AnyFunSuite:
               blockNum = BlockNumber(lastBlock),
               blockVersion = BlockVersion.Full(0, 0),
               kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              l2StateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
               header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
                 Array.fill[Byte](32)(7)
               )
