@@ -10,7 +10,7 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
-import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
@@ -40,6 +40,11 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
     private val headConfig = multiNodeConfig.headConfig
 
     private val softAt = Instant.parse("2026-01-01T00:00:00Z")
+
+    /** Block zero's creation end time, which is also its derived soft-confirmation moment. */
+    private val blockZeroEndTime: Instant =
+        headConfig.initialBlock.blockBrief.endTime.convert.instant
+
     private val hardAt = Instant.parse("2026-01-01T00:05:00Z")
 
     private val nanosPerSecond = 1_000_000_000L
@@ -116,21 +121,14 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             def blockBriefs: IO[List[BlockBrief.Next]] = IO.pure(List(brief))
             def blockBrief(num: BlockNumber): IO[Option[BlockBrief.Next]] =
                 IO.pure(Option.when(num == BlockNumber(1))(brief))
-            def softConfirmation(
-                num: BlockNumber
-            ): IO[Option[Timestamped[Block.SoftConfirmed.Next]]] =
+            // Block zero as the live reader resolves it: derived from its creation end time,
+            // because no `SoftConfirmation(0)` is ever written. `ConsensusStoreReaderTest` covers
+            // that derivation; this stub carries it so the rungs the routes render are the real
+            // ones.
+            def softConfirmedAt(num: BlockNumber): IO[Option[Instant]] =
                 IO.pure(
-                  Option.when(soft && num == BlockNumber(1))(
-                    Timestamped(
-                      stampFor(softAt),
-                      Block.SoftConfirmed
-                          .Minor(
-                            brief,
-                            headerMultiSigned = List.empty,
-                            finalizationRequested = false
-                          )
-                    )
-                  )
+                  if num == BlockNumber.zero then Some(blockZeroEndTime)
+                  else Option.when(soft && num == BlockNumber(1))(softAt)
                 )
             def stackOf(num: BlockNumber): IO[Option[StackNumber]] =
                 IO.pure(Option.when(hard && num == BlockNumber(1))(StackNumber(1)))

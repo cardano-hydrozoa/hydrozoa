@@ -312,9 +312,10 @@ object Serve {
                     )
             }
             // Read-only consensus-store view behind the /head/blocks queries.
-            consensusReader = ConsensusStoreReader.fromPersistence(persistence)(using
-              nodeConfig.headConfig
-            )
+            consensusReader = ConsensusStoreReader.fromPersistence(
+              persistence,
+              nodeConfig.headConfig.initialBlock.blockBrief.endTime
+            )(using nodeConfig.headConfig)
         } yield (nodeConfig, system, nodeRun, consensusReader, metrics)
 
         resource.use { case (nodeConfig, system, nodeRun, consensusReader, metrics) =>

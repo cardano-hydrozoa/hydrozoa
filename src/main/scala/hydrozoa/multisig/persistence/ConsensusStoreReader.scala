@@ -1,10 +1,12 @@
 package hydrozoa.multisig.persistence
 
 import cats.effect.IO
+import cats.syntax.all.*
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.recovery.CursorScan
@@ -28,10 +30,16 @@ trait ConsensusStoreReader[F[_]]:
     /** One block's brief, if persisted. */
     def blockBrief(num: BlockNumber): F[Option[BlockBrief.Next]]
 
-    /** This node's soft-confirmation record for a block: the aggregate plus the local confirmation
-      * stamp.
+    /** This node's soft-confirmation moment for a block, present exactly when the node holds that
+      * block's confirmation.
+      *
+      * Block zero is derived rather than read. It skips the fast cycle entirely (`Initial` is not a
+      * `BlockType.Next`), so no `SoftConfirmation(0)` is ever written and a stored read would
+      * report a hard-confirmed block as unconfirmed. Its moment is its creation end time, which the
+      * config already fixes — so this is the accessor every caller uses, and the record itself is
+      * not exposed.
       */
-    def softConfirmation(num: BlockNumber): F[Option[Timestamped[Block.SoftConfirmed.Next]]]
+    def softConfirmedAt(num: BlockNumber): F[Option[Instant]]
 
     /** The stack that hard-confirmed a block, if any. */
     def stackOf(num: BlockNumber): F[Option[StackNumber]]
@@ -80,9 +88,12 @@ trait ConsensusStoreReader[F[_]]:
 
 object ConsensusStoreReader:
 
-    /** The reader over a live [[Persistence]] instance. */
+    /** The reader over a live [[Persistence]] instance. `blockZeroEndTime` is block zero's creation
+      * end time, which is also its derived soft-confirmation moment.
+      */
     def fromPersistence(
-        persistence: Persistence[IO]
+        persistence: Persistence[IO],
+        blockZeroEndTime: BlockCreationEndTime
     )(using CardanoNetwork.Section): ConsensusStoreReader[IO] =
         new ConsensusStoreReader[IO]:
             def blockBriefs: IO[List[BlockBrief.Next]] =
@@ -96,10 +107,12 @@ object ConsensusStoreReader:
             def blockBrief(num: BlockNumber): IO[Option[BlockBrief.Next]] =
                 persistence.get(JournalKey.Block(num)).map(_.map(_.payload))
 
-            def softConfirmation(
-                num: BlockNumber
-            ): IO[Option[Timestamped[Block.SoftConfirmed.Next]]] =
-                persistence.get(StoreKey.SoftConfirmation(num))
+            def softConfirmedAt(num: BlockNumber): IO[Option[Instant]] =
+                if num == BlockNumber.zero then IO.pure(Some(blockZeroEndTime.convert.instant))
+                else
+                    persistence
+                        .get(StoreKey.SoftConfirmation(num))
+                        .flatMap(_.traverse(t => persistence.wallClockOf(t.stamp)))
 
             def stackOf(num: BlockNumber): IO[Option[StackNumber]] =
                 persistence.get(StoreKey.BlockStackIndex(num))
@@ -163,9 +176,7 @@ object ConsensusStoreReader:
         new ConsensusStoreReader[IO]:
             def blockBriefs: IO[List[BlockBrief.Next]] = IO.pure(Nil)
             def blockBrief(num: BlockNumber): IO[Option[BlockBrief.Next]] = IO.pure(None)
-            def softConfirmation(
-                num: BlockNumber
-            ): IO[Option[Timestamped[Block.SoftConfirmed.Next]]] = IO.pure(None)
+            def softConfirmedAt(num: BlockNumber): IO[Option[Instant]] = IO.pure(None)
             def stackOf(num: BlockNumber): IO[Option[StackNumber]] = IO.pure(None)
             def hardConfirmation(
                 num: StackNumber
