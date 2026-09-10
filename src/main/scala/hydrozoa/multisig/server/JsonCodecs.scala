@@ -4,7 +4,7 @@ import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody}
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import hydrozoa.multisig.server.ApiResponse.RequestAccepted
 import io.bullet.borer.Cbor
@@ -74,7 +74,7 @@ object JsonCodecs {
         def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
             for {
                 kind <- c.downField("type").as[String]
-                requestHash <- c.downField("requestHash").as[Hash32]
+                requestHash <- c.downField("requestHash").as[RequestHash]
                 request <- kind match {
                     case "deposit" =>
                         c.as[DepositRequestBody].map(UserRequest.DepositRequest(_, requestHash))

@@ -3,9 +3,9 @@ package hydrozoa.multisig.persistence.codec
 import com.google.protobuf.{ByteString as ProtoBytes, InvalidProtocolBufferException}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWithId}
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import hydrozoa.request.request_record as proto
-import scalus.cardano.ledger.{Blake2b_256, Hash, Hash32}
+import scalus.cardano.ledger.{Blake2b_256, Hash}
 import scalus.uplc.builtin.ByteString
 
 /** Byte codec for the Request lane's durable record — the protobuf encoding declared in
@@ -62,7 +62,7 @@ object RequestRecordCodec:
                     )
         // Lazy so a record with no body is reported as such, rather than as whatever its (also
         // absent) digest looks like.
-        lazy val requestHash = hash32(message.requestHash)
+        lazy val hash = requestHash(message.requestHash)
         val request = message.body match
             case proto.RequestRecord.Body.Deposit(deposit) =>
                 UserRequest.DepositRequest(
@@ -70,12 +70,12 @@ object RequestRecordCodec:
                     byteString(deposit.l1Payload),
                     byteString(deposit.l2Payload)
                   ),
-                  requestHash
+                  hash
                 )
             case proto.RequestRecord.Body.Transaction(transaction) =>
                 UserRequest.TransactionRequest(
                   UserRequestBody.TransactionRequestBody(byteString(transaction.l2Payload)),
-                  requestHash
+                  hash
                 )
             case proto.RequestRecord.Body.Empty =>
                 throw new IllegalArgumentException("Request record is missing its body")
@@ -95,9 +95,9 @@ object RequestRecordCodec:
       * would compare unequal against every digest this node derives and surface later as a
       * consensus panic instead of here, where the bad record is still in hand.
       */
-    private def hash32(value: ProtoBytes): Hash32 =
+    private def requestHash(value: ProtoBytes): RequestHash =
         if value.size != 32 then
             throw new IllegalArgumentException(
               s"Request record's requestHash must be 32 bytes, got ${value.size}"
             )
-        else Hash[Blake2b_256, Any](byteString(value))
+        else RequestHash.fromHash(Hash[Blake2b_256, Any](byteString(value)))

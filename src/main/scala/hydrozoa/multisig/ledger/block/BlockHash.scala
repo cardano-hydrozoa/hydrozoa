@@ -2,19 +2,23 @@ package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.lib.crypto.Preimage
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
+import io.circe.{Codec, Decoder, Encoder}
 import java.nio.charset.StandardCharsets.UTF_8
-import scalus.cardano.ledger.Hash32
+import scalus.cardano.ledger.{Blake2b_256, Hash, Hash32}
+import scalus.uplc.builtin.ByteString
+import scodec.bits.ByteVector
+
+type BlockHash = BlockHash.BlockHash
 
 /** The digest that commits a block to its content, as defined in `design/block-hash.md`.
   *
   * Without it a block's four descriptive layers commit to positions and nothing else: a
-  * [[hydrozoa.multisig.ledger.event.RequestId]] names a slot in one peer's sequence, a
-  * [[BlockBody]] lists those slots, and a soft-ack signs four header scalars. Two peers holding
-  * *different payloads under the same id* therefore agree on every signature. `blockHash` closes
-  * that by folding each request's own [[hydrozoa.multisig.consensus.UserRequestBody.hash]] into the
-  * block's digest, which the soft-ack then signs.
+  * [[RequestId]] names a slot in one peer's sequence, a [[BlockBody]] lists those slots, and a
+  * soft-ack signs four header scalars. Two peers holding *different payloads under the same id*
+  * therefore agree on every signature. `blockHash` closes that by folding each request's own
+  * [[RequestHash]] into the block's digest, which the soft-ack then signs.
   *
   * ```
   * blockHash = blake2b_256(
@@ -59,6 +63,7 @@ import scalus.cardano.ledger.Hash32
   *     other field of the brief goes in and this one does not.
   */
 object BlockHash {
+    opaque type BlockHash = Hash32
 
     /** Mixed in before anything else so this digest can never collide with a hash of the same bytes
       * taken for another purpose. ASCII, no terminator — the block-type tag that follows is
@@ -66,13 +71,13 @@ object BlockHash {
       */
     val domainTag: Array[Byte] = "gummiworm-block-v1".getBytes(UTF_8)
 
-    /** The digest over a block's header and body — every field of a [[BlockBrief]] except the
-      * digest itself.
+    /** Derive the digest over a block's header and body — every field of a [[BlockBrief]] except
+      * the digest itself.
       *
       * It takes the two halves rather than a whole brief so a brief can compute it while it is
       * being built, before there is a brief to pass.
       */
-    def apply(header: BlockHeader, body: BlockBody): Hash32 = {
+    def apply(header: BlockHeader, body: BlockBody): BlockHash = {
         val out = Preimage()
         out.raw(domainTag)
         out.u8(blockTypeTag(header))
@@ -100,7 +105,7 @@ object BlockHash {
         out.u32(body.requests.size)
         body.requests.foreach { (requestId, requestHash, validity) =>
             putRequestId(out, requestId)
-            out.hash32(requestHash)
+            out.raw(requestHash.bytes)
             out.u8(validityTag(validity))
         }
         out.u32(body.depositsAbsorbed.size)
@@ -110,6 +115,31 @@ object BlockHash {
 
         out.digest
     }
+
+    /** Take a digest that arrived rather than one derived here — off the wire, or out of the
+      * `Block` journal. It is a claim until a peer that rebuilds the block derives its own and
+      * compares; see [[BlockBrief.Section.blockHash]].
+      */
+    def fromHash(hash: Hash32): BlockHash = hash
+
+    /** Opens `Hash32`'s own members — `bytes`, `toHex` — on a `BlockHash`, so the wrapper costs
+      * nothing at a call site that needs the raw digest.
+      */
+    given Conversion[BlockHash, Hash32] = identity
+
+    given Codec[BlockHash] = Codec.from(
+      Decoder.decodeString.emap(hex =>
+          ByteVector
+              .fromHex(hex)
+              .toRight(s"not a hex-encoded block hash: $hex")
+              .flatMap(bytes =>
+                  if bytes.size == 32 then
+                      Right(Hash[Blake2b_256, Any](ByteString.fromArray(bytes.toArray)))
+                  else Left(s"block hash must be 32 bytes, got ${bytes.size}")
+              )
+      ),
+      Encoder.encodeString.contramap(_.toHex)
+    )
 
     private def blockTypeTag(blockType: BlockType): Int = blockType match {
         case _: BlockType.Initial => 0x00

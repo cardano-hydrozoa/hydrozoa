@@ -2,12 +2,8 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.IO
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.lib.crypto.Preimage
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.ledger.event.RequestId
-import java.nio.charset.StandardCharsets.UTF_8
-import scalus.cardano.ledger.Hash32
-import scalus.uplc.builtin.Builtins.blake2b_256
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import scalus.uplc.builtin.ByteString
 
 // TODO: move away from server, it doesn't belong in here
@@ -29,7 +25,7 @@ enum UserRequest extends SyncRequest[IO, UserRequest, Either[UserRequest.Rejecte
       * the head holds is the request the user built. Nothing downstream trusts it: every peer that
       * needs a request's digest hashes the bytes in front of it (see `JointLedger`).
       */
-    def requestHash: Hash32
+    def requestHash: RequestHash
 
     /** Re-derive [[UserRequestBody.hash]] from [[body]] and compare it against [[requestHash]],
       * naming both digests when they differ.
@@ -51,12 +47,12 @@ enum UserRequest extends SyncRequest[IO, UserRequest, Either[UserRequest.Rejecte
 
     case DepositRequest private (
         override val body: UserRequestBody.DepositRequestBody,
-        override val requestHash: Hash32
+        override val requestHash: RequestHash
     ) extends UserRequest
 
     case TransactionRequest private (
         override val body: UserRequestBody.TransactionRequestBody,
-        override val requestHash: Hash32
+        override val requestHash: RequestHash
     ) extends UserRequest
 }
 
@@ -72,7 +68,7 @@ object UserRequest {
 
         /** Rebuild a request as received, keeping the submitter's own digest for the head to check.
           */
-        def apply(body: DepositRequestBody, requestHash: Hash32): DepositRequest =
+        def apply(body: DepositRequestBody, requestHash: RequestHash): DepositRequest =
             new UserRequest.DepositRequest(body, requestHash)
     }
 
@@ -84,7 +80,7 @@ object UserRequest {
 
         /** Rebuild a request as received, keeping the submitter's own digest for the head to check.
           */
-        def apply(body: TransactionRequestBody, requestHash: Hash32): TransactionRequest =
+        def apply(body: TransactionRequestBody, requestHash: RequestHash): TransactionRequest =
             new UserRequest.TransactionRequest(body, requestHash)
     }
 
@@ -113,63 +109,18 @@ enum UserRequestBody {
         l2Payload: ByteString
     )
 
-    /** The request's content digest — `requestHash` in `design/block-hash.md`, and the value a
-      * submitter sends alongside the request for the head to verify.
+    /** This body's content digest, and the single entry point to it: the submitter runs this to
+      * produce the value it sends, and the head runs it over the body it received to verify that
+      * value. A second implementation would be a second thing to disagree about.
       *
-      * ```
-      * requestHash = blake2b_256(
-      *      "gummiworm-request-v1"
-      *   || u8(variant)                                    -- 0 deposit, 1 transaction
-      *   || deposit:     blake2b_256(l1Payload) || blake2b_256(l2Payload)
-      *   || transaction: l2Payload
-      * )
-      * ```
-      *
-      * The variant tag is what keeps the two kinds apart: without it a transaction whose
-      * `l2Payload` is exactly a deposit's 64-byte pair of digests hashes to the same value as that
-      * deposit. It leads the payload, so neither variant needs length framing — a deposit
-      * contributes two fixed-width digests, a transaction one trailing payload.
-      *
-      * A deposit's two payloads are hashed before being concatenated so the pair stays injective:
-      * hashing them raw would collapse `hash(abc + def) == hash(ab + cdef)`.
-      *
-      * The [[RequestId]] is deliberately absent. The same bytes hash the same however they were
-      * sequenced, which is what lets a submitter compute the digest before the head has assigned an
-      * id — and lets two peers that received the same request agree on its digest without agreeing
-      * on anything else.
-      *
-      * The construction is a public interface: a client that cannot reproduce it cannot get a
-      * request accepted. It is written out for clients in `docs/user-guide/REQUEST-HASH.md`.
+      * [[RequestHash]] carries the preimage layout and why it is shaped that way.
       */
-    def hash: Hash32 = {
-        val out = Preimage()
-        out.raw(UserRequestBody.domainTag)
-        this match {
-            case UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
-                out.u8(UserRequestBody.depositVariantTag)
-                out.raw(blake2b_256(l1Payload).bytes)
-                out.raw(blake2b_256(l2Payload).bytes)
-            case UserRequestBody.TransactionRequestBody(l2Payload) =>
-                out.u8(UserRequestBody.transactionVariantTag)
-                out.raw(l2Payload.bytes)
-        }
-        out.digest
+    def hash: RequestHash = this match {
+        case UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
+            RequestHash.hashDeposit(l1Payload, l2Payload)
+        case UserRequestBody.TransactionRequestBody(l2Payload) =>
+            RequestHash.hashTransaction(l2Payload)
     }
-}
-
-object UserRequestBody {
-
-    /** Mixed in before anything else so this digest can never collide with a hash of the same bytes
-      * taken for another purpose. ASCII, no terminator — the variant tag that follows is
-      * fixed-width, so the boundary is unambiguous.
-      */
-    val domainTag: Array[Byte] = "gummiworm-request-v1".getBytes(UTF_8)
-
-    /** Variant tags, in the order the cases are declared. They separate the two request kinds
-      * inside [[domainTag]]'s namespace.
-      */
-    val depositVariantTag: Int = 0x00
-    val transactionVariantTag: Int = 0x01
 }
 
 enum UserRequestWithId {

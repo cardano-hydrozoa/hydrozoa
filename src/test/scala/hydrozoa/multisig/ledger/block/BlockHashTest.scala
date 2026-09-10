@@ -4,11 +4,15 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.{HeadConfig, generateHeadConfig}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.{
+  RequestHash,
+  RequestId,
+  RequestNumber
+}
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.DurationInt
-import scalus.cardano.ledger.{Blake2b_256, Hash, Hash32}
+import scalus.cardano.ledger.{Blake2b_256, Hash}
 import scalus.uplc.builtin.ByteString
 import test.{TestPeers, TestPeersSpec}
 
@@ -33,18 +37,20 @@ object BlockHashTest extends Properties("BlockHash") {
     private val generateConfig =
         TestPeersSpec.generate().flatMap(TestPeers.generate).flatMap(generateHeadConfig().run(_))
 
-    private def genHash32: Gen[Hash32] =
+    private def genRequestHash: Gen[RequestHash] =
         Gen.listOfN(32, Gen.choose(Byte.MinValue, Byte.MaxValue))
-            .map(bytes => Hash[Blake2b_256, Any](ByteString.fromArray(bytes.toArray)))
+            .map(bytes =>
+                RequestHash.fromHash(Hash[Blake2b_256, Any](ByteString.fromArray(bytes.toArray)))
+            )
 
     private def genRequestId: Gen[RequestId] = for {
         peer <- Gen.choose(0, 10)
         num <- Gen.choose[Long](0, 1024)
     } yield RequestId(HeadPeerNumber(peer), RequestNumber(num))
 
-    private def genRequest: Gen[(RequestId, Hash32, ValidityFlag)] = for {
+    private def genRequest: Gen[(RequestId, RequestHash, ValidityFlag)] = for {
         id <- genRequestId
-        hash <- genHash32
+        hash <- genRequestHash
         validity <- Gen.oneOf(ValidityFlag.Valid, ValidityFlag.Invalid)
     } yield (id, hash, validity)
 
@@ -140,7 +146,7 @@ object BlockHashTest extends Properties("BlockHash") {
     /** The point of the whole digest: change which payload sits at a position, keeping the position
       * itself, and the block's digest moves. This is what a `RequestId` alone cannot express.
       */
-    val _ = property("covers each request's hash") = Prop.forAll(generateBrief, genHash32) {
+    val _ = property("covers each request's hash") = Prop.forAll(generateBrief, genRequestHash) {
         case ((_, brief), other) =>
             val (id, hash, validity) = brief.body.requests.head
             (hash != other) ==> {

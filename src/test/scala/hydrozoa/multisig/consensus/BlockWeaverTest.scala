@@ -21,8 +21,11 @@ import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{
+  RequestHash,
+  RequestId
+}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.metrics.PeerMetrics
@@ -31,7 +34,6 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Gen, Properties, PropertyM, Test}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scalus.cardano.ledger.Hash32
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genRequestId
 import test.TestPeerName.{Bob, Carol}
@@ -251,7 +253,7 @@ object BlockWeaverTestHelpers {
     def mkMinorBriefWith(
         blockNum: BlockNumber,
         config: HeadConfig,
-        requests: List[(RequestId, Hash32, ValidityFlag)]
+        requests: List[(RequestId, RequestHash, ValidityFlag)]
     ): BWTest[BlockBrief.Minor] =
         lift(for {
             now <- realTimeQuantizedInstant(config.slotConfig)

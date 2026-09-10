@@ -5,8 +5,8 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import hydrozoa.multisig.metrics.{PeerStats, RateView, TimingStats}
 import hydrozoa.multisig.persistence.DepositDecision
@@ -17,7 +17,7 @@ import io.circe.{Codec, Decoder, Encoder}
 import java.time.Instant
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.{Blake2b_256, DatumOption, Hash, Hash32, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.ledger.{Blake2b_256, DatumOption, Hash, TransactionInput, TransactionOutput, Value}
 import scalus.uplc.builtin.ByteString
 import sttp.tapir.generic.Configuration as TapirConfig
 import sttp.tapir.{Schema, SchemaType, Validator}
@@ -432,9 +432,9 @@ object ApiDto {
     def toUserRequest(view: SubmitRequestView): Either[String, UserRequest] =
         def hex(field: String, value: String): Either[String, ByteString] =
             Try(ByteString.fromHex(value)).toEither.left.map(_ => s"$field must be lowercase hex")
-        def digest(value: String): Either[String, Hash32] =
+        def digest(value: String): Either[String, RequestHash] =
             hex("requestHash", value).flatMap(bytes =>
-                if bytes.size == 32 then Right(Hash[Blake2b_256, Any](bytes))
+                if bytes.size == 32 then Right(RequestHash.fromHash(Hash[Blake2b_256, Any](bytes)))
                 else Left(s"requestHash must be 32 bytes, got ${bytes.size}")
             )
         view match

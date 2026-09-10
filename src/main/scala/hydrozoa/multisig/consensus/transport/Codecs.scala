@@ -11,14 +11,13 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.codec.RequestRecordCodec
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-import scalus.cardano.ledger.Hash32
 import scodec.bits.ByteVector
 
 /** JSON codecs for the wire-eligible subset of [[PeerLiaisonHeadToHead.Request]].
@@ -433,7 +432,7 @@ object Codecs {
         val dec: Decoder[UserRequest.DepositRequest] = Decoder.instance(c =>
             for {
                 body <- c.downField("body").as[UserRequestBody.DepositRequestBody]
-                requestHash <- c.downField("requestHash").as[Hash32]
+                requestHash <- c.downField("requestHash").as[RequestHash]
             } yield UserRequest.DepositRequest(body, requestHash)
         )
         io.circe.Codec.from(dec, enc)
@@ -447,7 +446,7 @@ object Codecs {
         val dec: Decoder[UserRequest.TransactionRequest] = Decoder.instance(c =>
             for {
                 body <- c.downField("body").as[UserRequestBody.TransactionRequestBody]
-                requestHash <- c.downField("requestHash").as[Hash32]
+                requestHash <- c.downField("requestHash").as[RequestHash]
             } yield UserRequest.TransactionRequest(body, requestHash)
         )
         io.circe.Codec.from(dec, enc)

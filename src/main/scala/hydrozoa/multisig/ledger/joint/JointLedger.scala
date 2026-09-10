@@ -24,7 +24,7 @@ import hydrozoa.multisig.consensus.{CoilRelay, FastConsensusActor, StackComposer
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.l1.deposits.map.{DepositsMap, DepositsMapEvent}
@@ -40,7 +40,7 @@ import monocle.Focus.focus
 import scalus.cardano.ledger.Hash32
 
 private case class UserRequestState(
-    requests: List[(RequestId, Hash32, ValidityFlag)],
+    requests: List[(RequestId, RequestHash, ValidityFlag)],
     postDatedRefundTxs: Vector[RefundTx.PostDated]
 )
 
@@ -234,7 +234,7 @@ final case class JointLedger(
       */
     private def invalidateRequest(
         requestId: RequestId,
-        requestHash: Hash32,
+        requestHash: RequestHash,
         e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | String,
         invalidation: JointLedger.Invalidation = JointLedger.Invalidation.PreCommand
     ): IO[Unit] =
@@ -266,7 +266,7 @@ final case class JointLedger(
       * differs, and the brief comparison this actor already runs catches it. Reading the digest
       * that travelled with the request would compare two copies of the same claim instead.
       */
-    private def requestHashOf(request: UserRequestWithId): Hash32 = request.request.body.hash
+    private def requestHashOf(request: UserRequestWithId): RequestHash = request.request.body.hash
 
     /** Pure deposit-ledger op: parse the deposit tx and append the produced deposit utxo to the L1
       * deposits map — this actor's only L1-ledger surface. Parsing derives the deposit's accept-by

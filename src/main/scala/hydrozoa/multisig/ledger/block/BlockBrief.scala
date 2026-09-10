@@ -2,10 +2,9 @@ package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
+import hydrozoa.multisig.ledger.event.RequestHash
 import io.circe.*
 import io.circe.generic.semiauto.*
-import scalus.cardano.ledger.Hash32
 
 sealed trait BlockBrief extends BlockBrief.Section {
 
@@ -31,7 +30,7 @@ object BlockBrief {
 
     final case class Initial(
         override val header: BlockHeader.Initial,
-        override val blockHash: Hash32
+        override val blockHash: BlockHash
     ) extends BlockBrief,
           BlockType.Initial {
         override transparent inline def blockBrief: BlockBrief.Initial = this
@@ -51,7 +50,7 @@ object BlockBrief {
     final case class Minor(
         override val header: BlockHeader.Minor,
         override val body: BlockBody.Minor,
-        override val blockHash: Hash32
+        override val blockHash: BlockHash
     ) extends BlockBrief,
           BlockType.Minor {
         override transparent inline def blockBrief: BlockBrief.Minor = this
@@ -67,7 +66,7 @@ object BlockBrief {
     final case class Major(
         override val header: BlockHeader.Major,
         override val body: BlockBody.Major,
-        override val blockHash: Hash32
+        override val blockHash: BlockHash
     ) extends BlockBrief,
           BlockType.Major {
         override transparent inline def blockBrief: BlockBrief.Major = this
@@ -83,7 +82,7 @@ object BlockBrief {
     final case class Final(
         override val header: BlockHeader.Final,
         override val body: BlockBody.Final,
-        override val blockHash: Hash32
+        override val blockHash: BlockHash
     ) extends BlockBrief,
           BlockType.Final {
         override transparent inline def blockBrief: BlockBrief.Final = this
@@ -118,14 +117,14 @@ object BlockBrief {
           * its own and compares (`JointLedger.panicOnMismatchWithExpectedBrief`). What makes the
           * claim worth anything is [[signingBytes]] — every head peer's soft-ack signs it.
           */
-        def blockHash: Hash32
+        def blockHash: BlockHash
 
         override transparent inline def blockNum: BlockNumber = header.blockNum
         override transparent inline def blockVersion: BlockVersion.Full = header.blockVersion
         override transparent inline def startTime: BlockCreationStartTime = header.startTime
         override transparent inline def endTime: BlockCreationEndTime = header.endTime
 
-        override transparent inline def requests: List[(RequestId, Hash32, ValidityFlag)] =
+        override transparent inline def requests: List[(RequestId, RequestHash, ValidityFlag)] =
             body.requests
         override transparent inline def depositsAbsorbed: List[RequestId] =
             body.depositsAbsorbed

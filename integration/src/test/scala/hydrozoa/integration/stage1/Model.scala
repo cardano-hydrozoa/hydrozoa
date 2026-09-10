@@ -25,7 +25,7 @@ import hydrozoa.multisig.ledger.eutxol2.{Compartments, HydrozoaTransactionMutato
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import monocle.Lens
@@ -335,7 +335,7 @@ object Model:
                     case BlockCycle.InProgress(_, _, prevVersion, accumulator) =>
                         // The digest comes from the request body the model holds, the way a peer
                         // derives it from the body it received (design/block-hash.md).
-                        val events: List[(RequestId, Hash32, ValidityFlag)] =
+                        val events: List[(RequestId, RequestHash, ValidityFlag)] =
                             accumulator.map((le, _, flag) =>
                                 (le.requestId, le.request.body.hash, flag)
                             )
@@ -396,7 +396,7 @@ object Model:
           *   a tuple of (registeredEvents, rejectedEvents)
           */
         private def registerOrReject[M[_]: Monad](
-            events: List[(RequestId, Hash32, ValidityFlag)]
+            events: List[(RequestId, RequestHash, ValidityFlag)]
         ): StateT[M, State, (Queue[Registered], Queue[Rejected])] = for {
             state <- StateT.get[M, State]
             // FIXME: this could be done probably in a single fold, and perhaps more performant for large
@@ -410,7 +410,7 @@ object Model:
                 state.deposits.depositsEnqueued
                     // map them with the validity flag, if its in the accumulator
                     .map(cmd =>
-                        val thisEvent: Option[(RequestId, Hash32, ValidityFlag)] =
+                        val thisEvent: Option[(RequestId, RequestHash, ValidityFlag)] =
                             events.find(event => event._1 == cmd.request.requestId)
                         thisEvent.map((_, _, validityFlag) => (validityFlag, cmd))
                     )
@@ -508,7 +508,7 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            events: List[(RequestId, Hash32, ValidityFlag)],
+            events: List[(RequestId, RequestHash, ValidityFlag)],
             absorbedThisBlock: Queue[Absorbed],
             refundedThisBlock: Queue[Refunded]
         ): StateT[M, State, BlockBrief.Major] =
@@ -552,7 +552,7 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            events: List[(RequestId, Hash32, ValidityFlag)],
+            events: List[(RequestId, RequestHash, ValidityFlag)],
             refundedThisBlock: Queue[Refunded]
         ): StateT[M, State, BlockBrief.Minor] = for {
             state <- StateT.get[M, State]
@@ -585,7 +585,7 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            events: List[(RequestId, Hash32, ValidityFlag)],
+            events: List[(RequestId, RequestHash, ValidityFlag)],
             refundedThisBlock: Queue[Refunded]
         ): StateT[M, State, BlockBrief.Final] = for {
             _ <- StateT.modify[M, State](_.copy(blockCycle = BlockCycle.HeadFinalized))
