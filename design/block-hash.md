@@ -1,13 +1,44 @@
 # Block hash
 
-For whoever implements content commitments on the fast side. It defines three digests —
-`requestHash` over a user request, `blockHash` over what a leader *decides*, and `blockResultHash`
-over what applying that decision *produces* — says when each is taken, and names what compares
-them. The soft-ack signs both block digests, so the signature set a block already carries becomes
-a proof a peer can seed from without replaying the head's history.
+For whoever implements content commitments on the fast side. It defines `requestHash` over a user
+request and `blockHash` over the block that carries it, says when each is taken, and names what
+compares them. Committing to the *state* a block produces is a further question this document
+scopes but does not settle.
 
 Stacks need the same treatment on the slow side. That is a separate work item; this document
 fixes the approach both follow.
+
+## Scope
+
+This document describes the whole shape. **Cycle 3 implements the request layer and one block
+digest**, and nothing else:
+
+1. **`requestHash` on the request.** A hash field on the request, with a variant tag so a
+   transaction request and a deposit request cannot collide.
+2. **Verification in `RequestSequencer`.** Re-derive the hash from the received body and reject
+   on mismatch, before an id is assigned.
+3. **Persistence in `RequestSequencer`.** The verified hash is stored with the assigned request.
+4. **One `blockHash`, over the brief as it stands.** Validity flags stay in `BlockBody` and stay
+   in the preimage. Moving them out is a large refactor of the block type, the wire brief, the
+   journal value and every consumer that reads a flag off a body — out of scope here.
+5. **Followers re-hash every request in `JointLedger`.** A follower rebuilding a block hashes
+   each request body it holds. A peer that received different bytes under the same `RequestId`
+   computes a different `requestHash`, so its `blockHash` differs and the mismatch surfaces at
+   the block comparison instead of never.
+
+Deferred, with the reasoning kept below because it is what the increment is aiming at:
+
+- **`blockResultHash` and the cut-time split.** Announcing a brief before applying requires the
+  flags to leave it, which is item 4's refactor. Until then the brief carries consequences and is
+  announced after applying, as it is today.
+- **State commitments.** Committing to the L2 state and the evacuation map is a separate
+  question, and the leading answer is no longer a per-block digest — see *State commitments are
+  a stack question* below.
+- **Stack hashes.** The slow side's layer, unchanged in scope.
+
+The five items above are self-contained: they close the "different payloads under one id" hole
+(point 3 of *The gap*) without touching block or stack structure. The state hole (point 4) stays
+open, deliberately.
 
 ## The brief carries only what is known at the cut
 
@@ -30,13 +61,19 @@ So the split is not a hashing detail. It is what lets the fast side pipeline at 
 The line falls between **decided at the cut** and **computed by applying**, and it does not land
 where a first reading suggests:
 
-| | decided at the cut | in `blockHash` | in `blockResultHash` |
-|---|---|---|---|
-| `blockNum`, versions, the four times | yes | ✓ | |
-| the ordered `(RequestId, requestHash)` sequence | yes | ✓ | |
-| `depositsAbsorbed` / `depositsRejected` | yes — the leader decides them | ✓ | |
-| `ValidityFlag` per request | no — applying decides | | ✓ |
-| `evacuationDiffHash`, `l2StateHash` | no | | ✓ |
+| | decided at the cut | in `blockHash` (cycle 3) |
+|---|---|---|
+| `blockNum`, versions, the four times | yes | ✓ |
+| the ordered `(RequestId, requestHash)` sequence | yes | ✓ |
+| `depositsAbsorbed` / `depositsRejected` | yes — the leader decides them | ✓ |
+| `ValidityFlag` per request | no — applying decides | ✓, because the flags stay in the brief |
+| the L2 state and the evacuation map | no | not committed to at the block layer at all |
+
+The fourth row is where cycle 3 departs from the target shape. Flags belong on the applied side
+by this argument, but moving them out of `BlockBody` is a refactor of the block type, the wire
+brief, the journal value and every consumer that reads a flag off a body. Until that happens the
+brief carries them, `blockHash` covers them, and the brief is announced after applying — the
+behaviour today. The digest is correct either way; only the pipelining is deferred.
 
 Absorption decisions stay on the announced side, and belong there. A deposit decision rests on
 what the leader observed on L1; peers observe L1 at different times, so the leader genuinely
@@ -88,20 +125,18 @@ Its four limits are what this work item addresses:
 
 Points 3 and 4 are the ones that cannot be fixed by moving the comparison. Point 3 needs a
 content hash; point 4 needs a state digest. They belong in *separate* preimages, because one is
-known when the leader cuts the block and the other is not — which is the subject of the section
-above.
+known when the leader cuts the block and the other is not. Cycle 3 takes the content hash; the
+state digest is scoped out above.
 
-## Three digests
+## Two digests, and where the third lives
 
 | digest | over | taken by | when | carried on |
 |---|---|---|---|---|
 | `requestHash` | one user request as received | the submitter, and every peer that receives it | supplied on submission, re-derived and checked at `RequestId` assignment | the block body, beside its `RequestId` |
-| `blockHash` | the header fields and the ordered request sequence | the block leader, and every peer that rebuilds the block | at block cut, **before applying anything** | the block brief |
-| `blockResultHash` | the outcome of applying that sequence | every peer, independently | after applying the body | the soft-ack |
+| `blockHash` | the brief — header fields, the ordered request sequence, flags and absorption decisions | the block leader, and every peer that rebuilds the block | after the block is applied, as briefs are produced today | the block brief |
 
-**Each digest travels on the message that is ready when it is.** The brief is announced at the
-cut, so it carries what the cut decided; the ack is produced after applying, so it carries what
-applying produced.
+A third layer commits to the state, and it is not a block digest: see *State commitments are a
+stack question*.
 
 `blockHash` covers `requestHash`, not the request bytes: the body is a list of
 `(RequestId, requestHash)` pairs, so the block commits to exactly which payload sits at each
@@ -253,9 +288,10 @@ Notes on the layout:
   `getLong`), unlike the 4-byte soft/hard-ack indices.
 - **The optional wakeup is flag-then-value**, so `None` and a present value can never produce
   the same bytes.
-- **No `ValidityFlag` beside each request.** The flag is a result, and results live in
-  `blockResultHash`. A leader that had to fill it in could not announce until it had applied the
-  block.
+- **`ValidityFlag` beside each request.** The flags are a result, not a decision, so the target
+  shape keeps them out — but they stay in `BlockBody` for now (see *Scope*), and the preimage
+  covers the brief as it stands. Taking them out later changes the preimage and therefore the
+  domain tag.
 
 **The initial block gets one too.** `BlockBrief.Initial` has an empty body and a header already
 pinned by `headParamsHash` through the initialization transaction, so its hash proves nothing
@@ -263,87 +299,48 @@ new — but hashing it keeps all four block types uniform, keeps `blockHash` tot
 `BlockBrief`, and removes a special case from every consumer. Its empty body encodes as three
 zero-length lists under the `Initial` type tag.
 
-## `blockResultHash`: what applying the block produced
+## State commitments are a stack question
 
-`blockHash` commits to a block's **inputs**: which requests, in what order, and which deposits the
-leader decided to absorb. A second digest commits to the **output** — what those inputs turned out
-to mean, and the state they produced.
+`blockHash` commits to a block's **content**: which requests, in what order, with which flags and
+which absorption decisions. It does not commit to the **state** that applying them produced, which
+is point 4 of *The gap* — two peers that agree on every request and reach different ledger states
+still compare equal.
 
-```
-blockResultHash = blake2b_256(
-     "gummiworm-block-result-v1"
-  || raw(blockHash)                           -- 32 bytes; binds a result to its block
-  || u32(requests.length)
-  || for each, in blockHash's list order: u8(validityFlag)
-  || raw(evacuationDiffHash)                  -- 32 bytes; this block's own diff, not the map
-  || raw(l2StateHash)                         -- 32 bytes
-)
-```
+An earlier draft closed that with a second per-block digest, `blockResultHash`, carrying an
+`l2StateHash` and an evacuation-map digest and signed by the soft-ack. **That is not the direction
+being taken.** The leading answer is a **certificate on the stack**: a signed statement of the L2
+ledger state and the evacuation map at a stack boundary, rather than a digest recomputed and
+compared on every block.
 
-- **It opens with `blockHash`.** A result is meaningless except about a specific block, and
-  binding the two means a result digest cannot be lifted onto a different block that happens to
-  produce the same state. It also means one comparison distinguishes the two failure modes
-  below.
-- **Flags ride positionally**, in `blockHash`'s order, so the sequence is stated once. The count
-  is repeated only to length-frame the run.
-- **Computed by every peer, never sent as an authority.** A follower applies the block it was
-  announced and derives the digest itself. A peer that computes a different one has diverged, and
-  that is precisely what should be caught.
+Two reasons it is better:
 
-**Two digests make two failures distinguishable**, which today's single structural comparison
-conflates:
+1. **The state hash is not computed every block.** Under `L2LedgerKind.AnyRemote` the head cannot
+   compute it at all — the ledger is a black box and the value has to come back over the
+   coordination protocol. Asking for that per block puts a round trip on the critical path of
+   every block cut; asking for it per stack puts it where the slow cycle already waits.
+2. **It is a real certificate.** A digest that every peer recomputes and compares is a divergence
+   *detector*: it tells peers they disagree. A signed statement of the state is something a peer
+   can be *handed* — it confirms the state and the evacuation map to someone who was not there,
+   which is what a joining coil peer actually needs, and what "certificate" already means in this
+   codebase's vocabulary for the coil handshake.
 
-| | `blockHash` | `blockResultHash` | means |
-|---|---|---|---|
-| agree | ✓ | ✓ | fine |
-| content divergence | ✗ | — | peers disagree about *which block this is* — mempool, ordering, or a payload mismatch under a shared `RequestId` |
-| execution divergence | ✓ | ✗ | peers agree on the block and **compute different results** — a ledger bug, a non-deterministic rule, or a genuinely different prior state |
+The evacuation map fits the stack layer for a second, independent reason: **a block does not know
+it.** `BlockResult` carries `evacuationMapDiff: Seq[EvacuationDiffGroup]` — the block's own
+contribution — and nothing else. The running map is folded on the slow side, in `StackComposer`
+(`EvacuationMap.applyDiffs(runMap, result.flatEvacuationDiffs)`), walking a stack's blocks in order
+from the previous stack's map, and persisted only at the blocks whose map backs an effect. A digest
+over the map after block N depends on every block before it — information the fast side does not
+have at the cut and does not have when it applies the body either.
 
-The second row has no detector at all today, and it is the more alarming of the two.
+**Not settled.** The certificate shape has to be designed against the slow cycle: what it covers,
+who signs it, at which boundary, how it is stored, and how a joining peer asks for one. That is
+the stack work item's problem, and this document does not prejudge it beyond saying the state
+commitment belongs there rather than here.
 
-### The two state digests inside it
-
-| field | over | why it alone is not enough |
-|---|---|---|
-| `evacuationDiffHash` | this block's `evacuationMapDiff`, in application order | a delta, not a state. It says what this block changed about who is owed what, and nothing about what the totals became |
-| `l2StateHash` | the L2 ledger state after this block | says nothing about what each party is owed on exit, which is the thing L1 enforces |
-
-Both, therefore. Neither implies the other, and a snapshot is only as trustworthy as the weaker
-of the two commitments over it.
-
-**The cumulative evacuation map is deliberately absent, because a block does not know it.**
-`BlockResult` carries `evacuationMapDiff: Seq[EvacuationDiffGroup]` — the block's own contribution
-— and nothing else about the map. The running map is folded on the **slow** side, in
-`StackComposer`: `EvacuationMap.applyDiffs(runMap, result.flatEvacuationDiffs)`, walking a stack's
-blocks in order from the previous stack's map, and persisted only at the blocks whose map backs an
-effect. A digest over the map after block N therefore depends on every block before N, which is
-information the fast side does not have at the cut and does not have when it applies the body
-either.
-
-Committing to the diff instead keeps the commitment at the layer that owns the value. The
-cumulative map digest belongs one layer up, in the stack digest, where `StackComposer` already
-computes the map it would cover — the same way `stackHash` covers the ordered `blockHash`es rather
-than re-deriving their contents.
-
-**`blake2b_256`, not KZG.** The evacuation map already carries a KZG commitment, and it stays
-where it is: `EvacuationMap.kzgCommitment` goes into the treasury datum at major-block
-settlement, where L1 needs a commitment it can open. Per-block digests are computed and verified
-by every peer on every block, so they take the same `blake2b_256` construction as every other
-digest here.
-
-**They are not header fields.** An earlier draft of this design put them in the header and split
-`BlockHeader` construction into a draft stage and a `finalize(draft, …)` stage. That is exactly
-the coupling the opening section rules out: a header nobody can complete until the block has been
-applied is a brief nobody can announce until then either.
-
-Dropping them from the header removes the two-stage construction entirely. `nextHeaderMinor` and
-friends keep deriving block N+1's header from N's header plus timing, in one step, as they do
-today — there is no draft type, no `Option` field, and no finalizer.
-
-**Every peer computes them, and none is told them.** A follower rebuilding block N applies the
-same requests to its own ledger and derives both digests. That is what makes the execution-
-divergence row above detectable: nothing today catches two peers reaching different states from
-an identical request list.
+**What stays true meanwhile.** `JointLedger.panicOnMismatchWithExpectedBrief` still compares the
+locally re-derived brief structurally, so a state divergence that changes any block content is
+still caught — just not one that changes only state. Nothing this document adds makes that worse,
+and `blockHash` makes the content half of it verifiable by a peer that did not re-derive.
 
 ## Why the preimage does not chain to the previous block
 
@@ -409,60 +406,36 @@ Nothing does that today.
 
 ## Seeding a peer from a snapshot
 
-The reason the state digests are worth their bytes. A coil peer joining a head with long history
-is handed a snapshot — a block number `N` and the L2 ledger state at `N` — and verifies it without
-replaying anything:
+What `blockHash` gives a joining peer, and what it does not.
 
-```
-1. recompute  l2StateHash        from the supplied ledger state
-2. recompute  blockHash(N)       from block N's brief
-3. recompute  blockResultHash(N) from (2), the supplied flags, block N's diff, and (1)
-4. verify the peers' soft-ack signatures over (blockHash(N), blockResultHash(N))
-```
+A coil peer joining a head with long history is handed a snapshot — a block number `N`, the L2
+ledger state at `N`, and the evacuation map at `N`. Two halves, verified very differently:
 
-Constant work, whatever `N` is. Step 4 is what makes steps 1–3 mean anything: the digests are
-what the peers signed, so matching them is matching what the head agreed the state was. A donor
-that fabricates the ledger state has to produce a signature set over the fabrication.
+- **The block's content is verifiable from signatures.** Recompute `blockHash(N)` from block
+  `N`'s brief and check the head peers' soft-ack signatures over it. Constant work, whatever `N`
+  is, and a donor that fabricates the brief has to produce a signature set over the fabrication.
+- **The state is not.** Nothing signed covers the ledger state or the evacuation map, so both
+  halves of the snapshot rest on the donor. That is the trust boundary `transplantStackNumber`
+  declares today, and `blockHash` narrows it — the block a peer is seeded at is now provably the
+  block the head agreed on — without closing it.
 
-**The evacuation map is not verified here, and cannot be.** `blockResultHash` commits to block
-`N`'s own diff, not to the map the diffs accumulate to, so the block layer offers nothing to check
-a supplied map against. That check anchors one layer up, at the stack digest, where the cumulative
-map is both computed and — at the blocks whose map backs an effect — persisted. Two consequences
-worth stating rather than discovering later:
+**Closing it is what the stack certificate is for.** A signed statement of the L2 state and the
+evacuation map at a stack boundary is exactly the thing a seeding peer needs and cannot get from
+a per-block digest it would have to recompute for itself. Note the anchor that implies:
+`StackComposer` persists `StoreKey.EvacuationMap(blockNum)` only where the map backs an effect,
+so those blocks are the ones at which a map exists to hand over at all. A snapshot anchors there,
+not at an arbitrary `N`.
 
-- **A snapshot anchors at a stack boundary, not at an arbitrary block.** `StackComposer` persists
-  `StoreKey.EvacuationMap(blockNum)` only where the map backs an effect, so those are the blocks
-  at which a map even exists to be handed over. Seeding at any other `N` means shipping a map no
-  peer stored.
-- **Full snapshot verification needs the stack digest**, which is a separate work item. Until it
-  lands, a seeded peer can verify the L2 half of its snapshot against signatures and has to take
-  the evacuation-map half on trust — which is the trust boundary `transplantStackNumber` declares
-  today, narrowed rather than closed.
-
-Splitting the digest does not weaken this. The state commitments sit in `blockResultHash` and the
-ack signs it, so the seeding peer verifies the same claim from the ack. What it needs alongside
-the state is the block's brief (for step 2) and its validity flags (for step 3); both are in the
-`Block` journal beside the confirmation. Each ack also states the `blockResultHash` its signature
-covers, so step 4 is a comparison before it is a verification, and a donor with a stale or
-fabricated state is named as such rather than merely failing a signature check. Open question 5
-asks whether a `bodyHash` reduces step 2 to the header alone.
-
-**Every block, not only majors.** The KZG commitment in the treasury datum pins the evacuation
-map at major-block settlement, which is a real anchor and a stronger one — it is on L1 rather
-than under peer keys. It is also as sparse as the head's major cadence, which some deployments
-space out arbitrarily far. Per-block digests make any block a seeding point.
-
-**What a snapshot has to carry** is a separate question from what commits to it. The two digests
-cover the ledger state and the evacuation map; the rest of the recovery base (§5.2 of
+**What a snapshot has to carry** is a separate question from what commits to it. Beyond the
+ledger state and the evacuation map, the rest of the recovery base (§5.2 of
 `persistence-and-crash-recovery.md` — the deposits map, request high-water, the block and stack
-spines) is not covered by either, and a seeded peer either re-derives it or is handed it on
-trust. Settling that is the work item this design unblocks rather than one it completes.
+spines) is covered by nothing here, and a seeded peer either re-derives it or is handed it on
+trust. Settling that is a work item this design unblocks rather than one it completes.
 
-## Where the digests live
+## Where `blockHash` lives
 
-**`blockHash` is a `BlockBrief` field** — not a `BlockHeader` one, which cannot work.
-
-`blockHash` is known at the cut, but a header still cannot *cover* a body it does not hold.
+**A `BlockBrief` field** — not a `BlockHeader` one, which cannot work. A header cannot *cover* a
+body it does not hold.
 
 `BlockHeader` is used standalone in three places, none of which has a body:
 
@@ -475,24 +448,14 @@ trust. Settling that is the work item this design unblocks rather than one it co
 The first is decisive. Those methods return `F[BlockHeader.Minor]` and friends from timing alone,
 with no body to hash. The other two would carry a body commitment they have no use for.
 
-**`blockResultHash` is not a brief field. It is a `SoftAck` field.** The brief is the
-announcement and the announcement is made at the cut, so a brief field that exists only after
-applying puts back, in the type, the ordering the opening section takes out. The result is also
-not the leader's to state: every peer derives its own, and the leader's is one of `N` rather than
-the one the others copy. So it rides the per-peer message that already travels after the work is
-done — see *What the soft-ack signs*.
-
 `BlockBrief` is where header and body meet, and `BlockBrief.Section` already extends both
 `BlockHeader.Section` and `BlockBody.Section`, so the preimage needs no new plumbing. It is also
 what actually travels and persists — the block lane carries briefs, and `JournalKey.Block` stores
 one — so the storage and wire story is unchanged by the choice.
 
-`signingBytes` moves from `BlockHeader.Section` to `BlockBrief.Section` with it, and stops being
-a value on the section: the preimage names a result the brief does not hold, so it takes one —
-`BlockBrief.Section.signingBytes(blockResultHash)`. Both call sites already hold a brief.
-`JointLedger` (`:719`) passes the result it just computed, because it is signing its own ack.
-`FastConsensusActor` (`:285`) passes the result each ack states, because it is verifying somebody
-else's — see below.
+`signingBytes` moves from `BlockHeader.Section` to `BlockBrief.Section` with it. Both call sites
+already hold a brief: `JointLedger` (`:719`) signing its own ack, and `FastConsensusActor`
+(`:285`) verifying somebody else's.
 
 **Stored, and never trusted.** The brief carries the hash on the wire and into the `Block`
 journal, but a stored hash is a claim: every peer that rebuilds the block recomputes the digest
@@ -506,77 +469,39 @@ from header and body and compares. That holds in both directions:
   against the recomputed one. Below `fastBlockMark` nothing re-derives — those blocks are read
   back and believed, and their stored signatures are the only thing that would catch a change.
 
-**Coil peers check both digests.** A coil peer authors no soft-ack, so it signs neither — but it
+**Coil peers check it too.** A coil peer authors no soft-ack, so it signs nothing — but it
 rebuilds block bodies exactly as a head follower does, so it recomputes `blockHash` and compares
-on the same path. It also *receives* the head peers' acks: `SoftAck` is a `CoilRelay.Artifact`,
-relayed over `PeerLiaisonHubToCoil` alongside briefs and hard-acks. So a coil compares its own
-`blockResultHash` against the value each ack states, exactly as a head peer does, and reaches the
-same verdict without contributing a signature to it.
+on the same path. That extends the guarantee from head↔head to head↔coil, which is where it is
+most needed: a coil peer's divergence is otherwise invisible until its hard-ack fails to verify.
 
-That extends both guarantees from head↔head to head↔coil, which is where they are most needed: a
-coil peer's divergence is otherwise invisible until its hard-ack fails to verify.
+### Followers hash every request they hold
+
+The check above is only as good as the request hashes feeding it, so a follower does not take
+`requestHash` from the brief. **`JointLedger` hashes each request body it holds** as it rebuilds
+the block, and builds its `blockHash` from those digests.
+
+That is what closes point 3 of *The gap*. Two peers holding different payloads under the same
+`RequestId` compare equal today, because nothing ties an id to its bytes. Once the follower hashes
+its own copy, the difference lands in `requestHash`, which lands in `blockHash`, which the
+follower is already comparing against the leader's brief. No new comparison site is needed — the
+existing one gets something worth comparing.
+
+It also means the hash on the brief is never load-bearing for a peer that has the request. It is
+load-bearing only for a peer that does not: a submitter checking that their request made it into a
+block, or a peer seeded from a snapshot.
 
 ## What the soft-ack signs
 
-**Both block digests, with the two version components beside them.**
+**The block digest, with the two version components beside it.**
 
 ```scala
-SignedDigest(versionMajor, versionMinor, blockHash, blockResultHash)
+SignedDigest(versionMajor, versionMinor, blockHash)
 ```
 
-This is where the split pays for itself. The brief is announced at the cut carrying `blockHash`
-alone; the ack is produced after applying and carries the result. So the ack is the natural home
-for everything the announcement could not wait for — and the one message that already travels
-*after* the work is done.
-
-That the ack signs both is what preserves every guarantee of the single-digest design. A peer
-attests to two things in one signature: *this is the block I was given* and *this is what I got
-from applying it*. Neither statement is weaker than before, and their separation is what makes an
-execution divergence nameable rather than merely visible.
-
-**The ack carries `blockResultHash` as a field**, on the same terms the brief carries
-`blockHash`: stored, and never trusted.
-
-```scala
-SoftAck(ackId, blockNum, blockResultHash, headerSignature, finalizationRequested)
-```
-
-Carrying the value costs 32 bytes per ack per block and buys the diagnosis. Left implicit in the
-preimage, a peer that computed a different result is indistinguishable from one signing with the
-wrong key or one whose message arrived mangled — three failures, one symptom. Stated, the result
-is a claim that can be compared before any signature is checked.
-
-**Verification becomes per-ack, and compares before it verifies.**
-`FastConsensusActor.completeCell` (`:284`) computes one `msg` from the brief today and checks
-every signature against it. Two things change:
-
-1. **A preimage per ack**, built from the `blockResultHash` that ack states rather than from one
-   value shared across all of them.
-2. **An equality pass first** — every ack's `blockResultHash` against the peer's own — and only
-   then the signature pass.
-
-Building each preimage from the *verifier's* own result would catch a divergence too, as a
-signature failure. Comparing first is what makes the divergence nameable: the comparison says
-which peer computed what, and the verification then confirms that peer really claimed it rather
-than being misquoted by whoever relayed the ack.
-
-**The ordering this needs is already there.** The new preimage cannot be built before the
-verifier has applied the block. `completeCell` runs only on a saturated cell, `isSaturated`
-requires an ack from every head peer including the local one, and `JointLedger` (`:716`) authors
-that ack only after applying. So no ack is verified before the local apply today, and none has to
-start waiting.
-
-`blockHash` is unaffected: it is checkable the moment the brief lands, which is the first of the
-two stages below.
-
-**The same shape lets deposit decisions follow later**, without redesigning any of this. If a
-decision stops riding the brief, it needs a carrier that travels after the leader has observed
-L1 — which is what the ack already is.
-
-`blockNum` and `startTime` go. Both are inside the `blockHash` preimage, so dropping them
-unbinds nothing — a signature made over block N still cannot be replayed as block M. `SoftAck`
-already carries `blockNum` as a plain field, so anything wanting an ack's block number has it
-without parsing signed bytes.
+`blockNum` and `startTime` go. Both are inside the `blockHash` preimage, so dropping them unbinds
+nothing — a signature made over block N still cannot be replayed as block M. `SoftAck` already
+carries `blockNum` as a plain field, so anything wanting an ack's block number has it without
+parsing signed bytes.
 
 The versions stay, duplicated in the preimage on purpose: a ratchet must read them **without
 recomputing a hash** — `versionMajor` for equality, `versionMinor` for the strict increase. A
@@ -595,12 +520,11 @@ produces a different `blockHash`, and the leader's ack fails to verify against i
 The domain tag inside the preimage keeps those signed bytes separable from any other digest the
 protocol signs.
 
-**This is what makes the signature set a state certificate.** `blockResultHash` covers the two
-state digests and is bound to `blockHash`, so signing the pair attests to the state the block
-produced and not only to the requests it contained. The `SoftConfirmation` record — the header
-plus the aggregated soft-acks — is then a complete, self-contained proof that a given state
-belongs to a given block, which is what a peer seeding from a snapshot verifies and what it
-already finds in the store.
+**What the signature set then proves.** A soft-confirmed block's aggregated acks attest that
+every head peer saw the same block: the same requests, in the same order, with the same flags and
+the same absorption decisions. They do **not** attest to the state that block produced — that is
+the stack certificate's job, and until it exists the signature set is a content proof and nothing
+more. A snapshot's state half rests on the donor, not on signatures.
 
 **What this does not touch: the rule-based ratchet.** It reads none of these fields.
 `DisputeResolutionScript` compares `voteRedeemer.sec.versionMinor > prevVersionMinor` and
@@ -621,38 +545,29 @@ on-chain. Its only readers are `PeerWallet.mkHeaderSignature`, `JointLedger` (si
 and `FastConsensusActor` (verification, `:285`), and `Onchain` is a misleading name worth
 correcting alongside the shape change.
 
-**`JointLedger` compares hashes.** `panicOnMismatchWithExpectedBrief` compares 32-byte values
-instead of case-class trees, in two stages and against two different sources: `blockHash` against
-the leader's brief on receipt, and `blockResultHash` against each peer's ack once the block has
-been applied. The first is checkable before any work is done, which is worth having on its own —
-a divergent block is rejected without being applied.
+**`JointLedger` compares hashes.** `panicOnMismatchWithExpectedBrief` compares one 32-byte value
+instead of case-class trees, against the leader's brief on receipt — before the block is applied,
+so a divergent block is rejected without being applied.
 
 `briefMismatchSummary` stays: once the hashes differ, the field-level diff is what tells an
 operator *which* part flipped, and it is the only thing that can — a hash says they disagree,
-never how. What the split adds is that the operator is told *which kind* of disagreement it is
-before reading the diff.
-
-It explains a `blockHash` mismatch only, because a brief is all it holds. A `blockResultHash`
-mismatch has no field-level diff behind it — the two peers hold different ledger states rather
-than different messages — so what an operator gets is the ack's peer number and the two digests,
-and the state comparison that would say more is a diagnostic tool this design does not build.
+never how.
 
 ## Migration
 
-**A running head cannot be upgraded across this change.** Three things move at once: the signed
-bytes, so acks from a peer on the old preimage fail to verify on the new one and the reverse; the
-brief, on the wire and as the `Block` journal value, which gains `blockHash`; and the ack, on the
-wire and as the `SoftAck` journal value, which gains `blockResultHash`. It applies to heads
-initialized afterwards, and belongs in the release notes of the release that ships it.
+**A running head cannot be upgraded across this change.** Three things move at once: the request,
+which gains a hash field; the signed bytes, so acks from a peer on the old preimage fail to verify
+on the new one and the reverse; and the brief, on the wire and as the `Block` journal value, which
+gains `blockHash`. It applies to heads initialized afterwards, and belongs in the release notes of
+the release that ships it.
 
-The block header is **unchanged** by this design. The state digests live in `blockResultHash`, not
-on the header, which leaves `BlockHeader` and its `nextHeader*` constructors exactly as they are.
+The block header is **unchanged** by this design, and so is `SoftAck` beyond what it signs.
 
-**A fourth thing moves if `l2StateHash` comes from the remote ledger** (open question 3): the
-coordination protocol gains a per-block state digest, which lands in
+**The L2 coordination protocol is untouched by cycle 3.** It moves only when the state commitment
+does (open questions 1-3): the protocol would gain a state digest landing in
 `sugar-rush-ledger/types/src/types/coordination/` and `hydrozoa/multisig/ledger/remote/` in the
-same work item, with the golden pins on both sides moved together. A head on the new preimage
-cannot drive a ledger on the old one.
+same work item, with the golden pins on both sides moved together. Nothing here obliges the Sugar
+Rush side to do anything yet.
 
 ## Out of scope
 
@@ -685,60 +600,44 @@ cannot drive a ledger on the old one.
 
 ## Open questions
 
-1. **What exactly does `evacuationDiffHash` cover?** `BlockResult.evacuationMapDiff` is
-   `Seq[EvacuationDiffGroup]` — grouped, and `flatEvacuationDiffs` erases the boundaries for
-   folding. Hashing the flattened sequence commits to the diffs in application order and nothing
-   about the grouping; hashing the groups commits to both. The grouping exists because partitions
-   need it on the slow side, so whether two peers must agree on it at the block layer decides
-   which of the two the preimage takes.
-2. **Should `blockResultHash` cover the rest of `BlockResult`?** It carries
-   `payoutObligations`, `payoutRequestIds`, `postDatedRefundTxs`, `absorbedDeposits` and
-   `competingFallbackTxTime` alongside the diffs — all of them produced by applying the block,
-   all of them known at that moment, none of them currently committed to. If the digest's job is
-   "what applying the block produced", the honest preimage is the whole result rather than two
-   fields chosen from it. Against that: every field is derivable from the request list plus the
-   ledger, so a mismatch would surface in `l2StateHash` anyway for anything that touches state,
-   and the extra coverage buys a sharper error rather than a new detection.
-
-3. **Can the remote L2 ledger produce `l2StateHash` on every block?** This design assumes it
-   can. Hydrozoa cannot compute the digest itself — under `L2LedgerKind.AnyRemote` the ledger is
-   a black box and its state never crosses the boundary — so the value has to come back over the
-   coordination protocol, per block, cheaply enough to sit on the critical path of a block cut.
-   The shape has precedent: `restoreTo` already returns an evacuation-map digest that
-   `JointLedger.State.recover` checks against its own folded expectation
-   (`RestoreError.EvacuationMapMismatch`). Extending that to a state root is the same kind of
-   change, and the same kind of cost: a wire break landing in
-   `sugar-rush-ledger/types/src/types/coordination/` and
-   `hydrozoa/multisig/ledger/remote/` together, with golden pins moved on both sides. **Confirm
-   with the Sugar Rush side what a RocksDB-backed CLOB can commit to per block before this
-   design fixes an interface they have to implement.** [what is the per-block cost there?]
-4. **What does `l2StateHash` cover on the built-in EUTXO ledger?** `EutxoL2Ledger` has no such
-   digest today, and the two backends have to agree on what the field means even though neither
-   sees the other's representation. Whether that is a root over the L2 UTxO set, or a digest
-   defined the way `EvacuationMap.digest` is — over bytes both sides already exchange — decides
-   how much of `l2-ledger-command-coordination.md` moves.
-5. **Should the header carry a `bodyHash`, so a seeding peer needs headers only?** Add a digest
+1. **What does a stack certificate look like?** The leading answer to the state question, and
+   undesigned: what it covers (the L2 state digest and the evacuation map, presumably as
+   digests), who signs it, at which boundary, how it is stored, and how a joining peer asks for
+   one. It belongs to the stack work item, but it is the thing that closes point 4 of *The gap*,
+   so the two are coupled in sequence even though they are separate in scope.
+2. **What can the remote L2 ledger commit to, and how often?** Hydrozoa cannot compute an L2
+   state digest itself — under `L2LedgerKind.AnyRemote` the ledger is a black box and its state
+   never crosses the boundary — so the value has to come back over the coordination protocol.
+   Per stack is the point of the certificate shape: it takes the round trip off the block-cut
+   path and puts it where the slow cycle already waits. The shape has precedent: `restoreTo`
+   already returns an evacuation-map digest that `JointLedger.State.recover` checks against its
+   own folded expectation (`RestoreError.EvacuationMapMismatch`). **Confirm with the Sugar Rush
+   side what a RocksDB-backed CLOB can commit to, and at what cadence, before a design fixes an
+   interface they have to implement.**
+3. **What does an L2 state digest cover on the built-in EUTXO ledger?** `EutxoL2Ledger` has no
+   such digest today, and the two backends have to agree on what the field means even though
+   neither sees the other's representation. Whether that is a root over the L2 UTxO set, or a
+   digest defined the way `EvacuationMap.digest` is — over bytes both sides already exchange —
+   decides how much of `l2-ledger-command-coordination.md` moves.
+4. **Should the header carry a `bodyHash`, so a seeding peer needs headers only?** Add a digest
    over the ordered body to the header and `blockHash` becomes a hash of the header alone, so a
    peer seeding from a snapshot verifies a header plus signatures without fetching a single
    request list. A follower rebuilding a block checks `bodyHash` against the body it derived,
    which is the check `blockHash` performs today, one level down. That is the layered shape the
    rest of this design already follows.
 
-   **The cut-time split makes this cheaper than it was.** A `bodyHash` is computable at the cut
-   like everything else in `blockHash`, so adding it introduces no ordering constraint and no
-   finalizer — the objection that killed the header-side state digests does not apply. It costs a
-   second digest per block and a preimage rewrite in this document, and wants deciding before
-   implementation starts.
-6. **Memoize `blockHash` on the brief?** As a stored `BlockBrief` field the value is present
+   It costs a second digest per block and a preimage rewrite in this document, and wants deciding
+   before implementation starts — a peer seeded on headers alone is the case it buys.
+5. **Memoize `blockHash` on the brief?** As a stored `BlockBrief` field the value is present
    without computation, but every rebuild recomputes it to compare. Whether that recomputed
    value is worth caching — a `lazy val` on `BlockBrief.Section`, once per brief rather than
    once per comparison — is a profiling question, not a design one.
-7. ~~**Does `transplantStackNumber` come out in the same work item?**~~ **Settled: it comes out.**
+6. ~~**Does `transplantStackNumber` come out in the same work item?**~~ **Settled: it comes out.**
    It declares a trust boundary — everything at or below the tag is taken from the donor and never
    verified — which is the hole the state digests close. The seeding path this design enables
    replaces it rather than sitting beside it. Tracked as GUM-320, decided 2026-09-08; the ordering
    between the two work items is the only thing left.
-8. **Does the leader apply its own block on the same path as a follower?** The point of the split
+7. **Does the leader apply its own block on the same path as a follower?** The point of the split
    is that it can — announce at the cut, then apply alongside everyone else. Whether
    `BlockWeaver` and `JointLedger` actually allow that today, or whether the leader's apply is
    entangled with producing the brief, decides how much of the latency win is available without
