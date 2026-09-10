@@ -14,7 +14,7 @@ catches a ledger bug, a non-deterministic rule, or a genuinely different prior s
 The same absence is what makes seeding a peer an act of trust. A coil peer joining a head with
 long history is handed a block number, the L2 ledger state at it, and the evacuation map at it.
 The block is provable from signatures; both halves of the state rest on the donor. That is the
-trust boundary `transplantStackNumber` declares today.
+trust boundary seeding carries today.
 
 ## Certificates, not detectors
 
@@ -58,18 +58,20 @@ A major partition snapshots state at the major; a minor partition's SEC covers t
 its run. So every stack that is not purely final produces at least one signed statement of state,
 at partition granularity — coarser than per block, finer than per stack.
 
-**The `Final` partition is the exception**, and probably a moot one: the head is closing, payouts
-are already determined by the finalization, and a certificate dated after the end has no reader.
-Confirm that rather than assume it.
+**The `Final` partition is the exception, and needs no certificate.** It finalizes the head: the
+payouts are determined by the finalization itself, there is no next state to commit to, and no peer
+joins at that anchor.
 
 ## Why not per block
 
 Per-block state digests were the earlier design and were rejected on two grounds.
 
-**Cost, under `any-remote`.** Hydrozoa cannot compute an L2 state digest itself: the ledger is a
-black box and its state never crosses the boundary, so the value comes back over the coordination
-protocol. Per block that is a round trip on the critical path of every block cut. Per partition it
-lands where the slow cycle already waits.
+**Cost, on every backend.** A state digest is a hash over the elements that constitute the ledger
+state, so producing one is work proportional to the state unless the construction is incremental.
+That holds for the built-in ledger as much as for a remote one. `any-remote` adds a second cost on
+top: the state never crosses the boundary, so the value comes back over the coordination protocol.
+Per block that is a hash of everything, and a round trip besides, on the critical path of every
+block cut. Per partition both land where the slow cycle already waits.
 
 **It is the wrong artifact.** A per-block digest is a detector. It has to be recomputed by whoever
 checks it, which a seeding peer cannot do — that is the whole reason it is seeding.
@@ -85,6 +87,40 @@ effects whose signatures do not verify. Making that explicit would improve diagn
 and it would cost a wire break to do it.
 
 The state commitment, which was the real reason to want a third layer, is served better here.
+
+## What the digest covers
+
+`l2StateHash` is an **efficient digest over the elements that constitute the ledger's state**. The
+construction is the backend's to pick — a Merkle root, or anything else with the same property —
+and the requirement on it is efficiency, because it is produced at every partition rather than once
+at boot.
+
+The backends do **not** have to agree on a construction. `l2Ledger: L2LedgerKind` is a head
+parameter, pinned in `headParamsHash`, so every peer in one head drives the same backend and only
+ever compares digests with peers computing them the same way. What has to be defined per backend is
+what the digest ranges over:
+
+| backend | ranges over | today |
+|---|---|---|
+| `EutxoL2Ledger` | active L2 UTxOs, transient tokens, pending deposits — the fields `L2Snapshot` persists | no digest; `EvacuationMap.digest` is the nearest precedent |
+| `any-remote` | `[Sugar Rush defines what constitutes its state]` | nothing reported |
+
+### Where the value comes from
+
+**Piggyback on `restoreTo`.** `L2Ledger.Restored` already carries `evacuationMapHash` and
+`l2ParamsHash`; it gains `l2StateHash` beside them, and so does the wire form —
+`Restored { tip, evacuationMapHash }` in `docs/spec/l2-ledger-command-coordination.md`. One exchange
+then reports every digest the head needs about the ledger, and the check the head already runs —
+`JointLedger.State.recover` comparing `evacuationMapHash` against its own folded expectation — is
+the pattern the new field follows.
+
+The remote side owes two fields rather than one: that frame does not carry `l2ParamsHash` today
+either, which is the gap GUM-327 tracks.
+
+That carries one implication for `EutxoL2Ledger`: its `restoreTo` re-folds from the latest snapshot,
+so a call at the anchor the ledger is already at is not free. Either that path gets a cheap
+same-anchor case, or the digest is maintained incrementally — the efficiency requirement above, seen
+from the other side.
 
 ## The two changes
 
@@ -137,9 +173,10 @@ peer already stores:
   commitment, and
 - the N-of-N signatures the slow cycle collected over it.
 
-A joining peer asks for the effect at its anchor, checks the signatures against the head peer
-verification keys it holds from config, and reads the two commitments out of it. No replay, and
-no trust in the donor beyond the signatures.
+**A joining coil peer asks, and the hub answers with the latest stack as the start point.** The
+peer takes the effect that stack carries, checks the signatures against the head peer verification
+keys it holds from config, and reads the two commitments out of it. No replay, and no trust in the
+donor beyond the signatures.
 
 ## Anchoring is uneven, deliberately
 
@@ -162,22 +199,8 @@ signatures.
   by nothing here.
 - **It does not change `blockHash`.** The two work items are independent in both directions.
 
-## Open questions
+## Still to measure
 
-1. **What does `l2StateHash` cover on each backend?** `EutxoL2Ledger` has no such digest today,
-   and the two backends must agree on what the field means even though neither sees the other's
-   representation. Whether it is a root over the L2 UTxO set or a digest defined the way
-   `EvacuationMap.digest` is — over bytes both sides already exchange — decides how much of
-   `docs/spec/l2-ledger-command-coordination.md` moves.
-2. **What can Sugar Rush commit to, and at what cadence?** The value has to come back over the
-   coordination protocol. Per partition is the point of this shape, but **confirm what a
-   RocksDB-backed CLOB can produce, and how expensively, before this fixes an interface they have
-   to implement.** Precedent: `restoreTo` already returns an evacuation-map digest that
-   `JointLedger.State.recover` checks against its own folded expectation.
-3. **What does the SEC change cost on-chain?** Script budget on vote, tally and resolution, and
-   the size of the datum. Worth measuring before committing, since it is the one part of this
-   that touches Plutus.
-4. **Does the `Final` partition need one?** Argued above that it does not. Confirm.
-5. **Does a joining peer ask for a certificate, or is it pushed?** The coil handshake already
-   negotiates a join point; whether the certificate rides that exchange or is fetched separately
-   is a protocol question this document does not settle.
+**What the SEC change costs on-chain** — script budget on vote, tally and resolution, and the size
+of the datum. It is the one part of this that touches Plutus, so measure it; the measurement is not
+expected to change the decision.
