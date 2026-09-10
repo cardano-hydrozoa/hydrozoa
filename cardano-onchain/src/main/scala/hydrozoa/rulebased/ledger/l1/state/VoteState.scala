@@ -115,6 +115,14 @@ end VoteState
   * (`design/l2-state-certificate.md`). The dispute-resolution script does not read it; it is here
   * because the script verifies the peers' signatures over `serialiseData(sec.toData)`, and that is
   * what makes the field a signed statement rather than a hint.
+  *
+  * **Field order is load-bearing, and `l2StateHash` is last for that reason.** The validator reads
+  * `headId`, `versionMajor`, `versionMinor` and `commitment` by position and otherwise
+  * re-serialises the redeemer's own `Data`, so appending leaves every index it uses where it was:
+  * the compiled program, and therefore `HydrozoaBlueprint.disputeScriptHash` and the head addresses
+  * derived from it, are byte-identical across this change (measured — moving `l2StateHash` ahead of
+  * `commitment` moves the hash, appending it does not). Inserting a field anywhere but the end
+  * would recompile the validator and change every head's addresses.
   */
 final case class StandaloneEvacuationCommitmentOnchain(
     headId: TokenName,
