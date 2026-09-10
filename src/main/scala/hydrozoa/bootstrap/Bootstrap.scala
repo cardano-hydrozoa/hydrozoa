@@ -535,9 +535,7 @@ object Bootstrap:
         // tx's treasury datum carries `headParamsHash`, and the header is part of that digest's
         // preimage. Every field follows from `blockCreationEndTime`, which is exactly what
         // `InitializationTxSeq.Build` derives the fallback's start time from.
-        initialBlockHeader = BlockHeader.Initial.derive(blockCreationEndTime)(using
-          headParams.txTiming
-        )
+        initialBlockHeader = BlockHeader.Initial(blockCreationEndTime)(using headParams.txTiming)
         headParamsHash = HeadParamsHash(bootstrap, initialBlockHeader)
 
         initTxSeq <- InitializationTxSeq

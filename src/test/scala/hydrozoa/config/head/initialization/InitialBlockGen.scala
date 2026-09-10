@@ -27,9 +27,7 @@ def generateInitialBlock(
 
         // The header is built before the transactions, as `Bootstrap.mkSharedHeadConfig` does:
         // `headParamsHash` covers it and the init tx's treasury datum carries that digest.
-        header = BlockHeader.Initial.derive(blockCreationEndTime)(using
-          config.headParameters.txTiming
-        )
+        header = BlockHeader.Initial(blockCreationEndTime)(using config.headParameters.txTiming)
 
         initTxSeqResult = InitializationTxSeq
             .Build(config, funding)(blockCreationEndTime, HeadParamsHash(config, header))

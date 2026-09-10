@@ -204,12 +204,11 @@ chain and moves with hard forks, so it is not something peers agree on.
 reaches the treasury value; the split decides who is paid what at finalization and is otherwise
 unpinned.
 
-The block-zero timing fields matter unevenly and are all included for that reason. `endTime`
-reaches the initialization transaction's validity end; `fallbackTxStartTime`,
-`forcedMajorBlockWakeupTime`, and `mDepositDecisionWakeupTime` reach no transaction at all, so
-the digest is the only thing that pins them. `startTime` repeats `endTime` — block zero has no
-creation window, so it is derived rather than configured — and stays in the preimage because
-removing a term would mean a new domain tag for nothing.
+The block-zero timing fields are five terms over one value. `endTime` reaches the initialization
+transaction's validity end and fixes the whole header: `startTime` repeats it because block zero
+has no creation window, and `fallbackTxStartTime`, `forcedMajorBlockWakeupTime`, and
+`mDepositDecisionWakeupTime` follow from it through the tx timing this preimage already covers.
+All five stay in because dropping a term would mean a new domain tag for nothing.
 
 `hubHeadPeerNumber` decides which head peer relays a coil peer's hard acknowledgement and how
 many `HubHardAck` journals a recovering coil peer must read. It is not in the native script.

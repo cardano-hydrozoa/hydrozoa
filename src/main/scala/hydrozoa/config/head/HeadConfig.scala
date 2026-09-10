@@ -12,6 +12,7 @@ import hydrozoa.config.head.HeadConfig.Bootstrap.HeadConfigBootstrapError
 import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.coil.CoilPeers.coilPeersDecoder
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.HeadParameters
@@ -24,7 +25,7 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
@@ -141,9 +142,14 @@ object HeadConfig {
                 hc <- {
                     given CardanoNetwork = network
                     for {
-                        brief <- c
-                            .downField("blockBrief")
-                            .as[BlockBrief.Initial]
+                        hcBootstrap <- c.as[HeadConfig.Bootstrap]
+
+                        // Block zero's brief carries its end time and nothing else; the head
+                        // params' tx timing rebuilds the rest of the header.
+                        brief <- {
+                            given TxTiming = hcBootstrap.txTiming
+                            c.downField("blockBrief").as[BlockBrief.Initial]
+                        }
                         initTx <- c
                             .downField("initializationTx")
                             .as[Transaction]
@@ -151,28 +157,6 @@ object HeadConfig {
                             .downField("resolvedUtxos")
                             .as[Utxos]
                             .map(ResolvedUtxos(_))
-                        hcBootstrap <- c.as[HeadConfig.Bootstrap]
-
-                        // Block zero's header is fully determined by its end time, which the
-                        // initialization transaction pins through its validity end. Rebuild it and
-                        // reject a config whose stored header disagrees, rather than running on
-                        // timings a hand edit could have moved out from under the transaction.
-                        _ <- {
-                            val derived =
-                                BlockHeader.Initial.derive(brief.endTime)(using
-                                  hcBootstrap.txTiming
-                                )
-                            Either.cond(
-                              brief.header == derived,
-                              (),
-                              io.circe.DecodingFailure(
-                                "Block zero's header does not match the one its end time " +
-                                    s"${brief.endTime.convert.instant} determines: stored " +
-                                    s"${brief.header}, derived $derived",
-                                c.history
-                              )
-                            )
-                        }
 
                         // Parse the stored init tx (honouring its bytes) rather than re-building it.
                         // The fallback is protocol-derived, so we build it from the parsed init tx.
