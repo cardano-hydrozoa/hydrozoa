@@ -86,10 +86,13 @@ object BlockHeader {
     type Intermediate = BlockHeader & BlockType.Intermediate
     type NonFinal = BlockHeader & BlockType.NonFinal & NonFinal.Section
 
-    /** Block-type-agnostic header signature. Currently an alias of the original Minor-scoped opaque
-      * so existing rule-based code (which speaks `BlockHeader.Minor.HeaderSignature` for
-      * dispute-resolution voting) keeps working unchanged. Fast-consensus soft-acks for Minor,
-      * Major, and Final blocks all share this type. TODO: untie from minor blocks
+    /** Block-type-agnostic signature. An alias of the original Minor-scoped opaque so existing
+      * rule-based code (which speaks `BlockHeader.Minor.HeaderSignature` for dispute-resolution
+      * voting) keeps working unchanged. Fast-consensus soft-acks for Minor, Major, and Final blocks
+      * all share it, as do the slow side's SEC signatures.
+      *
+      * TODO: untie from minor blocks. See
+      * https://linear.app/gummiworm-labs/issue/GUM-334/untie-the-soft-ack-signature-type-from-minor-blocks
       */
     type HeaderSignature = Minor.HeaderSignature
 
