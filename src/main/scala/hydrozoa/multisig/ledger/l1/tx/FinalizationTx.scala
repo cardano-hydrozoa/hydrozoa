@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.l1.tx
 
-import hydrozoa.config.head.HeadParamsHash
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FinalizationTxEndTime
@@ -139,7 +138,7 @@ private object FinalizationTxOps {
 
     object Build {
         type Config = CardanoNetwork.Section & FallbackContingency.Section & HeadPeers.Section &
-            InitialBlock.Section & InitializationParameters.Section & HeadParamsHash.Section
+            InitialBlock.Section & InitializationParameters.Section
 
         case class NoPayouts(override val config: Config)(
             override val majorVersionProduced: BlockVersion.Major,
@@ -260,8 +259,7 @@ private object FinalizationTxOps {
             private val spendTreasury =
                 Spend(treasuryToSpend.asUtxo, config.headMultisigScript.witnessAttached)
 
-            private val spendMultisigRegime =
-                config.multisigRegimeUtxo.spend(config.headParamsHash)(using config)
+            private val spendMultisigRegime = config.multisigRegimeUtxo.spend(using config)
 
             private val spendSteps = List(spendMultisigRegime, spendTreasury)
 

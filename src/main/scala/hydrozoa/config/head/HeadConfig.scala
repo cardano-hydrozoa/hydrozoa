@@ -177,8 +177,7 @@ object HeadConfig {
                             .Build(
                               hcBootstrap.txTiming.newFallbackStartTime(brief.endTime),
                               parsedInitTx.treasuryProduced,
-                              parsedInitTx.multisigRegimeProduced,
-                              headParamsHash
+                              parsedInitTx.multisigRegimeProduced
                             )(using hcBootstrap)
                             .result
                             .left

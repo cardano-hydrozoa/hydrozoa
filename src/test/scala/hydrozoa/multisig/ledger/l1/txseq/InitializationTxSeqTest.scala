@@ -6,7 +6,7 @@ import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, Metadata as MD}
-import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeOutput, MultisigRegimeUtxo}
+import hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeUtxo
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
@@ -164,7 +164,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
               "initialization tx contains MR output at correct index" |:
                   (iTxOutputs(multisigRegimeUtxo.input.index) ==
                       multisigRegimeUtxo
-                          .toUtxo(config.headParamsHash)(using config)
+                          .toUtxo(using config)
                           .output) && multisigRegimeUtxo.input.index == 1
             )
 
@@ -182,14 +182,14 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                           Some(Data.fromData[MultisigRegimeUtxo.Datum](d))
                       case _ => None
                   }
-                  datum.contains(MultisigRegimeOutput.datum(config.headParamsHash))
+                  datum.contains(MultisigRegimeUtxo.mkDatum(config.headParamsHash))
               }
             )
 
             props.append(
               "MR utxo only contains MR token in multiassets" |:
                   multisigRegimeUtxo
-                      .toUtxo(config.headParamsHash)(using config)
+                      .toUtxo(using config)
                       .output
                       .value
                       .assets ==
@@ -205,7 +205,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             props.append(
               "MR utxo contains at least enough coin for fallback deposit" |:
                   (multisigRegimeUtxo
-                      .toUtxo(config.headParamsHash)(using config)
+                      .toUtxo(using config)
                       .output
                       .value
                       .coin >=
@@ -464,7 +464,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
               "multsig regime utxo contains at exactly enough ada to cover tx fee and all non-treasury outputs" |: {
                   val expectedHRWTCoin: Coin = config.totalFallbackContingency
                   iTx.multisigRegimeProduced
-                      .toUtxo(config.headParamsHash)(using config)
+                      .toUtxo(using config)
                       .output
                       .value
                       .coin == expectedHRWTCoin

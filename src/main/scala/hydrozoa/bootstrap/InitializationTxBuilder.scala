@@ -127,10 +127,13 @@ object InitializationTxBuilder {
 
             object Sends {
                 def apply(): List[Send] =
-                    List(
-                      Treasury(),
-                      MultisigRegimeOutput.send(headParamsHash)(using config)
-                    ) ++ ChangeOutputs()
+                    List(Treasury(), multisigRegimeOutput.send(using config)) ++ ChangeOutputs()
+
+                /** Derived once here and reused for the produced [[MultisigRegimeUtxo]], so the
+                  * output the transaction carries and the utxo the head remembers cannot drift.
+                  */
+                private[bootstrap] val multisigRegimeOutput: MultisigRegimeOutput =
+                    MultisigRegimeOutput(MultisigRegimeUtxo.mkDatum(headParamsHash))
 
                 object Treasury {
                     def apply(): Send = Send(treasuryOutput)
@@ -174,6 +177,7 @@ object InitializationTxBuilder {
 
                 val multisigRegimeProduced = MultisigRegimeUtxo(
                   input = TransactionInput(finalized.transaction.id, multisigRegimeIndex),
+                  datum = Steps.Sends.multisigRegimeOutput.datum
                 )
 
                 val equityCoin =

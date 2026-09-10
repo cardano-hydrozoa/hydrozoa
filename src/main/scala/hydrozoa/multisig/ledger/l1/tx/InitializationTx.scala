@@ -9,7 +9,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.l1.tx.InitializationTx.InitializationTxOps.Parse.Error.MetadataParseError
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
-import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigRegimeOutput, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import io.circe.*
 import monocle.*
 import scala.util.Try
@@ -132,7 +132,7 @@ object InitializationTx {
                   config.initialEvacuationMap
                 )
 
-                expectedMultisigRegimeDatum = MultisigRegimeOutput.datum(headParamsHash)
+                expectedMultisigRegimeDatum = MultisigRegimeUtxo.mkDatum(headParamsHash)
 
                 actualOutputs = tx.body.value.outputs.map(_.value)
 
@@ -398,7 +398,8 @@ object InitializationTx {
               initializationTxEndTime = initializationTxEndTime,
               treasuryProduced = treasury,
               multisigRegimeProduced = MultisigRegimeUtxo(
-                input = TransactionInput(tx.id, md.multisigRegimeIx)
+                input = TransactionInput(tx.id, md.multisigRegimeIx),
+                datum = expectedMultisigRegimeDatum
               ),
               headTokenNames = config.headTokenNames,
               resolvedUtxos = resolvedUtxos,

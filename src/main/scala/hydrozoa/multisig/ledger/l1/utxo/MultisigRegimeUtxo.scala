@@ -16,21 +16,21 @@ import scalus.uplc.builtin.{ByteString, FromData, ToData}
 // carry the correct token and be at the correct address.
 final case class MultisigRegimeUtxo(
     input: TransactionInput,
+    datum: MultisigRegimeUtxo.Datum
 ) {
 
-    def toUtxo(headParamsHash: Hash32)(using config: MultisigRegimeOutput.Config): Utxo =
+    def toUtxo(using config: MultisigRegimeOutput.Config): Utxo =
         Utxo(
           input,
-          MultisigRegimeOutput.toOutput(headParamsHash)
+          MultisigRegimeOutput(datum).toOutput
         )
 
-    def referenceOutput(headParamsHash: Hash32)(using config: Config): ReferenceOutput =
-        ReferenceOutput(
-          this.toUtxo(headParamsHash)
-        )
+    def referenceOutput(using config: Config): ReferenceOutput = ReferenceOutput(
+      this.toUtxo
+    )
 
-    def spend(headParamsHash: Hash32)(using config: Config): Spend = Spend(
-      this.toUtxo(headParamsHash),
+    def spend(using config: Config): Spend = Spend(
+      this.toUtxo,
       config.headMultisigScript.witnessAttached
     )
 }
@@ -48,6 +48,14 @@ object MultisigRegimeUtxo {
     ) derives FromData,
           ToData
 
+    /** The datum for a head whose configuration hashes to `headParamsHash`. The digest is passed in
+      * rather than read from a config section: the initialization tx builder produces this datum,
+      * and it runs before a [[hydrozoa.config.head.HeadConfig]] exists. Everything downstream reads
+      * the datum off the [[MultisigRegimeUtxo]] that transaction produced.
+      */
+    def mkDatum(headParamsHash: Hash32): Datum =
+        Datum(ByteString.fromArray(headParamsHash.bytes))
+
     /** If some tx extends this, it means that tx is producing it. */
     trait Produced {
         def multisigRegimeProduced: MultisigRegimeUtxo
@@ -60,21 +68,13 @@ object MultisigRegimeUtxo {
 
 }
 
-case object MultisigRegimeOutput {
-    type Config = HasTokenNames & CardanoNetwork.Section & HeadPeers.Section &
-        FallbackContingency.Section
+/** The multisig regime output, identified by the datum it carries. Callers that already hold the
+  * [[MultisigRegimeUtxo]] go through it instead — this is for the initialization tx builder, which
+  * produces the output before any utxo exists.
+  */
+final case class MultisigRegimeOutput(datum: MultisigRegimeUtxo.Datum) {
 
-    /** The head's configuration digest, in the form the regime utxo's inline datum holds it.
-      *
-      * The digest is passed in rather than read from [[Config]]: computing it needs nearly the
-      * whole head config, and the initialization tx builder — the one caller that produces this
-      * output — runs before a [[hydrozoa.config.head.HeadConfig]] exists. See
-      * `docs/spec/head-params-hash.md`.
-      */
-    def datum(headParamsHash: Hash32): MultisigRegimeUtxo.Datum =
-        MultisigRegimeUtxo.Datum(ByteString.fromArray(headParamsHash.bytes))
-
-    def toOutput(headParamsHash: Hash32)(using config: Config): Babbage = Babbage(
+    def toOutput(using config: Config): Babbage = Babbage(
       address = config.headMultisigAddress,
       value = Value(config.totalFallbackContingency) +
           Value.asset(
@@ -82,18 +82,21 @@ case object MultisigRegimeOutput {
             config.headTokenNames.regimeWitnessTokenName,
             1L
           ),
-      datumOption = Some(Inline(datum(headParamsHash).toData)),
+      datumOption = Some(Inline(datum.toData)),
       scriptRef = Some(ScriptRef(config.headMultisigScript.script))
     )
+
+    def send(using config: Config): Send = Send(toOutput)
+}
+
+object MultisigRegimeOutput {
+    type Config = HasTokenNames & CardanoNetwork.Section & HeadPeers.Section &
+        FallbackContingency.Section
 
     def burnRegimeWitnessToken(using config: Config): Mint = Mint(
       config.headMultisigScript.policyId,
       config.headTokenNames.regimeWitnessTokenName,
       -1,
       config.headMultisigScript.witnessAttached
-    )
-
-    def send(headParamsHash: Hash32)(using config: Config): Send = Send(
-      toOutput(headParamsHash)
     )
 }

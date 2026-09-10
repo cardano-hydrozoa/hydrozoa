@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyList
-import hydrozoa.config.head.HeadParamsHash
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -76,8 +75,7 @@ object DepositRefundTxSeq {
 private object DepositRefundTxSeqOps {
 
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
-        InitializationParameters.Section & TxTiming.Section & FallbackContingency.Section &
-        HeadParamsHash.Section
+        InitializationParameters.Section & TxTiming.Section & FallbackContingency.Section
 
     object Build {
         sealed trait Error extends RuntimeException {

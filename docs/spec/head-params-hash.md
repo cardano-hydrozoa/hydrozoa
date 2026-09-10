@@ -61,10 +61,16 @@ and `versionMajor` with each settlement. A digest that cannot change does not �
 it would be a constant re-serialised onto the chain once per major block, for the life of the
 head.
 
-`MultisigRegimeOutput.toOutput` takes the digest as a parameter rather than reading a
-`HeadParamsHash.Section`, because its one producing caller — `InitializationTxBuilder` — runs
-before any `HeadConfig` exists. Every other caller reconstructs the same output to reference or
-spend it, and passes the digest from its own config.
+`MultisigRegimeUtxo` carries its `datum` alongside its `input`, the way `MultisigTreasuryUtxo`
+does, so `toUtxo` / `referenceOutput` / `spend` need nothing but the ambient config. The one
+place the digest is turned into a datum is `MultisigRegimeUtxo.mkDatum`, called by the two
+transactions that see the digest as a `Hash32`: `InitializationTxBuilder`, which produces the
+output, and `InitializationTx.Parse`, which rebuilds it to compare. The builder holds the result
+as a `MultisigRegimeOutput` and uses it for both the transaction's output and the
+`MultisigRegimeUtxo` it reports, so the two cannot drift.
+
+The digest is a parameter to those two rather than a `HeadParamsHash.Section` on their configs,
+because both run before a `HeadConfig` exists — the `HeadConfig` decoder is what calls `Parse`.
 
 ### Where it lives
 
@@ -82,9 +88,9 @@ preimage — never the transaction — so the bootstrap context plus that header
 digest needs and nothing more.
 
 Readers that only have to carry the value take `HeadParamsHash.Section`, which grants
-`headParamsHash` without dragging in the config. The transaction builders that reconstruct the
-regime output ask for that and nothing else, and `MultisigRegimeOutput.datum` is the one place
-that turns the `Hash32` into the datum's `ByteString`.
+`headParamsHash` without dragging in the config — `StoreIdentity`'s stamp is what reads it that
+way. No transaction builder needs it: the two that see the digest take it as a parameter, and
+every other builder reads the datum off the `MultisigRegimeUtxo` it was given.
 
 `InitializationTx.Parse` must **not** compute it. Its `Config` is a deliberately minimal
 intersection —
@@ -379,7 +385,7 @@ both datums from local config and compares each:
 expectedTreasuryDatum      = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
   config.initialEvacuationMap
 )
-expectedMultisigRegimeDatum = MultisigRegimeOutput.datum(headParamsHash)
+expectedMultisigRegimeDatum = MultisigRegimeUtxo.mkDatum(headParamsHash)
 ```
 
 `headParamsHash` on the regime output makes that comparison cover the whole configuration.

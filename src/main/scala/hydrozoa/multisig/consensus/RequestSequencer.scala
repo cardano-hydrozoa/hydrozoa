@@ -5,7 +5,6 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-import hydrozoa.config.head.HeadParamsHash
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
@@ -279,7 +278,7 @@ object RequestSequencer {
     // parse and time-gate a deposit tx (DepositL1Screening.Config).
     type Config = OwnPeerPublic.Section & CardanoNetwork.Section & HeadPeers.Section &
         InitialBlock.Section & TxTiming.Section & InitializationParameters.Section &
-        FallbackContingency.Section & BlockConfig.Section & HeadParamsHash.Section
+        FallbackContingency.Section & BlockConfig.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,

@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.l1.tx
 
-import hydrozoa.config.head.HeadParamsHash
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -140,7 +139,7 @@ private object SettlementTxOps {
     object Build {
         type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
             SettlementConfig.Section & InitializationParameters.Section & HasTokenNames &
-            FallbackContingency.Section & HeadParamsHash.Section
+            FallbackContingency.Section
 
         case class NoPayouts(override val config: Config)(
             override val kzgCommitment: KzgCommitment,
@@ -242,7 +241,7 @@ private object SettlementTxOps {
                 ModifyAuxiliaryData(_ => Some(Settlement().asAuxData(config.headId)))
 
             private val referenceMultisigRegime =
-                config.multisigRegimeUtxo.referenceOutput(config.headParamsHash)(using config)
+                config.multisigRegimeUtxo.referenceOutput(using config)
 
             private val validityEndSlot = ValidityEndSlot(settlementTxEndTime.toSlot.slot)
 

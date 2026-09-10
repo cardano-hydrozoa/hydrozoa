@@ -52,7 +52,6 @@ private object InitializationTxSeqOps {
                   config.txTiming.newFallbackStartTime(blockCreationEndTime),
                   initializationTx.treasuryProduced,
                   initializationTx.multisigRegimeProduced,
-                  headParamsHash
                 )(using config)
                 .result
                 .left
@@ -159,8 +158,7 @@ private object InitializationTxSeqOps {
                         .Build(
                           config.txTiming.newFallbackStartTime(blockCreationEndTime),
                           iTx.treasuryProduced,
-                          iTx.multisigRegimeProduced,
-                          headParamsHash
+                          iTx.multisigRegimeProduced
                         )(using config)
                         .result
                         .left
