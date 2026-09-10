@@ -98,8 +98,7 @@ class CoilCodecsTest extends AnyFunSuite {
         val softAck = SoftAck(
           ackId = SoftAckId(h0, SoftAckNumber(5)),
           blockNum = BlockNumber(11),
-          headerSignature =
-              BlockHeader.Minor.HeaderSignature(IArray[Byte](1.toByte, 2.toByte, 3.toByte)),
+          signature = BlockHeader.Minor.HeaderSignature(IArray[Byte](1.toByte, 2.toByte, 3.toByte)),
           finalizationRequested = true,
         )
         val headHardAck = HardAck(

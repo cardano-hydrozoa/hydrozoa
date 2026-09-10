@@ -284,7 +284,7 @@ class FastConsensusActor(
         // Verify every ack's signature against the brief's signingBytes — the block's content
         // digest, so a peer that derived a different block cannot have signed these.
         msg = brief.signingBytes
-        _ <- cell.acks.toList.traverse_((vk, ack) => verifyHeaderSig(vk, ack.headerSignature, msg))
+        _ <- cell.acks.toList.traverse_((vk, ack) => verifySignature(vk, ack.signature, msg))
 
         finalizationRequested = cell.acks.values.exists(_.finalizationRequested)
         confirmed = mkSoftConfirmed(brief, cell.acks, finalizationRequested)
@@ -348,7 +348,7 @@ class FastConsensusActor(
         _ <- stateRef.update(s => s.copy(cells = s.cells - cell.blockNum))
     } yield ()
 
-    private def verifyHeaderSig(
+    private def verifySignature(
         vk: VerificationKey,
         sig: BlockHeader.HeaderSignature,
         msg: ByteString
@@ -377,7 +377,7 @@ class FastConsensusActor(
         // arrives at the same canonical sequence.
         val sigsByPeer: List[BlockHeader.HeaderSignature] = acks.toList
             .sortBy((_, ack) => ack.peerNum: Int)
-            .map((_, ack) => ack.headerSignature)
+            .map((_, ack) => ack.signature)
 
         brief match {
             case b: BlockBrief.Minor =>

@@ -749,7 +749,7 @@ final case class JointLedger(
                     val ack = SoftAck(
                       peerNum = peerNum,
                       blockNum = brief.blockNum,
-                      header = config.ownWallet.mkHeaderSignature(brief.signingBytes),
+                      signature = config.ownWallet.mkHeaderSignature(brief.signingBytes),
                       finalizationRequested = localFinalization.asBoolean
                     )
                     persistOwnAckBundle(brief, ack, blockResult).as(Some(ack))

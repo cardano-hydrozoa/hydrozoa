@@ -110,7 +110,7 @@ class CodecsTest extends AnyFunSuite {
         val ack = SoftAck(
           ackId = SoftAckId(HeadPeerNumber(2), SoftAckNumber(5)),
           blockNum = BlockNumber(11),
-          headerSignature = BlockHeader.Minor.HeaderSignature(
+          signature = BlockHeader.Minor.HeaderSignature(
             IArray[Byte](1.toByte, 2.toByte, 3.toByte, 4.toByte, 5.toByte)
           ),
           finalizationRequested = true,
@@ -125,8 +125,8 @@ class CodecsTest extends AnyFunSuite {
                         val _ = assert(decodedAck.ackId == ack.ackId)
                         val _ = assert(decodedAck.blockNum == ack.blockNum)
                         val _ = assert(
-                          (decodedAck.headerSignature: IArray[Byte]).toList ==
-                              (ack.headerSignature: IArray[Byte]).toList
+                          (decodedAck.signature: IArray[Byte]).toList ==
+                              (ack.signature: IArray[Byte]).toList
                         )
                         assert(decodedAck.finalizationRequested == ack.finalizationRequested)
                     case other => fail(s"Expected Some(SoftAck), got: $other")
