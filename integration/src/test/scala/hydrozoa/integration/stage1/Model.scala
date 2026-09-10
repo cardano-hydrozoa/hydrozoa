@@ -333,8 +333,12 @@ object Model:
                 state <- StateT.get[M, State]
                 brief <- state.blockCycle match {
                     case BlockCycle.InProgress(_, _, prevVersion, accumulator) =>
-                        val events: List[(RequestId, ValidityFlag)] =
-                            accumulator.map((le, _, flag) => le.requestId -> flag)
+                        // The digest comes from the request body the model holds, the way a peer
+                        // derives it from the body it received (design/block-hash.md).
+                        val events: List[(RequestId, Hash32, ValidityFlag)] =
+                            accumulator.map((le, _, flag) =>
+                                (le.requestId, le.request.body.hash, flag)
+                            )
                         for
                             _ <- StateT.liftF(
                               log.debug(
@@ -392,7 +396,7 @@ object Model:
           *   a tuple of (registeredEvents, rejectedEvents)
           */
         private def registerOrReject[M[_]: Monad](
-            events: List[(RequestId, ValidityFlag)]
+            events: List[(RequestId, Hash32, ValidityFlag)]
         ): StateT[M, State, (Queue[Registered], Queue[Rejected])] = for {
             state <- StateT.get[M, State]
             // FIXME: this could be done probably in a single fold, and perhaps more performant for large
@@ -406,9 +410,9 @@ object Model:
                 state.deposits.depositsEnqueued
                     // map them with the validity flag, if its in the accumulator
                     .map(cmd =>
-                        val thisEvent: Option[(RequestId, ValidityFlag)] =
+                        val thisEvent: Option[(RequestId, Hash32, ValidityFlag)] =
                             events.find(event => event._1 == cmd.request.requestId)
-                        thisEvent.map((_, validityFlag) => (validityFlag, cmd))
+                        thisEvent.map((_, _, validityFlag) => (validityFlag, cmd))
                     )
                     // Then filter out all the requests not in the accumulator
                     .filter(_.isDefined)
@@ -504,7 +508,7 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            events: List[(RequestId, ValidityFlag)],
+            events: List[(RequestId, Hash32, ValidityFlag)],
             absorbedThisBlock: Queue[Absorbed],
             refundedThisBlock: Queue[Refunded]
         ): StateT[M, State, BlockBrief.Major] =
@@ -548,7 +552,7 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            events: List[(RequestId, ValidityFlag)],
+            events: List[(RequestId, Hash32, ValidityFlag)],
             refundedThisBlock: Queue[Refunded]
         ): StateT[M, State, BlockBrief.Minor] = for {
             state <- StateT.get[M, State]
@@ -581,7 +585,7 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            events: List[(RequestId, ValidityFlag)],
+            events: List[(RequestId, Hash32, ValidityFlag)],
             refundedThisBlock: Queue[Refunded]
         ): StateT[M, State, BlockBrief.Final] = for {
             _ <- StateT.modify[M, State](_.copy(blockCycle = BlockCycle.HeadFinalized))
@@ -613,7 +617,9 @@ object Model:
             for {
                 state <- StateT.get[M, State]
 
-                events = accumulator.map((req, _, flag) => (req.requestId, flag))
+                events = accumulator.map((req, _, flag) =>
+                    (req.requestId, req.request.body.hash, flag)
+                )
 
                 // Construct, but don't execute the state transitions -- we decide which one we need below
                 doMajorBlock = majorBlock[M](

@@ -3,13 +3,11 @@ package hydrozoa.config.head
 import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.given
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.lib.crypto.Preimage
 import hydrozoa.multisig.ledger.block.BlockHeader
-import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets.UTF_8
-import scala.concurrent.duration.FiniteDuration
-import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, ScriptHash, TransactionInput}
-import scalus.uplc.builtin.{ByteString, platform}
+import scalus.cardano.ledger.Hash32
+import scalus.uplc.builtin.ByteString
 
 /** The digest that pins a head's agreed configuration, as defined in
   * `docs/spec/head-params-hash.md`.
@@ -64,7 +62,7 @@ object HeadParamsHash {
         config: HeadConfig.Bootstrap.Section,
         initialBlockHeader: BlockHeader.Initial
     ): Hash32 = {
-        val out = Buffer()
+        val out = Preimage()
         out.raw(domainTag)
 
         // -- HeadParameters.txTiming
@@ -152,55 +150,6 @@ object HeadParamsHash {
         out.u32(hubs.size)
         hubs.foreach(hub => out.u32(hub.convert))
 
-        Hash[Blake2b_256, Any](platform.blake2b_256(ByteString.unsafeFromArray(out.bytes)))
-    }
-
-    /** Accumulates the preimage. Variable-width values are length-framed and fixed-width ones are
-      * not, so no two distinct configs can produce the same byte string.
-      */
-    private final class Buffer {
-        private val buffer = ByteArrayOutputStream()
-
-        def bytes: Array[Byte] = buffer.toByteArray
-
-        def raw(value: Array[Byte]): Unit = buffer.write(value)
-
-        def framed(value: Array[Byte]): Unit = {
-            u32(value.length)
-            buffer.write(value)
-        }
-
-        def u8(value: Int): Unit = buffer.write(value & 0xff)
-
-        def u32(value: Int): Unit = {
-            buffer.write((value >>> 24) & 0xff)
-            buffer.write((value >>> 16) & 0xff)
-            buffer.write((value >>> 8) & 0xff)
-            buffer.write(value & 0xff)
-        }
-
-        def u64(value: Long): Unit = {
-            u32((value >>> 32).toInt)
-            u32(value.toInt)
-        }
-
-        def bool(value: Boolean): Unit = u8(if value then 0x01 else 0x00)
-
-        def coin(value: Coin): Unit = u64(value.value)
-
-        def duration(value: QuantizedFiniteDuration): Unit = finiteDuration(value.finiteDuration)
-
-        def finiteDuration(value: FiniteDuration): Unit = u64(value.toMillis)
-
-        def instant(value: QuantizedInstant): Unit = u64(value.instant.toEpochMilli)
-
-        def hash32(value: Hash32): Unit = raw(value.bytes)
-
-        def scriptHash(value: ScriptHash): Unit = raw(value.bytes)
-
-        def transactionInput(value: TransactionInput): Unit = {
-            raw(value.transactionId.bytes)
-            u32(value.index)
-        }
+        out.digest
     }
 }

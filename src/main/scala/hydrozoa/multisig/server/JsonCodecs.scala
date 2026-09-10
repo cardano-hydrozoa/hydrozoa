@@ -65,18 +65,26 @@ object JsonCodecs {
     case class UserRequestDecoder() extends Decoder[UserRequest] {
 
         // The request is internally tagged: a `type` field (`deposit` / `transaction`) selects the
-        // kind, with the body fields (`l1Payload` deposits only, `l2Payload` all) alongside it.
+        // kind, with the body fields (`l1Payload` deposits only, `l2Payload` all) and the
+        // submitter's `requestHash` alongside it.
         // Authentication is not done here: the L2 payload is a native, self-authenticating tx, and
         // the ledger's stateless screening verifies its signatures before a RequestId is assigned.
+        // Neither is the digest checked here — that is RequestSequencer's job, on the body it ends
+        // up holding.
         def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
-            c.downField("type").as[String].flatMap {
-                case "deposit" =>
-                    c.as[DepositRequestBody].map(UserRequest.DepositRequest(_))
-                case "transaction" =>
-                    c.as[TransactionRequestBody].map(UserRequest.TransactionRequest(_))
-                case other =>
-                    Left(DecodingFailure(s"unknown request type: $other", c.history))
-            }
+            for {
+                kind <- c.downField("type").as[String]
+                requestHash <- c.downField("requestHash").as[Hash32]
+                request <- kind match {
+                    case "deposit" =>
+                        c.as[DepositRequestBody].map(UserRequest.DepositRequest(_, requestHash))
+                    case "transaction" =>
+                        c.as[TransactionRequestBody]
+                            .map(UserRequest.TransactionRequest(_, requestHash))
+                    case other =>
+                        Left(DecodingFailure(s"unknown request type: $other", c.history))
+                }
+            } yield request
     }
 
     given Decoder[UserRequest] = UserRequestDecoder()

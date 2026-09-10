@@ -131,14 +131,6 @@ object BlockHeader {
           startTime = newStartTime,
           endTime = newEndTime
         )
-
-        /** Canonical byte representation used as the input for a head peer's soft acknowledgment
-          * (Ed25519 signature). Authenticates brief identity (block number, version, timing) —
-          * deliberately KZG-free. The slow cycle's dispute-script-facing bytes live separately on
-          * [[hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment.Onchain.Serialized]].
-          */
-        final def signingBytes: BlockHeader.SignedDigest.Serialized =
-            BlockHeader.SignedDigest.Serialized(BlockHeader.SignedDigest.Onchain(this))
     }
 
     object NonFinal {
@@ -226,62 +218,6 @@ object BlockHeader {
             }
         }
     }
-
-    /** The canonical bytes a head peer's soft acknowledgment signs over. Authenticates the brief's
-      * identity (block number, version, timing) — fast-cycle only; no L1 effect material (KZG and
-      * any other slow-cycle artifact live in the slow side's effects, e.g.
-      * [[hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment.Onchain]]).
-      *
-      * No on-chain consumer reads this — Hydrozoa's L1 scripts speak the SEC's `Onchain` datum, not
-      * the soft-ack bytes. We still derive `Serialized` via scalus' `serialiseData` for canonical
-      * byte determinism and toolchain consistency with the SEC.
-      */
-    object SignedDigest {
-        import scalus.cardano.onchain.plutus.v3.PosixTime
-        import scalus.uplc.builtin.{ByteString, FromData, ToData}
-        import scalus.uplc.builtin.Builtins.serialiseData
-        import scalus.uplc.builtin.Data.toData
-
-        final case class Onchain(
-            blockNum: BigInt,
-            startTime: PosixTime,
-            versionMajor: BigInt,
-            versionMinor: BigInt,
-        ) derives FromData,
-              ToData
-
-        object Onchain {
-            def apply(offchainHeader: BlockHeader.Section): Onchain =
-                new Onchain(
-                  blockNum = BigInt(offchainHeader.blockNum.convert),
-                  startTime = offchainHeader.startTime.instant.toEpochMilli,
-                  versionMajor = BigInt(offchainHeader.blockVersion.major.convert),
-                  versionMinor = BigInt(offchainHeader.blockVersion.minor.convert),
-                )
-        }
-
-        type Serialized = Serialized.Serialized
-
-        object Serialized {
-            opaque type Serialized = IArray[Byte]
-
-            def apply(onchain: Onchain): Serialized =
-                IArray.from(serialiseData(onchain.toData).bytes)
-
-            given Conversion[Serialized, IArray[Byte]] = identity
-
-            given Conversion[Serialized, Array[Byte]] = msg => IArray.genericWrapArray(msg).toArray
-
-            given Conversion[Serialized, ByteString] = msg => ByteString.fromArray(msg)
-
-            extension (msg: Serialized) def untagged: IArray[Byte] = identity(msg)
-
-            trait Section {
-                def headerSerialized: BlockHeader.SignedDigest.Serialized
-            }
-        }
-    }
-
     object Initial {
         final transparent inline def blockNum: BlockNumber = BlockNumber.zero
         final transparent inline def blockVersion: BlockVersion.Full = BlockVersion.Full.zero

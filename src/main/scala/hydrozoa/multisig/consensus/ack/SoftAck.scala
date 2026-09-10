@@ -4,7 +4,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 
 /** A head peer's soft acknowledgment of a block brief: the head peer's Ed25519 signature over the
-  * brief's [[BlockHeader.Section.signingBytes]]. See `consensus/fast-consensus` in the spec.
+  * brief's [[BlockBrief.Section.signingBytes]]. See `consensus/fast-consensus` in the spec.
   *
   * One soft-ack per peer per block, regardless of block type (Minor / Major / Final). The `ackNum`
   * (soft-ack number — TODO(rename): `AckNumber` -> `SoftAckNumber`, see AckNumber.scala) is the

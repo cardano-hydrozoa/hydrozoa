@@ -58,7 +58,8 @@ final class PeerWallet(
 
     /** Sign arbitrary canonical bytes as a `HeaderSignature`. Used for two distinct sign targets:
       *
-      *   - Soft-ack over the fast-cycle brief identity ([[BlockHeader.SignedDigest.Serialized]]).
+      *   - Soft-ack over the fast-cycle block content digest
+      *     ([[hydrozoa.multisig.ledger.block.BlockBrief.SignedDigest.Serialized]]).
       *   - Hard-ack signature over the standalone evacuation commitment
       *     ([[hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment.Onchain.Serialized]]).
       *

@@ -25,7 +25,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   * ==Overview==
   *
   * Coordinates the soft-confirmation of block briefs among head peers via a single round of Ed25519
-  * signatures over the brief's [[BlockHeader.Section.signingBytes]] (see `consensus/fast-consensus`
+  * signatures over the brief's [[BlockBrief.Section.signingBytes]] (see `consensus/fast-consensus`
   * in the whitepaper).
   *
   * This actor produces soft-confirmations only. L1 effect signatures (settlement, fallback,
@@ -281,8 +281,9 @@ class FastConsensusActor(
         brief <- cell.brief.liftTo[IO](
           new IllegalStateException(s"Saturated cell ${cell.blockNum} without a brief")
         )
-        // Verify every ack's signature against the brief's signingBytes.
-        msg = brief.header.signingBytes
+        // Verify every ack's signature against the brief's signingBytes — the block's content
+        // digest, so a peer that derived a different block cannot have signed these.
+        msg = brief.signingBytes
         _ <- cell.acks.toList.traverse_((vk, ack) => verifyHeaderSig(vk, ack.headerSignature, msg))
 
         finalizationRequested = cell.acks.values.exists(_.finalizationRequested)

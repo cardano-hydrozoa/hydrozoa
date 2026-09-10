@@ -72,7 +72,7 @@ object JointLedgerEvent:
         previousHeader: BlockHeader,
         blockCreationStartTime: BlockCreationStartTime,
         competingFallbackTxTime: FallbackTxStartTime,
-        events: List[(RequestId, ValidityFlag)],
+        events: List[(RequestId, Hash32, ValidityFlag)],
         decisionsAbsorbed: List[RequestId],
         decisionsRejected: List[RequestId]
     ) extends JointLedgerEvent

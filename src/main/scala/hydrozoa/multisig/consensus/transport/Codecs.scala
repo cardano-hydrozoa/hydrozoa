@@ -18,6 +18,7 @@ import hydrozoa.multisig.persistence.codec.RequestRecordCodec
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
+import scalus.cardano.ledger.Hash32
 import scodec.bits.ByteVector
 
 /** JSON codecs for the wire-eligible subset of [[PeerLiaisonHeadToHead.Request]].
@@ -421,24 +422,33 @@ object Codecs {
     private given Codec[UserRequestBody.TransactionRequestBody] =
         deriveCodec[UserRequestBody.TransactionRequestBody]
 
+    // `requestHash` rides along as the submitter sent it and the assigning peer verified it. A
+    // receiving peer does not check it — it derives its own digest from the body (JointLedger),
+    // and this field is only what a peer relays onward and stores.
     given Codec[UserRequest.DepositRequest] = {
         val enc: Encoder[UserRequest.DepositRequest] =
-            Encoder.instance(r => Json.obj("body" -> r.body.asJson))
+            Encoder.instance(r =>
+                Json.obj("body" -> r.body.asJson, "requestHash" -> r.requestHash.asJson)
+            )
         val dec: Decoder[UserRequest.DepositRequest] = Decoder.instance(c =>
-            c.downField("body")
-                .as[UserRequestBody.DepositRequestBody]
-                .map(UserRequest.DepositRequest(_))
+            for {
+                body <- c.downField("body").as[UserRequestBody.DepositRequestBody]
+                requestHash <- c.downField("requestHash").as[Hash32]
+            } yield UserRequest.DepositRequest(body, requestHash)
         )
         io.circe.Codec.from(dec, enc)
     }
 
     given Codec[UserRequest.TransactionRequest] = {
         val enc: Encoder[UserRequest.TransactionRequest] =
-            Encoder.instance(r => Json.obj("body" -> r.body.asJson))
+            Encoder.instance(r =>
+                Json.obj("body" -> r.body.asJson, "requestHash" -> r.requestHash.asJson)
+            )
         val dec: Decoder[UserRequest.TransactionRequest] = Decoder.instance(c =>
-            c.downField("body")
-                .as[UserRequestBody.TransactionRequestBody]
-                .map(UserRequest.TransactionRequest(_))
+            for {
+                body <- c.downField("body").as[UserRequestBody.TransactionRequestBody]
+                requestHash <- c.downField("requestHash").as[Hash32]
+            } yield UserRequest.TransactionRequest(body, requestHash)
         )
         io.circe.Codec.from(dec, enc)
     }

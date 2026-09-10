@@ -91,6 +91,34 @@ class RequestRecordCodecTest extends AnyFunSuite:
         assert(failure.getMessage.contains("body"))
     }
 
+    /** A digest of the wrong width is corruption. Carrying it would compare unequal against every
+      * digest this node derives and surface later as a consensus panic, a long way from the record
+      * that caused it.
+      */
+    test("a record whose requestHash is not 32 bytes is rejected") {
+        val (_, record) = cases.head
+        val truncated = proto.RequestRecord
+            .parseFrom(RequestRecordCodec.encode(record))
+            .withRequestHash(ProtoBytes.copyFrom(Array.fill[Byte](31)(0)))
+            .toByteArray
+        val failure = intercept[IllegalArgumentException](RequestRecordCodec.decode(truncated))
+        assert(failure.getMessage.contains("requestHash"))
+    }
+
+    /** The stored digest is the one the record carries, not one re-derived on read: the assigning
+      * peer verified it against this body before writing, so a stored record that disagrees with
+      * its own body is corruption to surface, never a value to silently repair.
+      */
+    test("the stored requestHash is the body's own digest") {
+        cases.foreach { (name, record) =>
+            val decoded = RequestRecordCodec.decode(RequestRecordCodec.encode(record))
+            assert(
+              decoded.request.requestHash == decoded.request.body.hash,
+              s"$name's stored digest does not describe its body"
+            )
+        }
+    }
+
     private def transaction(peer: Int, num: Long, l2Payload: Array[Byte]): UserRequestWithId =
         UserRequestWithId(
           UserRequest.TransactionRequest(

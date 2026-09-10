@@ -40,7 +40,7 @@ import monocle.Focus.focus
 import scalus.cardano.ledger.Hash32
 
 private case class UserRequestState(
-    requests: List[(RequestId, ValidityFlag)],
+    requests: List[(RequestId, Hash32, ValidityFlag)],
     postDatedRefundTxs: Vector[RefundTx.PostDated]
 )
 
@@ -228,8 +228,13 @@ final case class JointLedger(
         case req: UserRequestWithId.TransactionRequest => applyTransaction(req)
     }
 
+    /** Record a request that could not be applied, so the block still names it and its content.
+      *
+      * `requestHash` is the digest of the body this peer holds — see [[requestHashOf]].
+      */
     private def invalidateRequest(
         requestId: RequestId,
+        requestHash: Hash32,
         e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | String,
         invalidation: JointLedger.Invalidation = JointLedger.Invalidation.PreCommand
     ): IO[Unit] =
@@ -245,12 +250,23 @@ final case class JointLedger(
                 case JointLedger.Invalidation.PostCommand => oldState.incrementCommandNumber
             newState = advanced
                 .focus(_.userRequestState.requests)
-                .modify(_.appended((requestId, Invalid)))
+                .modify(_.appended((requestId, requestHash, Invalid)))
             _ <- state.set(newState)
             _ <- tracer.traceWith(
               JointLedgerEvent.RequestInvalidated(requestId, currentBlockNum, e.toString)
             )
         } yield ()
+
+    /** The digest of a request **as this peer received it**, hashed here rather than read off
+      * [[UserRequest.requestHash]].
+      *
+      * That is what ties a [[RequestId]] to its bytes. Two peers holding different payloads under
+      * the same id agree on every position in a block, so the divergence has nowhere to surface
+      * until each hashes its own copy: the digests differ, so the `blockHash` built from them
+      * differs, and the brief comparison this actor already runs catches it. Reading the digest
+      * that travelled with the request would compare two copies of the same claim instead.
+      */
+    private def requestHashOf(request: UserRequestWithId): Hash32 = request.request.body.hash
 
     /** Pure deposit-ledger op: parse the deposit tx and append the produced deposit utxo to the L1
       * deposits map — this actor's only L1-ledger surface. Parsing derives the deposit's accept-by
@@ -293,12 +309,14 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.DepositRegistrationStarted(requestId))
 
+            requestHash = requestHashOf(req)
+
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
             currentBlockNum = p.nextBlockNumber
 
             _ <- registerDepositInMap(p.deposits, req) match {
-                case Left(error) => invalidateRequest(requestId, error)
+                case Left(error) => invalidateRequest(requestId, requestHash, error)
                 case Right((newDeposits, (depositProduced, refundTx))) =>
                     // The accept-by deadline is derived from the deposit tx's TTL during the parse
                     // above (ttl − submissionDuration), so the check can only run post-parse.
@@ -309,6 +327,7 @@ final case class JointLedger(
                     then
                         invalidateRequest(
                           requestId,
+                          requestHash,
                           JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
                             blockStartTime,
                             depositProduced.requestValidityEndTime
@@ -335,6 +354,7 @@ final case class JointLedger(
                                 case L2LedgerResponse.Rejected.RegisterDeposit(_, reason) =>
                                     invalidateRequest(
                                       requestId,
+                                      requestHash,
                                       reason,
                                       JointLedger.Invalidation.PostCommand
                                     )
@@ -346,7 +366,7 @@ final case class JointLedger(
                                           p.setDeposits(newDeposits)
                                               .incrementCommandNumber
                                               .focus(_.userRequestState.requests)
-                                              .modify(_.appended((requestId, Valid)))
+                                              .modify(_.appended((requestId, requestHash, Valid)))
                                               .focus(_.userRequestState.postDatedRefundTxs)
                                               .modify(_.appended(refundTx))
                                         )
@@ -378,6 +398,8 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.TransactionApplicationStarted(requestId))
 
+            requestHash = requestHashOf(req)
+
             p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber
 
@@ -401,6 +423,7 @@ final case class JointLedger(
                         case L2LedgerResponse.Rejected.ApplyTransaction(_, reason) =>
                             invalidateRequest(
                               requestId,
+                              requestHash,
                               reason,
                               JointLedger.Invalidation.PostCommand
                             )
@@ -412,7 +435,7 @@ final case class JointLedger(
                                   p.setL2LedgerState(newL2State)
                                       .incrementCommandNumber
                                       .focus(_.userRequestState.requests)
-                                      .modify(_.appended((requestId, Valid)))
+                                      .modify(_.appended((requestId, requestHash, Valid)))
                                 )
                                 _ <- tracer.traceWith(
                                   JointLedgerEvent.TransactionApplicationCompleted(
@@ -726,7 +749,7 @@ final case class JointLedger(
                     val ack = SoftAck(
                       peerNum = peerNum,
                       blockNum = brief.blockNum,
-                      header = config.ownWallet.mkHeaderSignature(brief.header.signingBytes),
+                      header = config.ownWallet.mkHeaderSignature(brief.signingBytes),
                       finalizationRequested = localFinalization.asBoolean
                     )
                     persistOwnAckBundle(brief, ack, blockResult).as(Some(ack))
@@ -805,7 +828,7 @@ final case class JointLedger(
             // One reverse-index row per event, in the same atomic bundle: the request's id maps
             // to the block that processed it and the validity verdict it received.
             val withRequestBlocks = brief.requests.foldLeft(bundle) {
-                case (batch, (requestId, validity)) =>
+                case (batch, (requestId, _, validity)) =>
                     batch.put(StoreKey.RequestBlockIndex(requestId))(
                       RequestBlockEntry(brief.blockNum, validity)
                     )
@@ -873,11 +896,22 @@ final case class JointLedger(
                 .get(StoreKey.RequestHighWater(BlockNumber((blockNum: Int) - 1)))
                 .map(_.getOrElse(Map.empty))
 
+    /** Refuse a reference brief that does not describe the block this peer rebuilt.
+      *
+      * The comparison is one 32-byte value. `actualBrief` was built here, so its [[BlockHash]] was
+      * derived from this peer's own header and body; `expectedBrief` arrived carrying the leader's
+      * digest. Comparing the two therefore catches both a genuine content divergence and a leader
+      * whose brief and digest disagree, and it covers every field of a brief — the preimage leaves
+      * nothing out except the digest itself.
+      *
+      * [[briefMismatchSummary]] is what turns the verdict into something an operator can act on: a
+      * digest says two briefs differ, never how.
+      */
     private def panicOnMismatchWithExpectedBrief(
         expectedBrief: Option[BlockBrief],
         actualBrief: BlockBrief
     ): IO[Unit] =
-        IO.unlessA(expectedBrief.fold(true)(_ == actualBrief))(
+        IO.unlessA(expectedBrief.fold(true)(_.blockHash == actualBrief.blockHash))(
           panic(
             "Reference block brief didn't match actual block brief; consensus is broken.\n" +
                 expectedBrief.fold("")(e => s"mismatch:${briefMismatchSummary(e, actualBrief)}\n") +

@@ -13,7 +13,10 @@ Soft-confirmation requires soft-acks from **every** head peer, including the lea
 
 ## Terminology
 
-- **ack** (soft) — one peer's Ed25519 signature over `BlockHeader.Section.signingBytes`.
+- **ack** (soft) — one peer's Ed25519 signature over `BlockBrief.Section.signingBytes`, which is
+  the block's content digest (`BlockHash`) with its two version components beside it. Signing the
+  digest is what makes the ack set attest to the block's requests, their order, their validity
+  flags and its absorption decisions — see `design/block-hash.md`.
   Per-peer event, transported by `PeerLiaison`, collected by `FastConsensusActor`.
 - **confirmation** (soft) — the saturated set of acks, emitted as `Block.SoftConfirmed`.
   Aggregated event, consumed by `BlockWeaver` and by the slow side's `StackComposer`.
@@ -96,7 +99,10 @@ same brief locally from the same inputs (deterministic).
 Produces blocks on **every** peer, not just the leader: the leader builds the block from its
 inputs and broadcasts the brief; a follower re-produces the same block from the same
 (deterministic) inputs and verifies it arrives at the identical brief
-(`panicOnMismatchWithExpectedBrief`). It is also the L2 executor (applies each block's L2
+(`panicOnMismatchWithExpectedBrief`, one 32-byte `blockHash` comparison). Each request in the
+rebuilt body carries the digest this peer derived from the request body it holds, so two peers that
+received different payloads under the same `RequestId` reach different `blockHash`es and the
+mismatch surfaces here. It is also the L2 executor (applies each block's L2
 transactions) and owns the deposit map, making the per-block deposit decisions (absorb vs.
 refund) from `PollResults` — the set of deposit utxos currently visible on L1, which
 `CardanoLiaison` polls and forwards through `BlockWeaver` (delivered with the block-completion
@@ -107,7 +113,7 @@ command; needed only for regular, non-final blocks). On local block completion
    routed through `FastConsensusActor`.
 2. Signs the brief and sends its own `SoftAck` to the local `FastConsensusActor`.
 3. Forwards `BlockBrief.Next` to the local `FastConsensusActor` (so verification has the
-   header bytes).
+   signed bytes).
 4. Emits `BlockResult` to `StackComposer` (slow side; independent of the soft-ack round).
 
 `BlockResult` is the slow-side's per-block input: brief + evacuation-map diff + payout

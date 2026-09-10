@@ -53,8 +53,17 @@ object SubmissionClient:
                 ).withEntity(bodyJson)
                 client.expect[RequestAccepted](req).map(_.requestId)
 
+    /** The submission body: the kind tag, the payloads, and the digest the submitter computed over
+      * them. The head re-derives the digest and refuses the request on a mismatch, so this is the
+      * one field a client cannot copy from somewhere else — see `docs/user-guide/REQUEST-HASH.md`.
+      */
     private def requestJson(request: UserRequest): Json =
         val (tag, body) = request.body match
             case b: UserRequestBody.DepositRequestBody     => ("deposit", b.asJson)
             case b: UserRequestBody.TransactionRequestBody => ("transaction", b.asJson)
-        Json.obj("type" -> Json.fromString(tag)).deepMerge(body)
+        Json
+            .obj(
+              "type" -> Json.fromString(tag),
+              "requestHash" -> Json.fromString(request.requestHash.toHex)
+            )
+            .deepMerge(body)

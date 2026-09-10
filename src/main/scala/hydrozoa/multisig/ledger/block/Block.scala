@@ -7,6 +7,7 @@ import io.circe.*
 import io.circe.generic.semiauto.*
 import java.time.Instant
 import scala.concurrent.duration.FiniteDuration
+import scalus.cardano.ledger.Hash32
 
 /** Namespace for block-shape types still in use on the fast consensus cycle.
   *
@@ -43,7 +44,7 @@ object Block {
     }
 
     /** Result of fast consensus: block brief plus every head peer's soft-ack signature over the
-      * brief's [[BlockHeader.Section.signingBytes]]. Carries no L1 effect signatures — those belong
+      * brief's [[BlockBrief.Section.signingBytes]]. Carries no L1 effect signatures — those belong
       * to the slow consensus cycle (see [[hydrozoa.multisig.consensus.SlowConsensusActor]]).
       */
     sealed trait SoftConfirmed
@@ -52,6 +53,8 @@ object Block {
           Fields.HasFinalizationRequested,
           LimiterTimestamp {
         def headerMultiSigned: List[BlockHeader.HeaderSignature]
+
+        override def blockHash: Hash32 = blockBrief.blockHash
 
         override def limiterTimestamp: Instant = blockBrief.endTime.instant
 

@@ -31,6 +31,7 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Gen, Properties, PropertyM, Test}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scalus.cardano.ledger.Hash32
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genRequestId
 import test.TestPeerName.{Bob, Carol}
@@ -250,7 +251,7 @@ object BlockWeaverTestHelpers {
     def mkMinorBriefWith(
         blockNum: BlockNumber,
         config: HeadConfig,
-        requests: List[(RequestId, ValidityFlag)]
+        requests: List[(RequestId, Hash32, ValidityFlag)]
     ): BWTest[BlockBrief.Minor] =
         lift(for {
             now <- realTimeQuantizedInstant(config.slotConfig)
@@ -588,7 +589,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           brief3 <- mkMinorBriefWith(
             BlockNumber(3),
             config.headConfig,
-            overflowExpected.map(r => (r.requestId, ValidityFlag.Valid))
+            overflowExpected.map(r => (r.requestId, r.request.body.hash, ValidityFlag.Valid))
           )
           _ <- lift((weaver ! brief3) >> env.system.waitForIdle())
           _ <- settle(env.jointLedgerMock.events.get == ordered)

@@ -1,8 +1,10 @@
 package hydrozoa.multisig.ledger.block
 
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.ledger.event.RequestId
 import io.circe.Codec
 import io.circe.generic.semiauto.*
+import scalus.cardano.ledger.Hash32
 
 import RequestId.ValidityFlag
 
@@ -16,14 +18,14 @@ trait BlockBody extends BlockBody.Section {
 object BlockBody {
     case object Initial extends BlockBody, BlockType.Initial {
         override transparent inline def body: BlockBody.Initial.type = this
-        override transparent inline def requests: List[(RequestId, ValidityFlag)] = List()
+        override transparent inline def requests: List[(RequestId, Hash32, ValidityFlag)] = List()
         override transparent inline def depositsAbsorbed: List[RequestId] = List()
         override transparent inline def depositsRejected: List[RequestId] = List()
     }
 
     given Codec[Minor] = deriveCodec[Minor]
     final case class Minor(
-        override val requests: List[(RequestId, ValidityFlag)],
+        override val requests: List[(RequestId, Hash32, ValidityFlag)],
         override val depositsRejected: List[RequestId]
     ) extends BlockBody,
           BlockType.Minor {
@@ -33,7 +35,7 @@ object BlockBody {
 
     given Codec[Major] = deriveCodec[Major]
     final case class Major(
-        override val requests: List[(RequestId, ValidityFlag)],
+        override val requests: List[(RequestId, Hash32, ValidityFlag)],
         override val depositsAbsorbed: List[RequestId],
         override val depositsRejected: List[RequestId]
     ) extends BlockBody,
@@ -43,7 +45,7 @@ object BlockBody {
 
     given Codec[Final] = deriveCodec[Final]
     final case class Final(
-        override val requests: List[(RequestId, ValidityFlag)],
+        override val requests: List[(RequestId, Hash32, ValidityFlag)],
         override val depositsRejected: List[RequestId]
     ) extends BlockBody,
           BlockType.Final {
@@ -56,7 +58,19 @@ object BlockBody {
 
     trait Section {
         def body: BlockBody
-        def requests: List[(RequestId, ValidityFlag)]
+
+        /** The block's requests in the order the leader chose them: each request's id, the digest
+          * of the body that id names ([[hydrozoa.multisig.consensus.UserRequestBody.hash]]), and
+          * whether applying it succeeded.
+          *
+          * The digest is what ties an id to its bytes. Without it two peers holding different
+          * payloads under the same id compare equal, because nothing else in a block names a
+          * payload. It is carried and never trusted: a peer that holds the request re-derives the
+          * digest from its own copy (see [[hydrozoa.multisig.ledger.joint.JointLedger]]), and only
+          * a peer that does not hold it — a submitter checking a block for their request, a peer
+          * seeded from a snapshot — reads the carried value.
+          */
+        def requests: List[(RequestId, Hash32, ValidityFlag)]
         def depositsAbsorbed: List[RequestId]
         def depositsRejected: List[RequestId]
     }
