@@ -16,8 +16,9 @@ import scalus.uplc.builtin.Data.{fromData, toData}
 
 /** The rule-based regime utxo: the HRWT beacon plus the immutable head-identity datum, produced by
   * the FallbackTx at the head multisig (native script) address. The head-identity datum is what
-  * distinguishes it from the datum-less multisig regime utxo at the same address. Consumed only as
-  * a reference input during the rule-based regime; spent (and its beacon burned) by the DeinitTx.
+  * distinguishes it from the multisig regime utxo at the same address, which carries the head's
+  * `headParamsHash` instead. Consumed only as a reference input during the rule-based regime; spent
+  * (and its beacon burned) by the DeinitTx.
   */
 final case class RuleBasedRegimeUtxo(input: TransactionInput) {
 

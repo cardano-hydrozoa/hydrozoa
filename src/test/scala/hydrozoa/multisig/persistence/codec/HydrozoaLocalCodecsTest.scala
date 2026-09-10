@@ -15,8 +15,7 @@ class HydrozoaLocalCodecsTest extends AnyFunSuite:
     test("MultisigTreasuryUtxo.Datum round-trips through Circe JSON") {
         val datum = MultisigTreasuryUtxo.Datum(
           commit = ByteString.fromArray(Array.fill[Byte](48)(0xab.toByte)),
-          versionMajor = BigInt(7),
-          headParamsHash = ByteString.fromArray(Array.fill[Byte](32)(0xcd.toByte))
+          versionMajor = BigInt(7)
         )
         val json = datum.asJson.noSpaces
         val back = decode[MultisigTreasuryUtxo.Datum](json)

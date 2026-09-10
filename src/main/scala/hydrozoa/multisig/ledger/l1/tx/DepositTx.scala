@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.config.head.HeadParamsHash
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -38,7 +39,8 @@ object DepositTx {
 
 private object DepositTxOps {
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
-        TxTiming.Section & InitializationParameters.Section & FallbackContingency.Section
+        TxTiming.Section & InitializationParameters.Section & FallbackContingency.Section &
+        HeadParamsHash.Section
 
     final case class Build(
         utxosFunding: NonEmptyList[Utxo],
@@ -98,7 +100,7 @@ private object DepositTxOps {
                       spendUtxosFunding ++ List(
                         // The deposit must reference the multisig regime utxo. This ensures that the deposit
                         // will roll back if the initialization tx rolls back.
-                        config.multisigRegimeUtxo.referenceOutput,
+                        config.multisigRegimeUtxo.referenceOutput(config.headParamsHash),
                         addRefundMetadata,
                         sendDeposit,
                         sendChange,

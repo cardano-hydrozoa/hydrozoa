@@ -212,7 +212,8 @@ private object SettlementTxSeqOps {
                                 .Build(
                                   newFallbackValidityEnd,
                                   settlementTx.transaction.treasuryProduced,
-                                  config.multisigRegimeUtxo
+                                  config.multisigRegimeUtxo,
+                                  config.headParamsHash
                                 )(using config)
                                 .result
                                 .left
@@ -251,7 +252,8 @@ private object SettlementTxSeqOps {
                                 .Build(
                                   newFallbackValidityEnd,
                                   settlementTxRes.transaction.treasuryProduced,
-                                  config.multisigRegimeUtxo
+                                  config.multisigRegimeUtxo,
+                                  config.headParamsHash
                                 )(using config)
                                 .result
                                 .left

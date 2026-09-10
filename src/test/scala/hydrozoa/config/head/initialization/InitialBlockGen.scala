@@ -27,7 +27,7 @@ def generateInitialBlock(
         blockCreationEndTime <- generateBlockCreationEndTime
 
         // The header is built before the transactions, as `Bootstrap.mkSharedHeadConfig` does:
-        // `headParamsHash` covers it and the init tx's treasury datum carries that digest.
+        // `headParamsHash` covers it and the init tx's regime datum carries that digest.
         fallbackTxStartTime = config.headParameters.txTiming.newFallbackStartTime(
           blockCreationEndTime
         )

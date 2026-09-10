@@ -69,10 +69,17 @@ private object FallbackTxOps {
     type Config = HeadConfig.Bootstrap.Section & InitializationParameters.Section
 
     // TODO: Distribute equity
+    /** @param headParamsHash
+      *   the head's configuration digest, needed to reconstruct the multisig regime utxo this tx
+      *   spends. Passed in rather than read from [[Config]]: this builder also runs at bootstrap,
+      *   from [[HeadConfig]]'s decoder and the initialization tx sequence, where no
+      *   [[hydrozoa.config.head.HeadParamsHash.Section]] exists yet.
+      */
     final case class Build(
         validityStartTime: FallbackTxStartTime,
         treasuryUtxoSpent: MultisigTreasuryUtxo,
         multisigRegimeUtxo: MultisigRegimeUtxo,
+        headParamsHash: Hash32
     )(using config: Config) {
 
         lazy val result: Either[SomeBuildError, FallbackTx] = for {
@@ -117,7 +124,10 @@ private object FallbackTxOps {
 
                 object MultisigRegime {
                     def apply(): Spend =
-                        Spend(multisigRegimeUtxo.toUtxo, config.headMultisigScript.witnessAttached)
+                        Spend(
+                          multisigRegimeUtxo.toUtxo(headParamsHash),
+                          config.headMultisigScript.witnessAttached
+                        )
                 }
             }
 

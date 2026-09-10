@@ -1,6 +1,6 @@
 # The head parameters hash
 
-For anyone changing `HeadParameters`, `HeadConfig`, or the multisig treasury datum: this
+For anyone changing `HeadParameters`, `HeadConfig`, or the multisig regime datum: this
 document defines `headParamsHash` — the digest that pins a head's agreed configuration — and
 where it is checked.
 
@@ -18,18 +18,18 @@ split, or which L2 ledger they run, and both will start, sign block zero, and di
 at deposit absorption, at block packing, or at fallback, when the divergence is unrecoverable.
 
 `headParamsHash` closes that gap at the only agreement gate that exists. It is carried in the
-multisig treasury datum, which `InitializationTx.Parse` compares against the transaction it was
-handed. **A peer whose configuration differs cannot sign the initialization transaction**, so
+multisig regime utxo's datum, which `InitializationTx.Parse` compares against the transaction it
+was handed. **A peer whose configuration differs cannot sign the initialization transaction**, so
 the head does not start rather than starting split.
 
-The multisig treasury sits under a native script, so no on-chain validator reads this datum.
+The multisig regime utxo sits under a native script, so no on-chain validator reads this datum.
 The enforcement is entirely off-chain. That is the right place: after initialization the
 configuration cannot change, and after fallback there is no consensus left to agree.
 
 ## One digest, one nested leaf
 
 ```
-multisig treasury datum
+multisig regime datum
   └── headParamsHash = blake2b_256("gummiworm-head-params-v1" || <the whole agreed config>)
         └── l2ParamsHash — reported by the L2 ledger, 32 bytes, opaque to the head
 ```
@@ -43,6 +43,28 @@ reports, or transmits a parameters-only value.
 compute it.** The L2 ledger is the only party that knows its own parameters, so the value
 arrives from outside, is compared against the ledger's report on its own (check 4), and is
 folded in as an opaque leaf.
+
+### The output it rides
+
+The digest is immutable for the head's life, so it goes on the output whose lifecycle is the
+same shape — the **multisig regime utxo**, produced once and never reproduced:
+
+| | multisig regime utxo | multisig treasury utxo |
+|---|---|---|
+| produced | once, by `InitializationTx` | again by every `SettlementTx` |
+| referenced | by `DepositTx` and `SettlementTx`, as a reference input, never spent | — |
+| spent | once, at close, by `FinalizationTx` or `FallbackTx` | by every `SettlementTx` |
+| datum | `MultisigRegimeUtxo.Datum(headParamsHash)` | `(commit, versionMajor)` |
+
+The treasury datum's two fields earn their place there: `commit` moves with the evacuation map
+and `versionMajor` with each settlement. A digest that cannot change does not — on that output
+it would be a constant re-serialised onto the chain once per major block, for the life of the
+head.
+
+`MultisigRegimeOutput.toOutput` takes the digest as a parameter rather than reading a
+`HeadParamsHash.Section`, because its one producing caller — `InitializationTxBuilder` — runs
+before any `HeadConfig` exists. Every other caller reconstructs the same output to reference or
+spend it, and passes the digest from its own config.
 
 ### Where it lives
 
@@ -60,8 +82,9 @@ preimage — never the transaction — so the bootstrap context plus that header
 digest needs and nothing more.
 
 Readers that only have to carry the value take `HeadParamsHash.Section`, which grants
-`headParamsHash` and its `headParamsHashBytes` datum form without dragging in the config. The
-transaction builders that write it into a treasury datum ask for that and nothing else.
+`headParamsHash` without dragging in the config. The transaction builders that reconstruct the
+regime output ask for that and nothing else, and `MultisigRegimeOutput.datum` is the one place
+that turns the `Hash32` into the datum's `ByteString`.
 
 `InitializationTx.Parse` must **not** compute it. Its `Config` is a deliberately minimal
 intersection —
@@ -81,7 +104,7 @@ is already in hand, and pass it into `Parse` as an opaque 32 bytes alongside
 The digest is `blake2b_256` over a domain-tagged, explicitly framed byte string. The layout
 below is normative — not a serialization of any JSON or CBOR encoder. Circe codecs for
 `QuantizedFiniteDuration`, `Coin`, and `PositiveInt` each have their own quirks, and a codec
-tweak that silently moved a hash already written into a treasury datum would leave a live head
+tweak that silently moved a hash already written into a regime datum would leave a live head
 unable to parse its own initialization transaction.
 
 | notation | bytes |
@@ -180,7 +203,7 @@ produces fewer, fatter blocks; one that shapes loosely produces more, thinner on
 rebuilds from the leader's brief either way, so no value of these seven knobs makes two peers
 disagree about a block. There is nothing here for consensus to enforce.
 
-Covering it would cost three things. This digest is pinned in the treasury datum and therefore
+Covering it would cost three things. This digest is pinned in the regime datum and therefore
 immutable for the head's life, so a badly chosen `blockGateSmoothing` could not be corrected
 without re-initializing the head — and five of the seven knobs have never been tuned under
 production load. It would force one set of values across head peers whose hardware may differ.
@@ -260,7 +283,7 @@ operators agree matters.
 
 **It covers parameters, never state.** No evacuation map goes into it. Parameters are fixed for
 the head's lifetime; an evacuation map changes with every applied command, and a moving value
-has no business inside a digest that the treasury datum pins forever. Keeping state out is also
+has no business inside a digest that the regime datum pins forever. Keeping state out is also
 what lets one definition serve both backends: the moment state enters, a ledger with a
 different state model needs a different rule.
 
@@ -326,19 +349,18 @@ signed handshake over the already-pinned verification keys, tracked in GUM-322.
 
 ## The checks
 
-Five checks, at four moments. Every one reuses a comparison point the code already has, and
+Four checks, at three moments. Every one reuses a comparison point the code already has, and
 **none of them branches on the backend.**
 
 | # | when | who | compares | on mismatch |
 |---|---|---|---|---|
-| 1 | config decode, every boot | every head and coil peer | the initialization tx's treasury datum against the datum rebuilt from local config | refuse to decode the config |
+| 1 | config decode, every boot | every head and coil peer | the initialization tx's regime datum against the datum rebuilt from local config | refuse to decode the config |
 | 2 | store open, every boot | every head and coil peer | the store's `Cf.Meta` identity stamp against `headParamsHash`, `headId`, and own `PeerId` | refuse to open the store |
 | 3 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `evacuationMapHash` against the head's map at that anchor | refuse to boot |
 | 4 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `l2ParamsHash` against the config's | refuse to boot |
-| 5 | every major block | every head and coil peer | the settlement tx's treasury datum `headParamsHash` against the local one | refuse to sign the block |
 
-The four sites that implement them are `InitializationTx.Parse` (1), `StoreIdentity` (2),
-`JointLedger.State.recover` (3, 4), and `SettlementTx` (5).
+The three sites that implement them are `InitializationTx.Parse` (1), `StoreIdentity` (2), and
+`JointLedger.State.recover` (3, 4).
 
 **Check 4 has a gap on `any-remote`.** A remote ledger that reports no `l2ParamsHash` is let
 through with a warning (`JointLedgerEvent.L2ParamsHashUnreported`), because a remote that does
@@ -350,33 +372,34 @@ GUM-327 carries both questions.
 
 ### 1. The initialization transaction matches the hash
 
-The load-bearing one. `InitializationTx.Parse` rebuilds the expected treasury datum from local
-config and compares it **field by field** — a whole-datum equality would report one opaque
-message for three unrelated operator problems:
+The load-bearing one. The initialization transaction produces both outputs, so `Parse` rebuilds
+both datums from local config and compares each:
 
 ```scala
-expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
-  config.initialEvacuationMap,
-  ByteString.fromArray(headParamsHash.bytes)
+expectedTreasuryDatum      = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
+  config.initialEvacuationMap
 )
+expectedMultisigRegimeDatum = MultisigRegimeOutput.datum(headParamsHash)
 ```
 
-`headParamsHash` in the datum makes that comparison cover the whole configuration. Everything folded into the preimage becomes self-verifying against a value committed
-on-chain: a peer whose `depositMaturityDuration`, `maxRequestsPerBlock`, fallback contingency
-split, hub topology, or setup-ladder anchor differs from the one the initialization transaction
-was built for cannot parse that transaction, so it never signs block zero and the head does not
-start split.
+`headParamsHash` on the regime output makes that comparison cover the whole configuration.
+Everything folded into the preimage becomes self-verifying against a value committed on-chain:
+a peer whose `depositMaturityDuration`, `maxRequestsPerBlock`, fallback contingency split, hub
+topology, or setup-ladder anchor differs from the one the initialization transaction was built
+for cannot parse that transaction, so it never signs block zero and the head does not start
+split.
 
-The three fields fail for three unrelated reasons — a wrong initial evacuation map (`commit`), a
-stale version (`versionMajor`), and a configuration disagreement (`headParamsHash`) — and only
-the third is something an operator can act on, so each carries its own message naming the two
-digests.
+The treasury datum is compared **field by field** rather than as a whole, because its two fields
+fail for two unrelated reasons — a wrong initial evacuation map (`commit`) and a stale version
+(`versionMajor`) — and one opaque message would not tell the operator which. The regime datum
+holds one field and is compared whole, with a message naming both digests: it is the only one of
+the three an operator can act on.
 
 `Parse` takes the digest as an already-computed `Hash32` rather than deriving it: computing it
 needs nearly the whole head config, and `Parse` deliberately asks for only the five sections it
 uses. `HeadConfig`'s decoder computes it, as does `Bootstrap.mkSharedHeadConfig` — which builds
 block zero's header **before** the transactions for exactly this reason, since the header is part
-of the preimage and the init tx's datum carries the result.
+of the preimage and the init tx's regime datum carries the result.
 
 Two properties fall out of where this check sits, and both are worth relying on deliberately:
 
@@ -484,24 +507,23 @@ against the same head.
 safe to run through — either the on-chain commitment is already wrong, or the ledger is the
 wrong one. Same rule the evacuation map digest already follows.
 
-### 5. Every major block re-checks it
+### Why there is no per-block re-check
 
-`SettlementTx` builds a fresh treasury datum for every major block:
+Check 1 runs at every boot, not once at initialization. That is the whole coverage, and it is
+enough: the configuration cannot change while a node runs, so the drift worth catching is an
+operator hand-editing `head-config.json` on a live head — and `NodeConfig.load` re-reads and
+re-decodes that file, running `InitializationTx.Parse`, on the very next restart.
 
-```scala
-datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced, config.headParamsHashBytes)
-```
+Re-verifying it once per major block would need it on an output the settlement rewrites, at a
+standing cost of 32 bytes plus encoding written afresh with every major block, for a value that
+cannot have changed since the last one.
 
-The digest comes from the builder's **own config**, not from the spent treasury's datum. Carrying
-it forward would make every peer reproduce whatever was already there and check nothing; taking
-it from config means a peer whose config diverged produces a datum the others reject. Every peer
-verifies a settlement transaction before signing it. So the configuration agreement is re-checked once per
-major block for the life of the head, by the machinery that already verifies settlements — a
-peer whose configuration drifts after initialization stops being able to get blocks signed.
-
-This is why `headParamsHash` belongs in the datum rather than in the initialization
-transaction's metadata: metadata is written once, the datum is rewritten and re-verified
-forever.
+Reading it back from the regime utxo per settlement would not buy the check either. A peer
+verifying a settlement rebuilds the reference output from its **own** config
+(`MultisigRegimeUtxo.referenceOutput`) rather than resolving it on L1, and the datum of a
+reference input is not in the transaction's bytes — so the comparison would be against itself.
+A real per-settlement check needs an L1 query per settlement, and buys only what the next
+restart already catches.
 
 ### What is deliberately not checked
 
@@ -513,22 +535,22 @@ forever.
 
 ### Datum compatibility
 
-Adding a field to `MultisigTreasuryUtxo.Datum` changes its `Data` arity, so
-`Data.fromData[MultisigTreasuryUtxo.Datum]` fails on every datum written before the change —
-on-chain and in persisted state alike. **A running head cannot be upgraded across this
-change.** It applies to heads initialized afterwards; existing heads keep the two-field datum
-and the build that understands it. This belongs in the release notes of the release that ships
-it, with the configuration-change procedure below.
+Changing the field list of either datum changes its `Data` arity, so `Data.fromData` fails on
+every datum written before the change — on-chain and in persisted state alike. **A running head
+cannot be upgraded across such a change.** It applies to heads initialized afterwards; existing
+heads keep the datum shape they were initialized with and the build that understands it. This
+belongs in the release notes of the release that ships it, with the configuration-change
+procedure below.
 
 ## Changing any of this
 
-The layout is a wire break and an on-chain break at once. A head whose treasury datum holds a
+The layout is a wire break and an on-chain break at once. A head whose regime datum holds a
 `headParamsHash` computed under one layout cannot be parsed by a node computing the next.
 Changing the layout means a new domain tag, and heads initialized under the old one keep the
 old tag for life.
 
 Adding a field anywhere the preimage covers — `HeadParameters` or the wider head config —
-changes `headParamsHash`, and so changes the treasury datum of every head initialized
+changes `headParamsHash`, and so changes the regime datum of every head initialized
 afterwards. Follow the configuration-change procedure: state which files change, whether
 existing configs still decode, verify both decoders (`HeadParameters` and
 `Bootstrap.BootstrapHeadParams`), and carry the migration into the release notes of the release

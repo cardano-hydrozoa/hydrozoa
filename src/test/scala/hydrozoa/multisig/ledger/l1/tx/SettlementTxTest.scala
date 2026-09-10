@@ -169,7 +169,7 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
           treasuryTokenName = config.headTokenNames.treasuryTokenName,
           utxoId = utxoId,
           address = config.headMultisigAddress,
-          datum = MultisigTreasuryUtxo.Datum(kzg, majorVersion, config.headParamsHashBytes),
+          datum = MultisigTreasuryUtxo.Datum(kzg, majorVersion),
           value = treasuryValue,
           equity = equity
         )

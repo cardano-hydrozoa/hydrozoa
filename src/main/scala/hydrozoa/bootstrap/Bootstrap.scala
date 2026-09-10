@@ -540,7 +540,7 @@ object Bootstrap:
         )(IO.pure)
 
         // Block zero's header is built before the transactions, not read back off them: the init
-        // tx's treasury datum carries `headParamsHash`, and the header is part of that digest's
+        // tx's regime datum carries `headParamsHash`, and the header is part of that digest's
         // preimage. Every field here is derived from the config and `blockCreationEndTime`, which
         // is exactly what `InitializationTxSeq.Build` derives the fallback's start time from.
         fallbackTxStartTime = headParams.txTiming.newFallbackStartTime(blockCreationEndTime)

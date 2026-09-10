@@ -242,7 +242,7 @@ private object SettlementTxOps {
                 ModifyAuxiliaryData(_ => Some(Settlement().asAuxData(config.headId)))
 
             private val referenceMultisigRegime =
-                config.multisigRegimeUtxo.referenceOutput(using config)
+                config.multisigRegimeUtxo.referenceOutput(config.headParamsHash)(using config)
 
             private val validityEndSlot = ValidityEndSlot(settlementTxEndTime.toSlot.slot)
 
@@ -305,8 +305,7 @@ private object SettlementTxOps {
                       MultisigTreasuryUtxo
                           .Datum(
                             commit = kzgCommitment,
-                            versionMajor = majorVersionProduced.convert,
-                            headParamsHash = config.headParamsHashBytes,
+                            versionMajor = majorVersionProduced.convert
                           )
                           .toData
                     )
@@ -351,8 +350,7 @@ private object SettlementTxOps {
                   treasuryTokenName = config.headTokenNames.treasuryTokenName,
                   utxoId = TransactionInput(ctx.transaction.id, 0),
                   address = config.headMultisigAddress,
-                  datum = MultisigTreasuryUtxo
-                      .Datum(kzgCommitment, majorVersionProduced, config.headParamsHashBytes),
+                  datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced),
                   value = output.value,
                   equity = equity
                 )

@@ -6,6 +6,7 @@ import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, Metadata as MD}
+import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeOutput, MultisigRegimeUtxo}
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
@@ -19,8 +20,8 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.uplc.builtin.Builtins.blake2b_224
-import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data}
 import test.*
 import test.TransactionChain.observeTxChain
 import test.given
@@ -163,7 +164,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
               "initialization tx contains MR output at correct index" |:
                   (iTxOutputs(multisigRegimeUtxo.input.index) ==
                       multisigRegimeUtxo
-                          .toUtxo(using config)
+                          .toUtxo(config.headParamsHash)(using config)
                           .output) && multisigRegimeUtxo.input.index == 1
             )
 
@@ -172,9 +173,26 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                   (iTx.tx.id == multisigRegimeUtxo.input.transactionId)
             )
 
+            // The digest rides the output that is written once and never rewritten
+            // (docs/spec/head-params-hash.md).
+            props.append(
+              "MR output datum pins headParamsHash" |: {
+                  val datum = iTxOutputs(multisigRegimeUtxo.input.index).datumOption match {
+                      case Some(Inline(d)) =>
+                          Some(Data.fromData[MultisigRegimeUtxo.Datum](d))
+                      case _ => None
+                  }
+                  datum.contains(MultisigRegimeOutput.datum(config.headParamsHash))
+              }
+            )
+
             props.append(
               "MR utxo only contains MR token in multiassets" |:
-                  multisigRegimeUtxo.toUtxo(using config).output.value.assets ==
+                  multisigRegimeUtxo
+                      .toUtxo(config.headParamsHash)(using config)
+                      .output
+                      .value
+                      .assets ==
                   MultiAsset(
                     SortedMap(
                       expectedHeadNativeScript.policyId -> SortedMap(
@@ -186,7 +204,11 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 
             props.append(
               "MR utxo contains at least enough coin for fallback deposit" |:
-                  (multisigRegimeUtxo.toUtxo(using config).output.value.coin >=
+                  (multisigRegimeUtxo
+                      .toUtxo(config.headParamsHash)(using config)
+                      .output
+                      .value
+                      .coin >=
                       config.maxNonPlutusTxFee)
             )
 
@@ -442,7 +464,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
               "multsig regime utxo contains at exactly enough ada to cover tx fee and all non-treasury outputs" |: {
                   val expectedHRWTCoin: Coin = config.totalFallbackContingency
                   iTx.multisigRegimeProduced
-                      .toUtxo(using config)
+                      .toUtxo(config.headParamsHash)(using config)
                       .output
                       .value
                       .coin == expectedHRWTCoin

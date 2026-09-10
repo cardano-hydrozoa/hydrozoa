@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.l1.tx
 
+import hydrozoa.config.head.HeadParamsHash
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -31,7 +32,8 @@ object DepositL1Screening {
 
     /** The sections [[DepositTx.Parse]] needs, plus nothing else. */
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
-        TxTiming.Section & InitializationParameters.Section & FallbackContingency.Section
+        TxTiming.Section & InitializationParameters.Section & FallbackContingency.Section &
+        HeadParamsHash.Section
 
     enum Error {
         case DepositTxParseFailed(e: DepositTx.Parse.Error)
