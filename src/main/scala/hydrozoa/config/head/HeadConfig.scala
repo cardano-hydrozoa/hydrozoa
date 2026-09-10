@@ -111,8 +111,7 @@ object HeadConfig {
     }
 
     given headConfigEncoder: Encoder[HeadConfig] with {
-        override def apply(hc: HeadConfig): Json = {
-            given HeadConfig.Section = hc
+        override def apply(hc: HeadConfig): Json =
             Json.obj(
               "cardanoNetwork" -> hc.cardanoNetwork.asJson,
               "headParams" -> hc.headParameters.asJson,
@@ -130,7 +129,6 @@ object HeadConfig {
               "initializationTx" -> hc.initializationTx.asJson,
               "resolvedUtxos" -> hc.initializationTx.resolvedUtxos.utxos.asJson
             )
-        }
     }
 
     given headConfigDecoder(using resolved: ScriptReferenceUtxos): Decoder[HeadConfig] =

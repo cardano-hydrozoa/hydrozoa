@@ -22,8 +22,7 @@ object BlockBrief {
     // does not carry — so its encoder and decoder are given separately.
     given (using CardanoNetwork.Section): Encoder[BlockBrief] = deriveEncoder[BlockBrief]
     given (using CardanoNetwork.Section, TxTiming): Decoder[BlockBrief] = deriveDecoder[BlockBrief]
-    given (using CardanoNetwork.Section): Encoder[BlockBrief.Initial] =
-        deriveEncoder[BlockBrief.Initial]
+    given Encoder[BlockBrief.Initial] = deriveEncoder[BlockBrief.Initial]
     given (using CardanoNetwork.Section, TxTiming): Decoder[BlockBrief.Initial] =
         deriveDecoder[BlockBrief.Initial]
     given bbMinorCodec(using CardanoNetwork.Section): Codec[BlockBrief.Minor] =
