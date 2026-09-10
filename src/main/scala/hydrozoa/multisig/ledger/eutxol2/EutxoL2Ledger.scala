@@ -393,18 +393,71 @@ case class EutxoL2Ledger private (
       */
     private[multisig] def peekState: IO[EutxoL2Ledger.State] = state.get
 
-    /** Reconstruct the committed state as of `commandNumber`: load the latest snapshot
-      * `<= commandNumber` (or genesis), then re-fold the *logged* (applied) commands in
-      * `(snapshot.commandNumber, commandNumber]` through the same [[applyMutation]] the live path
-      * uses — no re-logging, no re-snapshot. The command number is a coordination index with gaps
-      * where commands were rejected, so `commandNumber` may land on a gap; the applied subset still
-      * yields the state at that point, and the target is adopted as the tip. Guarded against a
-      * target beyond the recorded tip (a corruption tripwire — the co-anchoring ordering prevents
-      * it).
+    /** Reconstruct the committed state as of `commandNumber` ([[reconstruct]]) and **adopt it**:
+      * publish it as the live state, move the store's tip to the target, and clear a freeze that
+      * happened after it. The command number is a coordination index with gaps where commands were
+      * rejected, so `commandNumber` may land on a gap; the applied subset still yields the state at
+      * that point, and the target is adopted as the tip.
       */
     override def restoreTo(
         commandNumber: L2CommandNumber
-    ): EitherT[IO, RestoreError, L2Ledger.Restored] =
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        for {
+            restored <- reconstruct(commandNumber)
+            // Respect the freeze: it survives only if it happened at or before the target — rewinding
+            // to before the freezing decision clears it.
+            frozenAt <- EitherT.right(
+              store.getFrozenAt.map(_.filter(Ordering[L2CommandNumber].lteq(_, commandNumber)))
+            )
+            _ <- EitherT.right(store.putTip(commandNumber))
+            _ <- EitherT.right(store.putFrozenAt(frozenAt))
+            _ <- EitherT.right(
+              state.set(
+                restored
+                    .focus(_.commandNumber)
+                    .replace(commandNumber)
+                    .focus(_.frozenAt)
+                    .replace(frozenAt)
+              )
+            )
+            // The digests of the state we just restored to. For this backend the caller's
+            // evacuation-map check is a tautology at a cold start — the ledger seeds its own
+            // genesis from the same `initialEvacuationMap` the caller compares against — but it
+            // keeps one boot path for every backend, and it is a real check against a remote ledger
+            // that owns its state.
+            digests <- digestsOf(restored)
+        } yield digests
+
+    /** Read-only counterpart of [[restoreTo]]: reconstruct the state as of `commandNumber`, digest
+      * it, and drop it. The live position, the store's tip and the freeze are all untouched, which
+      * is what lets the slow side ask about a partition boundary the fast side has already run past
+      * (`design/l2-state-certificate.md`).
+      *
+      * **At the tip this reads the live state and digests it** — no snapshot load, no re-fold, no
+      * store round trip. [[EutxoL2Ledger.State.commandNumber]] tracks the store's tip on both
+      * command paths ([[persist]] after an applied command, [[rejectAndAdvance]] after a rejected
+      * one), so the in-memory state at the tip *is* the reconstruction, and the partition boundary
+      * a stack closes at is the tip whenever no block has been cut since.
+      */
+    override def stateAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT
+            .right(state.get)
+            .flatMap { live =>
+                if live.commandNumber == commandNumber then EitherT.rightT[IO, RestoreError](live)
+                else reconstruct(commandNumber)
+            }
+            .flatMap(digestsOf)
+
+    /** Reconstruct the committed state as of `commandNumber` without publishing it: load the latest
+      * snapshot `<= commandNumber` (or genesis), then re-fold the *logged* (applied) commands in
+      * `(snapshot.commandNumber, commandNumber]` through the same [[applyMutation]] the live path
+      * uses — no re-logging, no re-snapshot. Guarded against a target beyond the recorded tip.
+      */
+    private def reconstruct(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, EutxoL2Ledger.State] =
         for {
             tip <- EitherT.right(store.getTip.map(_.getOrElse(L2CommandNumber.zero)))
             _ <- EitherT.cond[IO](
@@ -426,34 +479,25 @@ case class EutxoL2Ledger private (
                   .left
                   .map(RestoreError.OtherError(_))
             )
-            // Respect the freeze: it survives only if it happened at or before the target — rewinding
-            // to before the freezing decision clears it.
-            frozenAt <- EitherT.right(
-              store.getFrozenAt.map(_.filter(Ordering[L2CommandNumber].lteq(_, commandNumber)))
-            )
-            _ <- EitherT.right(store.putTip(commandNumber))
-            _ <- EitherT.right(store.putFrozenAt(frozenAt))
-            _ <- EitherT.right(
-              state.set(
-                restored
-                    .focus(_.commandNumber)
-                    .replace(commandNumber)
-                    .focus(_.frozenAt)
-                    .replace(frozenAt)
+        } yield restored
+
+    /** The three digests this ledger reports about a state: the evacuation map's, the L2 state's,
+      * and this backend's fixed parameter digest.
+      */
+    private def digestsOf(s: EutxoL2Ledger.State): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT.fromEither[IO](
+          s.activeUtxos
+              .toEvacuationMap(config)
+              .left
+              .map(violation => RestoreError.OtherError(violation.toString))
+              .map(map =>
+                  L2Ledger.Digests(
+                    evacuationMapHash = map.digest,
+                    l2StateHash = Some(L2Snapshot.fromState(s).stateHash),
+                    l2ParamsHash = Some(EutxoL2Ledger.l2ParamsHash)
+                  )
               )
-            )
-            // The digest of the state we just restored to. For this backend the caller's check is
-            // a tautology at a cold start — the ledger seeds its own genesis from the same
-            // `initialEvacuationMap` the caller compares against — but it keeps one boot path for
-            // every backend, and it is a real check against a remote ledger that owns its state.
-            digest <- EitherT.fromEither[IO](
-              restored.activeUtxos
-                  .toEvacuationMap(config)
-                  .left
-                  .map(violation => RestoreError.OtherError(violation.toString))
-                  .map(_.digest)
-            )
-        } yield L2Ledger.Restored(digest, Some(EutxoL2Ledger.l2ParamsHash))
+        )
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
       * `transientTokens`, `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).

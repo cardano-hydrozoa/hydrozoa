@@ -278,6 +278,50 @@ evacuationMapHash(M) = blake2b_256(
   not make an EUTXO-keyed map meaningful to an account-keyed ledger. That is the point — this is the
   check that catches exactly that substitution.
 
+## The L2 state digest
+
+A digest over the elements that constitute the ledger's own state — the value the head puts on the
+effects a stack produces, so that an effect plus its N-of-N hard-ack signatures is a signed
+statement of the state that partition ends at (`design/l2-state-certificate.md`). It is what a peer
+joining with no history is handed instead of trusting whoever seeds it.
+
+**Unlike the evacuation map digest, this one is not a shared construction.** The evacuation map
+crosses the boundary, so both sides hash the same wire bytes. A ledger's state does not cross the
+boundary at all, so **each backend defines its own digest over its own representation**, and the
+requirement on it is only that it be *efficient* — it is produced at every partition, not once at
+boot — and identical on every peer for the same command number. `l2Ledger` is a head parameter
+pinned in `headParamsHash`, so every peer in one head drives the same backend and only ever compares
+digests with peers computing them the same way.
+
+The built-in EUTXO ledger's construction ranges over the three compartments its snapshot persists —
+active L2 utxos, the transient-token overlay, and pending deposits — under its own domain tag,
+`gummiworm-l2-state-cardano-eutxo-v1`, with the same count-and-length framing the evacuation map
+digest uses. The coordination index is deliberately **not** folded in: it is not ledger state, and
+the effects carrying the digest already name the boundary it was taken at.
+
+**A remote ledger reports what its state digests to and what that ranges over.** Until it does, the
+field is absent and the head certifies no L2 state — it does not invent a value.
+
+### Reading a digest without moving the ledger
+
+`restoreTo` moves the ledger, so it cannot be what produces this value. The head's slow side asks at
+each partition boundary of a stack it has just closed, and by then the fast side has cut further
+blocks — a `restoreTo` there would rewind a live ledger out from under block production. Every peer
+also derives its own effect bodies and checks the hard-ack signatures against them, so the answer
+must be the same on every peer for the same command number, not "what the ledger holds now".
+
+So the digests ride a second un-numbered frame, `StateAt`, which **reads and does not move**:
+
+- **At the ledger's tip it is only the digest** — no snapshot load, no re-fold, no write. A ledger
+  that keeps its committed position in lock-step with its durable tip on both the applied and the
+  rejected path (as the EUTXO ledger does) already holds the answer.
+- **Below the tip it is the same reconstruction `restoreTo` performs**, with the result digested and
+  dropped rather than adopted. A ledger that has pruned its history past the asked-for number
+  answers `StateAtFailed`, exactly as it would for a number past its tip.
+
+The reply carries the same three digests a `Restored` does, so one frame answers everything the head
+asks about the ledger at a command number.
+
 ## Initial evacuation map
 
 A ledger implementation **must** provide an out-of-band way to print the evacuation map of its
@@ -304,8 +348,8 @@ type GummiwormCommand =
   | { "ApplyTransaction":       { commandNumber: CommandNumber, command: ApplyTransaction } }
 ```
 
-`restoreTo` rides the same socket as a separate un-numbered frame. Its tag is disjoint from every
-command tag, so the two never collide:
+`restoreTo` and `stateAt` ride the same socket as separate un-numbered frames. Their tags are
+disjoint from every command tag and from each other, so none of them ever collide:
 
 ```typescript
 type RestoreRequest =
@@ -313,10 +357,25 @@ type RestoreRequest =
 
 type RestoreResponse =
   // Reconstructed as of the requested number. `tip` equals the request. `evacuationMapHash` is the
-  // digest of the ledger's evacuation map at that state — 32 bytes, hex.
-  | { "Restored":      { tip: CommandNumber, evacuationMapHash: string } }
+  // digest of the ledger's evacuation map at that state — 32 bytes, hex. `l2StateHash` and
+  // `l2ParamsHash` are likewise 32 bytes, hex, and are omitted by a ledger that does not report
+  // them yet.
+  | { "Restored":      { tip: CommandNumber, evacuationMapHash: string,
+                         l2StateHash?: string, l2ParamsHash?: string } }
   // `requested` is the asked-for number, `tip` the ledger's current durable tip.
   | { "RestoreFailed": { requested: CommandNumber, tip: CommandNumber, reason: string } }
+
+type StateAtRequest =
+  // Report the digests of the state at this number. The ledger does NOT move.
+  | { "StateAt": { commandNumber: CommandNumber } }
+
+type StateAtResponse =
+  // `at` equals the request. The same three digests `Restored` carries; the ledger's own position
+  // is unchanged.
+  | { "StateReported": { at: CommandNumber, evacuationMapHash: string,
+                         l2StateHash?: string, l2ParamsHash?: string } }
+  // The ledger cannot report that number — past its tip, or pruned below it.
+  | { "StateAtFailed":  { requested: CommandNumber, tip: CommandNumber, reason: string } }
 ```
 
 Delta from the spec (`/whitepaper/sugar-rush/commands`):
@@ -327,7 +386,7 @@ Delta from the spec (`/whitepaper/sugar-rush/commands`):
   `UnrecoverableError` cases — `CompartmentsNotFound` / `OutOfOrder` / `LedgerFreeze` / `OtherError` —
   are flat). `Applied`/`Rejected` map onto the spec's `Success`/`Failure`; the `UnrecoverableError`
   cases are new, required by the coordination contract. A resend replays the cached last response.
-  `restoreTo` is a separate, un-numbered request.
+  `restoreTo` and `stateAt` are separate, un-numbered requests.
 - **Command payloads** — match the spec except **`userVk: ByteString`**: the contract omits it (the
   native L2 tx self-authenticates via its own witnesses, so the spec should drop it), and it omits
   the spec's `ProxyBlockConfirmation` / `ProxyRequestError`.

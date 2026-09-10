@@ -9,8 +9,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.joint.EvacuationMapHash
-import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, RegisterDepositResponse, RestoreError}
-import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse}
+import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, L2StateHash, RegisterDepositResponse, RestoreError}
+import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse, StateAtResponse}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.parser.*
 import io.circe.syntax.*
@@ -159,15 +159,59 @@ class RemoteL2Ledger private (
       */
     override def restoreTo(
         commandNumber: L2CommandNumber
-    ): EitherT[IO, RestoreError, L2Ledger.Restored] =
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
         EitherT(sendRestoreRequest(Request.Restore(commandNumber)).map {
             case r: RestoreResponse.Restored =>
-                Right(L2Ledger.Restored(r.evacuationMapHash, r.l2ParamsHash))
+                Right(L2Ledger.Digests(r.evacuationMapHash, r.l2StateHash, r.l2ParamsHash))
             case RestoreResponse.RestoreFailed(requested, tip, reason) =>
                 if requested.value > tip.value then
                     Left(RestoreError.CommandNumberTooHigh(requested, tip))
                 else Left(RestoreError.OtherError(reason))
         })
+
+    /** Ask the remote for the digests of its state at `commandNumber` — a [[Request.StateAt]], the
+      * read-only sibling of [[restoreTo]]. The remote does not move; nothing here is co-anchoring.
+      *
+      * Bounded by [[restoreTimeout]] for the same reason a restore is: a remote with no snapshot at
+      * the asked-for number answers by re-folding its log. It is retried on timeout, unlike a
+      * restore — a read changes nothing, so a second attempt cannot compound the first.
+      */
+    override def stateAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT(sendStateAtRequest(Request.StateAt(commandNumber)).map {
+            case r: StateAtResponse.StateReported =>
+                Right(L2Ledger.Digests(r.evacuationMapHash, r.l2StateHash, r.l2ParamsHash))
+            case StateAtResponse.StateAtFailed(requested, tip, reason) =>
+                if requested.value > tip.value then
+                    Left(RestoreError.CommandNumberTooHigh(requested, tip))
+                else Left(RestoreError.OtherError(reason))
+        })
+
+    /** Send a [[Request.StateAt]] and return the remote's [[StateAtResponse]]. Mirrors
+      * [[sendRestoreRequest]]: transport failure is retried through by [[exchange]], and an
+      * undecodable frame or a mismatched echoed command number is a protocol violation that
+      * fail-stops.
+      */
+    private def sendStateAtRequest(request: Request.StateAt): IO[StateAtResponse] =
+        exchange(request, restoreTimeout, retryOnTimeout = true).flatMap { text =>
+            decode[StateAtResponse](text) match {
+                case Left(err) =>
+                    IO.raiseError(
+                      RemoteL2LedgerError(
+                        s"remote L2 ledger sent an undecodable state-at response: ${err.getMessage}"
+                      )
+                    )
+                case Right(response) if response.commandNumber != request.commandNumber =>
+                    IO.raiseError(
+                      RemoteL2LedgerError(
+                        s"remote L2 ledger answered state-at ${response.commandNumber} " +
+                            s"but we asked ${request.commandNumber}"
+                      )
+                    )
+                case Right(response) => IO.pure(response)
+            }
+        }
 
     /** Send a [[Request.Restore]] and return the remote's [[RestoreResponse]]. Like
       * [[sendRequest]], transport failure is retried through by [[exchange]] and never seen here;
@@ -454,6 +498,13 @@ object RemoteL2Ledger {
           * restored JointLedger command number.
           */
         final case class Restore(commandNumber: L2CommandNumber) extends Request
+
+        /** Ask the remote what its state at `commandNumber` digests to, **without rewinding it**.
+          * Like [[Restore]] it carries no command payload and is un-numbered (it does not consume a
+          * command number); unlike [[Restore]] it is a read, issued at every partition boundary of
+          * a closed stack rather than once at boot. See [[RemoteL2Ledger.stateAt]].
+          */
+        final case class StateAt(commandNumber: L2CommandNumber) extends Request
     }
 
     /** The remote's answer to a [[Request.Restore]]: it rewound to the requested command number
@@ -471,13 +522,16 @@ object RemoteL2Ledger {
 
         /** `evacuationMapHash` is the remote's [[EvacuationMapHash]] at `tip` — the digest the
           * caller checks its own evacuation map against.
-          */
-        /** @param l2ParamsHash
-          *   absent from a remote that does not report it yet; see [[L2Ledger.Restored]].
+          *
+          * @param l2StateHash
+          *   absent from a remote that does not report it yet; see [[L2Ledger.Digests]].
+          * @param l2ParamsHash
+          *   absent from a remote that does not report it yet; see [[L2Ledger.Digests]].
           */
         final case class Restored(
             tip: L2CommandNumber,
             evacuationMapHash: EvacuationMapHash,
+            l2StateHash: Option[L2StateHash],
             l2ParamsHash: Option[Hash32]
         ) extends RestoreResponse {
             def commandNumber: L2CommandNumber = tip
@@ -487,6 +541,50 @@ object RemoteL2Ledger {
             tip: L2CommandNumber,
             reason: String
         ) extends RestoreResponse {
+            def commandNumber: L2CommandNumber = requested
+        }
+    }
+
+    /** The remote's answer to a [[Request.StateAt]]: the digests of its state at the asked-for
+      * command number ([[StateAtResponse.StateReported]]), or a refusal
+      * ([[StateAtResponse.StateAtFailed]]). Deliberately its own frame rather than a case of
+      * [[RestoreResponse]] — the two requests differ in whether the remote *moves*, and a remote
+      * implementer should not have to read a field to tell which it was asked for.
+      * [[commandNumber]] echoes the request so [[RemoteL2Ledger.sendStateAtRequest]] can correlate.
+      */
+    sealed trait StateAtResponse {
+        def commandNumber: L2CommandNumber
+    }
+
+    object StateAtResponse {
+
+        /** `at` equals the requested command number. The digests are of the state the remote holds
+          * as of that number; its own position is unchanged.
+          *
+          * @param l2StateHash
+          *   absent from a remote that does not report it yet; see [[L2Ledger.Digests]]. A head
+          *   driving such a ledger cannot certify its L2 state.
+          * @param l2ParamsHash
+          *   absent from a remote that does not report it yet; see [[L2Ledger.Digests]].
+          */
+        final case class StateReported(
+            at: L2CommandNumber,
+            evacuationMapHash: EvacuationMapHash,
+            l2StateHash: Option[L2StateHash],
+            l2ParamsHash: Option[Hash32]
+        ) extends StateAtResponse {
+            def commandNumber: L2CommandNumber = at
+        }
+
+        /** `requested` is the asked-for number, `tip` the remote's current durable tip. A remote
+          * that prunes its history far enough back answers this for an old boundary as legitimately
+          * as for one past its tip.
+          */
+        final case class StateAtFailed(
+            requested: L2CommandNumber,
+            tip: L2CommandNumber,
+            reason: String
+        ) extends StateAtResponse {
             def commandNumber: L2CommandNumber = requested
         }
     }

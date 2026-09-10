@@ -208,25 +208,51 @@ trait L2Ledger[F[_]] {
       * that is the check that the head config's `initialEvacuationMap` is the one this ledger
       * actually starts from — see [[RestoreError.EvacuationMapMismatch]].
       */
-    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, L2Ledger.Restored]
+    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, L2Ledger.Digests]
+
+    /** The same [[L2Ledger.Digests]] `restoreTo` reports, **without moving the ledger**: read the
+      * state as of `commandNumber`, digest it, discard it.
+      *
+      * This is what certifies state (`design/l2-state-certificate.md`). The slow side asks at each
+      * partition boundary of a closed stack, and by then the fast side has cut further blocks, so
+      * the ledger's tip is ahead of the boundary — `restoreTo` there would rewind a live ledger out
+      * from under block production. Every peer derives its own effect bodies and
+      * `HardAckSignatureVerifier` checks signatures against them, so this must answer the same
+      * value on every peer for the same `commandNumber`, which is why it addresses a command number
+      * rather than "now".
+      *
+      * At `commandNumber` equal to the ledger's tip this is only the digest — no snapshot load, no
+      * re-fold, no write.
+      */
+    def stateAt(commandNumber: L2CommandNumber): EitherT[F, RestoreError, L2Ledger.Digests]
 }
 
 object L2Ledger {
 
-    /** What a ledger reports about itself at a [[L2Ledger.restoreTo]] anchor.
+    /** What a ledger reports about itself at a command number — an anchor it was told to
+      * [[L2Ledger.restoreTo]], or one it was merely asked about via [[L2Ledger.stateAt]].
       *
-      * The two digests answer different questions, which is why both are here. `evacuationMapHash`
-      * moves with every applied command, so at a warm anchor it says only that both sides hold the
-      * same *state*. `l2ParamsHash` never moves, so it is what keeps asking whether this is still
-      * the right *ledger*. See `docs/spec/head-params-hash.md`.
+      * The three digests answer different questions, which is why all three are here.
+      * `evacuationMapHash` and `l2StateHash` both move with every applied command: the first says
+      * both sides hold the same map of L1-bound payouts, the second the same L2 state behind it —
+      * two peers can agree on every evacuable output and still have diverged in the ledger that
+      * produced them. `l2ParamsHash` never moves, so it is what keeps asking whether this is still
+      * the right *ledger*. See `docs/spec/head-params-hash.md` and
+      * `design/l2-state-certificate.md`.
       *
+      * @param l2StateHash
+      *   `None` from a remote ledger that does not report it yet. Transitional, like
+      *   `l2ParamsHash`: a head driving such a ledger cannot certify its state and says so rather
+      *   than certifying a value it made up. Remove the `Option` once the remote side ships the
+      *   field.
       * @param l2ParamsHash
       *   `None` from a remote ledger that does not report it yet. Transitional: the head then
       *   cannot check which ledger it is driving, so it warns rather than failing. Remove the
       *   `Option` once the remote side ships the field.
       */
-    final case class Restored(
+    final case class Digests(
         evacuationMapHash: EvacuationMapHash,
+        l2StateHash: Option[L2StateHash],
         l2ParamsHash: Option[Hash32]
     )
 }

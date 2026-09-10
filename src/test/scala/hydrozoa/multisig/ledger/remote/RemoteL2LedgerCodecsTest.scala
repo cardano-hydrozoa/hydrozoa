@@ -6,8 +6,8 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMapHash}
 import hydrozoa.multisig.ledger.l2.L2LedgerResponse.UnrecoverableError
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerResponse}
-import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, RestoreResponse}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerResponse, L2StateHash}
+import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, RestoreResponse, StateAtResponse}
 import io.circe.syntax.*
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
@@ -107,13 +107,59 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
     }
 
     test("Restored success encodes to the canonical SugarRush wire shape and round-trips") {
-        // The same vector SugarRush pins in `types/src/types/coordination/restore.rs`.
+        // The same vector SugarRush pins in `types/src/types/coordination/restore.rs`. A remote
+        // that reports neither optional digest drops both fields, so this vector is unchanged by
+        // `l2StateHash` joining the frame.
         val hash = EvacuationMapHash(ByteString.fromArray(Array.fill[Byte](32)(0xab.toByte)))
-        val response: RestoreResponse = RestoreResponse.Restored(L2CommandNumber(7L), hash, None)
+        val response: RestoreResponse =
+            RestoreResponse.Restored(L2CommandNumber(7L), hash, None, None)
         val json = response.asJson.noSpaces
         assert(
           json == """{"Restored":{"tip":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab"}}"""
               && io.circe.parser.decode[RestoreResponse](json) == Right(response)
+        )
+    }
+
+    test("Restored carries l2StateHash when the remote reports one, and round-trips") {
+        val hash = EvacuationMapHash(ByteString.fromArray(Array.fill[Byte](32)(0xab.toByte)))
+        val stateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0xcd.toByte)))
+        val response: RestoreResponse =
+            RestoreResponse.Restored(L2CommandNumber(7L), hash, Some(stateHash), None)
+        val json = response.asJson.noSpaces
+        assert(
+          json == """{"Restored":{"tip":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"""
+              && io.circe.parser.decode[RestoreResponse](json) == Right(response)
+        )
+    }
+
+    test("StateAt request encodes to its canonical wire shape and round-trips") {
+        val request: Request = Request.StateAt(L2CommandNumber(7L))
+        val json = request.asJson.noSpaces
+        assert(
+          json == """{"StateAt":{"commandNumber":7}}"""
+              && io.circe.parser.decode[Request](json) == Right(request)
+        )
+    }
+
+    test("StateReported encodes to its canonical wire shape and round-trips") {
+        val hash = EvacuationMapHash(ByteString.fromArray(Array.fill[Byte](32)(0xab.toByte)))
+        val stateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0xcd.toByte)))
+        val response: StateAtResponse =
+            StateAtResponse.StateReported(L2CommandNumber(7L), hash, Some(stateHash), None)
+        val json = response.asJson.noSpaces
+        assert(
+          json == """{"StateReported":{"at":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"""
+              && io.circe.parser.decode[StateAtResponse](json) == Right(response)
+        )
+    }
+
+    test("StateAtFailed encodes to its canonical wire shape and round-trips") {
+        val response: StateAtResponse =
+            StateAtResponse.StateAtFailed(L2CommandNumber(9L), L2CommandNumber(4L), "pruned")
+        val json = response.asJson.noSpaces
+        assert(
+          json == """{"StateAtFailed":{"requested":9,"tip":4,"reason":"pruned"}}"""
+              && io.circe.parser.decode[StateAtResponse](json) == Right(response)
         )
     }
 

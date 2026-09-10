@@ -1145,7 +1145,7 @@ object JointLedger {
           * it. See `docs/spec/head-params-hash.md`.
           */
         private def checkL2Params(
-            restored: L2Ledger.Restored,
+            restored: L2Ledger.Digests,
             expected: Hash32,
             tracer: ContraTracer[IO, JointLedgerEvent]
         ): IO[Unit] =

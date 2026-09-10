@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationMapHash}
-import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
+import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse, L2StateHash}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder}
@@ -224,9 +224,11 @@ object RemoteL2LedgerCodecs {
                       for {
                           tip <- body.downField("tip").as[L2CommandNumber]
                           hash <- body.downField("evacuationMapHash").as[EvacuationMapHash]
-                          // Optional while the remote side ships it; see `L2Ledger.Restored`.
+                          // Both optional while the remote side ships them; see
+                          // `L2Ledger.Digests`.
+                          l2State <- body.downField("l2StateHash").as[Option[L2StateHash]]
                           l2Params <- body.downField("l2ParamsHash").as[Option[Hash32]]
-                      } yield RestoreResponse.Restored(tip, hash, l2Params)
+                      } yield RestoreResponse.Restored(tip, hash, l2State, l2Params)
                   case "RestoreFailed" =>
                       val body = c.downField("RestoreFailed")
                       for {
@@ -243,12 +245,13 @@ object RemoteL2LedgerCodecs {
                       )
               },
       encodeA = {
-          case RestoreResponse.Restored(tip, evacuationMapHash, l2ParamsHash) =>
+          case RestoreResponse.Restored(tip, evacuationMapHash, l2StateHash, l2ParamsHash) =>
               io.circe.Json.obj(
                 "Restored" -> io.circe.Json
                     .obj(
                       "tip" -> tip.asJson,
                       "evacuationMapHash" -> evacuationMapHash.asJson,
+                      "l2StateHash" -> l2StateHash.asJson,
                       "l2ParamsHash" -> l2ParamsHash.asJson
                     )
                     .dropNullValues
@@ -256,6 +259,67 @@ object RemoteL2LedgerCodecs {
           case RestoreResponse.RestoreFailed(requested, tip, reason) =>
               io.circe.Json.obj(
                 "RestoreFailed" -> io.circe.Json.obj(
+                  "requested" -> requested.asJson,
+                  "tip" -> tip.asJson,
+                  "reason" -> reason.asJson
+                )
+              )
+      }
+    )
+
+    // State-at-response codec. The remote answers a StateAt request with the digests of its state
+    // at the asked-for command number (`StateReported`) or a refusal carrying the requested number,
+    // its current durable tip, and a reason (`StateAtFailed`). Its own frame rather than a case of
+    // RestoreResponse: the two requests differ in whether the remote moves.
+    import RemoteL2Ledger.StateAtResponse
+    given stateAtResponseCodec: Codec[StateAtResponse] = Codec.from(
+      decodeA = c =>
+          c.keys
+              .flatMap(_.headOption)
+              .toRight(
+                io.circe.DecodingFailure("StateAtResponse must have exactly one field", c.history)
+              )
+              .flatMap {
+                  case "StateReported" =>
+                      val body = c.downField("StateReported")
+                      for {
+                          at <- body.downField("at").as[L2CommandNumber]
+                          hash <- body.downField("evacuationMapHash").as[EvacuationMapHash]
+                          // Both optional while the remote side ships them; see
+                          // `L2Ledger.Digests`.
+                          l2State <- body.downField("l2StateHash").as[Option[L2StateHash]]
+                          l2Params <- body.downField("l2ParamsHash").as[Option[Hash32]]
+                      } yield StateAtResponse.StateReported(at, hash, l2State, l2Params)
+                  case "StateAtFailed" =>
+                      val body = c.downField("StateAtFailed")
+                      for {
+                          requested <- body.downField("requested").as[L2CommandNumber]
+                          tip <- body.downField("tip").as[L2CommandNumber]
+                          reason <- body.downField("reason").as[String]
+                      } yield StateAtResponse.StateAtFailed(requested, tip, reason)
+                  case other =>
+                      Left(
+                        io.circe.DecodingFailure(
+                          s"Unknown StateAtResponse type: $other",
+                          c.history
+                        )
+                      )
+              },
+      encodeA = {
+          case StateAtResponse.StateReported(at, evacuationMapHash, l2StateHash, l2ParamsHash) =>
+              io.circe.Json.obj(
+                "StateReported" -> io.circe.Json
+                    .obj(
+                      "at" -> at.asJson,
+                      "evacuationMapHash" -> evacuationMapHash.asJson,
+                      "l2StateHash" -> l2StateHash.asJson,
+                      "l2ParamsHash" -> l2ParamsHash.asJson
+                    )
+                    .dropNullValues
+              )
+          case StateAtResponse.StateAtFailed(requested, tip, reason) =>
+              io.circe.Json.obj(
+                "StateAtFailed" -> io.circe.Json.obj(
                   "requested" -> requested.asJson,
                   "tip" -> tip.asJson,
                   "reason" -> reason.asJson
@@ -294,6 +358,12 @@ object RemoteL2LedgerCodecs {
                   io.circe.Json.obj(
                     "RestoreTo" -> io.circe.Json.obj("commandNumber" -> cn.asJson)
                   )
+              // StateAt likewise carries no command payload, and unlike RestoreTo it does not move
+              // the remote — its tag is disjoint so the two never collide on the socket.
+              case Request.StateAt(cn) =>
+                  io.circe.Json.obj(
+                    "StateAt" -> io.circe.Json.obj("commandNumber" -> cn.asJson)
+                  )
           },
           decodeA = c =>
               c.keys
@@ -329,6 +399,8 @@ object RemoteL2LedgerCodecs {
                               } yield Request.ApplyTransaction(n, cmd)
                           case "RestoreTo" =>
                               cn.map(Request.Restore.apply)
+                          case "StateAt" =>
+                              cn.map(Request.StateAt.apply)
                           case other =>
                               Left(
                                 io.circe.DecodingFailure(s"Unknown request type: $other", c.history)
