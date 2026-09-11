@@ -813,9 +813,8 @@ object CardanoBackendBlockfrost:
                 blockfrostApiUrl match {
                     case None      => IO.pure(Left(standard))
                     case Some(url) =>
-                        // A standard chain served by a private Blockfrost endpoint: keep the
-                        // baked-in CardanoInfo (correct params/slot/magic — never fetched) but send
-                        // queries and submissions to `url`.
+                        // A standard chain served by a private Blockfrost endpoint: keep its
+                        // baked-in slot config and magic, but send queries and submissions to `url`.
                         val custom: CardanoNetwork.Custom =
                             CardanoNetwork.Custom(standard.cardanoInfo, standard.protocolMagic)
                         IO.pure(Right((custom, url)))
