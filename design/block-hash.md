@@ -18,10 +18,11 @@ digest**, and nothing else:
 4. **One `blockHash`, over the brief as it stands.** Validity flags stay in `BlockBody` and stay
    in the preimage. Moving them out is a large refactor of the block type, the wire brief, the
    journal value and every consumer that reads a flag off a body — out of scope here.
-5. **Followers re-hash every request in `JointLedger`.** A follower rebuilding a block hashes
-   each request body it holds. A peer that received different bytes under the same `RequestId`
-   computes a different `requestHash`, so its `blockHash` differs and the mismatch surfaces at
-   the block comparison instead of never.
+5. **`JointLedger` re-hashes every alien request.** A peer rebuilding a block hashes the body of
+   each request another peer assigned. A peer that received different bytes under the same
+   `RequestId` computes a different `requestHash`, so its `blockHash` differs and the mismatch
+   surfaces at the block comparison instead of never. Its own requests it does not hash again:
+   their digest is the one its `RequestSequencer` already verified.
 
 Deferred, with the reasoning kept below because it is what the increment is aiming at:
 
@@ -196,9 +197,9 @@ Three reasons that is the right shape:
    different one has different bytes, which is exactly the condition worth detecting.
 
 Point 3 is not weakened by the submitter supplying the hash. The user's digest is verified once,
-at the edge, and then discarded as an input: what flows between peers is the body, and every peer
-derives the digest from the bytes in front of it. The head trusts no digest it did not compute —
-including the user's.
+at the edge, by the peer that received it — which then builds its own blocks from that verified
+value rather than hashing the body a second time. Every other peer derives the digest from the
+bytes in front of it. No peer trusts a digest nobody on it checked — including the user's.
 
 **Rejected: hash at block packing.** Too late to reject a request the submitter mis-encoded, since
 by then it holds an id. And only the leader would compute it, so a follower would be verifying the
@@ -488,17 +489,34 @@ rebuilds block bodies exactly as a head follower does, so it recomputes `blockHa
 on the same path. That extends the guarantee from head↔head to head↔coil, which is where it is
 most needed: a coil peer's divergence is otherwise invisible until its hard-ack fails to verify.
 
-### Followers hash every request they hold
+### Every peer re-hashes the requests it did not assign
 
-The check above is only as good as the request hashes feeding it, so a follower does not take
-`requestHash` from the brief. **`JointLedger` hashes each request body it holds** as it rebuilds
-the block (`mkHashOf`, over the body — never `UserRequest.requestHash`, the submitter's copy
-that travelled with it), and builds its `blockHash` from those digests. `BlockBody.requests` is
+The check above is only as good as the request hashes feeding it, so a peer does not take
+`requestHash` from the brief. As it rebuilds a block, `JointLedger` picks each request's digest
+with `mkHashOf`, and builds its `blockHash` from those. `BlockBody.requests` is
 `List[(RequestId, RequestHash, ValidityFlag)]`.
 
+| request | digest used | why |
+|---|---|---|
+| **own** — this peer assigned it | the one it carries | this peer's `RequestSequencer` verified it against the body before assigning the id; hashing again would repeat that work |
+| **alien** — any other peer assigned it | recomputed from the body this peer holds | nobody on this peer checked the digest it carries, and trusting it would compare two copies of one claim |
+
+A coil peer assigns nothing, so every request is alien to it.
+
+"Own" is read off the id, and peer liaisons stay transport: they check nothing, so a byzantine
+peer can send a request under another peer's id. Its carried digest is then reused by that one
+peer while every honest peer recomputes it. If it does not describe the body, that peer's
+`blockHash` disagrees with theirs, and no block soft-confirms without every head peer's ack. The
+shortcut can cost liveness under a byzantine peer — which withholding an ack already costs — and
+never lets a wrong block confirm.
+
+The digests in the store follow the same line. The CR1 write persists an own request's verified
+digest; a liaison persists an alien request's digest as it arrived. So only records under a peer's
+own author number carry a verified digest in that peer's store (`request_record.proto`, field 5).
+
 That is what closes point 3 of *The gap*. Two peers holding different payloads under the same
-`RequestId` compare equal today, because nothing ties an id to its bytes. Once the follower hashes
-its own copy, the difference lands in `requestHash`, which lands in `blockHash`, which the
+`RequestId` compare equal today, because nothing ties an id to its bytes. Once each peer hashes
+its own copy of every alien request, the difference lands in `requestHash`, which lands in `blockHash`, which the
 follower is already comparing against the leader's brief. No new comparison site is needed — the
 existing one gets something worth comparing.
 
