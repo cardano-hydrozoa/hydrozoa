@@ -127,7 +127,7 @@ state digest is scoped out above.
 
 | digest | over | taken by | when | carried on |
 |---|---|---|---|---|
-| `requestHash` | one user request as received | the submitter, and every peer that receives it | supplied on submission, re-derived and checked at `RequestId` assignment | the block body, beside its `RequestId` |
+| `requestHash` | one user request as received | the submitter, and every peer that receives it | supplied on submission, checked before a `RequestId` is drawn, persisted with it | the block body, beside its `RequestId` |
 | `blockHash` | the brief — header fields, the ordered request sequence, flags and absorption decisions | the block leader, and every peer that rebuilds the block | after the block is applied, as briefs are produced today | the block brief |
 
 Committing to the state those requests produced is not a block digest at all — see
@@ -161,24 +161,32 @@ consumed, and the submitter retries with the request they meant.
 
 **The check is `UserRequestBody.hash` itself**, run over the received body. There is one hash
 function, used by the submitter to produce the value and by the head to verify it; a second
-implementation would be a second thing to disagree about.
+implementation would be a second thing to disagree about. `UserRequest.checkRequestHash` runs it
+and names both digests on a mismatch, and `RequestSequencer` counts the refusal as a screening
+rejection (`RejectionKind.Screening`): it is a stateless admission check like the rest, and the
+reason string tells the two apart.
 
 **The reply is unchanged.** `UserRequest` keeps returning
 `Either[UserRequest.Rejected, RequestId]`. There is nothing to add to it: the submitter computed
 the hash, so returning it would hand back a value they already hold. Only the request grows a
 field, and a mismatch travels as a reason string in the `Rejected` the channel already carries.
 
-## When the head hashes: at assignment
+## When the head hashes: before assignment, persisted with it
 
-In `RequestSequencer`, between `val newId = RequestId(ownHeadPeerNum, newNum)` and the CR1 persist
-that follows it — the verification above happens on the way in, and the verified digest is what
-the rest of this design carries.
+In `RequestSequencer`, **first** — before stateless screening, and before `tryNextRequestNum`
+draws a request number. That ordering is what makes *Refuse, do not correct* hold: a check placed
+after the number is drawn would consume a `RequestId` for a request it then refuses. The digest
+mismatch is the cheapest verdict available and the one that says the two sides disagree about
+what was submitted, so nothing else runs on a request that fails it.
 
-Three reasons that is the right moment:
+The verified digest is then **persisted by the CR1 write**, as the `Request` record's
+`request_hash` field (`request_record.proto`, field 5).
 
-1. **It rides the barrier that already exists.** CR1 persists the assigned request to the
-   `Request` journal *before* the user is told the id — durable before observable. The hash is
-   part of the same write and inherits the same guarantee.
+Three reasons that is the right shape:
+
+1. **Persistence rides the barrier that already exists.** CR1 persists the assigned request to
+   the `Request` journal *before* the user is told the id — durable before observable. The hash
+   is part of the same write and inherits the same guarantee.
 2. **It is taken over the request as received**, before screening verdicts, block packing, or
    any validity judgement. The hash describes what the user submitted, and nothing later can
    move it.
@@ -250,7 +258,16 @@ The two-digest rule stays for the reason its comment gives — hashing the depos
 would collapse `hash(abc + def) == hash(ab + cdef)`.
 
 Both changes move the pinned vectors in `UserRequestTest`, which is free now and is not free once
-a client has shipped against them.
+a client has shipped against them. The new vectors are `58828159…` for the transaction and
+`ac596c7f…` for the deposit; `docs/user-guide/REQUEST-HASH.md` gives them in full, with the
+deposit's two intermediate digests.
+
+**Where it lives.** The digest is its own type, `RequestHash`, opaque over `Hash32` and placed in
+`ledger.event` beside `RequestId` — it is the content counterpart of the id, and what a block body
+carries next to it. Its object holds the domain tag, the variant tags and the preimage, as
+`hashDeposit(l1Payload, l2Payload)` and `hashTransaction(l2Payload)`. They take payloads rather
+than a `UserRequestBody`, so `ledger.event` gains no dependency on `consensus`, and
+`UserRequestBody.hash` stays the single entry point by dispatching to them.
 
 ## What `blockHash` covers
 
@@ -449,6 +466,11 @@ call sites already hold a brief: `JointLedger` signing its own ack with
 `PeerWallet.mkSoftAckSignature(brief.blockHash)`, and `FastConsensusActor` verifying somebody
 else's against `brief.blockHash`.
 
+The digest is typed `BlockHash`, opaque over `Hash32` like `RequestHash`, so the two can never be
+passed for each other. `BlockBrief`'s companion builds a brief two ways: `apply(header, body)`
+derives the digest, which is what a producer does, and the generated full-arity constructor keeps
+one that arrived, which is what a decoder does.
+
 **Stored, and never trusted.** The brief carries the hash on the wire and into the `Block`
 journal, but a stored hash is a claim: every peer that rebuilds the block recomputes the digest
 from header and body and compares. That holds in both directions:
@@ -470,7 +492,9 @@ most needed: a coil peer's divergence is otherwise invisible until its hard-ack 
 
 The check above is only as good as the request hashes feeding it, so a follower does not take
 `requestHash` from the brief. **`JointLedger` hashes each request body it holds** as it rebuilds
-the block, and builds its `blockHash` from those digests.
+the block (`requestHashOf`, over the body — never `UserRequest.requestHash`, the submitter's copy
+that travelled with it), and builds its `blockHash` from those digests. `BlockBody.requests` is
+`List[(RequestId, RequestHash, ValidityFlag)]`.
 
 That is what closes point 3 of *The gap*. Two peers holding different payloads under the same
 `RequestId` compare equal today, because nothing ties an id to its bytes. Once the follower hashes
@@ -553,13 +577,26 @@ on the new one and the reverse; and the brief, on the wire and as the `Block` jo
 gains `blockHash`. It applies to heads initialized afterwards, and belongs in the release notes of
 the release that ships it.
 
-The block header is **unchanged** by this design, and so is `SoftAck` beyond what it signs.
+The block header is **unchanged** by this design. `SoftAck` gains no field: its one signature is
+named `signature` and typed `SoftAck.Signature`, and `Block.SoftConfirmed`'s list of them is
+`softAckSignatures`. Both codecs are derived, so those names are the JSON keys on the wire and in
+the `SoftConfirmation` store — which the brief's new field already breaks.
+
+The SEC side moves no bytes. Its signatures are byte-identical, and its persisted
+`headerMultiSigned` key is kept; renaming it would add a store break this work item does not
+otherwise cause.
+
+**What Sugar Rush has to do.** Two of the contracts that move are ones it reads:
+
+| contract | what moves | Sugar Rush |
+|---|---|---|
+| `POST /head/requests` | `requestHash` becomes a **required** field | **must change.** The DEX submits deposits and transactions through the unified API's proxy (`useHandleDepositRequest`, `useHandleTransactionRequest`, `useReDelegateKey`), which forwards the body byte-for-byte. Without the digest every submission is refused. The DEX computes it per `docs/user-guide/REQUEST-HASH.md`, and the change lands together with hydrozoa's. |
+| `Request` journal record | gains `request_hash` (proto field 5) | nothing required. `hydrozoa-store` vendors the record without field 5, and prost skips unknown fields; it can adopt the field whenever it wants the digest. |
 
 **The L2 coordination protocol is untouched by cycle 3.** It moves only when the state commitment
 does (`design/l2-state-certificate.md`): the protocol would gain a state digest landing in
 `sugar-rush-ledger/types/src/types/coordination/` and `hydrozoa/multisig/ledger/remote/` in the
-same work item, with the golden pins on both sides moved together. Nothing here obliges the Sugar
-Rush side to do anything yet.
+same work item, with the golden pins on both sides moved together.
 
 ## Out of scope
 
@@ -592,3 +629,23 @@ stores, so a seeding peer has briefs, not bare headers. There is no headers-only
 gets recomputed on every rebuild has to be recomputed, because a stored hash is a claim (see
 *Where `blockHash` lives*). Whether the recomputation is cached anywhere is an implementation
 call.
+
+**No versions beside the digest.** Settled in review of the implementation (#734): a soft-ack signs
+`blockHash` alone, because ratcheting reads the SEC's own versions on the slow side. The reasoning
+is in *What the soft-ack signs*.
+
+**Each digest and each signature has its own type.** `RequestHash` and `BlockHash` are opaque over
+`Hash32`; `SoftAck.Signature` and `StandaloneEvacuationCommitment.Signature` replace the single
+minor-scoped `BlockHeader.Minor.HeaderSignature`. None of the four changes a byte — they exist so
+that a request digest cannot stand in for a block digest, or a soft-ack signature for an SEC's.
+
+**A digest mismatch is a screening rejection.** It counts under `RejectionKind.Screening` rather
+than a counter of its own: it is a stateless admission check like the rest, and its reason string
+tells the two apart. A dedicated counter would add a `PeerStats` field, a Prometheus line and a spec
+change for a distinction the reason already carries.
+
+**One preimage buffer.** `BlockHash` and `HeadParamsHash` write their preimages through the same
+`lib.crypto.Preimage` — ASCII domain tag, fixed-width fields unframed, variable-width ones
+length-framed — rather than two copies of the same encoder. Its byte layout is pinned by its own
+test, which the digests' property tests could not do: a change shifting every writer the same way
+still passes "the digest moves when a field moves".
