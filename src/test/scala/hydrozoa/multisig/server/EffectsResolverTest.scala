@@ -90,7 +90,7 @@ class EffectsResolverTest extends AnyFunSuite:
               )
             )
           ),
-          headerMultiSigned = List(Some(StandaloneEvacuationCommitment.Signature(IArray(0.toByte))))
+          signatures = List(Some(StandaloneEvacuationCommitment.Signature(IArray(0.toByte))))
         )
     private val secId: TransactionHash = EffectIds.secL1TxId(sec.commitment)
 

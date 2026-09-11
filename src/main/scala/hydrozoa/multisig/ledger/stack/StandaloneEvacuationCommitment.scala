@@ -57,7 +57,7 @@ object StandaloneEvacuationCommitment {
       * minor block's header (the consensus artifact that makes the commitment usable — presented in
       * the rule-based regime's vote tx after a fallback).
       *
-      * @param headerMultiSigned
+      * @param signatures
       *   an ordered, peer-position-aligned list over `allHeadPeers.sorted ++ allCoilPeers.sorted`:
       *   `Some(sig)` where that peer signed `blockNum`'s header, `None` otherwise. Head peers
       *   always sign (AllOf), so only coil slots ever carry `None`. The alignment is load-bearing:
@@ -67,7 +67,7 @@ object StandaloneEvacuationCommitment {
       */
     final case class MultiSigned(
         commitment: StandaloneEvacuationCommitment,
-        headerMultiSigned: List[Option[Signature]]
+        signatures: List[Option[Signature]]
     )
 
     type Signature = Signature.Signature

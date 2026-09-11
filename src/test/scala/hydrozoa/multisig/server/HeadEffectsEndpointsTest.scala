@@ -88,7 +88,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
               )
             )
           ),
-          headerMultiSigned = List.tabulate(nHeadPeers + 1)(i =>
+          signatures = List.tabulate(nHeadPeers + 1)(i =>
               Some(StandaloneEvacuationCommitment.Signature(IArray(i.toByte, (i + 1).toByte)))
           )
         )

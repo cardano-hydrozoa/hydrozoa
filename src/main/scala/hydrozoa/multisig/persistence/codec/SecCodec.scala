@@ -13,8 +13,7 @@ import scalus.uplc.builtin.ByteString
   * The SEC's `header` field is `StandaloneEvacuationCommitment.Onchain.Serialized` (opaque
   * `IArray[Byte]`); we ride the public `Serialized.fromBytes` constructor added for the codec.
   * [[StandaloneEvacuationCommitment.Signature]] is similarly an opaque `IArray[Byte]` with a public
-  * bytes constructor. The `headerMultiSigned` key is the persisted name of the SEC's signature
-  * list.
+  * bytes constructor.
   */
 object SecCodec:
 
@@ -69,7 +68,7 @@ object SecCodec:
         Encoder.instance { ms =>
             Json.obj(
               "commitment" -> ms.commitment.asJson,
-              "headerMultiSigned" -> ms.headerMultiSigned.asJson
+              "signatures" -> ms.signatures.asJson
             )
         }
 
@@ -78,10 +77,10 @@ object SecCodec:
             for
                 commitment <- c.downField("commitment").as[StandaloneEvacuationCommitment]
                 sigs <- c
-                    .downField("headerMultiSigned")
+                    .downField("signatures")
                     .as[List[Option[StandaloneEvacuationCommitment.Signature]]]
             yield StandaloneEvacuationCommitment.MultiSigned(
               commitment = commitment,
-              headerMultiSigned = sigs
+              signatures = sigs
             )
         }

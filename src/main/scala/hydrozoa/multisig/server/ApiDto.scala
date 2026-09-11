@@ -1128,7 +1128,7 @@ object ApiDto {
         sec: ResolvedEffect.Sec,
         nHeadPeers: Int
     ): (List[String], List[String]) =
-        val sigsHex = sec.commitment.headerMultiSigned.map {
+        val sigsHex = sec.commitment.signatures.map {
             case Some(sig) =>
                 val bytes: Array[Byte] = sig
                 ByteString.fromArray(bytes).toHex

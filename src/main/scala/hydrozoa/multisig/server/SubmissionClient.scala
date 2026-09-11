@@ -15,6 +15,12 @@ import org.http4s.{Method, Request as Http4sRequest, Uri}
 /** A client-side handle for submitting [[UserRequest]]s to a Hydrozoa peer and awaiting its
   * assigned [[RequestId]]. Abstracts over the transport: an in-process actor send, an in-memory
   * http4s round-trip against [[HydrozoaRoutes]], or a real over-the-wire HTTP call.
+  *
+  * TODO: this does not belong in the main codebase. It is a *client* of the node, not part of one,
+  * and the abstraction over transports exists for tests. What keeps it here is the packaged CLI:
+  * `hydrozoa submit-deposit` and `hydrozoa submit-l2-tx` submit through [[http]]. Moving it out
+  * means deciding where a first-party client lives — its own module, or collapsed into the two CLI
+  * commands with the harness keeping its own. [[direct]] has no callers at all and can go with it.
   */
 trait SubmissionClient:
     def submit(userRequest: UserRequest): IO[RequestId]
