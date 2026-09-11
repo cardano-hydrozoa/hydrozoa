@@ -159,7 +159,7 @@ before assignment, through the existing `UserRequest.Rejected(reason)` channel t
 screening already uses, with a reason naming both digests. Nothing is persisted, no `RequestId` is
 consumed, and the submitter retries with the request they meant.
 
-**The check is `UserRequestBody.hash` itself**, run over the received body. There is one hash
+**The check is `UserRequestBody.mkHash` itself**, run over the received body. There is one hash
 function, used by the submitter to produce the value and by the head to verify it; a second
 implementation would be a second thing to disagree about. `UserRequest.checkRequestHash` runs it
 and names both digests on a mismatch, and `RequestSequencer` counts the refusal as a screening
@@ -217,9 +217,9 @@ The uniqueness a per-assignment hash would add is not needed. The block body car
 `RequestId` beside the hash, so the block's commitment names both which request and which
 position.
 
-## `UserRequestBody.hash` already exists
+## A request digest already exists
 
-`UserRequest.scala` carries it: `blake2b_256`, with deposits hashed as
+`UserRequest.scala` carries one, as `UserRequestBody.hash`: `blake2b_256`, with deposits hashed as
 `blake2b_256(l1Payload) ++ blake2b_256(l2Payload)` before the outer hash, its comment explaining
 this keeps the hash injective rather than collapsing `hash(abc + def) == hash(ab + cdef)`.
 `UserRequestTest` pins two vectors. **Nothing calls it** — it is written, tested, and unreached,
@@ -267,7 +267,7 @@ deposit's two intermediate digests.
 carries next to it. Its object holds the domain tag, the variant tags and the preimage, as
 `hashDeposit(l1Payload, l2Payload)` and `hashTransaction(l2Payload)`. They take payloads rather
 than a `UserRequestBody`, so `ledger.event` gains no dependency on `consensus`, and
-`UserRequestBody.hash` stays the single entry point by dispatching to them.
+`UserRequestBody.mkHash` stays the single entry point by dispatching to them.
 
 ## What `blockHash` covers
 
@@ -492,7 +492,7 @@ most needed: a coil peer's divergence is otherwise invisible until its hard-ack 
 
 The check above is only as good as the request hashes feeding it, so a follower does not take
 `requestHash` from the brief. **`JointLedger` hashes each request body it holds** as it rebuilds
-the block (`requestHashOf`, over the body — never `UserRequest.requestHash`, the submitter's copy
+the block (`mkHashOf`, over the body — never `UserRequest.requestHash`, the submitter's copy
 that travelled with it), and builds its `blockHash` from those digests. `BlockBody.requests` is
 `List[(RequestId, RequestHash, ValidityFlag)]`.
 
