@@ -63,6 +63,12 @@ object JointLedgerEventFormat:
                   s"recovered passive state from a non-empty store (block ${bn: Int})",
                   "blockNum" -> s"${bn: Int}"
                 )
+            case L2ParamsHashUnreported(expected) =>
+                warn(
+                  "the L2 ledger did not report an l2ParamsHash; cannot verify this node is " +
+                      "driving the ledger its head config was built against",
+                  "expected" -> expected.toHex
+                )
             case BlockStarted(bn, startTime) =>
                 info(
                   s"start block: $bn (blockCreationStartTime=$startTime)",

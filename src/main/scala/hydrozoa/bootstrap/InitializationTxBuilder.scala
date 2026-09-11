@@ -17,6 +17,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 import scalus.cardano.txbuilder.TxBalancingError.InsufficientFunds
+import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
 
 /** Builds the head's initialization transaction. This lives in the `hydrozoa.bootstrap` package
@@ -34,7 +35,8 @@ object InitializationTxBuilder {
         TxTiming.Section & InitializationParameters.Section
 
     final case class Build(config: Config, funding: InitializationFunding)(
-        blockCreationEndTime: BlockCreationEndTime
+        blockCreationEndTime: BlockCreationEndTime,
+        headParamsHash: Hash32
     ) {
 
         lazy val result: BuilderResultSimple[InitializationTx] = for {
@@ -141,7 +143,8 @@ object InitializationTxBuilder {
 
                     private[bootstrap] val treasuryDatum =
                         MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
-                          config.initialEvacuationMap
+                          config.initialEvacuationMap,
+                          ByteString.fromArray(headParamsHash.bytes)
                         )
 
                     private val treasuryOutput = Babbage(

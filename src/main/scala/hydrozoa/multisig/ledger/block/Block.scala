@@ -88,6 +88,11 @@ object Block {
             override transparent inline def header: BlockHeader.Final = blockBrief.header
             override transparent inline def body: BlockBody.Final = blockBrief.body
             override transparent inline def finalizationRequested: Boolean = false
+
+            /** The last block this head will ever produce: there is no next block to pace against,
+              * and holding it only delays finalization.
+              */
+            override def limiterExempt: Boolean = true
         }
 
         type Next = Block.SoftConfirmed & BlockType.Next

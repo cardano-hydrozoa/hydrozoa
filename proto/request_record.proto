@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package hydrozoa.request;
+
+// The canonical durable form of one entry in a head peer's Request journal — the schema
+// contract between Hydrozoa (Scala, the only writer) and the Sugar Rush ledger (Rust, a
+// read-only RocksDB secondary reader).
+//
+// The record is the *value* stored at a Request-lane key. The stored bytes are
+// `[arrival stamp : 12][RequestRecord …]`: the 12-byte arrival stamp is the persistence
+// layer's generic journal framing across all six journals, carries no protocol meaning, and
+// is skipped by a reader that only wants the record.
+//
+// The key supplies the same identity from the other side — the column family is the author
+// and the key is the request number — so a reader can cross-check the two and treat a
+// mismatch as store corruption.
+//
+// Golden fixtures pinning this encoding live in the Hydrozoa repo at
+// `src/test/resources/golden/request-record/`; a reader in another repo vendors a copy and
+// asserts it decodes them to the same values.
+message RequestRecord {
+  // The assigning head peer's number, and its per-author sequential request number.
+  uint32 head_peer_number = 1;
+  uint64 request_number = 2;
+
+  // Exactly one body is present; which one is the request's kind.
+  oneof body {
+    DepositBody deposit = 3;
+    TransactionBody transaction = 4;
+  }
+
+  // Field 5 is unused. It carried a content hash of the body, which is being taken up
+  // separately alongside pinning request hashes in block bodies; it will come back here.
+}
+
+// A deposit: the CBOR-encoded L1 deposit transaction, and the opaque L2 payload it pins.
+message DepositBody {
+  bytes l1_payload = 1;
+  bytes l2_payload = 2;
+}
+
+// An L2 transaction: one opaque payload, passed to the L2 ledger unmodified.
+message TransactionBody {
+  bytes l2_payload = 1;
+}

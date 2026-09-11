@@ -1,6 +1,6 @@
 package hydrozoa.multisig
 
-import hydrozoa.lib.logging.LogEvent
+import hydrozoa.lib.logging.{Level, LogEvent}
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEventFormat
 import hydrozoa.multisig.consensus.limiter.LimiterEventFormat
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -22,6 +22,13 @@ object HeadMultisigRegimeManagerEventFormat:
             case LifecycleEvent.WatchingActors            => info("Watching multisig actors...")
             case LifecycleEvent.TerminatedActor(actor)    => warn(s"Terminated $actor actor")
             case LifecycleEvent.TerminatedDependency(dep) => warn(s"Terminated dependency $dep")
+            case LifecycleEvent.SupervisedFailureEscalated(cause) =>
+                LogEvent(
+                  Level.Error,
+                  "A supervised actor failed; escalating to the guardian, which will stop the system.",
+                  cause = Some(cause),
+                  routingKey = Some("Supervision")
+                )
             case CommonChildEvent.BlockWeaver(bw) =>
                 BlockWeaverEventFormat.humanFormat(peerNum)(bw)
             case CommonChildEvent.JointLedger(jl) =>

@@ -43,9 +43,16 @@
          The per-command RemoteL2Ledger Sending / Received stay at debug (below info), so ordinary L2
          traffic does not flood. -->
     <logger name="RemoteL2Ledger" level="info"/>
+    <!-- Dialer lifecycle: connect / clean disconnect / failure. Without these the transports log
+         failures only, so a coil that is wedged on a half-open socket and one that is merely idle
+         produce identical output (see WsDuplex.defaultReadIdleTimeout). -->
+    <logger name="CoilPeerWsTransport" level="info"/>
+    <logger name="PeerTransport" level="info"/>
     <logger name="HeadMultisigRegimeManager" level="info"/>
     <logger name="CoilMultisigRegimeManager" level="info"/>
     <logger name="com.bloxbean" level="warn"/>
     <logger name="scalus" level="warn"/>
     <logger name="CardanoBackend" level="warn"/>
+    <!-- The only record of why a supervised actor failed; never quiet it. -->
+    <logger name="Supervision" level="error"/>
 </configuration>

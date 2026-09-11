@@ -83,8 +83,11 @@ object PeerWallet:
       signingKey = signingKey
     )
 
-    /** We can't directly access the signing key of a peer wallet, so we serialize a "dummy"
-      * all-zeros signing key in its place.
+    /** ⚠️ The signing key is withheld: an all-zeros `dummySigningKey` stands in, so a wallet
+      * decoded from this output signs with a key its own verification key does not match. Nothing
+      * detects that at load — it surfaces as a hard-ack `BadSignature` deep in consensus, and the
+      * node dies verifying its own stack-0 ack. Anything writing a config a node will read must
+      * splice the real key back in, as `GenerateKeyPair` and `MainSmokeTest` do.
       */
     given dummyPeerWalletEncoder: Encoder[PeerWallet] = new Encoder[PeerWallet] {
         override def apply(w: PeerWallet): Json = Json.obj(

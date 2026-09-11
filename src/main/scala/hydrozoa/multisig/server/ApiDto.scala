@@ -237,6 +237,18 @@ object ApiDto {
     given Codec[BlockTimingSetView] = deriveCodec
     given Schema[BlockTimingSetView] = Schema.derived
 
+    /** What the StackComposer is doing and for how long. Every non-deriving path through
+      * `tryProgress` returns silently, so without this a composer blocked on a peer and one with
+      * nothing to do look identical.
+      */
+    final case class ComposerStatsView(
+        phase: String,
+        secondsInPhase: Long,
+        partitionsDone: Long,
+        partitionsTotal: Long
+    )
+    given Codec[ComposerStatsView] = deriveCodec
+
     /** The full peer-stats body. */
     final case class PeerStatsView(
         uptimeSeconds: Long,
@@ -247,9 +259,51 @@ object ApiDto {
         blockTimings: BlockTimingSetView,
         mempoolSize: Long,
         leaderMempoolDrain: Long,
-        sequencerHeadroom: Long
+        sequencerHeadroom: Long,
+        /** The head's equity beyond its L2 liabilities, in lovelace, as of the last stack this peer
+          * closed. One side of `treasury.value == evacuation map total + equity + beacon`.
+          */
+        equityLovelace: Long,
+        composer: ComposerStatsView,
+        runtime: RuntimeStatsView,
+        blockGate: BlockGateStatsView
     )
     given Codec[PeerStatsView] = deriveCodec
+
+    /** What the block lane's rate limiter is doing right now. `multiplier` 1.0 is the expected
+      * steady state; below 1.0 the stack composer is behind and the lane is being slowed. `backlog`
+      * is blocks released since the last hard confirmation, and `residual` is that count filtered
+      * over several stack cycles — see [[hydrozoa.multisig.metrics.BlockGateStats]].
+      */
+    final case class BlockGateStatsView(
+        multiplier: Double,
+        backlog: Long,
+        residual: Double,
+        holds: Long,
+        drains: Long
+    )
+    given Codec[BlockGateStatsView] = deriveCodec
+
+    /** Whole-process resource gauges. Read these against the cumulative counters above (`blocks`,
+      * `stacks`, `localRequests.total`) and across a deliberate load step-down; they are
+      * concurrency axes, not backlog. Anything the platform does not expose reads as -1. See
+      * [[hydrozoa.multisig.metrics.RuntimeStats]] for how to read them and what they cannot say.
+      */
+    final case class RuntimeStatsView(
+        fibersSuspended: Long,
+        fibersQueuedLocal: Long,
+        workerThreads: Int,
+        workersActive: Int,
+        workersSearching: Int,
+        workersBlocked: Int,
+        timersOutstanding: Long,
+        timersExecuted: Long,
+        liveThreads: Int,
+        heapUsedBytes: Long,
+        heapCommittedBytes: Long,
+        openFileDescriptors: Long
+    )
+    given Codec[RuntimeStatsView] = deriveCodec
 
     /** Map a [[hydrozoa.multisig.metrics.PeerStats]] snapshot to its JSON body. */
     def mkPeerStatsView(s: PeerStats): PeerStatsView =
@@ -263,6 +317,27 @@ object ApiDto {
             )
         PeerStatsView(
           uptimeSeconds = s.uptimeSeconds,
+          blockGate = BlockGateStatsView(
+            multiplier = s.blockGate.multiplier,
+            backlog = s.blockGate.backlog,
+            residual = s.blockGate.residual,
+            holds = s.blockGate.holds,
+            drains = s.blockGate.drains
+          ),
+          runtime = RuntimeStatsView(
+            fibersSuspended = s.runtime.fibersSuspended,
+            fibersQueuedLocal = s.runtime.fibersQueuedLocal,
+            workerThreads = s.runtime.workerThreads,
+            workersActive = s.runtime.workersActive,
+            workersSearching = s.runtime.workersSearching,
+            workersBlocked = s.runtime.workersBlocked,
+            timersOutstanding = s.runtime.timersOutstanding,
+            timersExecuted = s.runtime.timersExecuted,
+            liveThreads = s.runtime.liveThreads,
+            heapUsedBytes = s.runtime.heapUsedBytes,
+            heapCommittedBytes = s.runtime.heapCommittedBytes,
+            openFileDescriptors = s.runtime.openFileDescriptors
+          ),
           localRequests = LocalRequestStatsView(
             total = s.localAccepted,
             rate = rate(s.localRate),
@@ -295,7 +370,14 @@ object ApiDto {
           ),
           mempoolSize = s.mempoolSize,
           leaderMempoolDrain = s.leaderMempoolDrain,
-          sequencerHeadroom = s.sequencerHeadroom
+          sequencerHeadroom = s.sequencerHeadroom,
+          equityLovelace = s.equityLovelace,
+          composer = ComposerStatsView(
+            phase = s.composer.phase.toString,
+            secondsInPhase = s.composer.secondsInPhase,
+            partitionsDone = s.composer.partitionsDone,
+            partitionsTotal = s.composer.partitionsTotal
+          )
         )
 
     /** `{ "status": "success", "message": ... }` — the finalize-trigger body. */

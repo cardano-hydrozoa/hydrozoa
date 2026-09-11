@@ -2,6 +2,7 @@ package hydrozoa.multisig.consensus.transport
 
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import org.http4s.Uri
+import scala.concurrent.duration.FiniteDuration
 
 /** Typed events emitted by [[PeerTransport]]. Pure data; formatters in [[PeerTransportEventFormat]]
   * decide how each variant is rendered to a particular sink.
@@ -29,8 +30,30 @@ object PeerTransportEvent:
     /** A dialer attempt to a remote peer failed. */
     final case class DialerFailed(remote: HeadPeerId, cause: Throwable) extends PeerTransportEvent
 
+    /** The connection to a remote ended without error — the peer closed cleanly, or the receive
+      * side reached end of stream. A read-deadline expiry is an **error** and surfaces as
+      * [[DialerFailed]], not here.
+      *
+      * Logged because a normal return is otherwise an unlogged state change.
+      */
+    final case class DialerDisconnected(remote: HeadPeerId, uri: Uri) extends PeerTransportEvent
+
     /** The dialer fiber for a remote peer was cancelled (resource release). */
     final case class DialerStopped(remote: HeadPeerId, uri: Uri) extends PeerTransportEvent
+
+    /** A dial attempt sat in the WebSocket handshake past its budget and was abandoned. Nothing
+      * failed: the remote accepted the TCP connection and never answered. The attempt cannot be
+      * cancelled (the client builds its socket in an uncancelable acquire), so it is left running
+      * and the dialer moves on — which is what keeps this peer reconnecting at all.
+      */
+    final case class DialerHandshakeStalled(remote: HeadPeerId, uri: Uri, after: FiniteDuration)
+        extends PeerTransportEvent
+
+    /** An abandoned dial attempt completed its handshake after the loop had given up on it, and
+      * dropped the socket instead of using it. The pair to [[DialerHandshakeStalled]]: both for one
+      * attempt means the remote is merely slower than `handshakeBudget`, not black-holing.
+      */
+    final case class DialerHandshakeLate(remote: HeadPeerId, uri: Uri) extends PeerTransportEvent
 
     /** A frame received on an active dialer connection could not be decoded. */
     final case class ClientDecodeError(remote: HeadPeerId, cause: Throwable)

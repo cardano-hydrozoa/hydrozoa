@@ -127,13 +127,13 @@ under it. Then load the CLI alias and check you are on the version you expect:
 source ./hydrozoa.sh   # sets the `hydrozoa` alias + HYDROZOA_HOME (this folder, an absolute path)
 
 hydrozoa version       # verify the image you are running
-#   hydrozoa 0.1.8
-#   git:   v0.1.8
+#   hydrozoa 0.1.14
+#   git:   v0.1.14
 #   built: 2026-07-28 14:00:37.834-0600
 ```
 
-(The `git:` line is `git describe` provenance; a published image built from the `v0.1.8` tag reads a
-clean `v0.1.8`. A locally built image between releases shows the distance from the newest tag, e.g.
+(The `git:` line is `git describe` provenance; a published image built from the `v0.1.14` tag reads a
+clean `v0.1.14`. A locally built image between releases shows the distance from the newest tag, e.g.
 `v0.1.0-10-gaa9d7c69`.)
 
 Need a version that isn't in the registry? Build it from this repo — see §3.
@@ -224,6 +224,8 @@ period), `nodeOperationMultisigConfig` (rate limits, Cardano polling period),
 `blockfrostApiKey`, `adminUsername`, `adminPassword`, `httpHost`, `httpPort`. `remoteLedgerUri` is
 **optional and unused for the EUTXO ledger** — it is read only on the `any-remote` path, so an
 EUTXO node may omit it.
+`remoteScreenerUri` is read on the same path and only by a head peer, whose `RequestSequencer`
+screens each request before assigning it a RequestId; `keygen-fleet` omits it from coil configs.
 
 ### Generating a head's configuration
 
@@ -450,9 +452,14 @@ the ladder never changes.
 ### Step 5 — Build the shared head config
 
 ```bash
-hydrozoa build-head-config   # Docker; reads $HYDROZOA_HOME/bootstrap/, writes $HYDROZOA_HOME/head-config/head-config.json
-just build-head-config       # local
+hydrozoa build-head-config --l2-ledger cardano-eutxo   # Docker; reads $HYDROZOA_HOME/bootstrap/, writes $HYDROZOA_HOME/head-config/head-config.json
+just build-head-config cardano-eutxo                   # local
 ```
+
+`--l2-ledger` is required and has no default. `cardano-eutxo` is the ledger this guide deploys:
+every node runs the built-in EUTXO ledger in-process, and the head's opening evacuation map is
+projected from `bootstrap/l2-cardano-eutxo.json`. The other value, `any-remote`, points the head
+at a separate L2 ledger and is out of scope here.
 
 The build assembles the bootstrap directory's four files (roster, defaults, opening L2 state,
 script refs) and talks to L1: it fetches head peer 0's UTxOs (to select funding inputs and verify
@@ -549,8 +556,8 @@ finalization) appears in the same section as the head progresses.
 build (§3) is already tagged `…:latest`, so it is picked up without either:
 
 ```bash
-HYDROZOA_VERSION=0.1.8 just head-up                          # a specific published release
-HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.8 just head-up  # a specific/other image name
+HYDROZOA_VERSION=0.1.14 just head-up                          # a specific published release
+HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.14 just head-up  # a specific/other image name
 ```
 
 **Another head** — each head directory carries its own `docker-compose.yml`, so switch heads by
@@ -581,7 +588,7 @@ So the restart cycle is:
 just head-down
 # re-fund head peer 0 if the previous head consumed the funding — `just head-zero-address`
 # prints the address; check it in the network's explorer
-just build-head-config
+just build-head-config cardano-eutxo
 just head-up           # right after the build — the config is freshest now
 ```
 

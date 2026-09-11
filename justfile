@@ -143,7 +143,12 @@ integration-rbr-preview:
   trap 'just notify "integration-rbr-preview"' EXIT
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
 
-precommit: lint-check fmt-check nixfmt-check
+# Fail if any project registers ScalaCheck's own sbt framework instead of the wrapper that keeps
+# a suite's property events in one batch. See `ScalaCheckFrameworkFixed` for why that matters.
+scalacheck-framework-check:
+  sbt checkScalaCheckFramework
+
+precommit: lint-check fmt-check nixfmt-check scalacheck-framework-check
   just notify "precommit"
 
 # Like precommit, but cleans first — matches CI's fresh-target behaviour so
@@ -252,7 +257,11 @@ deploy-scripts-and-g2-setup LADDER_REFS="" *ARGS: _require-launcher
 # ref-utxos), writing $HYDROZOA_HOME/head-config/head-config.json. Reads the Blockfrost key from the .local
 # template (else $BLOCKFROST_API_KEY); head peer 0's address must be funded on the target network
 # first (the tool logs the exact lovelace required and fails with the shortfall if not).
-build-head-config *ARGS: _require-launcher
+#
+# L2_LEDGER is required and explicit — `cardano-eutxo` runs the built-in ledger in-process, while
+# `any-remote` points the head at a remote L2 ledger and additionally reads the map that ledger
+# exported into bootstrap/initial-evacuation-map.json, using it verbatim.
+build-head-config L2_LEDGER *ARGS: _require-launcher
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "build-head-config"' EXIT
@@ -260,7 +269,7 @@ build-head-config *ARGS: _require-launcher
   key="${BLOCKFROST_API_KEY:-}"
   if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
-  {{hydrozoa}} build-head-config --home {{HYDROZOA_HOME}} --blockfrost-key "$key" {{ARGS}}
+  {{hydrozoa}} build-head-config --home {{HYDROZOA_HOME}} --blockfrost-key "$key" --l2-ledger {{L2_LEDGER}} {{ARGS}}
 
 # Drive a local Yaci DevKit devnet as the head's L1 (dev/testing — no Blockfrost key, no funded
 # testnet wallet). Commands: `up`, `network [OUT]`, `topup ADDRESS [ADA]`, `down`; run without

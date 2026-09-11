@@ -40,34 +40,50 @@ final class LaneBidirectional[T, N] private (
 object LaneBidirectional {
 
     /** A contiguous bidirectional lane: both directions start at `first`, successor `+1`.
-      * `backfill` reads the outbound prefix below the in-memory outbox floor from the store on a
-      * reply.
+      * `serveFromJournal` reads the outbound entries below the in-memory outbox floor from the
+      * store on a reply; `outboxCap` bounds how many that floor leaves in memory.
       */
     def contiguous[T, N: Ordering](
         numberOf: T => N,
         first: N,
         increment: N => N,
         maxPerReply: Int = 1,
-        backfill: (N, Int) => IO[List[T]]
+        outboxCap: Int,
+        serveFromJournal: (N, Int) => IO[List[T]]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.contiguous(numberOf, first, increment, maxPerReply, backfill),
+          LaneOutbound.contiguous(
+            numberOf,
+            first,
+            increment,
+            maxPerReply,
+            outboxCap = outboxCap,
+            serveFromJournal = serveFromJournal
+          ),
           LaneInbound.contiguous(numberOf, first, increment)
         )
 
     /** A sparse bidirectional lane: outbound follows this side's leader schedule (`outboundNext`),
-      * inbound the remote's (`inboundNext`). `zero` is "before the first" for both. `backfill`
-      * reads the outbound prefix below the in-memory outbox floor from the store on a reply.
+      * inbound the remote's (`inboundNext`). `zero` is "before the first" for both.
+      * `serveFromJournal` reads the outbound entries below the in-memory outbox floor from the
+      * store on a reply; `outboxCap` bounds how many that floor leaves in memory.
       */
     def sparse[T, N: Ordering](
         numberOf: T => N,
         zero: N,
         outboundNext: N => Option[N],
         inboundNext: N => Option[N],
-        backfill: (N, Int) => IO[List[T]]
+        outboxCap: Int,
+        serveFromJournal: (N, Int) => IO[List[T]]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.sparse(numberOf, zero, outboundNext, backfill),
+          LaneOutbound.sparse(
+            numberOf,
+            zero,
+            outboundNext,
+            outboxCap = outboxCap,
+            serveFromJournal = serveFromJournal
+          ),
           LaneInbound.sparse(numberOf, zero, inboundNext)
         )
 }

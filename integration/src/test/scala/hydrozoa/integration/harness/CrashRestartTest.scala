@@ -11,7 +11,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.*
 
 /** End-to-end proof for the deterministic crash-recovery mechanism (see
-  * `.scratch/crash-after-write-n-scope.md`): crash one head peer at a chosen durable write during
+  * `docs/spec/crash-recovery-testing.md`): crash one head peer at a chosen durable write during
   * bring-up, restart it against its own store, and assert it recovers and rejoins the running head.
   *
   * This is the single hand-written case that proves the harness plumbing — [[CrashingPersistence]]

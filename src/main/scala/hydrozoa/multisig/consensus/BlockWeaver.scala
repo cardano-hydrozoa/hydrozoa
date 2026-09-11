@@ -1,5 +1,5 @@
 package hydrozoa.multisig.consensus
-import cats.effect.IO
+import cats.effect.{FiberIO, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -35,6 +35,10 @@ final case class BlockWeaver(
       * block to resume on, and whether its predecessor is confirmed — and reads it in `PreStart`.
       */
     persistence: Persistence[IO],
+    /** The boot markers, derived once by the regime manager (§5.2). This actor projects
+      * `fastBlockMark` and `softConfirmed` out of them rather than re-reading the store.
+      */
+    markers: Markers,
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
@@ -62,9 +66,16 @@ final case class BlockWeaver(
                 // Suspends on the start barrier, so the base below is in place before any
                 // replayed journal entry is processed (§5.6, §8).
                 connections <- initializeConnections
-                // Same anchor as `JointLedger.preStartLocal`: the two step the spine in lockstep.
-                fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
-                recovered <- State.recover(config, connections, tracer, persistence, fastBlockMark)
+                // Same anchor as `JointLedger.preStartLocal`: the two step the spine in lockstep —
+                // now guaranteed, because both project the one bundle rather than each re-reading.
+                recovered <- State.recover(
+                  config,
+                  connections,
+                  tracer,
+                  persistence,
+                  markers.fastBlockMark,
+                  markers.softConfirmed
+                )
                 // `None`: the store says this head finalized, so the weaver retires rather than
                 // opening a block, as on the live path.
                 _ <- recovered.fold(context.self.stop)(become)
@@ -76,11 +87,12 @@ final case class BlockWeaver(
     private def initializeConnections: IO[BlockWeaver.Connections] = pendingConnections match {
         case pc: HeadMultisigRegimeManager.PendingConnections =>
             for {
-                c <- pc.get
+                c <- pc.get.flatMap(IO.fromEither)
             } yield BlockWeaver.Connections(
               blockWeaver = context.self,
               jointLedger = c.jointLedger,
-              metrics = metrics
+              metrics = metrics,
+              wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None)
             )
         case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
     }
@@ -103,14 +115,24 @@ object BlockWeaver {
     final case class Connections private[BlockWeaver] (
         blockWeaver: BlockWeaver.Handle,
         jointLedger: JointLedger.Handle,
-        metrics: PeerMetrics
+        metrics: PeerMetrics,
+        /** Handle to the in-flight wakeup fiber (see `sleepSendWakeup`). Lives here because every
+          * state already carries `Connections`, and it is created once per weaver.
+          *
+          * At most one wakeup is ever wanted. ⚠️ The fiber's sleep is
+          * `min(depositDecisionWakeup, forcedMajorBlockWakeup) - now`, and the forced-major horizon
+          * derives from `minSettlementDuration` — routinely hours. An uncancelled fiber therefore
+          * outlives its block by that much, and at a high block rate they accumulate.
+          */
+        wakeupFiber: Ref[IO, Option[FiberIO[Unit]]]
     )
 
     final case class ConnectionsPartial(jointLedger: JointLedger.Handle, metrics: PeerMetrics) {
         def apply(blockWeaver: BlockWeaver.Handle): Connections = Connections(
           blockWeaver = blockWeaver,
           jointLedger = jointLedger,
-          metrics = metrics
+          metrics = metrics,
+          wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None)
         )
     }
 
@@ -142,7 +164,14 @@ object BlockWeaver {
         def finalizationLocallyTriggered: LocalFinalizationTrigger
 
         final def stop(): IO[None.type] =
-            tracer.traceWith(BlockWeaverEvent.Stopped) >> IO.pure(None)
+            // A retiring weaver must not leave a wakeup sleeping past it.
+            clearWakeupFiber >> tracer.traceWith(BlockWeaverEvent.Stopped) >> IO.pure(None)
+
+        /** Cancel and forget whatever wakeup is currently armed. See `scheduleWakeupFiber` for why
+          * cancelling here is safe.
+          */
+        final def clearWakeupFiber: IO[Unit] =
+            connections.wakeupFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 
         final def logStateTransition: IO[Unit] =
             tracer.traceWith(BlockWeaverEvent.BecameState(stateName))
@@ -229,10 +258,10 @@ object BlockWeaver {
             connections: Connections,
             tracer: ContraTracer[IO, BlockWeaverEvent],
             persistence: Persistence[IO],
-            fastBlockMark: Option[BlockNumber]
+            fastBlockMark: Option[BlockNumber],
+            softConfirmed: Option[BlockNumber]
         ): IO[Option[Reactive]] =
             for {
-                softConfirmed <- Markers.recoverSoftConfirmed(persistence.backend)
                 opening <- start(config, connections, tracer, fastBlockMark)
                 // `filter(softConfirmed.contains)` is the "confirmed everything it applied" test.
                 resumed <- fastBlockMark
@@ -1022,13 +1051,26 @@ object BlockWeaver {
                                 //
                                 // See:
                                 //   https://linear.app/gummiworm-labs/issue/GUM-111/should-negative-weavers-wakeups-be-permitted
+                                // Clear as well as fire: this branch arms no new fiber, so nothing
+                                // else would collect the previous one.
                                 tracer.traceWith(
                                   BlockWeaverEvent.NonPositiveWakeupDelay(this.leadingBlockNumber)
-                                ) >> (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
+                                ) >> clearWakeupFiber >>
+                                    (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
                             } else
                                 tracer.traceWith(
                                   BlockWeaverEvent.WakeupFiberStarted(this.leadingBlockNumber)
-                                ) >> sleepSendWakeup(sleepDuration).start.void
+                                ) >> sleepSendWakeup(sleepDuration).start
+                                    .flatMap(fib =>
+                                        // ⛔ Cancelling here is safe only because the block-number
+                                        // guard in `Leader.AwaitingRequest` refuses a superseded
+                                        // `Wakeup`: a cancel that loses its race still delivers
+                                        // one. Remove that guard and this becomes a correctness
+                                        // hazard rather than a resource optimisation.
+                                        connections.wakeupFiber
+                                            .getAndSet(Some(fib))
+                                            .flatMap(_.fold(IO.unit)(_.cancel))
+                                    )
                     } yield ()
 
                 private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] =
@@ -1081,7 +1123,14 @@ object BlockWeaver {
                 private val currentBlockNumber = previousBlockConfirmed.blockNum.increment
 
                 override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
-                    def completeBlockRegular = sendCompleteRegularBlockAsLeader(config) >>
+                    // Completing this block is the moment its wakeup stops being wanted.
+                    // Cancel-on-replace alone does not cover it: leadership rotates, so the peer
+                    // usually becomes a FOLLOWER next and arms no replacement for several blocks,
+                    // leaving this fiber to sleep out a term that can be hours. The fiber being
+                    // cancelled is armed for the block being completed right now, so it cannot be
+                    // one anyone still needs.
+                    def completeBlockRegular = clearWakeupFiber >>
+                        sendCompleteRegularBlockAsLeader(config) >>
                         DecidingRole(
                           this,
                           mempool = Mempool.empty,

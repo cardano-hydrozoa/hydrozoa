@@ -169,7 +169,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                                 _ => IO.pure(())
                         })
                         routes <- HydrozoaRoutes(
-                          reqStub,
+                          Some(reqStub),
                           bwStub,
                           IO.pure(NodeStatus.Active),
                           stubReader(brief),

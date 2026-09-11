@@ -14,6 +14,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.persistence.codec.RequestRecordCodec
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -442,7 +443,47 @@ object Codecs {
         io.circe.Codec.from(dec, enc)
     }
 
-    given Codec[UserRequestWithId] = {
+    /** The request's protobuf form, base64 in a JSON string — the same bytes the `Request` journal
+      * stores (`proto/request_record.proto`), rather than a second hand-maintained shape.
+      *
+      * Not the emitted form yet. A peer running an older build cannot read it, so the fleet has to
+      * be able to *read* this before any peer starts *writing* it: this release teaches every peer
+      * to accept it, and a later one flips [[userRequestWithIdCodec]]'s encoder over. Flipping it
+      * early would break the mesh, which is why the switch is a code change and not a config knob
+      * somebody could turn on half a fleet.
+      *
+      * Same payload, two thirds the bytes: hex in JSON is 2× the binary, base64 is 4/3.
+      */
+    val userRequestProtobufEncoder: Encoder[UserRequestWithId] =
+        Encoder.encodeString.contramap(r => ByteVector(RequestRecordCodec.encode(r)).toBase64)
+
+    /** The counterpart decoder. Kept next to the encoder so the pair is read together. */
+    val userRequestProtobufDecoder: Decoder[UserRequestWithId] = Decoder.instance(c =>
+        c.as[String].flatMap { encoded =>
+            ByteVector
+                .fromBase64Descriptive(encoded)
+                .left
+                .map(why => DecodingFailure(s"UserRequestWithId is not base64: $why", c.history))
+                .flatMap(bytes =>
+                    // `RequestRecordCodec.decode` raises on a malformed record — the persistence
+                    // layer treats corruption as fail-fast. On the wire it is a decode failure, so
+                    // the liaison rejects the batch rather than the actor system dying. Carry its
+                    // message: it names which field went wrong, which "expected a string" would not.
+                    scala.util
+                        .Try(RequestRecordCodec.decode(bytes.toArray))
+                        .toEither
+                        .left
+                        .map(e =>
+                            DecodingFailure(
+                              s"UserRequestWithId protobuf is malformed: ${e.getMessage}",
+                              c.history
+                            )
+                        )
+                )
+        }
+    )
+
+    given userRequestWithIdCodec: Codec[UserRequestWithId] = {
         val enc: Encoder[UserRequestWithId] = Encoder.instance {
             case UserRequestWithId.DepositRequest(rid, r) =>
                 Json.obj(
@@ -477,7 +518,13 @@ object Codecs {
                 }
             } yield out
         )
-        io.circe.Codec.from(dec, enc)
+        // Accept both forms. The two are told apart by JSON shape, not by a tag or a version
+        // field: the protobuf form is a string, the field-by-field form is an object, and nothing
+        // can be read as both. A peer on this build therefore understands a peer on the next one.
+        val tolerant: Decoder[UserRequestWithId] = Decoder.instance(c =>
+            if c.value.isString then userRequestProtobufDecoder(c) else dec(c)
+        )
+        io.circe.Codec.from(tolerant, enc)
     }
 
     // ---- BlockBrief.Next ----

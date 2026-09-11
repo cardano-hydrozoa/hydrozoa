@@ -37,6 +37,58 @@ val http4sVersion = "0.23.32"
 val tapirVersion = "1.13.25"
 
 // Cardano on-chain validators and shared on-chain types
+// sbt 2 renamed the class ScalaCheck sniffs to recognise a forked run, so ScalaCheck falls back to
+// a path whose per-property events sbt's forked worker collapses: a falsified property is reported
+// as `Passed: Total 1` with exit code 0. `ScalaCheckFrameworkFixed` delegates to ScalaCheck and
+// only consolidates event delivery — properties still run concurrently. It lives in the root-level
+// `test` package of core's test sources, which `integration` and `examples` get via their
+// `test->test` dependency. NB: not `hydrozoa.test` — that shadows the top-level `test` package for
+// every file under `hydrozoa.*`, breaking `import test.Generators...` on a clean compile.
+//
+// A bare (non-`ThisBuild`) `testFrameworks` setting in this file reaches every project, so one
+// registration covers them all; `checkScalaCheckFramework` asserts that it actually did. Remove
+// both, and `ScalaCheckFrameworkFixed`, once the upstream fixes are in a resolved version.
+lazy val scalaCheckFramework: TestFramework =
+  new TestFramework("test.ScalaCheckFrameworkFixed")
+
+lazy val useFixedScalaCheck: Setting[Seq[TestFramework]] =
+  testFrameworks := testFrameworks.value.filterNot(_ == TestFrameworks.ScalaCheck) :+
+    scalaCheckFramework
+
+// Registering the wrapper is per-project, and forgetting it in a new subproject would silently
+// restore the dropped-failure behaviour — a green build, the same signature as the bug itself. This
+// check fails the run instead. It inspects every project, so it also covers projects that never
+// applied `useFixedScalaCheck`, which is precisely the case a per-project check would miss.
+lazy val checkScalaCheckFramework =
+  taskKey[Unit]("Fail if any project registers ScalaCheck's own sbt framework.")
+
+lazy val everyProject = ScopeFilter(inAnyProject)
+
+useFixedScalaCheck
+
+checkScalaCheckFramework := Def.uncached {
+  val ids = thisProject.all(everyProject).value.map(_.id)
+  val frameworks = (Test / testFrameworks).all(everyProject).value
+  val classpaths = (Test / dependencyClasspath).all(everyProject).value
+  val offenders = ids.zip(frameworks).zip(classpaths).collect {
+    case ((id, fws), cp)
+        if fws.contains(TestFrameworks.ScalaCheck) &&
+          cp.exists(_.data.id.contains("scalacheck_")) =>
+      id
+  }
+  if (offenders.nonEmpty) {
+    sys.error(
+      s"${offenders.mkString(", ")} registers ScalaCheck's own sbt framework, which drops all but " +
+        "one property result per suite on a forked run — a falsified property is then reported as " +
+        "passed with exit code 0. Add `useFixedScalaCheck` to those projects. Remove this check, " +
+        "`useFixedScalaCheck` and `ScalaCheckFrameworkFixed` once build.sbt resolves an sbt or " +
+        "ScalaCheck version carrying the upstream fixes: typelevel/scalacheck#1195 " +
+        "(fork detection) or sbt/sbt#9642 (events keyed per task overwrite one another)."
+    )
+  }
+}
+
+
 lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
     .settings(
       name := "hydrozoa-cardano-onchain",
@@ -78,6 +130,13 @@ lazy val core: Project = (project in file("."))
     .enablePlugins(JavaAppPackaging, DockerPlugin, BuildInfoPlugin)
     .dependsOn(cardanoOnchain)
     .settings(
+      // Generate the Request journal's record from `proto/request_record.proto` into src_managed.
+      // sbt-protoc's default protoc (3.21.7) is dynamically linked and will not start in a lean
+      // container; 3.25.8 ships self-contained. Everything here resolves from Maven like any other
+      // dependency — nothing is added to the flake.
+      PB.protocVersion := "3.25.8",
+      Compile / PB.protoSources := Seq(baseDirectory.value / "proto"),
+      Compile / PB.targets := Seq(scalapb.gen() -> (Compile / sourceManaged).value / "scalapb"),
       Compile / mainClass := Some("hydrozoa.app.Main"),
       // Name the packaged launcher `hydrozoa`, and generate only the dispatcher's script (not
       // forwarder scripts for every other discovered main); every command is a `hydrozoa <sub>`.
@@ -206,6 +265,8 @@ lazy val core: Project = (project in file("."))
         "com.monovore" %% "decline-effect" % "2.6.2",
         // RocksDB (persistence layer)
         "org.rocksdb" % "rocksdbjni" % "9.7.3",
+        // ScalaPB runtime, for the code generated from `proto/`. Pulls protobuf-java itself.
+        "com.thesamet.scalapb" %% "scalapb-runtime" % "1.0.0-alpha.6",
       ),
       libraryDependencies ++= Seq(
         "org.typelevel" %% "spire-laws" % "0.18.0" % Test,
@@ -310,8 +371,11 @@ lazy val integration: Project = (project in file("integration"))
       //
       // A full, unfiltered run is the same opt-out the Yaci recipes already use:
       //   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly *"
+      // Scoped to `scalaCheckFramework`, not `TestFrameworks.ScalaCheck`: testOptions are matched
+      // by framework, so naming a framework this build does not register would silently drop the
+      // tuning — 100 cases instead of 10, and `(extended)` properties back in the fast run.
       Test / testOptions += Tests.Argument(
-        TestFrameworks.ScalaCheck,
+        scalaCheckFramework,
         "-s",
         "10",
         "-f",
@@ -327,6 +391,11 @@ lazy val integration: Project = (project in file("integration"))
         // so `YaciCardanoContainer.start` can talk to the daemon.
         "org.testcontainers" % "testcontainers" % "1.21.3" % Test
       ),
+      // yaci-cardano-test also drags in `org.testcontainers:junit-jupiter:1.17.6`, which the single
+      // `testcontainers` bump above doesn't cover — leaving a split 1.17.6/1.21.3 testcontainers
+      // surface on the test classpath. Force the companion module to match so the whole group
+      // resolves to one version.
+      dependencyOverrides += "org.testcontainers" % "junit-jupiter" % "1.21.3",
       // testcontainers' `DockerClientProviderStrategy.getClientForConfig` unconditionally forces
       // the shaded docker-java `apiVersion` to `VERSION_1_32` whenever the config resolves to
       // `UNKNOWN_VERSION` (a compat fallback for pre-1.24 daemons). Modern rootless dockerd
@@ -412,7 +481,7 @@ inThisBuild(
   List(
     // Release version — drives the Docker image tag, `hydrozoa.BuildInfo.version`, and `GET
     // /version`. Bump here for a release (see RELEASE.md), then tag `v<version>`.
-    version := "0.1.8",
+    version := "0.1.14",
     scalaVersion := "3.3.7",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision

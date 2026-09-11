@@ -690,7 +690,7 @@ is safe because every journal is **append-only** — entries are appended in ind
 and never mutated ([§3.2](#32-satellites), [§7.1](#71-key-layout--journal-ids)): a reader — even one running concurrently
 with the writer, e.g. a liaison re-seeding its lanes after the start barrier — sees a
 consistent prefix. It can at worst miss the newest append, never a torn entry, and a
-stale high-water self-corrects through the normal `append` / `backfill` path (and the
+stale high-water self-corrects through the normal `append` / journal-serve path (and the
 re-pull cursor protocol). The one read carrying a **cross-CF invariant** — the
 markers' `confirmed ≤ acked` — is derived **before** the start barrier, while no
 writer is producing yet ([§8](#8-boot-sequence)), and is fail-safed by `validateInvariants`.
@@ -871,8 +871,9 @@ differing only in which lanes each serves.
   source of truth and the outbox is only a cache. Recovery therefore restores almost
   nothing:
   - **Queue stays empty.** No payloads are eagerly seeded; it fills only as live
-    production appends new items, and `reply` hot-loads anything else from the journal
-    on demand.
+    production appends new items, and `reply` serves anything else from the journal.
+    That is not a recovery-only mode — it is what the cap makes routine for any remote
+    lagging more than `peerLiaisonOutboxCap` behind.
   - **One scalar is restored** — the high-water number (`lastAppended = max(journal
     key)`, payload-free — `LaneOutgoingBacking.highWater`). It is not state to serve; it
     exists so (a) the first post-crash `append` is legal — live production resumes at
@@ -880,9 +881,10 @@ differing only in which lanes each serves.
     cold `None` would make it throw — and (b) it is `reply`'s out-of-bounds bound
     (`next(lastAppended)`) for a remote that re-pulls before we append anything.
   - **Serving is a DB-backed view.** On `GetMsgBatch` from R, `LaneOutbound.reply`
-    returns the in-memory tail if it holds R's cursor, else hot-loads the prefix from
-    the journal (`LaneOutgoingBacking.backfill`). Because every served entry is persisted, the
-    journal always backs it — the cache need never be authoritative.
+    returns the in-memory window if it holds R's cursor, else reads from the journal
+    (`LaneOutgoingBacking.serveFromJournal`). Because every served entry is persisted,
+    the journal always backs it — the cache need never be authoritative, which is what
+    lets the window be capped.
   - **`append` is idempotent below the high-water.** A consensus actor re-emitting an
     already-durable entry during replay (e.g. `SlowConsensusActor` re-broadcasting the
     in-flight stack's round-1 ack, number `n1`, after the lane restored its high-water
@@ -906,9 +908,14 @@ differing only in which lanes each serves.
   `GetMsgBatch` cursors**, not local confirmation, *"so that messages can be
   retransmitted if needed during recovery scenarios"* (peer-network
   `#outbox-queues-and-confirmation`); persistence extends that retransmissibility
-  across a process restart, not just a transient disconnect. Reading from the
-  store on demand (rather than eagerly seeding the whole own production) also
-  bounds the in-memory outbox to the live tail.
+  across a process restart, not just a transient disconnect. Cursor-pruning alone
+  bounds an outbox only as well as its remote pulls, though: a configured peer that
+  never connects never advances a cursor, so its lanes retain everything the process
+  has relayed. `LaneOutbound` therefore also caps each outbox at
+  `peerLiaisonOutboxCap` items (floored at that lane's `maxPerReply`) and evicts the
+  oldest past it. Eviction costs only a store read: everything on a lane is durable
+  before it is appended (CR4), so an evicted item is still servable — the same path
+  every lane uses from a cold start.
 - **Inputs:** remote lane entries — **cursor-gated (CR8)**.
 - **Persists:** each inbound remote lane entry into its journal (CR8); each persisted
   value carries a **12-byte `ArrivalStamp` prefix** ([§5.4](#54-total-order-of-the-replayed-streams), [§7.1](#71-key-layout--journal-ids)) — `(generation,
@@ -928,10 +935,10 @@ differing only in which lanes each serves.
 
 > **Code reality.** All three shapes recover the same way: each outbound
 > lane is built with a `LaneOutgoingBacking` over its journal, `preStart` restores the
-> lane high-waters (`seedHighWater`), and `LaneOutbound.reply` hot-loads below the
-> in-memory floor (`LaneOutgoingBacking.backfill`); inbound receive cursors restore off a
-> `LaneIncomingCursors` read. No lane eagerly seeds its whole own
-> production.
+> lane high-waters (`seedHighWater`), and `LaneOutbound.reply` reads below the
+> in-memory floor (`LaneOutgoingBacking.serveFromJournal`); inbound receive cursors
+> restore off a `LaneIncomingCursors` read. No lane eagerly seeds its whole own
+> production, and none accumulates it either — the outbox is capped.
 
 #### 6.1.3 `CardanoLiaison`
 

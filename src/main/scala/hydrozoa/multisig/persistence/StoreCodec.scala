@@ -51,12 +51,26 @@ object StoreCodec:
         def encode(a: Array[Byte])(using CardanoNetwork.Section): Array[Byte] = a
         def decode(bytes: Array[Byte])(using CardanoNetwork.Section): Array[Byte] = bytes
 
-    /** Journal-CF codec: the Circe (wire-codec) JSON of `A` framed behind the [[ArrivalStamp]]
-      * prefix ([[JournalValue]]). Stripping the prefix yields the byte-identical wire form (§7.1).
+    /** Journal-CF codec over an arbitrary byte encoding of `A`, framed behind the [[ArrivalStamp]]
+      * prefix ([[JournalValue]]) like every other journal value (§7.1). The Request lane uses it to
+      * store its canonical protobuf record; the framing stays generic, so recovery reads stamps the
+      * same way across all six journals.
       *
-      * An explicit factory (not a `given`) — each journal `StoreKey` case calls
-      * `StoreCodec.journalValue` directly, so there is no implicit ambiguity with [[fromCirce]] and
-      * no `summon` self-resolution risk.
+      * These are explicit factories (not `given`s) — each journal `StoreKey` case calls one
+      * directly, so there is no implicit ambiguity with [[fromCirce]] and no `summon`
+      * self-resolution risk.
+      */
+    def journalFramed[A](
+        encodeA: A => Array[Byte],
+        decodeA: Array[Byte] => A
+    ): StoreCodec[JournalValue[A]] = new StoreCodec[JournalValue[A]]:
+        def encode(lv: JournalValue[A])(using CardanoNetwork.Section): Array[Byte] =
+            JournalValue.frame(lv.stamp, encodeA(lv.payload))
+        def decode(bytes: Array[Byte])(using CardanoNetwork.Section): JournalValue[A] =
+            JournalValue(JournalValue.stamp(bytes), decodeA(JournalValue.payload(bytes)))
+
+    /** Journal-CF codec over the circe wire codec of `A` — the common case, where the persisted
+      * payload is byte-identical to what goes on the mesh.
       */
     def journalValue[A](using
         mkEnc: CardanoNetwork.Section ?=> Encoder[A],

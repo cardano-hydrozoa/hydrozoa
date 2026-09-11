@@ -55,23 +55,25 @@ abstract class PeerLiaisonCoilToHub(
     private def resolveConnections: IO[PeerLiaisonCoilToHub.Connections] =
         pendingConnections match {
             case shared: HeadMultisigRegimeManager.PendingConnections =>
-                shared.get.flatMap(s =>
-                    s.remoteHubLiaison.fold(
-                      IO.raiseError(
-                        IllegalStateException("Coil→hub liaison requires a hub liaison handle.")
-                      )
-                    )(hub =>
-                        IO.pure(
-                          PeerLiaisonCoilToHub.Connections(
-                            blockWeaver = s.blockWeaver,
-                            consensusActor = s.consensusActor,
-                            stackComposer = s.stackComposer,
-                            slowConsensusActor = s.slowConsensusActor,
-                            remote = hub
+                shared.get
+                    .flatMap(IO.fromEither)
+                    .flatMap(s =>
+                        s.remoteHubLiaison.fold(
+                          IO.raiseError(
+                            IllegalStateException("Coil→hub liaison requires a hub liaison handle.")
                           )
+                        )(hub =>
+                            IO.pure(
+                              PeerLiaisonCoilToHub.Connections(
+                                blockWeaver = s.blockWeaver,
+                                consensusActor = s.consensusActor,
+                                stackComposer = s.stackComposer,
+                                slowConsensusActor = s.slowConsensusActor,
+                                remote = hub
+                              )
+                            )
                         )
                     )
-                )
             case own: PeerLiaisonCoilToHub.Connections => IO.pure(own)
         }
 
@@ -125,8 +127,8 @@ abstract class PeerLiaisonCoilToHub(
         }.toMap
 
     // Outbound: this coil peer's own hard-ack, served to the hub. Backed by the own coil `HardAck`
-    // journal so a reply hot-loads acks below the in-memory outbox floor (the hub re-pulls old acks
-    // it missed during our crash); preStart restores only the high-water, replay re-appends the
+    // journal so a reply reads acks below the in-memory outbox floor (the hub re-pulls old acks it
+    // missed during our crash); preStart restores only the high-water, replay re-appends the
     // in-flight tail.
     private val ownHardAckBacking =
         LaneOutgoingBacking.hardAck(persistence.backend, PeerId.Coil(ownCoilPeerNumber))
@@ -135,7 +137,8 @@ abstract class PeerLiaisonCoilToHub(
           _.hardAckNum,
           HardAckNumber.zero,
           _.increment,
-          backfill = ownHardAckBacking.backfill
+          outboxCap = config.peerLiaisonOutboxCap,
+          serveFromJournal = ownHardAckBacking.serveFromJournal
         )
 
     // ---- Connections ----------------------------------------------------------------------------
@@ -356,7 +359,14 @@ abstract class PeerLiaisonCoilToHub(
         (IO.sleep(
           config.peerLiaisonResendInterval
         ) >> (context.self ! ResendCurrent)).foreverM.start
-            .flatMap(fib => resendFiber.set(Some(fib)))
+            .flatMap(fib =>
+                // `getAndSet` + cancel, not `set`: `set` drops a fiber already stored without
+                // cancelling it, and the orphan is a `foreverM` that keeps delivering
+                // `ResendCurrent` for the life of the process. Keeping the single-fiber invariant
+                // local to this method is deliberate — see `FiberLifecycleTest` for why it cannot
+                // rest on the actor's own teardown running first.
+                resendFiber.getAndSet(Some(fib)).flatMap(_.fold(IO.unit)(_.cancel))
+            )
 
     /** Cancel the resend-timer fiber so it stops pinging `self` once the actor has stopped — e.g.
       * when fallback tears down the multisig regime and this liaison — instead of leaking a fiber

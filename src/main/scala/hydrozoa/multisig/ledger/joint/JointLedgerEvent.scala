@@ -5,7 +5,8 @@ import hydrozoa.config.head.multisig.timing.TxTimingEvent
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockHeaderEvent, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
-import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMapEvent
+import hydrozoa.multisig.ledger.l1.deposits.map.{DepositsMap, DepositsMapEvent}
+import scalus.cardano.ledger.Hash32
 
 /** Typed events emitted by [[JointLedger]]. Pure data; formatters in [[JointLedgerEventFormat]]
   * decide how each variant is rendered to a particular sink (SLF4J text, JSONL protocol trace,
@@ -48,6 +49,13 @@ object JointLedgerEvent:
     /** The passive `Done(softAcked)` state was restored from a non-empty store at boot (R3). */
     final case class PassiveStateRecovered(blockNum: BlockNumber) extends JointLedgerEvent
 
+    /** The L2 ledger answered `restoreTo` without an `l2ParamsHash`, so this node cannot verify it
+      * is driving the ledger its head config was built against. Transitional: a remote that
+      * predates the field is indistinguishable from a wrong one, and failing closed would refuse
+      * every deployed sidecar (docs/spec/head-params-hash.md).
+      */
+    final case class L2ParamsHashUnreported(expected: Hash32) extends JointLedgerEvent
+
     // ===== Block lifecycle =====
 
     final case class BlockStarted(blockNum: BlockNumber, startTime: BlockCreationStartTime)
@@ -56,7 +64,7 @@ object JointLedgerEvent:
         blockNum: BlockNumber,
         endTime: BlockCreationEndTime,
         competingFallbackTxTime: FallbackTxStartTime,
-        splitDescription: String
+        split: DepositsMap.Split
     ) extends JointLedgerEvent
 
     /** Verbose debug dump of the inputs to brief construction. */

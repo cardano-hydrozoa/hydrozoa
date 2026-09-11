@@ -22,9 +22,9 @@ object PeerLiaisonEventFormat:
             case Started =>
                 info(s"starting, remote peer: $remoteLabel")
             case BatchRequested(batchNum, detail) =>
-                debug(s"-> GetMsgBatch=$batchNum $detail")
+                debug(s"-> GetMsgBatch=$batchNum ${detail.value}")
             case BatchReceived(batchNum, detail) =>
-                debug(s"<- NewMsgBatch=$batchNum $detail")
+                debug(s"<- NewMsgBatch=$batchNum ${detail.value}")
             case StaleBatchDropped(received, outstanding) =>
                 debug(s"dropping stale reply batch=$received (outstanding=$outstanding)")
             case BatchRejected(batchNum, reason) =>

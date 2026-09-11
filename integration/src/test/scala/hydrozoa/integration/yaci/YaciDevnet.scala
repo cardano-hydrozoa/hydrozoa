@@ -36,7 +36,16 @@ object YaciDevnet {
     def acquireShared(
         config: YaciConfig = YaciConfig(startupTimeoutSeconds = 600L),
     ): IO[DevKit] =
-        IO.blocking(YaciContainer.acquire(config)).map(mkDevKit)
+        IO.blocking {
+            // testcontainers finds its DockerClientProviderStrategy impls via a ServiceLoader on
+            // the thread context classloader. This runs inside ScalaCheck property evaluation,
+            // whose worker thread's context loader can't see those services, so discovery finds
+            // none and throws "Could not find a valid Docker environment". (The probe suites avoid
+            // this: a ScalaTest suite inits Docker from a normal thread first.) Pin the context
+            // loader to this class's loader, which has testcontainers on its classpath.
+            Thread.currentThread().setContextClassLoader(getClass.getClassLoader)
+            YaciContainer.acquire(config)
+        }.map(mkDevKit)
 
     private def mkDevKit(c: com.bloxbean.cardano.yaci.test.YaciCardanoContainer): DevKit =
         // Bloxbean's URL helpers hardcode `localhost` and include a trailing `/`; strip the slash

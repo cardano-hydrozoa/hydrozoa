@@ -10,14 +10,19 @@ import java.nio.ByteBuffer
   * stabilizes — see [[current]].
   */
 object StoreVersion:
-    /** Current on-disk schema version — held at **1**.
+    /** Current on-disk schema version — **2**.
       *
       * The format still churns freely during development, so we do **not** track
-      * backward-incompatible bumps yet: a format change just rebuilds the store. Versioning starts
-      * (and the per-version deltas get recorded here) once the layout stabilizes and stores must
-      * survive upgrades.
+      * backward-incompatible bumps as migrations: a format change just rebuilds the store, and the
+      * bump is what makes an old store refuse to open rather than be misread.
+      *
+      *   - 2: the Request journals' values changed from the circe wire form to the canonical
+      *     protobuf record (`proto/request_record.proto`).
+      *   - 3: [[StoreIdentity]] arrived. Bumped rather than treating an unstamped store as fresh,
+      *     which would bless whatever store the node happens to be pointed at on its first open —
+      *     exactly the mistake the stamp exists to catch. Existing stores rebuild.
       */
-    val current: Int = 1
+    val current: Int = 3
 
     /** The key under which the schema version is stored in [[Cf.Meta]]. */
     val key: Array[Byte] = "store_version".getBytes("UTF-8")

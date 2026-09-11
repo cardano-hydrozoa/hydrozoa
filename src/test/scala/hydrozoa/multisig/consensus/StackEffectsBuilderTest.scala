@@ -94,8 +94,11 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
           utxoId = fixed(Arbitrary.arbitrary[TransactionInput], seed = 1),
           address = headConfig.headMultisigAddress,
-          datum =
-              MultisigTreasuryUtxo.Datum(ByteString.fromArray(Array.fill[Byte](48)(0)), BigInt(3)),
+          datum = MultisigTreasuryUtxo.Datum(
+            ByteString.fromArray(Array.fill[Byte](48)(0)),
+            BigInt(3),
+            ByteString.fromArray(Array.fill[Byte](32)(0))
+          ),
           // Generous ADA so the build succeeds even under the buggy (double-counting) path — the
           // regression then shows up as `payoutCount == 2`, not an opaque build failure.
           value = Value(Coin(2_000_000_000L)) + treasuryTokenValue,
@@ -178,8 +181,11 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
           utxoId = fixed(Arbitrary.arbitrary[TransactionInput], seed = 2),
           address = headConfig.headMultisigAddress,
-          datum =
-              MultisigTreasuryUtxo.Datum(ByteString.fromArray(Array.fill[Byte](48)(0)), BigInt(3)),
+          datum = MultisigTreasuryUtxo.Datum(
+            ByteString.fromArray(Array.fill[Byte](48)(0)),
+            BigInt(3),
+            ByteString.fromArray(Array.fill[Byte](32)(0))
+          ),
           value = treasuryValue + treasuryTokenValue,
           equity = Equity(Coin(5_000_000L)).get
         )
@@ -250,8 +256,11 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
           utxoId = fixed(Arbitrary.arbitrary[TransactionInput], seed = 4),
           address = headConfig.headMultisigAddress,
-          datum =
-              MultisigTreasuryUtxo.Datum(ByteString.fromArray(Array.fill[Byte](48)(0)), BigInt(3)),
+          datum = MultisigTreasuryUtxo.Datum(
+            ByteString.fromArray(Array.fill[Byte](48)(0)),
+            BigInt(3),
+            ByteString.fromArray(Array.fill[Byte](32)(0))
+          ),
           value = Value(Coin(2_000_000_000L)) + treasuryTokenValue,
           equity = Equity(Coin(1_000_000_000L)).get
         )
@@ -296,8 +305,11 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
           utxoId = fixed(Arbitrary.arbitrary[TransactionInput], seed = 5),
           address = headConfig.headMultisigAddress,
-          datum =
-              MultisigTreasuryUtxo.Datum(ByteString.fromArray(Array.fill[Byte](48)(0)), BigInt(3)),
+          datum = MultisigTreasuryUtxo.Datum(
+            ByteString.fromArray(Array.fill[Byte](48)(0)),
+            BigInt(3),
+            ByteString.fromArray(Array.fill[Byte](32)(0))
+          ),
           value = Value(Coin(2_000_000_000L)) + treasuryTokenValue,
           equity = Equity(Coin(1_000_000_000L)).get
         )
@@ -409,8 +421,11 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
           utxoId = fixed(Arbitrary.arbitrary[TransactionInput], seed = 7),
           address = headConfig.headMultisigAddress,
-          datum =
-              MultisigTreasuryUtxo.Datum(ByteString.fromArray(Array.fill[Byte](48)(0)), BigInt(3)),
+          datum = MultisigTreasuryUtxo.Datum(
+            ByteString.fromArray(Array.fill[Byte](48)(0)),
+            BigInt(3),
+            ByteString.fromArray(Array.fill[Byte](32)(0))
+          ),
           value = Value(Coin(120_000_000L)) + treasuryTokenValue,
           equity = Equity(Coin(100_000_000L)).get
         )

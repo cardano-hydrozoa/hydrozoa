@@ -10,16 +10,18 @@
   },
   "nodeOperationMultisigConfig": {
     "cardanoLiaisonPollingPeriod": 20000,
-    "peerLiaisonMaxRequestsPerBatch": 42,
+    "peerLiaisonMaxRequestsPerBatch": 500,
+    "peerLiaisonOutboxCap": 1024,
     "peerLiaisonResendInterval": 5000,
     "rateLimits": {
-      "softBlockMinPeriod": 250,
-      "hardStackMinPeriod": 180000
+      "softBlockMinPeriod": 100,
+      "hardStackMinPeriod": 30000
     }
   },
   "blockfrostApiKey": "preview00000000000000000000000000000000",
   "blockfrostApiUrl": null,
   "remoteLedgerUri": "ws://127.0.0.1:3001/ws",
+  "remoteScreenerUri": "http://127.0.0.1:3003",
   "adminUsername": "admin",
   "adminPassword": "welcome",
   "httpHost": "0.0.0.0",

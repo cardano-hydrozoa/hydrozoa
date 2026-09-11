@@ -37,6 +37,7 @@ import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
 import monocle.Focus.focus
+import scalus.cardano.ledger.Hash32
 
 private case class UserRequestState(
     requests: List[(RequestId, ValidityFlag)],
@@ -49,7 +50,11 @@ final case class JointLedger(
     l2Ledger: L2Ledger[IO],
     tracer: ContraTracer[IO, JointLedgerEvent],
     persistence: Persistence[IO],
-    metrics: PeerMetrics
+    metrics: PeerMetrics,
+    /** The boot markers, derived once by the regime manager (§5.2): this actor projects
+      * `fastBlockMark` and `evacuationMapMark` rather than re-reading the store.
+      */
+    markers: Markers
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
@@ -123,7 +128,7 @@ final case class JointLedger(
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
-                _connections <- x.get
+                _connections <- x.get.flatMap(IO.fromEither)
                 _ <- connections.set(
                   Some(
                     Connections(
@@ -200,12 +205,14 @@ final case class JointLedger(
             // fast anchor is `fastBlockMark = max(BlockResult)` (§6), shared by head and coil peers:
             // on a head peer it coincides with `max(own SoftAck)` (both written in the same atomic
             // per-block batch); a coil peer authors no soft-ack and anchors on it directly.
-            fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
             recovered <- State.recover(
               persistence,
               l2Ledger,
-              fastBlockMark,
-              config.initialEvacuationMap
+              markers.fastBlockMark,
+              config.initialEvacuationMap,
+              markers.evacuationMapMark,
+              config.l2ParamsHash,
+              tracer
             )
             _ <- recovered match {
                 case Some(done) =>
@@ -473,7 +480,7 @@ final case class JointLedger(
                     p.nextBlockNumber,
                     blockCreationEndTime,
                     p.competingFallbackTxTime,
-                    split.toString
+                    split
                   )
                 )
 
@@ -545,8 +552,8 @@ final case class JointLedger(
                   rejectedDeposits = decisions.rejected.requestIds
                 )
 
-            // The command number the deposit-decisions command takes when this block issues it
-            // (regular/major only); the number is carried unchanged when no command is issued.
+            // The command number the deposit-decisions command takes when a block issues it;
+            // carried unchanged when none is issued.
             assigned = p.commandNumber.increment
 
             // Block header
@@ -577,13 +584,16 @@ final case class JointLedger(
                     } yield (newJLState, headerIntermediate, evacDiffs)
                 else {
                     for {
-                        newL2State <- applyDepositDecisionsOrPanic(
-                          p,
-                          assigned,
-                          depositRequestDecisions
-                        )
-                        evacDiffs = newL2State.diffs
-                        newJLState = p.setL2LedgerState(newL2State).incrementCommandNumber
+                        // Also reached for a block made major by a withdrawal, which has no
+                        // decisions to apply -- and applying two empty lists is a no-op that
+                        // would still consume a command number.
+                        newJLState <-
+                            if decisions.absorbed.isEmpty && decisions.rejected.isEmpty
+                            then IO.pure(p)
+                            else
+                                applyDepositDecisionsOrPanic(p, assigned, depositRequestDecisions)
+                                    .map(s => p.setL2LedgerState(s).incrementCommandNumber)
+                        evacDiffs = newJLState.l2LedgerState.diffs
 
                         headerIntermediate <- previousHeader.nextHeaderMajor(bhTracer)(
                           txTiming,
@@ -1078,38 +1088,74 @@ object JointLedger {
             persistence: Persistence[IO],
             l2Ledger: L2Ledger[IO],
             fastBlockMark: Option[BlockNumber],
-            initialEvacuationMap: EvacuationMap
+            initialEvacuationMap: EvacuationMap,
+            evacuationMapMark: Option[BlockNumber],
+            l2ParamsHash: Hash32,
+            tracer: ContraTracer[IO, JointLedgerEvent]
         )(using CardanoNetwork.Section): IO[Option[Done]] =
             fastBlockMark match
                 case None =>
-                    l2Ledger
-                        .restoreTo(L2CommandNumber.zero)
-                        .value
-                        .flatMap(IO.fromEither)
-                        .flatMap(actual =>
-                            IO.raiseUnless(actual == initialEvacuationMap.digest)(
-                              RestoreError.EvacuationMapMismatch(
-                                expected = initialEvacuationMap.digest,
-                                actual = actual
-                              )
-                            )
+                    for {
+                        restored <- l2Ledger
+                            .restoreTo(L2CommandNumber.zero)
+                            .value
+                            .flatMap(IO.fromEither)
+                        _ <- IO.raiseUnless(
+                          restored.evacuationMapHash == initialEvacuationMap.digest
+                        )(
+                          RestoreError.EvacuationMapMismatch(
+                            expected = initialEvacuationMap.digest,
+                            actual = restored.evacuationMapHash
+                          )
                         )
-                        .as(None)
+                        _ <- checkL2Params(restored, l2ParamsHash, tracer)
+                    } yield None
                 case Some(blockNum) =>
                     for {
                         done <- doneAt(persistence, blockNum)
-                        actual <- l2Ledger
+                        restored <- l2Ledger
                             .restoreTo(done.commandNumber)
                             .value
                             .flatMap(IO.fromEither)
-                        expected <- evacuationMapAt(persistence, blockNum, initialEvacuationMap)
-                        _ <- IO.raiseUnless(actual == expected.digest)(
+                        expected <- evacuationMapAt(
+                          persistence,
+                          blockNum,
+                          initialEvacuationMap,
+                          evacuationMapMark
+                        )
+                        _ <- IO.raiseUnless(restored.evacuationMapHash == expected.digest)(
                           RestoreError.EvacuationMapMismatch(
                             expected = expected.digest,
-                            actual = actual
+                            actual = restored.evacuationMapHash
                           )
                         )
+                        _ <- checkL2Params(restored, l2ParamsHash, tracer)
                     } yield Some(done)
+
+        /** Compare the ledger's reported agreed parameters against the head config's.
+          *
+          * Unlike the evacuation map digest, this one never moves, so it is checked at **every**
+          * anchor — warm or cold — against a config value that is equally fixed. Past a cold start
+          * the map digest only says both sides hold the same *state*; this is what keeps asking
+          * whether this is still the right *ledger*.
+          *
+          * A ledger that does not report the digest is let through with a warning: a remote that
+          * predates the field cannot be distinguished from a wrong one, and failing closed would
+          * refuse every currently-deployed sidecar. Remove this branch once the remote side ships
+          * it. See `docs/spec/head-params-hash.md`.
+          */
+        private def checkL2Params(
+            restored: L2Ledger.Restored,
+            expected: Hash32,
+            tracer: ContraTracer[IO, JointLedgerEvent]
+        ): IO[Unit] =
+            restored.l2ParamsHash match
+                case Some(actual) =>
+                    IO.raiseUnless(actual == expected)(
+                      RestoreError.L2ParamsMismatch(expected = expected, actual = actual)
+                    )
+                case None =>
+                    tracer.traceWith(JointLedgerEvent.L2ParamsHashUnreported(expected))
 
         /** This peer's cumulative evacuation map at `blockNum` — the fast anchor.
           *
@@ -1128,10 +1174,10 @@ object JointLedger {
         private def evacuationMapAt(
             persistence: Persistence[IO],
             blockNum: BlockNumber,
-            initialEvacuationMap: EvacuationMap
+            initialEvacuationMap: EvacuationMap,
+            mapMark: Option[BlockNumber]
         ): IO[EvacuationMap] =
             for {
-                mapMark <- Markers.recoverEvacuationMapMark(persistence.backend)
                 base <- mapMark.fold(IO.pure(BlockNumber.zero -> initialEvacuationMap))(mark =>
                     persistence.getOrFail(StoreKey.EvacuationMap(mark)).map(mark -> _)
                 )

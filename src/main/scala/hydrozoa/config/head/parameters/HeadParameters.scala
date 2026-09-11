@@ -63,8 +63,6 @@ object HeadParameters {
 
         def coilQuorum: Int = headParameters.coilQuorum
 
-        final def headParamsHash: Hash32 = ???
-
         def txTiming: TxTiming = headParameters.txTiming
 
         def fallbackContingency: FallbackContingency =

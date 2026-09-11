@@ -18,8 +18,9 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -86,7 +87,7 @@ class StackComposerRecoveryTest extends AnyFunSuite:
                   p,
                   Some(HardAckNumber(0)),
                   None,
-                  PeerId.Head(ownNum)
+                  Some(StackNumber(1))
                 )
             } yield recovered match {
                 case Some(state) => assert(state.treasury == balancedTreasury)
@@ -104,7 +105,7 @@ class StackComposerRecoveryTest extends AnyFunSuite:
             for {
                 _ <- seedRecoverableWith(p, TreasuryFixture.sampleTreasury)
                 outcome <- StackComposer.State
-                    .recover(p, Some(HardAckNumber(0)), None, PeerId.Head(ownNum))
+                    .recover(p, Some(HardAckNumber(0)), None, Some(StackNumber(1)))
                     .attempt
             } yield outcome match {
                 case Left(e) =>
@@ -170,6 +171,9 @@ class StackComposerRecoveryTest extends AnyFunSuite:
                     for {
                         persistence <- Persistence.fromBackend(backend, persistenceTracer)
                         _ <- seed(persistence)
+                        // From the SEEDED store: this case is about recovering a real anchor, so a
+                        // cold bundle would make the actor bootstrap instead and assert nothing.
+                        markers <- Markers.derive(persistence, config.ownPeerId)
                         gotHandoff <- Deferred[IO, SlowConsensusActor.StackHandoff]
                         probe <- system.actorOf(HandoffProbe(gotHandoff))
                         jlSink <- system.actorOf(NoopSink[JointLedger.Requests.Request]())
@@ -184,7 +188,9 @@ class StackComposerRecoveryTest extends AnyFunSuite:
                               headPeerLiaisons = List()
                             ),
                             ContraTracer.nullTracer[IO, StackComposerEvent],
-                            persistence
+                            persistence,
+                            PeerMetrics.create(0L, Vector.empty),
+                            markers
                           )
                         )
                         r <- check(gotHandoff)

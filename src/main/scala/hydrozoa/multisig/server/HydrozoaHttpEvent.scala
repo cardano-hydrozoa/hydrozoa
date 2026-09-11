@@ -31,8 +31,16 @@ object HydrozoaHttpEvent:
     /** Decode-failure history (the circe cursor breadcrumb path), separated for diagnostics. */
     final case class JsonDecodeErrorHistory(path: String, history: String) extends HydrozoaHttpEvent
 
-    /** The request body decoded to a domain object (debug). */
-    final case class RequestDecoded(path: String, decoded: String) extends HydrozoaHttpEvent
+    /** The request body decoded to a domain object (debug).
+      *
+      * Carries the request's shape rather than the request. Rendering a decoded request means
+      * `toString` on its payloads, and a `ByteString`'s `toString` is its hex — which scalus caches
+      * on the instance, so a payload that is later retained is retained at three times its size.
+      * The event is built on every request whatever the log level, so that cost is paid whether or
+      * not anyone is reading debug logs.
+      */
+    final case class RequestDecoded(path: String, kind: String, payloadBytes: Int)
+        extends HydrozoaHttpEvent
 
     /** A request was rejected by screening or backpressure — an expected 400, not a fault, so it
       * carries only the client-facing reason (no exception or stack trace).

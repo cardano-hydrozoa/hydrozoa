@@ -20,15 +20,13 @@ import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.Future
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger
 import scalus.cardano.ledger.*
-import scalus.cardano.node.{BlockfrostProvider, BlockfrostProviderPlatform}
+import scalus.cardano.node.BlockfrostProvider
 import scalus.uplc.builtin.{ByteString, Data}
-import sttp.client4.Backend
 
 /** Cardano backend to use with Blockfrost-compatible API. Currently, uses both BloxBeans's
   * [[BackendServive]] and Scalus' [[BlockfrostProvider]] for protocol parameters handle.
@@ -46,7 +44,10 @@ import sttp.client4.Backend
 class CardanoBackendBlockfrost private (
     private val backendService: BackendService,
     private val pageSize: Int,
-    private val blockfrostProviderFuture: Future[BlockfrostProvider],
+    /** Builds a FRESH provider. Called again after a failure -- see [[provider]]. */
+    private val mkProvider: IO[BlockfrostProvider],
+    /** Memoises the provider ON SUCCESS ONLY. */
+    private val providerRef: Ref[IO, Option[BlockfrostProvider]],
     protected val tracer: ContraTracer[IO, CardanoBackendEvent],
     // Base URL + project id for the raw tx-utxos read in [[continuingTx]] — BloxBean's
     // `TxContentUtxoInputs` model drops the per-input tx_hash/output_index/collateral/reference we
@@ -55,14 +56,50 @@ class CardanoBackendBlockfrost private (
     private val apiKey: String
 ) extends CardanoBackend[IO] {
 
+    /** The Scalus provider, built on first use and memoised **only if it succeeds**.
+      *
+      * ⛔ This used to be a plain `Future[BlockfrostProvider]` created eagerly at construction. A
+      * Scala `Future` memoises its outcome — including its failure — so a single Blockfrost blip at
+      * the moment the backend was built poisoned every later `fetchLatestParams` for the entire
+      * life of the process, with no retry and no way back short of a restart. The node looked
+      * healthy: it polled L1 fine, because `utxosAt` goes through BloxBean's service and never
+      * touches this.
+      *
+      * That is disqualifying for a start-up gate built on protocol parameters — one blip and the
+      * gate could never be satisfied. So: retry on failure, memoise on success.
+      *
+      * ⚠️ Two concurrent first-callers may each build one; the loser's is discarded. Harmless (the
+      * provider is a stateless HTTP wrapper) and cheaper than serialising every access.
+      */
+    private def provider: IO[BlockfrostProvider] =
+        providerRef.get.flatMap {
+            case Some(p) => IO.pure(p)
+            case None    => mkProvider.flatTap(p => providerRef.set(Some(p)))
+        }
+
     private val httpClient: HttpClient = HttpClient.newHttpClient()
 
+    // BloxBean's get*Service builds a fresh Retrofit + OkHttpClient (its own
+    // connection pool and dispatcher threads) on every call — and pagination
+    // calls it once per page. Cache one instance per service.
+    private val utxoService = backendService.getUtxoService
+    private val scriptService = backendService.getScriptService
+    private val transactionService = backendService.getTransactionService
+    private val assetService = backendService.getAssetService
+
+    /** `IO.blocking`: a synchronous Blockfrost round trip — see [[paginate]] for why that matters.
+      * The call also has to be suspended rather than passed to `EitherT.fromEither`, whose argument
+      * is strict: evaluating it eagerly would run the request when `resolve` is called instead of
+      * when the returned `IO` is run.
+      */
     override def resolve(input: Input): IO[Either[Error, Option[ledger.Utxo]]] =
         (for {
-            res <- EitherT.fromEither[IO](
-              Try(
-                backendService.getUtxoService.getTxOutput(input.transactionId.toHex, input.index)
-              ).toEither.left.map(e => Error.ErrorResolving(input, e.getMessage))
+            res <- EitherT(
+              IO.blocking(
+                Try(
+                  utxoService.getTxOutput(input.transactionId.toHex, input.index)
+                ).toEither.left.map(e => Error.ErrorResolving(input, e.getMessage))
+              )
             )
             mbUtxo <- res match {
                 // Resolution "successful", but no utxo found
@@ -73,17 +110,25 @@ class CardanoBackendBlockfrost private (
                         utxos <- EitherT(convertUtxosWithScripts(List(res.getValue)))
                         utxo = ledger.Utxo(utxos.head)
                     } yield Some(utxo)
-                // Resolution unsuccessful for some other reason
+                // Resolution unsuccessful for some other reason. The status code goes in the
+                // message: it is what separates "retry, the backend is having a moment" (429, 5xx)
+                // from "this will never work" (401 on a bad key, 400), and the response body alone
+                // does not carry it — a proxy's 502 body is often empty.
                 case _ =>
                     EitherT.left(
-                      IO.pure(ErrorResolving(input, s"resolution response: ${res.getResponse}"))
+                      IO.pure(
+                        ErrorResolving(
+                          input,
+                          s"resolution failed with HTTP ${res.code()}: ${res.getResponse}"
+                        )
+                      )
                     )
             }
         } yield mbUtxo).value
 
     override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, Utxos]] =
         paginate(page =>
-            backendService.getUtxoService
+            utxoService
                 .getUtxos(address.toBech32.get, pageSize, page, OrderEnum.asc)
         ).map(_.map(convertUtxosWithoutScripts))
 
@@ -93,7 +138,7 @@ class CardanoBackendBlockfrost private (
     ): IO[Either[CardanoBackend.Error, Utxos]] = {
         val unit = s"${asset._1.toHex}${asset._2.bytes.toHex}"
         paginate(page =>
-            backendService.getUtxoService
+            utxoService
                 .getUtxos(address.toBech32.get, unit, pageSize, page, OrderEnum.asc)
         ).map(_.map(convertUtxosWithoutScripts))
     }
@@ -210,7 +255,7 @@ class CardanoBackendBlockfrost private (
     ): Either[CardanoBackend.Error, scalus.cardano.ledger.Script] = {
 
         lazy val nativeResult: Either[String, scalus.cardano.ledger.Script] =
-            Try(backendService.getScriptService.getNativeScript(scriptHash)).toEither.left
+            Try(scriptService.getNativeScript(scriptHash)).toEither.left
                 .map(ex => s"Exception fetching native script $scriptHash: ${ex.getMessage}")
                 .flatMap { res =>
                     if res.isSuccessful then
@@ -222,7 +267,7 @@ class CardanoBackendBlockfrost private (
                 }
 
         lazy val plutusResult: Either[String, scalus.cardano.ledger.Script] =
-            Try(backendService.getScriptService.getPlutusScript(scriptHash)).toEither.left
+            Try(scriptService.getPlutusScript(scriptHash)).toEither.left
                 .map(ex => s"Exception fetching Plutus script $scriptHash: ${ex.getMessage}")
                 .flatMap { res =>
                     if res.isSuccessful then
@@ -367,7 +412,7 @@ class CardanoBackendBlockfrost private (
         txHash: TransactionHash
     ): IO[Either[CardanoBackend.Error, Boolean]] =
         IO.blocking {
-            val result = backendService.getTransactionService.getTransaction(txHash.toHex)
+            val result = transactionService.getTransaction(txHash.toHex)
             if result.isSuccessful then {
                 Right(true)
             } else {
@@ -395,7 +440,7 @@ class CardanoBackendBlockfrost private (
             txIds <- EitherT(
               paginate(
                 apiCall = page =>
-                    backendService.getAssetService.getTransactions(
+                    assetService.getTransactions(
                       unit,
                       pageSize,
                       page,
@@ -517,7 +562,7 @@ class CardanoBackendBlockfrost private (
     }
 
     private def txUtxos(txHash: TransactionHash): IO[Either[CardanoBackend.Error, TxContentUtxo]] =
-        IO.delay(backendService.getTransactionService.getTransactionUtxos(txHash.toHex))
+        IO.delay(transactionService.getTransactionUtxos(txHash.toHex))
             .map(res =>
                 if res.isSuccessful then Right(res.getValue)
                 else
@@ -596,7 +641,7 @@ class CardanoBackendBlockfrost private (
         txHash: TransactionHash,
         inputIx: Int
     ): IO[Either[CardanoBackend.Error, TxContentRedeemers]] =
-        IO.delay(backendService.getTransactionService.getTransactionRedeemers(txHash.toHex))
+        IO.delay(transactionService.getTransactionRedeemers(txHash.toHex))
             .map(res =>
                 if res.isSuccessful
                 then
@@ -624,7 +669,7 @@ class CardanoBackendBlockfrost private (
         redeemerHash: String
     ): IO[Either[CardanoBackend.Error, ScriptDatumCbor]] =
         IO.delay(
-          backendService.getScriptService
+          scriptService
               .getScriptDatumCbor(redeemerHash)
         ).map(res =>
             if res.isSuccessful then Right(res.getValue)
@@ -649,7 +694,7 @@ class CardanoBackendBlockfrost private (
       */
     override def submitTx(etx: EnrichedTx[?]): IO[Either[CardanoBackend.Error, Unit]] =
         IO.blocking {
-            val result = backendService.getTransactionService.submitTransaction(etx.tx.toCbor)
+            val result = transactionService.submitTransaction(etx.tx.toCbor)
             if result.isSuccessful
             then Right(())
             else Left(Unexpected(result.getResponse))
@@ -661,8 +706,8 @@ class CardanoBackendBlockfrost private (
 
     override def fetchLatestParams: IO[Either[Error, ProtocolParams]] =
         (for
-            provider <- IO.fromFuture(IO.pure(blockfrostProviderFuture))
-            result <- IO.fromFuture(IO.pure(provider.fetchLatestParams))
+            p <- provider
+            result <- IO.fromFuture(IO.pure(p.fetchLatestParams))
         yield Right(result))
             .handleError(e =>
                 Left(Unexpected(s"${e.getMessage}, caused by: ${
@@ -671,8 +716,8 @@ class CardanoBackendBlockfrost private (
             )
 
     def getStartupParams: IO[Either[Error, ProtocolParams]] =
-        (for provider <- IO.fromFuture(IO.pure(blockfrostProviderFuture))
-        yield Right(provider.cardanoInfo.protocolParams))
+        (for p <- provider
+        yield Right(p.cardanoInfo.protocolParams))
             .handleError(e =>
                 Left(Unexpected(s"${e.getMessage}, caused by: ${
                         if e.getCause != null then e.getCause.getMessage else "N/A"
@@ -698,38 +743,33 @@ object CardanoBackendBlockfrost:
         val baseUrl = network.fold(_.baseUrl, _._2).stripSuffix("/")
         val backendService = BFBackendService(s"$baseUrl/", apiKey)
 
-        // 2. Scalus blockfrost provider
-        val blockfrostProviderFuture =
-            network match {
-                case Left(std) =>
-                    std match {
-                        case CardanoNetwork.Mainnet =>
-                            BlockfrostProvider.mainnet(apiKey)
-                        case CardanoNetwork.Preprod =>
-                            BlockfrostProvider.preprod(apiKey)
-                        case CardanoNetwork.Preview =>
-                            BlockfrostProvider.preview(apiKey)
+        // 2. Scalus blockfrost provider, as a RETRYABLE IO rather than an eager Future: each
+        //    evaluation starts a fresh fetch, so a failure is not memoised. See `provider`.
+        val mkProvider: IO[BlockfrostProvider] = IO.defer(IO.fromFuture(IO.delay(network match {
+            case Left(std) =>
+                std match {
+                    case CardanoNetwork.Mainnet =>
+                        BlockfrostProvider.mainnet(apiKey)
+                    case CardanoNetwork.Preprod =>
+                        BlockfrostProvider.preprod(apiKey)
+                    case CardanoNetwork.Preview =>
+                        BlockfrostProvider.preview(apiKey)
 
-                    }
-                case Right(custom, customBaseUrl) =>
-                    // Reuse the already-resolved CardanoInfo (params + network + slot config) instead
-                    // of re-fetching params via `create`, so the backend cannot diverge from the
-                    // CardanoInfo pinned into the head-config, and one HTTP round-trip is saved.
-                    given Backend[Future] = BlockfrostProviderPlatform.defaultBackend
-                    Future.successful(
-                      new BlockfrostProvider(
-                        apiKey,
-                        customBaseUrl.stripSuffix("/"),
-                        5,
-                        custom.cardanoInfo
-                      )
-                    )
-            }
+                }
+            case Right(custom, _) =>
+                BlockfrostProvider.create(
+                  apiKey = apiKey,
+                  baseUrl = baseUrl,
+                  network = custom.network,
+                  slotConfig = custom.cardanoInfo.slotConfig
+                )
+        })))
 
         new CardanoBackendBlockfrost(
           backendService,
           pageSize,
-          blockfrostProviderFuture,
+          mkProvider,
+          Ref.unsafe[IO, Option[BlockfrostProvider]](None),
           tracer,
           baseUrl,
           apiKey
@@ -760,9 +800,9 @@ object CardanoBackendBlockfrost:
 
     /** Resolve a [[CardanoNetwork]] + optional `blockfrostApiUrl` into the selector [[apply]]
       * expects. A standard network with no URL uses its own public Blockfrost endpoint; a standard
-      * network *with* a URL is served from that private endpoint while keeping its baked-in
-      * `CardanoInfo` (modeled as a `Custom` over the standard `CardanoInfo`, so params/slot/magic
-      * are never re-fetched). A `Custom` network requires a URL and fails without one.
+      * network *with* a URL is served from that private endpoint as a `Custom` over its baked-in
+      * `CardanoInfo`, so its slot config and magic stay the standard chain's own. A `Custom`
+      * network requires a URL and fails without one.
       */
     private[cardano] def networkSelector(
         network: CardanoNetwork,

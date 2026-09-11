@@ -2,6 +2,7 @@ package hydrozoa.app
 
 import cats.Monoid
 import cats.effect.{ExitCode, IO, Resource}
+import cats.syntax.applicativeError.*
 import cats.syntax.apply.*
 import cats.syntax.contravariant.*
 import cats.syntax.semigroup.*
@@ -13,23 +14,30 @@ import hydrozoa.BuildInfo
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
+import hydrozoa.lib.StartupRefusal
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
 import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
-import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener}
+import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener, RemoteL2ScreenerEventFormat}
+import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Markers, Persistence, PersistenceEventFormat, StoreIdentity}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
 import org.http4s.Uri
+import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
+import org.rocksdb.RocksDBException
+import scala.concurrent.duration.*
+import scalus.cardano.address.ShelleyAddress
 
 /** The head-node server: the `serve` subcommand of the `hydrozoa` CLI.
   *
@@ -59,7 +67,14 @@ object Serve {
         Command(
           name = "serve",
           header = "Run a Hydrozoa head node from a generated config"
-        )((headConfigPathArg, privateConfigPathArg).mapN((h, p) => runNode(h, p)))
+        )(
+          (headConfigPathArg, privateConfigPathArg).mapN((h, p) =>
+              // A deterministic refusal exits with a distinct code so the unit's
+              // `RestartPreventExitStatus=` can stop a supervisor from re-deriving the same
+              // verdict forever. Everything transient waits instead of exiting at all.
+              StartupRefusal.guard(runNode(h, p))
+          )
+        )
 
     /** Run a Hydrozoa head node from a loaded config.
       *
@@ -133,28 +148,128 @@ object Serve {
             // `remoteLedgerUri`. Only the EUTXO ledger is also an EutxoL2LedgerReader, so only it
             // yields a reader for the server's L2-query endpoints (a remote node hands it None).
             l2 <- mkL2Ledger(nodeConfig, dataDir)
-            (l2Ledger, l2Screener, l2QueryReader) = l2
+            (l2Ledger, l2Screener, l2QueryReader, signalL2Shutdown) = l2
 
             // Per-peer persistence store. Default path; later milestones will surface this
             // through NodeConfig (P1 skeleton; see design §7). Open the RocksDB-backed
             // BackendStore (byte-level primitive), then wrap it in the typed Persistence the
             // actor topology consumes.
             persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-            backendStore <- RocksDbBackendStore.open(
-              dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/rocksdb"),
-              Cf.mkAll(
-                headPeers = nodeConfig.headConfig.headPeerNums.toList,
-                coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
-                hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
-              ),
-              persistenceTracer,
-            )
+            // A held LOCK means another instance owns this store. Deterministic: restarting
+            // re-derives the same answer for as long as the other process lives, so it is a
+            // refusal, not a crash. It fails fast, with a message naming the holder.
+            backendStore <- RocksDbBackendStore
+                .open(
+                  dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/rocksdb"),
+                  Cf.mkAll(
+                    headPeers = nodeConfig.headConfig.headPeerNums.toList,
+                    coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
+                    hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+                  ),
+                  StoreIdentity(
+                    headParamsHash = nodeConfig.headParamsHash,
+                    headId = nodeConfig.headId,
+                    headAddress = nodeConfig.headMultisigAddress,
+                    ownPeerId = nodeConfig.ownPeerId
+                  ),
+                  persistenceTracer,
+                )
+                // `recoverWith`, not `handleErrorWith`: this handles ONE error type, and a
+                // partial function passed to `handleErrorWith` eta-expands into a total one that
+                // throws `MatchError` on everything else — losing the original cause for, say, a
+                // failure to create the directory.
+                .recoverWith { case e: RocksDBException =>
+                    Resource.eval(
+                      IO.raiseError(
+                        StartupRefusal(
+                          s"cannot open the persistence store (${e.getMessage}). Another hydrozoa " +
+                              "instance is most likely holding it.",
+                          Some(e)
+                        )
+                      )
+                    )
+                }
             persistence <- Resource.eval {
                 given CardanoNetwork.Section = nodeConfig
                 Persistence.fromBackend(backendStore, persistenceTracer)
             }
 
+            // ⛔ A transplant must contain the stack it is tagged with.
+            //
+            // `transplantStackNumber` names the stack this peer ELECTS TO ADOPT: everything at or
+            // below it is taken on trust from the donor committee and never verified, and only the
+            // stacks above it are checked. That makes the tag a partition of the store, chosen by
+            // the operator — any stack the store actually holds is a legitimate choice. A tag
+            // naming a stack the store does NOT hold is a different thing entirely: the config and
+            // the data have been mis-paired, and no amount of restarting will pair them.
+            //
+            // ⛔ This runs BEFORE the ActorSystem deliberately. The same verdict raised inside it
+            // escalates to the guardian, which terminates the system and exits 1 — and the unit's
+            // `RestartPreventExitStatus=2` does not catch a 1, so a mistyped tag would crash-loop.
+            // Here it is an ordinary `StartupRefusal` and exits 2. It needs nothing but the store
+            // and the config, so there is no reason for it to run any later.
+            //
+            // ⚠️ Reads `hardConfirmed` only — a plain `lastKey`, safe to derive more than once.
+            // NOT `hardAckedStack`, which is an interpretation the regime manager must derive
+            // exactly once and project into its children.
+            _ <- Resource.eval {
+                nodeConfig.transplantStackNumber.fold(IO.unit)(tag =>
+                    Markers
+                        .derive(persistence, nodeConfig.ownPeerId)
+                        .flatMap(markers =>
+                            IO.raiseUnless(
+                              markers.hardConfirmed.exists(Ordering[StackNumber].gteq(_, tag))
+                            )(
+                              StartupRefusal(
+                                s"transplantStackNumber is $tag, but the highest hard-confirmed " +
+                                    "stack in this store is " +
+                                    markers.hardConfirmed.fold("none — the store is empty")(
+                                      _.toString
+                                    ) +
+                                    ". A transplant must contain the stack it is tagged with; " +
+                                    "check that the store was copied and the tag read from that copy."
+                              )
+                            )
+                        )
+                )
+            }
+
+            // ⛔ BOTH L1 boot facts are established HERE, before the ActorSystem, and for the same
+            // two reasons the transplant gate above is.
+            //
+            // 1. Cancellability. `preStartLocal` is the handler for a `PreStart` message the regime
+            //    manager posts to itself (`MultisigRegimeManagerBase`), so it runs inside
+            //    `ActorCell.invoke(...).uncancelable`. An unbounded retry there cannot be
+            //    interrupted: SIGTERM does nothing and the process survives to be force-killed by
+            //    `shutdownHookTimeout`. Out here, on the app fiber, a wait is ordinary cancelable
+            //    IO and the node stops when it is asked to.
+            // 2. Exit code. A `StartupRefusal` raised inside the actor system escalates to the
+            //    guardian, which terminates on its own path and exits 1 — which
+            //    `RestartPreventExitStatus=2` does not catch, so the refusal crash-loops. Raised
+            //    here it reaches `StartupRefusal.guard` and exits 2, as intended.
+            //
+            // Neither needs anything the actor system provides: one is a UTxO read, the other a
+            // parameter comparison.
+            firstPollResults <- Resource.eval(
+              waitForFirstPollResults(
+                backend,
+                nodeConfig.initializationTx.treasuryProduced.address
+              )
+            )
+            _ <- Resource.eval {
+                given CardanoNetwork.Section = nodeConfig
+                verifyProtocolParams(backend)
+            }
+
             system <- ActorSystem[IO]("Hydrozoa Demo")
+
+            // ⛔ ORDER IS LOAD-BEARING. Resource finalizers run in reverse acquisition order, so
+            // acquiring this AFTER the ActorSystem makes it release BEFORE the system is torn down.
+            // A remote L2 ledger retries transport failure forever from inside a cats-actors message
+            // handler, and `ActorCell` wraps handlers in `.uncancelable` — so the system cannot stop
+            // that actor, and without this signal SIGTERM does not shut the node down at all. Move
+            // this line above the ActorSystem and the node stops exiting cleanly.
+            _ <- Resource.onFinalize(signalL2Shutdown)
 
             wsClient <- Resource.eval(JdkWSClient.simple[IO])
 
@@ -166,6 +281,7 @@ object Serve {
                     buildHeadNode(
                       nodeConfig,
                       backend,
+                      firstPollResults,
                       l2Ledger,
                       l2Screener,
                       l2QueryReader,
@@ -186,6 +302,7 @@ object Serve {
                     buildCoilNode(
                       nodeConfig,
                       backend,
+                      firstPollResults,
                       l2Ledger,
                       persistence,
                       metrics,
@@ -213,7 +330,14 @@ object Serve {
                       httpExtraTracer
                     )
                 case NodeRun.CoilNode(mrm) =>
-                    runCoilNode(system, mrm)
+                    runCoilNode(
+                      nodeConfig,
+                      system,
+                      mrm,
+                      consensusReader,
+                      metrics,
+                      httpExtraTracer
+                    )
             }
         }
     }
@@ -224,10 +348,57 @@ object Serve {
       * `None` and mounts no L2-query endpoints. The EUTXO ledger owns its own RocksDB persistence,
       * separate from the consensus store.
       */
+    /** Where this node's peer websocket server listens.
+      *
+      * Normally that is the address the shared head config advertises for this peer, so there is
+      * one source of truth and no way for the two to drift. The override exists for the case where
+      * they genuinely differ: with a TLS-terminating proxy in front, peers dial a public name that
+      * resolves to the proxy, and no host can bind that name. The node then advertises the public
+      * address to the head and listens wherever the proxy can reach it.
+      *
+      * Each half overrides independently -- moving the local port while keeping the advertised one
+      * is a normal thing to want, and requiring both would make that awkward.
+      */
+    private[hydrozoa] def peerBindAddress(
+        peerBindHost: Option[String],
+        peerBindPort: Option[String],
+        advertised: Uri,
+        ownHeadNum: HeadPeerNumber
+    ): (Host, Port) = {
+        val host = peerBindHost match {
+            case Some(h) =>
+                Host.fromString(h)
+                    .getOrElse(throw IllegalArgumentException(s"peerBindHost is not a host: $h"))
+            case None =>
+                advertised.host
+                    .flatMap(h => Host.fromString(h.value))
+                    .getOrElse(
+                      throw IllegalArgumentException(
+                        s"own head peer $ownHeadNum webSocketAddress has no valid host: $advertised"
+                      )
+                    )
+        }
+        val port = peerBindPort match {
+            case Some(p) =>
+                p.toIntOption
+                    .flatMap(Port.fromInt)
+                    .getOrElse(throw IllegalArgumentException(s"peerBindPort is not a port: $p"))
+            case None =>
+                advertised.port
+                    .flatMap(Port.fromInt)
+                    .getOrElse(
+                      throw IllegalArgumentException(
+                        s"own head peer $ownHeadNum webSocketAddress has no valid port: $advertised"
+                      )
+                    )
+        }
+        (host, port)
+    }
+
     private def mkL2Ledger(
         nodeConfig: NodeConfig,
         dataDir: Path,
-    ): Resource[IO, (L2Ledger[IO], L2Screener[IO], Option[EutxoL2LedgerReader[IO]])] =
+    ): Resource[IO, (L2Ledger[IO], L2Screener[IO], Option[EutxoL2LedgerReader[IO]], IO[Unit])] =
         nodeConfig.headConfig.l2Ledger match {
             case L2LedgerKind.CardanoEutxo =>
                 for {
@@ -236,7 +407,7 @@ object Serve {
                       dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/l2-rocksdb")
                     )
                     ledger <- Resource.eval(EutxoL2Ledger(nodeConfig, store))
-                } yield (ledger, EutxoL2Screener(nodeConfig), Some(ledger))
+                } yield (ledger, EutxoL2Screener(nodeConfig), Some(ledger), IO.unit)
             case L2LedgerKind.AnyRemote =>
                 val tracer = Slf4jTracer.sink.contramap(RemoteL2LedgerEventFormat.humanFormat)
                 val wsUri = nodeConfig.remoteLedgerUri.getOrElse(
@@ -251,8 +422,163 @@ object Serve {
                       config = nodeConfig,
                       tracer = tracer,
                     )
-                } yield (ledger, RemoteL2Screener, Option.empty[EutxoL2LedgerReader[IO]])
+                    screener <- mkRemoteScreener(nodeConfig)
+                } yield (
+                  ledger,
+                  screener,
+                  Option.empty[EutxoL2LedgerReader[IO]],
+                  ledger.signalShutdown
+                )
         }
+
+    /** The screener for a remote-ledger node: the stateless check every request must pass before it
+      * is assigned a RequestId. With `remoteScreenerUri` configured, deposits are screened by the
+      * remote ledger's screening endpoint, reached over a dedicated ember client so screening never
+      * shares the mutation transport. Without it, screening is a passthrough — every request is
+      * accepted here and checked only at submission.
+      */
+    private def mkRemoteScreener(nodeConfig: NodeConfig): Resource[IO, L2Screener[IO]] =
+        nodeConfig.remoteScreenerUri match {
+            case None =>
+                Resource
+                    .eval(log.info("L2 screener: passthrough (no remoteScreenerUri)"))
+                    .map(_ => RemoteL2Screener.passthrough)
+            case Some(uri) =>
+                for {
+                    parsedUri <- Resource.eval(
+                      IO.fromEither(
+                        Uri.fromString(uri)
+                            .left
+                            .map(e =>
+                                new IllegalArgumentException(s"invalid remoteScreenerUri: $e")
+                            )
+                      )
+                    )
+                    _ <- Resource.eval(log.info(s"L2 screener: remote at $uri"))
+                    // A short timeout, not ember's 45s default: screening is a fail-open
+                    // advisory gate on the request path, so a hung screener should cost a
+                    // request a few seconds at most before it proceeds unscreened.
+                    client <- EmberClientBuilder.default[IO].withTimeout(5.seconds).build
+                } yield RemoteL2Screener(
+                  client,
+                  parsedUri,
+                  Slf4jTracer.sink.contramap(RemoteL2ScreenerEventFormat.humanFormat),
+                )
+        }
+
+    /** Backoff for the boot L1 reads: doubles from 1s, capped at 30s. Capped rather than unbounded
+      * so a node that has been waiting for hours still reacts promptly when L1 returns.
+      */
+    private def l1BootBackoff(attempt: Int): FiniteDuration =
+        (1.second.toNanos * (1L << math.min(attempt, 5))).nanos.min(30.seconds)
+
+    /** Read the treasury address on L1 and produce the first [[PollResults]], WAITING for as long
+      * as it takes.
+      *
+      * ⛔ This is a GATE. `BlockWeaver` starts at `PollResults.empty`, which is structurally
+      * indistinguishable from "polled, and the address is genuinely empty" — there is no
+      * `NeverPolled` state. A head peer classifies deposit existence from its own poll
+      * (`DepositsMap.Existence.FromPoll`), so acting on that empty value would reject every mature
+      * deposit as `NotInPollResults`: terminal, and DEBUG-only in the logs. `ReplayActor` queues
+      * this value into BlockWeaver's mailbox before the start barrier opens, precisely so that
+      * cannot happen.
+      *
+      * It waits rather than failing because a node is useless without this fact either way, and a
+      * failed boot under `Restart=on-failure` becomes a restart loop that outlives the blip.
+      *
+      * ⚠️ The waiting belongs HERE and not in `ReplayActor`, which runs inside an uncancelable
+      * actor message handler — see the call site.
+      */
+    private def waitForFirstPollResults(
+        cardanoBackend: CardanoBackend[IO],
+        treasuryAddress: ShelleyAddress
+    ): IO[PollResults] = {
+        def attempt(n: Int): IO[PollResults] =
+            cardanoBackend.utxosAt(treasuryAddress).flatMap {
+                case Right(utxos) =>
+                    IO.whenA(n > 0)(
+                      log.info(s"boot L1 sample succeeded after ${n + 1} attempts; continuing")
+                    ).as(PollResults(utxos.keySet))
+                case Left(err) =>
+                    val wait = l1BootBackoff(n)
+                    log.warn(
+                      s"boot L1 sample failed (attempt ${n + 1}): $err. Cannot start consensus " +
+                          s"without it, so WAITING rather than failing the boot; retrying in $wait"
+                    ) >> IO.sleep(wait) >> attempt(n + 1)
+            }
+        attempt(0)
+    }
+
+    /** Compare the chain's live protocol parameters against the ones this head's config asserts,
+      * and REFUSE to start on a mismatch.
+      *
+      * ⛔ Nothing verified this at start-up before, so a head built every L1 transaction —
+      * settlements, fallbacks, rollouts, refunds — against parameters it merely assumed, and would
+      * keep doing so across a parameter update it never noticed. Those parameters decide fees,
+      * `maxTxSize` and execution-unit budgets, so a drift shows up as transactions the chain
+      * rejects, at the worst possible moment.
+      *
+      * ⚠️ Not to be confused with `CardanoBackendBlockfrost.getStartupParams`, which is alive and
+      * called from `integration/…/stage1/Suite.scala` — it returns the **compiled-in** constant
+      * (`provider.cardanoInfo.protocolParams`), where this gate reads the **chain** via
+      * `fetchLatestParams`. Different questions; do not delete it. (An earlier note here claimed it
+      * had zero callers. It was written from a search of `src/` only, and `integration` is a
+      * separate sbt project.)
+      *
+      * It is a [[StartupRefusal]] rather than a generic crash because it is deterministic: the
+      * config asserts what it asserts, and a restart re-derives the same verdict.
+      *
+      * ⚠️ On `mainnet`, `preprod` and `preview` the comparison is against a value compiled into the
+      * binary, not a config field: the head config carries only the network NAME, and
+      * `cardanoProtocolParams` resolves through `CardanoInfo.<net>` from Scalus. Only a `custom`
+      * network reads parameters from JSON. The remedy differs accordingly, and the message says so
+      * — telling an operator to "update the config" on preview would send them looking for a field
+      * that does not exist.
+      *
+      * Unreachable is NOT drift: it retries, because "cannot ask" and "asked, and the answer is
+      * wrong" are the two classes this whole start-up path exists to separate.
+      */
+    private def verifyProtocolParams(
+        cardanoBackend: CardanoBackend[IO]
+    )(using net: CardanoNetwork.Section): IO[Unit] = {
+        val remedy = net.cardanoNetwork match {
+            case CardanoNetwork.Custom(_, _) =>
+                "Update the `custom` network's protocolParams in the head config to the chain's " +
+                    "current parameters (both values are on the ERROR line above)."
+            case _ =>
+                "These parameters are NOT a config field on a named network — they are compiled " +
+                    "in from Scalus's CardanoInfo. Upgrade Scalus to a version carrying the " +
+                    "chain's current parameters and redeploy every peer; editing the config " +
+                    "cannot fix this."
+        }
+        def attempt(n: Int): IO[Unit] =
+            cardanoBackend.fetchLatestParams.flatMap {
+                case Right(onChain) =>
+                    val assumed = net.cardanoProtocolParams
+                    if onChain == assumed then
+                        log.info("protocol parameters on chain match the ones this config asserts")
+                    else
+                        log.error(
+                          "PROTOCOL PARAMETER MISMATCH: the chain's parameters differ from the " +
+                              "ones this head's config asserts. Refusing to start.\n" +
+                              s"  on chain: $onChain\n" +
+                              s"  config:   $assumed"
+                        ) >> IO.raiseError(
+                          StartupRefusal(
+                            "the chain's protocol parameters differ from the ones this head's " +
+                                "config asserts, so the L1 transactions it builds may be rejected " +
+                                s"by the chain. $remedy"
+                          )
+                        )
+                case Left(err) =>
+                    val wait = l1BootBackoff(n)
+                    log.warn(
+                      s"could not read protocol parameters (attempt ${n + 1}): $err. " +
+                          s"Retrying in $wait."
+                    ) >> IO.sleep(wait) >> attempt(n + 1)
+            }
+        attempt(0)
+    }
 
     /** Build the head-node transports (mesh + optional hub-coil), bind one shared `NodeWsServer`,
       * start dialers, and allocate the [[HeadMultisigRegimeManager]].
@@ -260,6 +586,7 @@ object Serve {
     private def buildHeadNode(
         nodeConfig: NodeConfig,
         backend: CardanoBackend[IO],
+        firstPollResults: PollResults,
         l2Ledger: L2Ledger[IO],
         l2Screener: L2Screener[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
@@ -274,6 +601,11 @@ object Serve {
         // The inter-peer transport server binds where the shared head config advertises this peer,
         // so bind address == the address other peers dial (single source of truth). The user-facing
         // HTTP server uses the private httpHost/httpPort instead.
+        //
+        // The two come apart whenever something terminates the connection in front of this node --
+        // a TLS proxy demanding a client certificate, say. Then peers dial a public name this host
+        // cannot bind, and `peerBindHost`/`peerBindPort` in the node's private config say where to
+        // listen instead. Advertised address stays shared and agreed; bind address stays local.
         val ownWsAddress = nodeConfig.headConfig.headPeers.headPeerData
             .lookup(ownHeadNum)
             .map(_.webSocketAddress)
@@ -282,20 +614,12 @@ object Serve {
                 s"no webSocketAddress configured for own head peer $ownHeadNum"
               )
             )
-        val bindHost = ownWsAddress.host
-            .flatMap(h => Host.fromString(h.value))
-            .getOrElse(
-              throw new IllegalArgumentException(
-                s"own head peer $ownHeadNum webSocketAddress has no valid host: $ownWsAddress"
-              )
-            )
-        val bindPort = ownWsAddress.port
-            .flatMap(Port.fromInt)
-            .getOrElse(
-              throw new IllegalArgumentException(
-                s"own head peer $ownHeadNum webSocketAddress has no valid port: $ownWsAddress"
-              )
-            )
+        val (bindHost, bindPort) = peerBindAddress(
+          nodeConfig.peerBindHost,
+          nodeConfig.peerBindPort,
+          ownWsAddress,
+          ownHeadNum
+        )
         val remoteHeadUris: Map[HeadPeerId, Uri] = nodeConfig.headPeerIds
             .filterNot(_.peerNum == ownHeadNum)
             .toList
@@ -353,6 +677,7 @@ object Serve {
             mrm <- HeadMultisigRegimeManager.resource(
               nodeConfig,
               backend,
+              firstPollResults,
               l2Ledger,
               l2Screener,
               persistence,
@@ -364,12 +689,14 @@ object Serve {
         } yield NodeRun.HeadNode(mrm, l2QueryReader)
     }
 
-    /** Build the coil-node uplink dialer (no inbound server) and allocate the
-      * [[CoilMultisigRegimeManager]]. A coil peer runs no user-facing HTTP server.
+    /** Build the coil-node uplink dialer (no inbound WebSocket server) and allocate the
+      * [[CoilMultisigRegimeManager]]. The coil's HTTP surface is bound separately, in
+      * `runCoilNode`.
       */
     private def buildCoilNode(
         nodeConfig: NodeConfig,
         backend: CardanoBackend[IO],
+        firstPollResults: PollResults,
         l2Ledger: L2Ledger[IO],
         persistence: Persistence[IO],
         metrics: PeerMetrics,
@@ -406,6 +733,7 @@ object Serve {
             mrm <- CoilMultisigRegimeManager.resource(
               nodeConfig,
               backend,
+              firstPollResults,
               l2Ledger,
               persistence,
               metrics,
@@ -413,6 +741,33 @@ object Serve {
               coilFactory,
             )
         } yield NodeRun.CoilNode(mrm)
+    }
+
+    /** The HTTP bind address and admin credentials, from the node's own private config. Shared by
+      * both roles: a coil serves the same server minus the mutating routes, so it reads the same
+      * fields.
+      */
+    private def httpServerConfig(nodeConfig: NodeConfig): HydrozoaServer.Config = {
+        val httpHost = Host
+            .fromString(nodeConfig.httpHost)
+            .getOrElse(
+              throw new IllegalArgumentException(
+                s"Invalid httpHost in node config: ${nodeConfig.httpHost}"
+              )
+            )
+        val httpPort = Port
+            .fromString(nodeConfig.httpPort)
+            .getOrElse(
+              throw new IllegalArgumentException(
+                s"Invalid httpPort in node config: ${nodeConfig.httpPort}"
+              )
+            )
+        HydrozoaServer.Config(
+          host = httpHost,
+          port = httpPort,
+          adminUsername = nodeConfig.adminUsername,
+          adminPassword = nodeConfig.adminPassword
+        )
     }
 
     private def runHeadNode(
@@ -428,64 +783,98 @@ object Serve {
             _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
             _ <- log.info("Hydrozoa node started successfully")
 
-            // Start HTTP server once RequestSequencer is available
-            _ <- mrm.connectionsDeferred.get.flatMap { connections =>
-                val httpHost = Host
-                    .fromString(nodeConfig.httpHost)
-                    .getOrElse(
-                      throw new IllegalArgumentException(
-                        s"Invalid httpHost in node config: ${nodeConfig.httpHost}"
-                      )
+            // The HTTP server needs the RequestSequencer, which only exists once connections
+            // resolve, so wait for them before binding.
+            connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
+            _ <- log.info("Starting HTTP server...")
+
+            // `surround`, not `start.void`: the server is bound for exactly as long as the node
+            // waits, and its finalizer runs when the actor system terminates. `runCoilNode` has
+            // the same shape and spells out what the old one leaked.
+            _ <- HydrozoaServer
+                .create(
+                  // Always present on a head; the `Option` exists for the coil.
+                  Some(
+                    connections.requestSequencer.getOrElse(
+                      sys.error("RequestSequencer required on head peers")
                     )
-                val httpPort = Port
-                    .fromString(nodeConfig.httpPort)
-                    .getOrElse(
-                      throw new IllegalArgumentException(
-                        s"Invalid httpPort in node config: ${nodeConfig.httpPort}"
-                      )
-                    )
-                val serverConfig = HydrozoaServer.Config(
-                  host = httpHost,
-                  port = httpPort,
-                  adminUsername = nodeConfig.adminUsername,
-                  adminPassword = nodeConfig.adminPassword
+                  ),
+                  connections.blockWeaver,
+                  mrm.nodeStatus.get,
+                  consensusReader,
+                  // Some(reader) for a cardano-eutxo node (mounts GET /l2/cardano-eutxo/...); None for
+                  // a remote-ledger node, which serves no L2-query endpoints.
+                  l2QueryReader,
+                  nodeConfig.headConfig,
+                  httpServerConfig(nodeConfig),
+                  metrics,
+                  Slf4jTracer.sink
+                      .contramap(HydrozoaHttpEventFormat.humanFormat) |+| httpExtraTracer,
                 )
-                val httpTracer = Slf4jTracer.sink
-                    .contramap(HydrozoaHttpEventFormat.humanFormat) |+| httpExtraTracer
-                log.info("Starting HTTP server...") *>
-                    HydrozoaServer
-                        .create(
-                          connections.requestSequencer.getOrElse(
-                            sys.error("RequestSequencer required on head peers")
-                          ),
-                          connections.blockWeaver,
-                          mrm.nodeStatus.get,
-                          consensusReader,
-                          // Some(reader) for a cardano-eutxo node (mounts GET /l2/cardano-eutxo/...); None for
-                          // a remote-ledger node, which serves no L2-query endpoints.
-                          l2QueryReader,
-                          nodeConfig.headConfig,
-                          serverConfig,
-                          metrics,
-                          httpTracer,
-                        )
-                        .use(_ => IO.never)
-                        .start
-                        .void
-            }
+                .surround(system.waitForTermination)
 
-            _ <- system.waitForTermination
-        } yield ExitCode.Success
+            exit <- abnormalTermination
+        } yield exit
 
+    /** A coil peer runs the same HTTP server as a head, minus the mutating routes: it passes `None`
+      * for the request sequencer, which is what removes them (see
+      * [[hydrozoa.multisig.server.HydrozoaRoutes]]).
+      *
+      * Serving a coil at all is for observability. It runs its own `StackComposer`, and its
+      * hard-ack gates the head's next stack — so without `/head/stats` and `/metrics`, a coil
+      * wedged on its single-flight gate looks exactly like an idle one.
+      */
     private def runCoilNode(
+        nodeConfig: NodeConfig,
         system: ActorSystem[IO],
         mrm: CoilMultisigRegimeManager,
+        consensusReader: ConsensusStoreReader[IO],
+        metrics: PeerMetrics,
+        httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
     ): IO[ExitCode] =
         for {
             _ <- system.actorOf(mrm, "CoilMultisigRegimeManager")
             _ <- log.info("Hydrozoa coil node started successfully")
-            _ <- system.waitForTermination
-        } yield ExitCode.Success
+
+            connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
+            _ <- log.info("Starting HTTP server (coil: read-only surface)...")
+
+            // `surround` binds the server for the node's lifetime and releases it when the actor
+            // system terminates. `use(_ => IO.never).start.void` -- what this was, on both roles --
+            // dropped the fiber handle, so nothing could cancel it and the finalizer never ran: the
+            // port stayed bound and answering after the node was dead, and a bind failure could not
+            // fail the node because no one joined the fiber's outcome.
+            _ <- HydrozoaServer
+                .create(
+                  // None on a coil — this is what removes the mutating routes.
+                  connections.requestSequencer,
+                  connections.blockWeaver,
+                  mrm.nodeStatus.get,
+                  consensusReader,
+                  // A coil always runs a remote ledger, so no L2-query endpoints.
+                  None,
+                  nodeConfig.headConfig,
+                  httpServerConfig(nodeConfig),
+                  metrics,
+                  Slf4jTracer.sink
+                      .contramap(HydrozoaHttpEventFormat.humanFormat) |+| httpExtraTracer,
+                )
+                .surround(system.waitForTermination)
+
+            exit <- abnormalTermination
+        } yield exit
+
+    /** Nothing here shuts the actor system down deliberately, and an interrupted `serve` is
+      * cancelled rather than resumed past `waitForTermination`. So reaching this point means an
+      * actor escalated to the guardian and took the system with it: exit non-zero, or a process
+      * supervisor will treat a crashed node as a clean stop. cats-actors 2.1.0 clears the cause
+      * before it can be re-raised, which is why this can only point at the log.
+      */
+    private def abnormalTermination: IO[ExitCode] =
+        log.info(
+          "Actor system terminated: an actor escalated to the guardian. " +
+              "See the [EventBus] error and stack trace above for the cause."
+        ).as(ExitCode.Error)
 
     private sealed trait NodeRun
     private object NodeRun {
