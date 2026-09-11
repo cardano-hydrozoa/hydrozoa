@@ -949,8 +949,6 @@ final case class JointLedger(
             case lines => lines.mkString("\n  - ", "\n  - ", "")
     }
 
-    // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
-    // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
     /** The digest to build a block from, refusing a request whose carried digest does not describe
       * its body.
       *
@@ -976,6 +974,8 @@ final case class JointLedger(
         ).as(hash)
     }
 
+    // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
+    // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
     private def panic(msg: String): IO[Unit] = throw new RuntimeException(msg)
 }
 
