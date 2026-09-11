@@ -1,7 +1,7 @@
 package hydrozoa.multisig.persistence.codec
 
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder, coinDecoder, coinEncoder}
-import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
 
@@ -19,16 +19,25 @@ import io.circe.{Decoder, Encoder}
   */
 object HydrozoaLocalCodecs:
 
-    /** Codec for [[MultisigTreasuryUtxo.Datum]] =
-      * `(commit: KzgCommitment, versionMajor: BigInt, headParamsHash: ByteString)`. `commit` and
-      * `headParamsHash` ride through the CIP-116 ByteString codec (hex string); `versionMajor`
-      * rides through Circe's built-in BigInt support (JSON number string).
+    /** Codec for [[MultisigTreasuryUtxo.Datum]] = `(commit: KzgCommitment, versionMajor: BigInt)`.
+      * `commit` rides through the CIP-116 ByteString codec (hex string); `versionMajor` rides
+      * through Circe's built-in BigInt support (JSON number string).
       */
     given datumEncoder: Encoder[MultisigTreasuryUtxo.Datum] =
         deriveEncoder[MultisigTreasuryUtxo.Datum]
 
     given datumDecoder: Decoder[MultisigTreasuryUtxo.Datum] =
         deriveDecoder[MultisigTreasuryUtxo.Datum]
+
+    /** Codec for [[MultisigRegimeUtxo.Datum]] = `(headParamsHash: ByteString)`, riding the same
+      * CIP-116 ByteString codec (hex string). Persisted rather than re-derived on decode: the
+      * persistence layer threads only `CardanoNetwork.Section`, and the digest is not in it.
+      */
+    given regimeDatumEncoder: Encoder[MultisigRegimeUtxo.Datum] =
+        deriveEncoder[MultisigRegimeUtxo.Datum]
+
+    given regimeDatumDecoder: Decoder[MultisigRegimeUtxo.Datum] =
+        deriveDecoder[MultisigRegimeUtxo.Datum]
 
     /** Codec for [[Equity]]. The wrapper has a private constructor + validating smart constructor
       * `apply(amount: Coin): Option[Equity]` (positivity check); on decode we go `Coin → Equity`

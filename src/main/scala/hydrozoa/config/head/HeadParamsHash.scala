@@ -22,7 +22,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   * It covers the **whole head config**, not only the [[parameters.HeadParameters]] case class: the
   * head parameters, the L1 network, the per-peer equity split, the script references, block zero's
   * timing, and the coil hub topology. Peers never exchange their configs, so this is what makes a
-  * disagreement visible — the multisig treasury datum carries it, and a peer that computes a
+  * disagreement visible — the multisig regime datum carries it, and a peer that computes a
   * different value cannot parse the initialization transaction and so never signs block zero.
   *
   * ```
@@ -36,7 +36,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   *
   * The layout is written out byte by byte rather than delegating to a JSON or CBOR encoder.
   * `QuantizedFiniteDuration`, `Coin` and `PositiveInt` each have their own codec quirks, and a
-  * codec tweak that silently moved this value — once it is written into a treasury datum — would
+  * codec tweak that silently moved this value — once it is written into a regime datum — would
   * leave a live head unable to parse its own initialization transaction.
   *
   * See `docs/spec/head-params-hash.md` for what each field is doing here, what is deliberately left
@@ -45,13 +45,12 @@ import scalus.uplc.builtin.{ByteString, platform}
 object HeadParamsHash {
 
     /** Grants read access to the digest without dragging in the whole [[HeadConfig.Section]].
-      * Transaction builders that must write it into a treasury datum ask for this and nothing more.
+      * Transaction builders that reconstruct the multisig regime output ask for this and nothing
+      * more; the datum form is [[hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeOutput.datum]]'s
+      * business.
       */
     trait Section {
         def headParamsHash: Hash32
-
-        /** The digest in the form the treasury datum holds it. */
-        final def headParamsHashBytes: ByteString = ByteString.fromArray(headParamsHash.bytes)
     }
 
     /** Mixed in before anything else so this digest can never collide with a hash of the same bytes
