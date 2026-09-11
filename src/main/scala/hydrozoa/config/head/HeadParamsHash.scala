@@ -150,6 +150,6 @@ object HeadParamsHash {
         out.u32(hubs.size)
         hubs.foreach(hub => out.u32(hub.convert))
 
-        out.digest
+        out.mkDigest
     }
 }

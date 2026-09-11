@@ -44,7 +44,7 @@ class PreimageTest extends AnyFunSuite {
         out.bool(true)
         out.framed(Array[Byte](7, 8))
         assert(
-          out.digest.toHex == "aae1bceab146f024e2710680c931343ea1127afa718a342fb7cd3435ce7a3e9f"
+          out.mkDigest.toHex == "aae1bceab146f024e2710680c931343ea1127afa718a342fb7cd3435ce7a3e9f"
         )
     }
 

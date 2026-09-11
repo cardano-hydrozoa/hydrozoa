@@ -22,7 +22,7 @@ class SubmitRequestBodyTest extends AnyFunSuite:
     test("a `type: transaction` body decodes to a TransactionRequest") {
         val body =
             s"""{ "type": "transaction", "l2Payload": "$l2Hex",
-               |  "requestHash": "${transactionBody.hash.toHex}" }""".stripMargin
+               |  "requestHash": "${transactionBody.mkHash.toHex}" }""".stripMargin
         val request = decode[ApiDto.SubmitRequestView](body).flatMap(ApiDto.toUserRequest)
         assert(request == Right(UserRequest.TransactionRequest(transactionBody)))
     }
@@ -30,7 +30,7 @@ class SubmitRequestBodyTest extends AnyFunSuite:
     test("a `type: deposit` body decodes to a DepositRequest") {
         val body =
             s"""{ "type": "deposit", "l1Payload": "$l1Hex", "l2Payload": "$l2Hex",
-               |  "requestHash": "${depositBody.hash.toHex}" }""".stripMargin
+               |  "requestHash": "${depositBody.mkHash.toHex}" }""".stripMargin
         val request = decode[ApiDto.SubmitRequestView](body).flatMap(ApiDto.toUserRequest)
         assert(request == Right(UserRequest.DepositRequest(depositBody)))
     }
@@ -38,7 +38,7 @@ class SubmitRequestBodyTest extends AnyFunSuite:
     test("an unknown `type` is a client error") {
         val body =
             s"""{ "type": "nonsense", "l2Payload": "$l2Hex",
-               |  "requestHash": "${transactionBody.hash.toHex}" }""".stripMargin
+               |  "requestHash": "${transactionBody.mkHash.toHex}" }""".stripMargin
         assert(decode[ApiDto.SubmitRequestView](body).isLeft)
     }
 
@@ -64,7 +64,9 @@ class SubmitRequestBodyTest extends AnyFunSuite:
     test("a well-formed `requestHash` that does not match the body still decodes") {
         val body =
             s"""{ "type": "transaction", "l2Payload": "$l2Hex",
-               |  "requestHash": "${depositBody.hash.toHex}" }""".stripMargin
+               |  "requestHash": "${depositBody.mkHash.toHex}" }""".stripMargin
         val request = decode[ApiDto.SubmitRequestView](body).flatMap(ApiDto.toUserRequest)
-        assert(request == Right(UserRequest.TransactionRequest(transactionBody, depositBody.hash)))
+        assert(
+          request == Right(UserRequest.TransactionRequest(transactionBody, depositBody.mkHash))
+        )
     }

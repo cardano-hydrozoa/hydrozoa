@@ -110,5 +110,5 @@ there is no version of the request it would be safe to accept.
 ## Worked implementation
 
 `hydrozoa submit-deposit` and `hydrozoa submit-l2-tx` compute it through
-`UserRequestBody.hash` (`src/main/scala/hydrozoa/multisig/consensus/UserRequest.scala`), which is the
+`UserRequestBody.mkHash` (`src/main/scala/hydrozoa/multisig/consensus/UserRequest.scala`), which is the
 same function the head runs to verify. Read it alongside this guide.

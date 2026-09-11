@@ -113,7 +113,7 @@ object BlockHash {
         out.u32(body.depositsRejected.size)
         body.depositsRejected.foreach(putRequestId(out, _))
 
-        out.digest
+        out.mkDigest
     }
 
     /** Take a digest that arrived rather than one derived here — off the wire, or out of the

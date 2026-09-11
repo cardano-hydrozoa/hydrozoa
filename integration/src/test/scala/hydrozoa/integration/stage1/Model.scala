@@ -337,7 +337,7 @@ object Model:
                         // derives it from the body it received (design/block-hash.md).
                         val events: List[(RequestId, RequestHash, ValidityFlag)] =
                             accumulator.map((le, _, flag) =>
-                                (le.requestId, le.request.body.hash, flag)
+                                (le.requestId, le.request.body.mkHash, flag)
                             )
                         for
                             _ <- StateT.liftF(
@@ -618,7 +618,7 @@ object Model:
                 state <- StateT.get[M, State]
 
                 events = accumulator.map((req, _, flag) =>
-                    (req.requestId, req.request.body.hash, flag)
+                    (req.requestId, req.request.body.mkHash, flag)
                 )
 
                 // Construct, but don't execute the state transitions -- we decide which one we need below

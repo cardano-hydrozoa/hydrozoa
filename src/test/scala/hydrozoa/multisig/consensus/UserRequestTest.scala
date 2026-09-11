@@ -5,8 +5,8 @@ import org.scalatest.funsuite.AnyFunSuite
 import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 
-/** [[UserRequestBody.hash]] is a public interface: a submitter has to reproduce it to get a request
-  * accepted, so these vectors are the contract. They are the worked examples in
+/** [[UserRequestBody.mkHash]] is a public interface: a submitter has to reproduce it to get a
+  * request accepted, so these vectors are the contract. They are the worked examples in
   * `docs/user-guide/REQUEST-HASH.md`, and moving one is a client break.
   */
 class UserRequestTest extends AnyFunSuite {
@@ -22,14 +22,14 @@ class UserRequestTest extends AnyFunSuite {
     test("User request body hashes as expected (deposits)") {
         val body = DepositRequestBody(l1Payload = l1Payload, l2Payload = l2Payload)
         assert(
-          body.hash.toHex == "ac596c7fb689a6e4757fb6c782580d7cc2ca0ff812ae872753be1292063a28bb"
+          body.mkHash.toHex == "ac596c7fb689a6e4757fb6c782580d7cc2ca0ff812ae872753be1292063a28bb"
         )
     }
 
     test("User request body hashes as expected (txs)") {
         val body = TransactionRequestBody(l2Payload = l2Payload)
         assert(
-          body.hash.toHex == "58828159aaac6c4575395db0ea87f5e2a378c2e3f4c6e78b27d61eddbd2b1e85"
+          body.mkHash.toHex == "58828159aaac6c4575395db0ea87f5e2a378c2e3f4c6e78b27d61eddbd2b1e85"
         )
     }
 
@@ -43,7 +43,7 @@ class UserRequestTest extends AnyFunSuite {
         val impostor = TransactionRequestBody(
           l2Payload = blake2b_256(l1Payload).concat(blake2b_256(l2Payload))
         )
-        assert(deposit.hash != impostor.hash)
+        assert(deposit.mkHash != impostor.mkHash)
     }
 
     /** The digest describes the body and nothing around it, which is what lets a submitter compute
@@ -52,11 +52,11 @@ class UserRequestTest extends AnyFunSuite {
       */
     test("Equal bodies hash equally") {
         val _ = assert(
-          TransactionRequestBody(l2Payload).hash == TransactionRequestBody(l2Payload).hash
+          TransactionRequestBody(l2Payload).mkHash == TransactionRequestBody(l2Payload).mkHash
         )
         assert(
-          DepositRequestBody(l1Payload, l2Payload).hash
-              == DepositRequestBody(l1Payload, l2Payload).hash
+          DepositRequestBody(l1Payload, l2Payload).mkHash
+              == DepositRequestBody(l1Payload, l2Payload).mkHash
         )
     }
 
@@ -66,8 +66,8 @@ class UserRequestTest extends AnyFunSuite {
       */
     test("A deposit's two payloads are not interchangeable") {
         assert(
-          DepositRequestBody(l1Payload, l2Payload).hash
-              != DepositRequestBody(l2Payload, l1Payload).hash
+          DepositRequestBody(l1Payload, l2Payload).mkHash
+              != DepositRequestBody(l2Payload, l1Payload).mkHash
         )
     }
 
@@ -85,11 +85,11 @@ class UserRequestTest extends AnyFunSuite {
 
     test("A request whose digest describes other bytes is refused, naming both digests") {
         val body: TransactionRequestBody = TransactionRequestBody(l2Payload)
-        val wrong = DepositRequestBody(l1Payload, l2Payload).hash
+        val wrong = DepositRequestBody(l1Payload, l2Payload).mkHash
         val refused = UserRequest.TransactionRequest(body, wrong).checkRequestHash
         val _ = assert(refused.isLeft)
         val _ = assert(refused.left.exists(_.contains(wrong.toHex)))
-        assert(refused.left.exists(_.contains(body.hash.toHex)))
+        assert(refused.left.exists(_.contains(body.mkHash.toHex)))
     }
 
     /** The failure the end-to-end check exists for: the head holds fewer bytes than the submitter
@@ -99,6 +99,6 @@ class UserRequestTest extends AnyFunSuite {
         val whole: TransactionRequestBody = TransactionRequestBody(l2Payload)
         val truncated: TransactionRequestBody =
             TransactionRequestBody(ByteString.fromArray(l2Payload.bytes.dropRight(1)))
-        assert(UserRequest.TransactionRequest(truncated, whole.hash).checkRequestHash.isLeft)
+        assert(UserRequest.TransactionRequest(truncated, whole.mkHash).checkRequestHash.isLeft)
     }
 }

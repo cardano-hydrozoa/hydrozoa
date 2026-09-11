@@ -20,14 +20,14 @@ enum UserRequest extends SyncRequest[IO, UserRequest, Either[UserRequest.Rejecte
 
     /** The digest of [[body]] **as the submitter computed it**, not as this node derived it.
       *
-      * It is a claim until [[RequestSequencer]] re-derives [[UserRequestBody.hash]] from the body
+      * It is a claim until [[RequestSequencer]] re-derives [[UserRequestBody.mkHash]] from the body
       * it received and refuses the request if the two differ — an end-to-end check that the request
       * the head holds is the request the user built. Nothing downstream trusts it: every peer that
       * needs a request's digest hashes the bytes in front of it (see `JointLedger`).
       */
     def requestHash: RequestHash
 
-    /** Re-derive [[UserRequestBody.hash]] from [[body]] and compare it against [[requestHash]],
+    /** Re-derive [[UserRequestBody.mkHash]] from [[body]] and compare it against [[requestHash]],
       * naming both digests when they differ.
       *
       * There is one hash function, run by the submitter to produce the value and here to verify it;
@@ -36,7 +36,7 @@ enum UserRequest extends SyncRequest[IO, UserRequest, Either[UserRequest.Rejecte
       * corrected — see [[RequestSequencer]], which runs this before assigning a [[RequestId]].
       */
     def checkRequestHash: Either[String, Unit] = {
-        val derived = body.hash
+        val derived = body.mkHash
         Either.cond(
           derived == requestHash,
           (),
@@ -64,7 +64,7 @@ object UserRequest {
           * carry, which is what a client does before it has a [[RequestId]] to name the request by.
           */
         def apply(body: DepositRequestBody): DepositRequest =
-            new UserRequest.DepositRequest(body, body.hash)
+            new UserRequest.DepositRequest(body, body.mkHash)
 
         /** Rebuild a request as received, keeping the submitter's own digest for the head to check.
           */
@@ -76,7 +76,7 @@ object UserRequest {
 
         /** Build the request a submitter sends — see [[DepositRequest.apply]]. */
         def apply(body: TransactionRequestBody): TransactionRequest =
-            new UserRequest.TransactionRequest(body, body.hash)
+            new UserRequest.TransactionRequest(body, body.mkHash)
 
         /** Rebuild a request as received, keeping the submitter's own digest for the head to check.
           */
@@ -115,7 +115,7 @@ enum UserRequestBody {
       *
       * [[RequestHash]] carries the preimage layout and why it is shaped that way.
       */
-    def hash: RequestHash = this match {
+    def mkHash: RequestHash = this match {
         case UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
             RequestHash.hashDeposit(l1Payload, l2Payload)
         case UserRequestBody.TransactionRequestBody(l2Payload) =>

@@ -40,7 +40,7 @@ type RequestHash = RequestHash.RequestHash
   *
   * The construction is a public interface: a client that cannot reproduce it cannot get a request
   * accepted. It is written out for clients in `docs/user-guide/REQUEST-HASH.md`, and
-  * `UserRequestBody.hash` is the entry point both the submitter and the head go through.
+  * `UserRequestBody.mkHash` is the entry point both the submitter and the head go through.
   */
 object RequestHash {
     opaque type RequestHash = Hash32
@@ -66,7 +66,7 @@ object RequestHash {
         out.u8(depositVariantTag)
         out.raw(blake2b_256(l1Payload).bytes)
         out.raw(blake2b_256(l2Payload).bytes)
-        out.digest
+        out.mkDigest
     }
 
     /** The digest of a transaction request: one opaque payload, passed to the L2 ledger unmodified.
@@ -76,7 +76,7 @@ object RequestHash {
         out.raw(domainTag)
         out.u8(transactionVariantTag)
         out.raw(l2Payload.bytes)
-        out.digest
+        out.mkDigest
     }
 
     /** Take a digest that arrived rather than one derived here — off the wire, out of the store, or

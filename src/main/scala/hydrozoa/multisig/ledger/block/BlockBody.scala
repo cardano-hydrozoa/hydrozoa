@@ -59,7 +59,7 @@ object BlockBody {
         def body: BlockBody
 
         /** The block's requests in the order the leader chose them: each request's id, the digest
-          * of the body that id names ([[hydrozoa.multisig.consensus.UserRequestBody.hash]]), and
+          * of the body that id names ([[hydrozoa.multisig.consensus.UserRequestBody.mkHash]]), and
           * whether applying it succeeded.
           *
           * The digest is what ties an id to its bytes. Without it two peers holding different

@@ -113,7 +113,7 @@ class RequestRecordCodecTest extends AnyFunSuite:
         cases.foreach { (name, record) =>
             val decoded = RequestRecordCodec.decode(RequestRecordCodec.encode(record))
             assert(
-              decoded.request.requestHash == decoded.request.body.hash,
+              decoded.request.requestHash == decoded.request.body.mkHash,
               s"$name's stored digest does not describe its body"
             )
         }

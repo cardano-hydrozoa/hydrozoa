@@ -26,8 +26,8 @@ final class Preimage {
     /** The preimage accumulated so far. */
     def bytes: Array[Byte] = buffer.toByteArray
 
-    /** `blake2b_256` over [[bytes]] — the digest itself. */
-    def digest: Hash32 =
+    /** Hash [[bytes]] with `blake2b_256` — the digest itself. */
+    def mkDigest: Hash32 =
         Hash[Blake2b_256, Any](platform.blake2b_256(ByteString.unsafeFromArray(bytes)))
 
     /** Append bytes verbatim. For a domain tag, or for a value whose width is fixed by its type. */

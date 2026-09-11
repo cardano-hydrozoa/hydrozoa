@@ -846,7 +846,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               _ <- assertWith(
                 msg = "Deposit should be in transient fields as valid",
                 condition = jlState.userRequestState.requests
-                    == List((depositReq.requestId, depositReq.request.body.hash, Valid))
+                    == List((depositReq.requestId, depositReq.request.body.mkHash, Valid))
               )
           } yield ()
       } yield true
@@ -886,7 +886,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               _ <- assertWith(
                 msg = "Deposit should be in transient fields as invalid",
                 condition = jlState.userRequestState.requests
-                    == List((depositReq.requestId, depositReq.request.body.hash, Invalid))
+                    == List((depositReq.requestId, depositReq.request.body.mkHash, Invalid))
               )
           } yield ()
       } yield true

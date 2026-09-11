@@ -230,7 +230,7 @@ final case class JointLedger(
 
     /** Record a request that could not be applied, so the block still names it and its content.
       *
-      * `requestHash` is the digest of the body this peer holds — see [[requestHashOf]].
+      * `requestHash` is the digest of the body this peer holds — see [[mkHashOf]].
       */
     private def invalidateRequest(
         requestId: RequestId,
@@ -266,7 +266,7 @@ final case class JointLedger(
       * differs, and the brief comparison this actor already runs catches it. Reading the digest
       * that travelled with the request would compare two copies of the same claim instead.
       */
-    private def requestHashOf(request: UserRequestWithId): RequestHash = request.request.body.hash
+    private def mkHashOf(request: UserRequestWithId): RequestHash = request.request.body.mkHash
 
     /** Pure deposit-ledger op: parse the deposit tx and append the produced deposit utxo to the L1
       * deposits map — this actor's only L1-ledger surface. Parsing derives the deposit's accept-by
@@ -309,7 +309,7 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.DepositRegistrationStarted(requestId))
 
-            requestHash = requestHashOf(req)
+            requestHash = mkHashOf(req)
 
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
@@ -398,7 +398,7 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.TransactionApplicationStarted(requestId))
 
-            requestHash = requestHashOf(req)
+            requestHash = mkHashOf(req)
 
             p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber

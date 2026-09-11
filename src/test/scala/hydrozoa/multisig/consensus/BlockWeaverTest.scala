@@ -588,7 +588,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           brief3 <- mkMinorBriefWith(
             BlockNumber(3),
             config.headConfig,
-            overflowExpected.map(r => (r.requestId, r.request.body.hash, ValidityFlag.Valid))
+            overflowExpected.map(r => (r.requestId, r.request.body.mkHash, ValidityFlag.Valid))
           )
           _ <- lift((weaver ! brief3) >> env.system.waitForIdle())
           _ <- settle(env.jointLedgerMock.events.get == ordered)
