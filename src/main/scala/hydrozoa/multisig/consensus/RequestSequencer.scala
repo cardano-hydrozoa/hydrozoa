@@ -43,56 +43,44 @@ trait RequestSequencer(
       */
     markers: Markers
 ) extends Actor[IO, Request] {
-    private val connections = Ref.unsafe[IO, Option[RequestSequencer.Connections]](None)
     private val state = State()
 
+    private given env: Env = Env(config, l2Screener, tracer, persistence, metrics)
+
     // The user-request surface is head-only, so the author is always a head peer.
-    private val ownHeadPeerNum: HeadPeerNumber = config.ownPeerId match {
-        case PeerId.Head(n) => n
-        case PeerId.Coil(_) =>
-            throw new IllegalStateException("RequestSequencer runs only on a head peer")
-    }
+    private val ownHeadPeerNum: HeadPeerNumber =
+        config.ownPeerId.expectHead("RequestSequencer runs only on a head peer")
 
-    /** `config` is a `CardanoNetwork.Section`; expose it as a given so the typed `Request`-lane
-      * `WriteBatch.put` (the CR1 persist) picks it up.
-      */
-    private given CardanoNetwork.Section = config
-
-    private def getConnections: IO[Connections] = for {
-        mConn <- this.connections.get
-        conn <- mConn.fold(
-          IO.raiseError(
-            IllegalStateException(
-              "Request sequencer is missing its connections to other actors."
-            )
-          )
-        )(IO.pure)
-    } yield conn
-
-    private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: HeadMultisigRegimeManager.PendingConnections =>
-            for {
-                _connections <- x.get.flatMap(IO.fromEither)
-                _ <- connections.set(
-                  Some(
-                    Connections(
-                      blockWeaver = _connections.blockWeaver,
-                      headPeerLiaisons = _connections.headPeerLiaisons,
-                      coilRelay = _connections.coilRelay
-                    )
-                  )
+    private def initializeConnections: IO[Env.Connected] = {
+        val connections: IO[RequestSequencer.Connections] =
+            HeadMultisigRegimeManager.resolveConnections(pendingConnections)(c =>
+                Connections(
+                  blockWeaver = c.blockWeaver,
+                  headPeerLiaisons = c.headPeerLiaisons,
+                  coilRelay = c.coilRelay
                 )
-            } yield ()
-        case x: RequestSequencer.Connections => connections.set(Some(x))
+            )
+        connections.map(env.connected)
     }
 
     override def preStart: IO[Unit] = context.self ! RequestSequencer.PreStart
 
-    override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction(receiveTotal)
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
+        case RequestSequencer.PreStart =>
+            for {
+                // Suspends on the start barrier, so connections are in place before any real
+                // message is processed.
+                given Env.Connected <- initializeConnections
+                _ <- preStartLocal
+                _ <- context.become(PartialFunction.fromFunction(receiveConnected))
+            } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
+    }
 
-    private def receiveTotal(req: Request): IO[Unit] = req match {
-        case RequestSequencer.PreStart  => preStartLocal
+    private def receiveConnected(req: Request)(using Env.Connected): IO[Unit] = req match {
+        case RequestSequencer.PreStart =>
+            IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
         case hw: SoftConfirmedHighWater =>
             // Advance this peer's own confirmed request high-water (merge by max); backpressure
             // reads it. A block that carries none of this peer's requests leaves it unchanged. The
@@ -156,8 +144,8 @@ trait RequestSequencer(
                                     userRequest = userRequest,
                                     requestId = newId
                                   )
+                                  val conn = summon[Env.Connected].connections
                                   for {
-                                      conn <- getConnections
                                       _ <- tracer.traceWith(
                                         EventSequencerEvent
                                             .RequestIdAssigned(newId.peerNum, newId.requestNum)
@@ -185,12 +173,12 @@ trait RequestSequencer(
             )
     }
 
-    private def preStartLocal: IO[Unit] =
+    private def preStartLocal: IO[Unit] = {
+        // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
+        // empty store -> RequestNumber(0), the same cold value. Projected from the manager's
+        // marker bundle rather than re-read, so every actor anchors on the one derivation.
+        val next = markers.nextRequestNumber
         for {
-            _ <- initializeConnections
-            // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
-            // empty store -> RequestNumber(0), the same cold value.
-            next = markers.nextRequestNumber
             _ <- state.seedNextRequestNum(next)
             // Seed the confirmed high-water from the highest already-assigned own request (next - 1).
             // Treating assigned-as-confirmed opens the backpressure window optimistically after a
@@ -198,6 +186,7 @@ trait RequestSequencer(
             _ <- state.seedConfirmedHighWater(next.previousOrZero)
             _ <- reportBackpressure(config.backpressureCoefficient * config.maxRequestsPerBlock)
         } yield ()
+    }
 
     /** Publish the current backpressure headroom (space left in the
       * `backpressureCoefficient * maxRequestsPerBlock` window) to [[metrics]] — see
@@ -294,4 +283,23 @@ object RequestSequencer {
     type Request = PreStart.type | UserRequest.Sync | SoftConfirmedHighWater
 
     case object PreStart
+
+    private final case class Env(
+        config: Config,
+        l2Screener: L2Screener[IO],
+        tracer: ContraTracer[IO, EventSequencerEvent],
+        persistence: Persistence[IO],
+        metrics: PeerMetrics
+    ) extends CardanoNetwork.Section {
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+    }
+
+    private object Env {
+
+        final class Connected(env: Env, val connections: Connections)
+            extends CardanoNetwork.Section {
+            export env.*
+        }
+    }
 }
