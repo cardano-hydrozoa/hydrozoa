@@ -444,9 +444,10 @@ with no body to hash. The other two would carry a body commitment they have no u
 what actually travels and persists — the block lane carries briefs, and `JournalKey.Block` stores
 one — so the storage and wire story is unchanged by the choice.
 
-`signingBytes` moves from `BlockHeader.Section` to `BlockBrief.Section` with it. Both call sites
-already hold a brief: `JointLedger` (`:719`) signing its own ack, and `FastConsensusActor`
-(`:285`) verifying somebody else's.
+The soft-ack signs `blockHash` itself, so there is no separate signing-bytes accessor to move. Both
+call sites already hold a brief: `JointLedger` signing its own ack with
+`PeerWallet.mkSoftAckSignature(brief.blockHash)`, and `FastConsensusActor` verifying somebody
+else's against `brief.blockHash`.
 
 **Stored, and never trusted.** The brief carries the hash on the wire and into the `Block`
 journal, but a stored hash is a claim: every peer that rebuilds the block recomputes the digest
@@ -483,33 +484,28 @@ block, or a peer seeded from a snapshot.
 
 ## What the soft-ack signs
 
-**The block digest, with the two version components beside it.**
+**The block digest, and nothing beside it.** A soft-ack is an Ed25519 signature over the 32 bytes
+of `blockHash`.
 
-```scala
-SignedDigest(versionMajor, versionMinor, blockHash)
-```
+Everything a signed statement about a block needs is inside that preimage already. `blockNum` and
+`startTime` are there, so a signature made over block N cannot be replayed as block M, and
+`SoftAck` carries `blockNum` as a plain field for anything that wants it without re-deriving a
+hash. The versions are there too, and nothing needs them beside the digest: **ratcheting reads the
+SEC's versions, on the slow side, never a soft-ack's.** A digest gives an ordering on nothing, but
+no consumer of a soft-ack ever has to order two of them.
 
-`blockNum` and `startTime` go. Both are inside the `blockHash` preimage, so dropping them unbinds
-nothing — a signature made over block N still cannot be replayed as block M. `SoftAck` already
-carries `blockNum` as a plain field, so anything wanting an ack's block number has it without
-parsing signed bytes.
+The one thing versions beside the digest would buy is a self-contained equivocation proof — two
+signed `(versions, hash)` pairs that agree on the versions and disagree on the hash, provable
+without either brief. Nothing consumes such a proof. With fixed membership and every head peer
+signing every block, an equivocating peer stalls the head, and the dispute that follows is settled
+by SECs.
 
-The versions stay, duplicated in the preimage on purpose: a ratchet must read them **without
-recomputing a hash** — `versionMajor` for equality, `versionMinor` for the strict increase. A
-digest gives an ordering on nothing; it can only say two things differ.
-
-Be honest about what that is. **Nothing reads any field of `SignedDigest` today.** The type has
-five references in the repository — constructed in `signingBytes`, its own declaration, an
-unused `Serialized.Section`, and a doc comment in `PeerWallet` — and its derived `FromData`
-decoder is never called. So the versions are kept for a ratchet that does not yet read them, at
-a cost of eight bytes in an off-chain message, to keep that option open. That is a deliberate
-choice, not a current requirement.
-
-**Everything else collapses into the hash.** The check moves from a structural comparison to
-signature verification, which is where it belongs — a follower that derives a different block
-produces a different `blockHash`, and the leader's ack fails to verify against its own brief.
-The domain tag inside the preimage keeps those signed bytes separable from any other digest the
-protocol signs.
+**Everything collapses into the hash.** The check moves from a structural comparison to signature
+verification, which is where it belongs — a follower that derives a different block produces a
+different `blockHash`, and the leader's ack fails to verify against its own brief. The domain tag
+inside the preimage keeps these signed bytes separable from any other digest the protocol signs,
+and an SEC signature covers CBOR-encoded `Data`, not a bare 32-byte digest, so the two can never be
+confused.
 
 **What the signature set then proves.** A soft-confirmed block's aggregated acks attest that
 every head peer saw the same block: the same requests, in the same order, with the same flags and
@@ -517,24 +513,29 @@ the same absorption decisions. They do **not** attest to the state that block pr
 the L2 state certificate's job, and until it exists the signature set is a content proof and nothing
 more. A snapshot's state half rests on the donor, not on signatures.
 
-**What this does not touch: the rule-based ratchet.** It reads none of these fields.
+**What this does not touch: the rule-based ratchet.** It reads no soft-ack at all.
 `DisputeResolutionScript` compares `voteRedeemer.sec.versionMinor > prevVersionMinor` and
 verifies signatures over `voteRedeemer.sec.toData |> serialiseData` — the standalone evacuation
 commitment, whose `Onchain` shape carries `headId`, `versionMajor`, `versionMinor` and
 `commitment` as its own fields. `StackEffectsBuilder.secOf` lifts `blockVersion` off the block
-header into the SEC, so the version reaches the dispute through a shape the builder keeps
-deliberately independent of the fast-cycle `signingBytes` path.
+header into the SEC, so the version reaches the dispute through the slow side alone.
 
-Two signposts in the code point the other way and are stale. `DisputeResolutionScript`'s comment
-claims the multisig covers "the blockHeader field of voteRedeemer" when the code signs `sec`;
-and `VoteTx`, `RatchetVoteTx` and `RuleBasedActor` type their SEC signatures as
-`BlockHeader.Minor.HeaderSignature`, the aliasing the `BlockHeader.scala` TODO already wants
-untied. Both are worth correcting; neither is a coupling.
+**Each signature gets its own type.** One opaque, `BlockHeader.Minor.HeaderSignature`, used to
+carry both — nested under `Minor` for no reason the code gave, and named for a header neither of
+them signs. It splits along fast and slow:
 
-**This costs no Plutus budget.** Despite the name, `SignedDigest.Onchain` is not consumed
-on-chain. Its only readers are `PeerWallet.mkHeaderSignature`, `JointLedger` (signing, `:719`)
-and `FastConsensusActor` (verification, `:285`), and `Onchain` is a misleading name worth
-correcting alongside the shape change.
+| side | signs | type | made by |
+|---|---|---|---|
+| fast | a block's `blockHash` | `SoftAck.Signature` | `PeerWallet.mkSoftAckSignature` |
+| slow | an SEC's serialized `Data` | `StandaloneEvacuationCommitment.Signature` | `PeerWallet.mkSecSignature` |
+
+Signatures over L1 effect transactions were already a separate type, `TxSignature`. The rule-based
+users — `VoteTx`, `RatchetVoteTx`, `RuleBasedActor` — take the slow type: they carry the same SEC
+signatures into vote redeemers. Both types are `IArray[Byte]` with the same hex codec, so the
+split moves no bytes on the wire, in the store, or on-chain.
+
+**This costs no Plutus budget.** Soft-acks never reach a script; the dispute consumes only SEC
+signatures, and those are byte-identical to what it consumed before.
 
 **`JointLedger` compares hashes.** `panicOnMismatchWithExpectedBrief` compares one 32-byte value
 instead of case-class trees, against the leader's brief on receipt — before the block is applied,
@@ -572,8 +573,6 @@ Rush side to do anything yet.
   carrier that travels after the leader has observed L1, which is the shape the ack already has,
   and a rule for when a block is complete without one. Until then absorption lists stay in
   `blockHash`, where the leader's decision belongs.
-- **The two stale rule-based signposts** named above. Both live in `cardano-onchain` and neither
-  blocks this work.
 - **Whether the leader can apply its own block on the follower path.** It matters only for the
   deferred cut-time split, which is what would let the leader announce and then apply alongside
   everyone else. Whether `BlockWeaver` and `JointLedger` allow that today decides how much of the
