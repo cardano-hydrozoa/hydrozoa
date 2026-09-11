@@ -298,7 +298,7 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.DepositRegistrationStarted(requestId))
 
-            requestHash <- mkHashOf(req)
+            requestHash <- mkHashOrPanic(req)
 
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
@@ -387,7 +387,7 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.TransactionApplicationStarted(requestId))
 
-            requestHash <- mkHashOf(req)
+            requestHash <- mkHashOrPanic(req)
 
             p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber
@@ -962,7 +962,7 @@ final case class JointLedger(
       * into a block that anyone else will agree with, so it refuses rather than building on it —
       * which is what carrying the digest between peers is for.
       */
-    private def mkHashOf(request: UserRequestWithId): IO[RequestHash] = {
+    private def mkHashOrPanic(request: UserRequestWithId): IO[RequestHash] = {
         val hash = JointLedger.mkHashOf(config.ownPeerId, request)
         IO.unlessA(hash == request.request.requestHash)(
           panic(
