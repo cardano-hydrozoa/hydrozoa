@@ -103,9 +103,9 @@ object CardanoNetworkDiscovery {
         protocolParams: ProtocolParams
     ): Either[String, CardanoNetwork.Custom] = {
         val magic = geometry.protocolMagic
-        val network =
-            if magic == CardanoNetwork.Mainnet.protocolMagic then Network.Mainnet
-            else Network.Testnet
+        // Always the testnet address tag: mainnet's magic, the one that would call for the mainnet
+        // tag, is refused below by rejectStandardMagic.
+        val network = Network.Testnet
         val slotConfig = SlotConfig(
           zeroTime = geometry.systemStartSeconds * 1000L,
           zeroSlot = 0L,
