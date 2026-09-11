@@ -30,8 +30,11 @@ message RequestRecord {
   }
 
   // The request's content digest: 32 bytes, blake2b-256 over a domain-tagged, variant-tagged
-  // preimage of the body above. The submitter computes it and the assigning peer verifies it
-  // before this record is written, so a stored record's digest always matches its body.
+  // preimage of the body above, as the submitter computed it. Only the assigning peer verifies
+  // it against the body, before writing its own record; every other peer stores it as it arrived
+  // and recomputes it from the body before relying on it. So in a peer's store only the records
+  // under that peer's own author number carry a verified digest; for any other author's, a reader
+  // that needs the digest to match the body recomputes it.
   //
   // It is stored rather than derived because it is what a block body names a request by: the
   // block commits to which payload sits at each position without carrying any payload. The

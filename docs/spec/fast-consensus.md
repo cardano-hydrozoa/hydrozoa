@@ -100,14 +100,15 @@ same brief locally from the same inputs (deterministic).
 Produces blocks on **every** peer, not just the leader: the leader builds the block from its
 inputs and broadcasts the brief; a follower re-produces the same block from the same
 (deterministic) inputs and verifies it arrives at the identical brief
-(`panicOnMismatchWithExpectedBrief`, one 32-byte `blockHash` comparison). Each request in the
-rebuilt body carries the digest this peer derived from the request body it holds, so two peers that
-received different payloads under the same `RequestId` reach different `blockHash`es and the
-mismatch surfaces here. It is also the L2 executor (applies each block's L2
-transactions) and owns the deposit map, making the per-block deposit decisions (absorb vs.
-refund) from `PollResults` — the set of deposit utxos currently visible on L1, which
-`CardanoLiaison` polls and forwards through `BlockWeaver` (delivered with the block-completion
-command; needed only for regular, non-final blocks). On local block completion
+(`panicOnMismatchWithExpectedBrief`, one 32-byte `blockHash` comparison). In the rebuilt body, a
+request this peer assigned carries the digest its `RequestSequencer` verified at submission, and
+every other peer's request carries one recomputed from the body this peer holds
+(`JointLedger.mkHashOf`). So two peers that received different payloads under the same
+`RequestId` reach different `blockHash`es, and the mismatch surfaces here. It is also the L2
+executor (applies each block's L2 transactions) and owns the deposit map, making the per-block
+deposit decisions (absorb vs. refund) from `PollResults` — the set of deposit utxos currently
+visible on L1, which `CardanoLiaison` polls and forwards through `BlockWeaver` (delivered with the
+block-completion command; needed only for regular, non-final blocks). On local block completion
 (`completeBlockRegular` / `completeBlockFinal`) it:
 
 1. Broadcasts `BlockBrief.Next` directly to `PeerLiaisons` (leader only) — briefs are not

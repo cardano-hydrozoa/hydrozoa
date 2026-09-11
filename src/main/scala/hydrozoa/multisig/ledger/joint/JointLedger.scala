@@ -230,7 +230,7 @@ final case class JointLedger(
 
     /** Record a request that could not be applied, so the block still names it and its content.
       *
-      * `requestHash` is the digest of the body this peer holds — see [[mkHashOf]].
+      * `requestHash` is the digest this peer builds the block from — see [[JointLedger.mkHashOf]].
       */
     private def invalidateRequest(
         requestId: RequestId,
@@ -256,17 +256,6 @@ final case class JointLedger(
               JointLedgerEvent.RequestInvalidated(requestId, currentBlockNum, e.toString)
             )
         } yield ()
-
-    /** The digest of a request **as this peer received it**, hashed here rather than read off
-      * [[UserRequest.requestHash]].
-      *
-      * That is what ties a [[RequestId]] to its bytes. Two peers holding different payloads under
-      * the same id agree on every position in a block, so the divergence has nowhere to surface
-      * until each hashes its own copy: the digests differ, so the `blockHash` built from them
-      * differs, and the brief comparison this actor already runs catches it. Reading the digest
-      * that travelled with the request would compare two copies of the same claim instead.
-      */
-    private def mkHashOf(request: UserRequestWithId): RequestHash = request.request.body.mkHash
 
     /** Pure deposit-ledger op: parse the deposit tx and append the produced deposit utxo to the L1
       * deposits map — this actor's only L1-ledger surface. Parsing derives the deposit's accept-by
@@ -309,7 +298,7 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.DepositRegistrationStarted(requestId))
 
-            requestHash = mkHashOf(req)
+            requestHash = mkHashOf(config.ownPeerId, req)
 
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
@@ -398,7 +387,7 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.TransactionApplicationStarted(requestId))
 
-            requestHash = mkHashOf(req)
+            requestHash = mkHashOf(config.ownPeerId, req)
 
             p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber
@@ -974,6 +963,31 @@ final case class JointLedger(
 object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
+
+    /** The digest `JointLedger` builds a block from for `request`.
+      *
+      * A request this head peer assigned carries the digest its own `RequestSequencer` verified
+      * against the body before assigning the id — in memory, or read back from this peer's own
+      * `Request` lane, written after that check — so it is reused, not hashed again.
+      *
+      * Every other request is **alien**: it carries a digest nobody on this peer checked, so it is
+      * recomputed from the body this peer holds. That recompute is what ties an alien [[RequestId]]
+      * to its bytes. Two peers holding different payloads under one id reach different digests, the
+      * `blockHash` built from them differs, and the brief comparison this actor already runs
+      * catches it. A coil peer assigns nothing, so every request is alien to it.
+      *
+      * The shortcut keys on the id alone, and liaisons are transport: nothing stops a byzantine
+      * peer sending a request under this peer's id. Its carried digest is then reused here while
+      * every honest peer recomputes it, so if it does not describe the body, this peer's
+      * `blockHash` disagrees with theirs — and no block soft-confirms without every head peer's
+      * ack. The worst it buys is a stalled head, which a byzantine peer can cause anyway by
+      * withholding its ack; it can never get a wrong block confirmed.
+      */
+    def mkHashOf(ownPeerId: PeerId, request: UserRequestWithId): RequestHash =
+        ownPeerId match {
+            case PeerId.Head(own) if own == request.requestId.peerNum => request.request.requestHash
+            case _                                                    => request.request.body.mkHash
+        }
 
     type Config = HeadConfig.Section & OwnPeerPrivate.Section
 
