@@ -13,7 +13,7 @@ import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
@@ -21,7 +21,6 @@ import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.{HeadConfig, HeadParamsHash}
 import hydrozoa.config.node.{NodeConfig, PrivateSecrets}
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
@@ -173,16 +172,15 @@ object Bootstrap:
 
     /** Assembly-time defaults (`defaults.json`): everything the head needs that is neither peer
       * topology (the roster), script references, nor the opening L2 state — the L1 network, the
-      * head protocol parameters, the per-peer equity contributions, and (optionally) the block-zero
-      * timing anchors. [[InitBootstrapFiles]] writes these with demo defaults for the operators to
-      * adjust before [[BuildHeadConfig]]. Block-zero timing is optional: omit it and
-      * [[BuildHeadConfig]] anchors the initial block to wall-clock at build time.
+      * head protocol parameters, the per-peer equity contributions, and (optionally) block zero's
+      * end time. [[InitBootstrapFiles]] writes these with demo defaults for the operators to adjust
+      * before [[BuildHeadConfig]]. `blockZeroEndTime` is optional: omit it and [[BuildHeadConfig]]
+      * anchors the initial block to wall-clock at build time.
       */
     final case class BootstrapDefaults(
         cardanoNetwork: CardanoNetwork,
         headParams: BootstrapHeadParams,
         initialEquityContributions: Map[HeadPeerNumber, Coin],
-        blockZeroStartTime: Option[BlockCreationStartTime],
         blockZeroEndTime: Option[BlockCreationEndTime]
     )
 
@@ -241,7 +239,6 @@ object Bootstrap:
         scriptReferenceUtxos: ScriptReferenceUtxos.Unresolved,
         initialL2State: List[L2Output],
         initialEquityContributions: Map[HeadPeerNumber, Coin],
-        blockZeroStartTime: Option[BlockCreationStartTime],
         blockZeroEndTime: Option[BlockCreationEndTime]
     )
 
@@ -292,7 +289,6 @@ object Bootstrap:
           scriptReferenceUtxos = refUtxos,
           initialL2State = l2State,
           initialEquityContributions = defaults.initialEquityContributions,
-          blockZeroStartTime = defaults.blockZeroStartTime,
           blockZeroEndTime = defaults.blockZeroEndTime
         )
     }
@@ -337,9 +333,12 @@ object Bootstrap:
         l2Ledger: L2LedgerKind,
         mbInitialEvacuationMap: Option[EvacuationMap]
     ): IO[HeadConfig] = for {
-        blockCreationStartTime <- bootstrapConfig.blockZeroStartTime.fold(
-          realTimeQuantizedInstant(cardanoNetwork.slotConfig).map(BlockCreationStartTime(_))
-        )(IO.pure)
+        // Equity comes from the config (per head peer). Its total is what the treasury backs beyond
+        // the L2 value; the per-peer split is recorded but the init tx consumes only the sum.
+        initialEquityContributions <- IO.fromOption(
+          NonEmptyMap.fromMap(SortedMap.from(bootstrapConfig.initialEquityContributions))
+        )(RuntimeException("initialEquityContributions must be non-empty"))
+        totalEquity = initialEquityContributions.toSortedMap.values.foldLeft(Coin.zero)(_ + _)
 
         bhp = bootstrapConfig.headParams
         headParams = HeadParameters(
@@ -374,13 +373,6 @@ object Bootstrap:
         initialL2Value = mbInitialEvacuationMap.fold(
           Value.combine(bootstrapConfig.initialL2State.map(_.value))
         )(_.totalValue)
-
-        // Equity comes from the config (per head peer). Its total is what the treasury backs beyond
-        // the L2 value; the per-peer split is recorded but the init tx consumes only the sum.
-        initialEquityContributions <- IO.fromOption(
-          NonEmptyMap.fromMap(SortedMap.from(bootstrapConfig.initialEquityContributions))
-        )(RuntimeException("initialEquityContributions must be non-empty"))
-        totalEquity = initialEquityContributions.toSortedMap.values.foldLeft(Coin.zero)(_ + _)
 
         headPeers <- IO.fromOption(
           HeadPeers(
@@ -541,19 +533,9 @@ object Bootstrap:
 
         // Block zero's header is built before the transactions, not read back off them: the init
         // tx's treasury datum carries `headParamsHash`, and the header is part of that digest's
-        // preimage. Every field here is derived from the config and `blockCreationEndTime`, which
-        // is exactly what `InitializationTxSeq.Build` derives the fallback's start time from.
-        fallbackTxStartTime = headParams.txTiming.newFallbackStartTime(blockCreationEndTime)
-        forcedMajorBlockWakeupTime = headParams.txTiming.forcedMajorBlockWakeupTime(
-          fallbackTxStartTime
-        )
-        initialBlockHeader = BlockHeader.Initial(
-          startTime = blockCreationStartTime,
-          endTime = blockCreationEndTime,
-          fallbackTxStartTime = fallbackTxStartTime,
-          forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
-          mDepositDecisionWakeupTime = None,
-        )
+        // preimage. Every field follows from `blockCreationEndTime`, which is exactly what
+        // `InitializationTxSeq.Build` derives the fallback's start time from.
+        initialBlockHeader = BlockHeader.Initial(blockCreationEndTime)(using headParams.txTiming)
         headParamsHash = HeadParamsHash(bootstrap, initialBlockHeader)
 
         initTxSeq <- InitializationTxSeq
@@ -1282,8 +1264,7 @@ end BuildHeadConfig
   * contributions — with demo defaults) and an `l2-cardano-eutxo.json` template (a min-ada
   * placeholder per head peer's L1 address, which the operators edit into the opening distribution).
   * Block-zero timing is left out of the defaults, so [[BuildHeadConfig]] anchors the initial block
-  * to wall-clock at build time; operators who want to pin it add `blockZeroStartTime` /
-  * `blockZeroEndTime` (epoch millis).
+  * to wall-clock at build time; operators who want to pin it add `blockZeroEndTime` (epoch millis).
   *
   * Usage:
   * {{{
@@ -1355,7 +1336,7 @@ object InitBootstrapFiles:
             equity = roster.headPeers.indices
                 .map(i => HeadPeerNumber(i) -> (if i == 0 then Coin.ada(100) else Coin.zero))
                 .toMap
-            defaults = Bootstrap.BootstrapDefaults(network, headParams, equity, None, None)
+            defaults = Bootstrap.BootstrapDefaults(network, headParams, equity, None)
             defaultsJson = {
                 given CardanoNetwork.Section = network
                 defaults.asJson.deepDropNullValues

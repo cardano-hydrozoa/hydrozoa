@@ -131,8 +131,10 @@ object HeadParamsHash {
         out.scriptHash(HydrozoaBlueprint.disputeScriptHash)
         out.transactionInput(config.setupLadderAnchor)
 
-        // -- initialBlockTiming. Only `startTime` and `endTime` reach the initialization
-        // transaction's validity end; the other three reach no transaction at all.
+        // -- initialBlockTiming. `endTime` carries the whole header: it reaches the initialization
+        // tx's validity end, and the other four terms are derived from it and the tx timing
+        // already hashed above. They stay in the preimage because dropping a term would mean a new
+        // domain tag for nothing.
         val header = initialBlockHeader
         out.instant(header.startTime.convert)
         out.instant(header.endTime.convert)
