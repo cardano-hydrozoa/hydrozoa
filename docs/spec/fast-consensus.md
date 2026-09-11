@@ -13,10 +13,11 @@ Soft-confirmation requires soft-acks from **every** head peer, including the lea
 
 ## Terminology
 
-- **ack** (soft) — one peer's Ed25519 signature over `BlockBrief.Section.signingBytes`, which is
-  the block's content digest (`BlockHash`) with its two version components beside it. Signing the
-  digest is what makes the ack set attest to the block's requests, their order, their validity
-  flags and its absorption decisions — see `design/block-hash.md`.
+- **ack** (soft) — one peer's Ed25519 signature (`SoftAck.Signature`) over the brief's `blockHash`:
+  the 32 digest bytes and nothing beside them. Signing the digest is what makes the ack set attest
+  to the block's requests, their order, their validity flags and its absorption decisions — see
+  `design/block-hash.md`. No version rides beside it: ratcheting reads the SEC's own versions, on
+  the slow side.
   Per-peer event, transported by `PeerLiaison`, collected by `FastConsensusActor`.
 - **confirmation** (soft) — the saturated set of acks, emitted as `Block.SoftConfirmed`.
   Aggregated event, consumed by `BlockWeaver` and by the slow side's `StackComposer`.
@@ -37,7 +38,7 @@ collection. The same distinction appears on the slow side (hard-ack vs hard-conf
 
 `BlockBrief.Next = Minor | Major | Final` is the wire-broadcast composition record (no
 block 0 — it never travels). The leader produces it; followers reproduce it locally and
-agree by signing the same header bytes.
+agree by signing the same `blockHash`.
 
 ## Leadership
 
@@ -113,7 +114,7 @@ command; needed only for regular, non-final blocks). On local block completion
    routed through `FastConsensusActor`.
 2. Signs the brief and sends its own `SoftAck` to the local `FastConsensusActor`.
 3. Forwards `BlockBrief.Next` to the local `FastConsensusActor` (so verification has the
-   signed bytes).
+   `blockHash` the acks sign).
 4. Emits `BlockResult` to `StackComposer` (slow side; independent of the soft-ack round).
 
 `BlockResult` is the slow-side's per-block input: brief + evacuation-map diff + payout
@@ -130,7 +131,7 @@ Soft-ack aggregator. Inputs:
   leader brief lands at the follower's `PeerLiaison`, which routes it to `BlockWeaver`; the
   follower's `JointLedger` then re-produces the brief and forwards its own copy here.
 
-Verifies each soft-ack's signature against the brief's `signingBytes` and accumulates per
+Verifies each soft-ack's signature against the brief's `blockHash` and accumulates per
 `blockNum`. When all head peers' acks are present, emits `Block.SoftConfirmed` to:
 - `BlockWeaver` — frees the next-block decision.
 - `StackComposer` — paired with the corresponding `BlockResult` to mark the block

@@ -8,9 +8,6 @@ import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.block.BlockHeader.Minor
-import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
@@ -75,8 +72,8 @@ private object VoteTxOps {
         regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
-        signatures: List[BlockHeader.Minor.HeaderSignature],
-        coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]],
+        signatures: List[StandaloneEvacuationCommitment.Signature],
+        coilSignatures: List[Option[StandaloneEvacuationCommitment.Signature]],
     ) {
 
         // TODO relocate to "BallotBoxOutput" companion object?

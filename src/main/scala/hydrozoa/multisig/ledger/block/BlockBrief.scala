@@ -115,7 +115,8 @@ object BlockBrief {
           * **Stored, and never trusted.** The brief carries the value on the wire and into the
           * `Block` journal, but a stored digest is a claim: a peer that rebuilds the block derives
           * its own and compares (`JointLedger.panicOnMismatchWithExpectedBrief`). What makes the
-          * claim worth anything is [[signingBytes]] — every head peer's soft-ack signs it.
+          * claim worth anything is that every head peer's soft-ack signs it — the 32 digest bytes,
+          * as [[hydrozoa.multisig.consensus.ack.SoftAck.Signature]].
           */
         def blockHash: BlockHash
 
@@ -130,74 +131,11 @@ object BlockBrief {
             body.depositsAbsorbed
         override transparent inline def depositsRejected: List[RequestId] =
             body.depositsRejected
-
-        /** Canonical byte representation a head peer's soft acknowledgment signs over (Ed25519).
-          *
-          * It authenticates the block's whole content through [[blockHash]], with the two version
-          * components beside it so a ratchet can *order* two signed statements without recomputing
-          * a digest. The slow cycle's dispute-script-facing bytes live separately on
-          * [[hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment.Onchain.Serialized]].
-          */
-        final def signingBytes: BlockBrief.SignedDigest.Serialized =
-            BlockBrief.SignedDigest.Serialized(BlockBrief.SignedDigest.Onchain(this))
     }
 
     object Section {
         type Next = Section & BlockType.Next
         type Intermediate = Section & BlockType.Intermediate
         type NonFinal = Section & BlockType.NonFinal
-    }
-
-    /** The canonical bytes a head peer's soft acknowledgment signs over: the block's content
-      * digest, with the two version components beside it.
-      *
-      * `blockNum` and `startTime` are inside the [[BlockHash]] preimage, so a signature made over
-      * block N still cannot be replayed as block M without them;
-      * [[hydrozoa.multisig.consensus.ack.SoftAck]] also carries the block number as a plain field,
-      * so anything wanting it has it without parsing signed bytes. The versions are duplicated in
-      * the preimage on purpose — a digest gives an ordering on nothing, and a ratchet must read
-      * `versionMajor` for equality and `versionMinor` for strict increase.
-      *
-      * No on-chain consumer reads this — Hydrozoa's L1 scripts speak the SEC's `Onchain` datum, not
-      * the soft-ack bytes. We still derive `Serialized` via scalus' `serialiseData` for canonical
-      * byte determinism and toolchain consistency with the SEC.
-      */
-    object SignedDigest {
-        import scalus.uplc.builtin.{ByteString, FromData, ToData}
-        import scalus.uplc.builtin.Builtins.serialiseData
-        import scalus.uplc.builtin.Data.toData
-
-        final case class Onchain(
-            versionMajor: BigInt,
-            versionMinor: BigInt,
-            blockHash: ByteString,
-        ) derives FromData,
-              ToData
-
-        object Onchain {
-            def apply(brief: BlockBrief.Section): Onchain =
-                new Onchain(
-                  versionMajor = BigInt(brief.blockVersion.major.convert),
-                  versionMinor = BigInt(brief.blockVersion.minor.convert),
-                  blockHash = ByteString.fromArray(brief.blockHash.bytes)
-                )
-        }
-
-        type Serialized = Serialized.Serialized
-
-        object Serialized {
-            opaque type Serialized = IArray[Byte]
-
-            def apply(onchain: Onchain): Serialized =
-                IArray.from(serialiseData(onchain.toData).bytes)
-
-            given Conversion[Serialized, IArray[Byte]] = identity
-
-            given Conversion[Serialized, Array[Byte]] = msg => IArray.genericWrapArray(msg).toArray
-
-            given Conversion[Serialized, ByteString] = msg => ByteString.fromArray(msg)
-
-            extension (msg: Serialized) def untagged: IArray[Byte] = identity(msg)
-        }
     }
 }

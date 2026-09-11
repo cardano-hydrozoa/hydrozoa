@@ -676,7 +676,7 @@ final case class StackComposer(
                 val fallbackSig = wallet.mkTxSignature(fallback.tx)
                 val rolloutSigs = rollouts.map(r => wallet.mkTxSignature(r.tx))
                 val refundSigs = refunds.map(r => wallet.mkTxSignature(r.tx))
-                val secSig = sec.map(s => wallet.mkHeaderSignature(s.header))
+                val secSig = sec.map(s => wallet.mkSecSignature(s.header))
                 if isUnlock then
                     HardAck.Round1Payload.PartitionSigs.MajorPartial(
                       fallback = fallbackSig,
@@ -703,7 +703,7 @@ final case class StackComposer(
                     )
             case PartitionEffects.Minor(sec, refunds) =>
                 HardAck.Round1Payload.PartitionSigs.Minor(
-                  sec = wallet.mkHeaderSignature(sec.header),
+                  sec = wallet.mkSecSignature(sec.header),
                   refunds = refunds.map(r => wallet.mkTxSignature(r.tx))
                 )
         }
@@ -734,7 +734,7 @@ final case class StackComposer(
         ): HardAck.SolePayload = pe match {
             case PartitionEffects.Minor(sec, refunds) =>
                 HardAck.SolePayload(
-                  sec = wallet.mkHeaderSignature(sec.header),
+                  sec = wallet.mkSecSignature(sec.header),
                   refunds = refunds.map(rt => wallet.mkTxSignature(rt.tx))
                 )
             case _ =>

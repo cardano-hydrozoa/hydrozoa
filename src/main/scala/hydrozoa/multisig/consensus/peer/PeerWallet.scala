@@ -5,8 +5,10 @@ import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.*
-import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.consensus.ack.SoftAck
+import hydrozoa.multisig.ledger.block.BlockHash
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxSignature}
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import io.circe.*
 import io.circe.syntax.*
 import scala.language.implicitConversions
@@ -56,22 +58,19 @@ final class PeerWallet(
             case Invalid(e) => throw e.head
         }
 
-    /** Sign arbitrary canonical bytes as a `HeaderSignature`. Used for two distinct sign targets:
-      *
-      *   - Soft-ack over the fast-cycle block content digest
-      *     ([[hydrozoa.multisig.ledger.block.BlockBrief.SignedDigest.Serialized]]).
-      *   - Hard-ack signature over the standalone evacuation commitment
-      *     ([[hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment.Onchain.Serialized]]).
-      *
-      * Both opaque types provide an implicit conversion to `IArray[Byte]`, so callers pass either.
-      *
-      * TODO: See
-      * https://linear.app/gummiworm-labs/issue/GUM-141/sec-commitment-signatures-dedicated-type-rename-peerwalletmksignature
+    /** Sign a block's content digest as this head peer's soft-ack. The message is the 32 digest
+      * bytes and nothing else — see [[SoftAck.Signature]].
       */
-    def mkHeaderSignature(
-        headerSerialized: IArray[Byte]
-    ): BlockHeader.HeaderSignature =
-        BlockHeader.Minor.HeaderSignature(walletModule.signMsg(headerSerialized, signingKey))
+    def mkSoftAckSignature(blockHash: BlockHash): SoftAck.Signature =
+        SoftAck.Signature(walletModule.signMsg(IArray.from(blockHash.bytes), signingKey))
+
+    /** Sign an SEC's serialized on-chain record, as a hard-ack carries it and the rule-based
+      * regime's vote tx presents it — see [[StandaloneEvacuationCommitment.Signature]].
+      */
+    def mkSecSignature(
+        sec: StandaloneEvacuationCommitment.Onchain.Serialized
+    ): StandaloneEvacuationCommitment.Signature =
+        StandaloneEvacuationCommitment.Signature(walletModule.signMsg(sec, signingKey))
 }
 
 object PeerWallet:

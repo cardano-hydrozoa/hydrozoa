@@ -173,7 +173,7 @@ object BlockWeaverTestHelpers {
         })
             .map(brief =>
                 Block.SoftConfirmed
-                    .Minor(brief, headerMultiSigned = List.empty, finalizationRequested = false)
+                    .Minor(brief, softAckSignatures = List.empty, finalizationRequested = false)
             )
 
     def mkBlockWeaverActor(peerNumber: HeadPeerNumber): BWTest[BlockWeaver.Handle] =
@@ -487,7 +487,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- lift(
             weaver ! Block.SoftConfirmed.Minor(
               brief,
-              headerMultiSigned = List.empty,
+              softAckSignatures = List.empty,
               finalizationRequested = false
             )
           )
@@ -579,7 +579,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- lift(
             (weaver ! Block.SoftConfirmed.Minor(
               brief1,
-              headerMultiSigned = List.empty,
+              softAckSignatures = List.empty,
               finalizationRequested = false
             )) >> env.system.waitForIdle()
           )
@@ -717,7 +717,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               ()
           })
           _ <- lift(
-            (weaver ! Block.SoftConfirmed.Final(finalBrief, headerMultiSigned = List.empty)) >>
+            (weaver ! Block.SoftConfirmed.Final(finalBrief, softAckSignatures = List.empty)) >>
                 env.system.waitForIdle()
           )
           // Give the event-stream drainer a beat to observe a panic before reading.

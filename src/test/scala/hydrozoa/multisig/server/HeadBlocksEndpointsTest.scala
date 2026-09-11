@@ -126,7 +126,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                       Block.SoftConfirmed
                           .Minor(
                             brief,
-                            headerMultiSigned = List.empty,
+                            softAckSignatures = List.empty,
                             finalizationRequested = false
                           )
                     )

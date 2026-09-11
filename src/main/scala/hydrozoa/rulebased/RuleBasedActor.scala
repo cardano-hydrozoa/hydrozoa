@@ -20,7 +20,6 @@ import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
@@ -1261,8 +1260,8 @@ object RuleBasedActor {
     enum DisputeAction:
         case Vote(
             sec: StandaloneEvacuationCommitment.Onchain,
-            signatures: List[BlockHeader.Minor.HeaderSignature],
-            coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]]
+            signatures: List[StandaloneEvacuationCommitment.Signature],
+            coilSignatures: List[Option[StandaloneEvacuationCommitment.Signature]]
         )
         case Abstain
 

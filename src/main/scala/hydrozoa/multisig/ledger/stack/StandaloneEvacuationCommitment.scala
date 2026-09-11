@@ -4,6 +4,7 @@ import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import scalus.cardano.onchain.plutus.v3.TokenName
+import scalus.uplc.builtin.ByteString
 
 /** A standalone evacuation commitment — the per-spec record a **minor** block carries (see
   * `replicated-state-machine/effects#standalone-evacuation-commitment`).
@@ -31,8 +32,8 @@ import scalus.cardano.onchain.plutus.v3.TokenName
   * hard-ack signs over. Keeping it here makes the SEC effect **self-contained for signing**: the
   * signer and verifier derive the SEC signing material straight off this effect, with no
   * `BlockResult` / `Stack.Unsigned.results` lookup (PR #446 review — `results` is a
-  * construction-only input and is being removed). KZG lives on the header transitionally, so today
-  * these bytes coincide with the soft-ack header domain.
+  * construction-only input and is being removed). The signature over them is a [[Signature]];
+  * soft-acks sign something else entirely — a block's `BlockHash` — with a type of their own.
   *
   * @param blockNum
   *   the committed minor block's number
@@ -66,8 +67,32 @@ object StandaloneEvacuationCommitment {
       */
     final case class MultiSigned(
         commitment: StandaloneEvacuationCommitment,
-        headerMultiSigned: List[Option[BlockHeader.Minor.HeaderSignature]]
+        headerMultiSigned: List[Option[Signature]]
     )
+
+    type Signature = Signature.Signature
+
+    /** A peer's Ed25519 signature over an SEC's serialized on-chain record
+      * ([[StandaloneEvacuationCommitment.header]]) — the signature the rule-based regime's vote tx
+      * presents to the dispute-resolution script, which verifies it over the SEC and ratchets on
+      * the SEC's own `versionMinor`.
+      *
+      * Built by `PeerWallet.mkSecSignature`; carried in hard-acks and aggregated on
+      * [[MultiSigned]]. Signatures over L1 effect transactions are a separate type, `TxSignature`.
+      */
+    object Signature {
+        opaque type Signature = IArray[Byte]
+
+        def apply(signature: IArray[Byte]): Signature = signature
+
+        given Conversion[Signature, IArray[Byte]] = identity
+
+        given Conversion[Signature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
+
+        given Conversion[Signature, ByteString] = sig => ByteString.fromArray(sig)
+
+        extension (signature: Signature) def untagged: IArray[Byte] = identity(signature)
+    }
 
     /** The PlutusData shape the rule-based dispute-resolution script consumes as the vote
       * redeemer's `sec` field. Type alias for [[StandaloneEvacuationCommitmentOnchain]], which
