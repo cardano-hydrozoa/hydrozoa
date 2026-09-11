@@ -298,7 +298,7 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.DepositRegistrationStarted(requestId))
 
-            requestHash = mkHashOf(config.ownPeerId, req)
+            requestHash <- mkHashOf(req)
 
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
@@ -387,7 +387,7 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.TransactionApplicationStarted(requestId))
 
-            requestHash = mkHashOf(config.ownPeerId, req)
+            requestHash <- mkHashOf(req)
 
             p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber
@@ -951,6 +951,31 @@ final case class JointLedger(
 
     // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
     // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
+    /** The digest to build a block from, refusing a request whose carried digest does not describe
+      * its body.
+      *
+      * [[JointLedger.mkHashOf]] returns the carried digest for a request this peer assigned and one
+      * derived from the body for anyone else's, so this comparison is trivially true for an own
+      * request and is the real check for an alien one — at no extra hashing, since the derived
+      * digest is what the comparison already has in hand.
+      *
+      * A mismatch means the bytes this peer holds are not the bytes the sender hashed: the request
+      * was corrupted in transit, or the sender lied about it. Either way this peer cannot weave it
+      * into a block that anyone else will agree with, so it refuses rather than building on it —
+      * which is what carrying the digest between peers is for.
+      */
+    private def mkHashOf(request: UserRequestWithId): IO[RequestHash] = {
+        val hash = JointLedger.mkHashOf(config.ownPeerId, request)
+        IO.unlessA(hash == request.request.requestHash)(
+          panic(
+            "Request digest does not describe its body; consensus is broken.\n" +
+                s"request: ${request.requestId}\n" +
+                s"carried: ${request.request.requestHash.toHex}\n" +
+                s"derived: ${hash.toHex}"
+          ) >> context.self.stop
+        ).as(hash)
+    }
+
     private def panic(msg: String): IO[Unit] = throw new RuntimeException(msg)
 }
 
@@ -972,16 +997,17 @@ object JointLedger {
       *
       * Every other request is **alien**: it carries a digest nobody on this peer checked, so it is
       * recomputed from the body this peer holds. That recompute is what ties an alien [[RequestId]]
-      * to its bytes. Two peers holding different payloads under one id reach different digests, the
-      * `blockHash` built from them differs, and the brief comparison this actor already runs
-      * catches it. A coil peer assigns nothing, so every request is alien to it.
+      * to its bytes, and the caller compares the two — an alien request whose carried digest does
+      * not describe its body stops this peer rather than entering a block. A coil peer assigns
+      * nothing, so every request is alien to it.
       *
-      * The shortcut keys on the id alone, and liaisons are transport: nothing stops a byzantine
-      * peer sending a request under this peer's id. Its carried digest is then reused here while
-      * every honest peer recomputes it, so if it does not describe the body, this peer's
-      * `blockHash` disagrees with theirs — and no block soft-confirms without every head peer's
-      * ack. The worst it buys is a stalled head, which a byzantine peer can cause anyway by
-      * withholding its ack; it can never get a wrong block confirmed.
+      * Note what that comparison cannot cover. It keys on the id, and liaisons are transport, so a
+      * byzantine peer can send a request under this peer's id; the carried digest is then returned
+      * unexamined and matches itself. Every honest peer still recomputes it, so a digest that does
+      * not describe the body makes this peer's `blockHash` disagree with theirs, and no block
+      * soft-confirms without every head peer's ack. The worst it buys is a stalled head, which a
+      * byzantine peer can cause anyway by withholding its ack; it can never get a wrong block
+      * confirmed.
       */
     def mkHashOf(ownPeerId: PeerId, request: UserRequestWithId): RequestHash =
         ownPeerId match {

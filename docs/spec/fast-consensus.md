@@ -103,7 +103,8 @@ inputs and broadcasts the brief; a follower re-produces the same block from the 
 (`panicOnMismatchWithExpectedBrief`, one 32-byte `blockHash` comparison). In the rebuilt body, a
 request this peer assigned carries the digest its `RequestSequencer` verified at submission, and
 every other peer's request carries one recomputed from the body this peer holds
-(`JointLedger.mkHashOf`). So two peers that received different payloads under the same
+(`JointLedger.mkHashOf`), and a carried digest that does not describe its body stops the peer
+rather than entering a block. So two peers that received different payloads under the same
 `RequestId` reach different `blockHash`es, and the mismatch surfaces here. It is also the L2
 executor (applies each block's L2 transactions) and owns the deposit map, making the per-block
 deposit decisions (absorb vs. refund) from `PollResults` — the set of deposit utxos currently

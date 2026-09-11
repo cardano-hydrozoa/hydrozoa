@@ -44,4 +44,29 @@ class MkHashOfTest extends AnyFunSuite {
           JointLedger.mkHashOf(PeerId.Coil(CoilPeerNumber(2)), requestFrom(2)) == body.mkHash
         )
     }
+
+    /** The condition `JointLedger` refuses on: for an alien request the returned digest is the
+      * derived one, so it differs from the carried one exactly when that digest does not describe
+      * the body — the corruption the digest travels between peers to catch.
+      */
+    test("an alien request's returned digest differs from a carried one that is wrong") {
+        val alien = requestFrom(2)
+        assert(
+          JointLedger.mkHashOf(PeerId.Head(HeadPeerNumber(1)), alien) != alien.request.requestHash
+        )
+    }
+
+    /** The same comparison on an honest request must hold, or every block would stop. */
+    test("an honest request's returned digest equals the one it carries, own or alien") {
+        val honest = UserRequestWithId(
+          UserRequest.TransactionRequest(body),
+          RequestId(HeadPeerNumber(2), RequestNumber(7))
+        )
+        val _ = assert(
+          JointLedger.mkHashOf(PeerId.Head(HeadPeerNumber(2)), honest) == honest.request.requestHash
+        )
+        assert(
+          JointLedger.mkHashOf(PeerId.Head(HeadPeerNumber(1)), honest) == honest.request.requestHash
+        )
+    }
 }
