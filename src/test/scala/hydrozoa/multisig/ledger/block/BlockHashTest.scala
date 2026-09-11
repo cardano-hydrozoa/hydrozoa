@@ -4,11 +4,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.{HeadConfig, generateHeadConfig}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
-import hydrozoa.multisig.ledger.event.{
-  RequestHash,
-  RequestId,
-  RequestNumber
-}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.DurationInt

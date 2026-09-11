@@ -22,10 +22,7 @@ import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
-import hydrozoa.multisig.ledger.event.{
-  RequestHash,
-  RequestId
-}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.metrics.PeerMetrics
