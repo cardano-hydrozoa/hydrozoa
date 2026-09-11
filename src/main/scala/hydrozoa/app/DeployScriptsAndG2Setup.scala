@@ -45,8 +45,9 @@ import scalus.uplc.builtin.ByteString
   * Reference UTxOs at the burn address can never be spent, so one deployment serves every head on
   * the network until the compiled scripts change (a hash mismatch at config-build or node start
   * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`; the
-  * target network is read from `defaults.json` (what keygen-fleet recorded — the same source
-  * build-head-config uses), with `--blockfrost-url` as a host-side override.
+  * target network is read from `defaults.json` (what keygen-fleet recorded, the same source
+  * build-head-config uses); the endpoint is `--blockfrost-url`, else the template's
+  * `blockfrostApiUrl`, else the network's public Blockfrost.
   */
 object DeployScriptsAndG2Setup:
 
@@ -84,8 +85,8 @@ object DeployScriptsAndG2Setup:
     private val blockfrostUrlOpt: Opts[Option[String]] =
         Opts.option[String](
           "blockfrost-url",
-          "Host-side Blockfrost-compatible API base URL override (e.g. an in-mesh backend's " +
-              "host-mapped port); overrides the blockfrostApiUrl recorded in defaults.json"
+          "Blockfrost-compatible API base URL for this run (e.g. an in-mesh backend's host-mapped " +
+              "port); overrides the template's blockfrostApiUrl"
         ).orNone
 
     /** The `deploy-scripts-and-g2-setup` subcommand. */
@@ -131,13 +132,13 @@ object DeployScriptsAndG2Setup:
                     s"$template"
               ) *> Bootstrap.blockfrostKeyFrom(template)
             )(IO.pure)
-            // The target network is what keygen-fleet recorded in defaults.json — the same source
-            // build-head-config reads — so the two never diverge. --blockfrost-url is a host-side
-            // override (e.g. an in-mesh backend's host-mapped port); the key only authenticates the
-            // backend.
-            bootstrapNetwork <- Bootstrap.readBootstrapNetwork(defaultsPath)
-            cardanoNetwork = bootstrapNetwork.cardanoNetwork
-            blockfrostApiUrl = blockfrostUrlOverride.orElse(bootstrapNetwork.blockfrostApiUrl)
+            // The target network is what keygen-fleet recorded in defaults.json, the same source
+            // build-head-config reads, so the two never diverge. The endpoint is this machine's
+            // own: --blockfrost-url, else the template's blockfrostApiUrl.
+            cardanoNetwork <- Bootstrap.readBootstrapNetwork(defaultsPath)
+            blockfrostApiUrl <- blockfrostUrlOverride.fold(Bootstrap.blockfrostUrlFrom(template))(
+              url => IO.pure(Some(url))
+            )
             // Fail fast on a key/network mismatch (a stale $BLOCKFROST_API_KEY) before the expensive
             // on-chain deployment — skipped for a private endpoint, as build-head-config does.
             _ <- IO.raiseWhen(

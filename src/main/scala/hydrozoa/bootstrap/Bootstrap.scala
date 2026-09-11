@@ -171,22 +171,6 @@ object Bootstrap:
             deriveDecoder[BootstrapHeadParams]
     }
 
-    /** The L1 target as recorded in `defaults.json`: which chain, and — independently — which
-      * Blockfrost-compatible endpoint serves it.
-      *
-      * The two are orthogonal. Setting `blockfrostApiUrl` serves *any* chain from a private
-      * endpoint (a self-hosted `blockfrost-backend-ryo`, the Blockfrost Platform); leaving it unset
-      * serves one of the three standard chains from public blockfrost.io. A chain that is not one
-      * of those three carries its own fully-specified [[CardanoNetwork.Custom]] `CardanoInfo`,
-      * written into `defaults.json` by whoever knows the chain. The network is never resolved from
-      * a running backend at read time — [[BuildHeadConfig]] and `serve` decode a complete chain
-      * description.
-      */
-    final case class BootstrapNetwork(
-        cardanoNetwork: CardanoNetwork,
-        blockfrostApiUrl: Option[String]
-    )
-
     /** Assembly-time defaults (`defaults.json`): everything the head needs that is neither peer
       * topology (the roster), script references, nor the opening L2 state — the L1 network, the
       * head protocol parameters, the per-peer equity contributions, and (optionally) the block-zero
@@ -196,7 +180,6 @@ object Bootstrap:
       */
     final case class BootstrapDefaults(
         cardanoNetwork: CardanoNetwork,
-        blockfrostApiUrl: Option[String],
         headParams: BootstrapHeadParams,
         initialEquityContributions: Map[HeadPeerNumber, Coin],
         blockZeroStartTime: Option[BlockCreationStartTime],
@@ -259,10 +242,7 @@ object Bootstrap:
         initialL2State: List[L2Output],
         initialEquityContributions: Map[HeadPeerNumber, Coin],
         blockZeroStartTime: Option[BlockCreationStartTime],
-        blockZeroEndTime: Option[BlockCreationEndTime],
-        // The Blockfrost-compatible endpoint serving `cardanoNetwork`, as recorded in
-        // `defaults.json`; `None` serves a standard chain from public blockfrost.io.
-        blockfrostApiUrl: Option[String] = None
+        blockZeroEndTime: Option[BlockCreationEndTime]
     )
 
     /** The bootstrap directory's file names — the operator-facing inputs [[readBootstrapDir]]
@@ -313,27 +293,27 @@ object Bootstrap:
           initialL2State = l2State,
           initialEquityContributions = defaults.initialEquityContributions,
           blockZeroStartTime = defaults.blockZeroStartTime,
-          blockZeroEndTime = defaults.blockZeroEndTime,
-          blockfrostApiUrl = defaults.blockfrostApiUrl
+          blockZeroEndTime = defaults.blockZeroEndTime
         )
     }
 
-    /** Read the L1 target — chain plus optional serving endpoint — out of a `defaults.json` file.
-      * The single reader shared by `deploy-scripts-and-g2-setup` and head-zero-address, so all
-      * callers see the one network decision keygen-fleet recorded.
+    /** Read the chain out of a `defaults.json` file. The single reader shared by
+      * `deploy-scripts-and-g2-setup` and head-zero-address, so all callers see the one network
+      * decision keygen-fleet recorded.
       */
-    def readBootstrapNetwork(defaultsPath: Path): IO[BootstrapNetwork] =
+    def readBootstrapNetwork(defaultsPath: Path): IO[CardanoNetwork] =
         IO.blocking(Files.readString(defaultsPath))
             .flatMap(s => IO.fromEither(parser.parse(s)))
-            .flatMap { json =>
-                val cursor = json.hcursor
-                IO.fromEither(
-                  for {
-                      network <- cursor.get[CardanoNetwork]("cardanoNetwork")
-                      url <- cursor.get[Option[String]]("blockfrostApiUrl")
-                  } yield BootstrapNetwork(network, url)
-                )
-            }
+            .flatMap(json => IO.fromEither(json.hcursor.get[CardanoNetwork]("cardanoNetwork")))
+
+    /** The `blockfrostApiUrl` a private-config template names, if any: the endpoint this machine
+      * reaches L1 through. It is private configuration, not a head-wide value, so the generation
+      * steps read it where they read the key.
+      */
+    def blockfrostUrlFrom(privateConfig: Path): IO[Option[String]] =
+        IO.blocking(Files.readString(privateConfig))
+            .flatMap(s => IO.fromEither(parser.parse(s)))
+            .flatMap(json => IO.fromEither(json.hcursor.get[Option[String]]("blockfrostApiUrl")))
 
     /** `--cardano-network-file`: a file holding a serialized [[CardanoNetwork]], as
       * `hydrozoa discover-network` prints it. Shared by `init-bootstrap-files` and `keygen-fleet`.
@@ -1232,9 +1212,9 @@ object BuildHeadConfig:
     private val blockfrostUrlOpt: Opts[Option[String]] =
         Opts.option[String](
           "blockfrost-url",
-          "Blockfrost-compatible API base URL — overrides defaults.json's blockfrostApiUrl, so a " +
-              "host-side build can reach an in-mesh backend at its host-mapped port while the " +
-              "nodes keep the in-mesh URL in their private configs"
+          "Blockfrost-compatible API base URL for this build; overrides the template's " +
+              "blockfrostApiUrl, so a host-side build can reach an in-mesh backend at its " +
+              "host-mapped port while the nodes keep the in-mesh URL"
         ).orNone
 
     /** Which L2 ledger the head runs. Required and explicit: the two differ in trust model, and a
@@ -1315,8 +1295,10 @@ object BuildHeadConfig:
             )(IO.pure)
             bootstrapConfig <- Bootstrap.readBootstrapDir(bootstrapDir)
             cardanoNetwork = bootstrapConfig.cardanoNetwork
-            // A host-side --blockfrost-url wins over the endpoint recorded in defaults.json.
-            blockfrostApiUrl = mbBlockfrostUrl.orElse(bootstrapConfig.blockfrostApiUrl)
+            // The endpoint is this machine's own: --blockfrost-url, else the template's.
+            blockfrostApiUrl <- mbBlockfrostUrl.fold(Bootstrap.blockfrostUrlFrom(template))(url =>
+                IO.pure(Some(url))
+            )
             // A hand-written `custom` chain that carries a standard chain's magic is a
             // misconfiguration, and a costly one: only the baked-in CardanoInfo has the correct
             // (Byron-aware) slot geometry and address tag.
@@ -1402,7 +1384,6 @@ end BuildHeadConfig
   * }}}
   */
 object InitBootstrapFiles:
-    import Bootstrap.BootstrapNetwork
 
     private val logger: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(
@@ -1418,17 +1399,10 @@ object InitBootstrapFiles:
     private val coilQuorumOpt: Opts[Option[Int]] =
         Opts.option[Int]("coil-quorum", "Coil quorum (default: a simple majority of coil peers)")
             .orNone
-    private val blockfrostUrlOpt: Opts[Option[String]] =
-        Opts.option[String](
-          "blockfrost-url",
-          "Blockfrost-compatible API base URL serving the target network — a private endpoint " +
-              "(self-hosted or otherwise) in place of public blockfrost.io"
-        ).orNone
 
     /** Where the target chain comes from: one of the standard networks by name, or a file holding a
       * serialized [[CardanoNetwork]] as `hydrozoa discover-network` prints it — the only way to
-      * name a chain that has no baked-in description. The endpoint serving it is the independent
-      * `--blockfrost-url` and applies to either.
+      * name a chain that has no baked-in description.
       */
     private val chainSourceOpt: Opts[Either[String, Path]] =
         (
@@ -1463,31 +1437,23 @@ object InitBootstrapFiles:
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
-        (rosterArg, outDirOpt, coilQuorumOpt, chainSourceOpt, blockfrostUrlOpt).mapN(
-          (rosterPath, outDir, coilQuorum, chainSource, blockfrostApiUrl) =>
+        (rosterArg, outDirOpt, coilQuorumOpt, chainSourceOpt).mapN(
+          (rosterPath, outDir, coilQuorum, chainSource) =>
               Bootstrap
                   .resolveChainSource(chainSource)
-                  .flatMap(chain =>
-                      init(
-                        rosterPath,
-                        outDir,
-                        coilQuorum,
-                        BootstrapNetwork(chain, blockfrostApiUrl)
-                      )
-                  )
+                  .flatMap(init(rosterPath, outDir, coilQuorum, _))
         )
 
     private[bootstrap] def init(
         rosterPath: Path,
         outDir: Path,
         coilQuorumOverride: Option[Int],
-        bootstrapNetwork: BootstrapNetwork
+        network: CardanoNetwork
     ): IO[ExitCode] =
         // The demo head params are computed against the chain's own slot config; a custom chain
         // carries a complete one, so nothing has to stand in for it. They remain
         // operator-adjustable placeholders — a sub-second-slot devnet needs the timing windows
         // retuned before build-head-config.
-        val network: CardanoNetwork = bootstrapNetwork.cardanoNetwork
         for {
             rosterStr <- IO.blocking(Files.readString(rosterPath))
             roster <- IO.fromEither(parser.decode[Bootstrap.Membership](rosterStr))
@@ -1510,14 +1476,7 @@ object InitBootstrapFiles:
             equity = roster.headPeers.indices
                 .map(i => HeadPeerNumber(i) -> (if i == 0 then Coin.ada(100) else Coin.zero))
                 .toMap
-            defaults = Bootstrap.BootstrapDefaults(
-              network,
-              bootstrapNetwork.blockfrostApiUrl,
-              headParams,
-              equity,
-              None,
-              None
-            )
+            defaults = Bootstrap.BootstrapDefaults(network, headParams, equity, None, None)
             defaultsJson = {
                 given CardanoNetwork.Section = network
                 defaults.asJson.deepDropNullValues
@@ -1543,7 +1502,7 @@ object InitBootstrapFiles:
                 )
             }
             _ <- logger.info(
-              s"Wrote ${Bootstrap.BootstrapDir.defaults} (network=$bootstrapNetwork, " +
+              s"Wrote ${Bootstrap.BootstrapDir.defaults} (network=$network, " +
                   s"coilQuorum=$coilQuorum) and an ${Bootstrap.BootstrapDir.l2CardanoEutxo} " +
                   s"template (${l2State.size} head-peer entries) to $outDir"
             )
@@ -1560,7 +1519,6 @@ end InitBootstrapFiles
   */
 object KeygenFleet:
     import GenerateKeyPair.Role
-    import Bootstrap.BootstrapNetwork
 
     private val headsArg: Opts[Int] = Opts.argument[Int]("heads")
     private val coilsArg: Opts[Int] = Opts.argument[Int]("coils")
@@ -1650,19 +1608,16 @@ object KeygenFleet:
     /** Derive the target network from the template: an explicit `cardanoNetwork` name picks the
       * chain, else the `blockfrostApiKey`'s `preview…`/`preprod…`/`mainnet…` prefix does. A
       * `--cardano-network-file` outranks both — it is the only way to name a chain with no baked-in
-      * description. Independently, `blockfrostApiUrl` — if present — records the private endpoint
-      * serving that chain (e.g. mainnet via a self-hosted Blockfrost) in place of public
-      * blockfrost.io.
+      * description.
       */
     private def deriveNetwork(
         template: Path,
         cardanoNetworkFile: Option[Path]
-    ): IO[BootstrapNetwork] =
+    ): IO[CardanoNetwork] =
         for {
             content <- IO.blocking(Files.readString(template))
             json <- IO.fromEither(parser.parse(content))
             // A present-but-wrong-typed field is a decode error, not silently "absent".
-            blockfrostApiUrl <- IO.fromEither(json.hcursor.get[Option[String]]("blockfrostApiUrl"))
             cardanoNetwork <- IO.fromEither(json.hcursor.get[Option[String]]("cardanoNetwork"))
             chain <- cardanoNetworkFile.fold(
               cardanoNetwork.fold(standardNetworkFromKey(json, template))(name =>
@@ -1674,7 +1629,7 @@ object KeygenFleet:
                       .widen[CardanoNetwork]
               )
             )(Bootstrap.readCardanoNetworkFile)
-        } yield BootstrapNetwork(chain, blockfrostApiUrl)
+        } yield chain
 
     /** Derive the standard chain from the Blockfrost key's `preview…`/`preprod…`/`mainnet…` prefix,
       * when the template names no `cardanoNetwork`.
@@ -1729,10 +1684,7 @@ object PrintHeadZeroAddress:
             headZero <- IO.fromOption(roster.headPeers.headOption)(
               RuntimeException("the roster has no head peers")
             )
-            bootstrapNetwork <- Bootstrap.readBootstrapNetwork(
-              dir.resolve(Bootstrap.BootstrapDir.defaults)
-            )
-            network = bootstrapNetwork.cardanoNetwork
+            network <- Bootstrap.readBootstrapNetwork(dir.resolve(Bootstrap.BootstrapDir.defaults))
             address <- IO.fromOption(
               headZero.verificationKey.shelleyAddress()(using network).toBech32.toOption
             )(RuntimeException("could not render head peer 0's address as bech32"))

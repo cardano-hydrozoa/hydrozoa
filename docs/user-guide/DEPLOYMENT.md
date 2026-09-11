@@ -190,8 +190,11 @@ whichever matches the build you made.
 
 ### Which L1 the head talks to
 
-A deployment makes **two independent choices**: which *chain*, and which *endpoint* serves it. Both
-are recorded once, by `keygen-fleet`, into `bootstrap/defaults.json`:
+A deployment makes **two independent choices**: which *chain*, and which *endpoint* serves it. The
+chain is shared: `keygen-fleet` records it once, in `bootstrap/defaults.json`. The endpoint is each
+peer's own: `blockfrostApiUrl` in its private config, so one peer can read L1 through its own node
+and Dolos while another uses blockfrost.io. The generation steps read it from the template, like the
+key, and `--blockfrost-url` overrides it for one command.
 
 | Chain | Endpoint | How you say it | Params + slot config come from |
 |---|---|---|---|
