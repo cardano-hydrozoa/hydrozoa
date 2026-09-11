@@ -218,6 +218,13 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                 val _ = assert(c.get[String]("l1TxId") == Right(secId.toHex))
                 val _ = assert(c.get[Int]("blockNumber") == Right(1))
                 val _ = assert(c.downField("secOnchainSerialized").as[String].isRight)
+                // The certificate's two commitments, decoded so a reader needs no Plutus decoder.
+                val _ = assert(
+                  c.get[String]("l2StateHash") == Right(sec.commitment.l2StateHash.toHex)
+                )
+                val _ = assert(
+                  c.get[String]("kzgCommitment") == Right(sec.commitment.kzgCommitment.toHex)
+                )
                 // nHeadPeers head signatures, the remaining tail as coil signatures.
                 val _ = assert(c.get[List[String]]("headSignatures").exists(_.size == nHeadPeers))
                 val _ = assert(c.get[List[String]]("coilSignatures").exists(_.size == 1))
@@ -233,6 +240,9 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                 // The by-id response is type-tagged by kind and omits l1TxId (it is the queried path).
                 val _ = assert(body.hcursor.get[String]("type") == Right("sec"))
                 val _ = assert(body.hcursor.downField("secOnchainSerialized").as[String].isRight)
+                val _ = assert(
+                  body.hcursor.get[String]("l2StateHash") == Right(sec.commitment.l2StateHash.toHex)
+                )
                 ()
             }
         }

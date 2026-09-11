@@ -14,7 +14,8 @@ import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup, Evac
 import hydrozoa.multisig.ledger.l1.tx.{FinalizationTx, genDepositUtxo}
 import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.l2.L2StateHash
-import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackPartition}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackPartition, StandaloneEvacuationCommitment}
+import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import org.scalacheck.rng.Seed
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.funsuite.AnyFunSuite
@@ -165,7 +166,8 @@ class StackEffectsBuilderTest extends AnyFunSuite {
     private def mkMinorStackResult(
         diffs: Seq[EvacuationDiffGroup],
         treasuryValue: Value,
-        initialMap: EvacuationMap
+        initialMap: EvacuationMap,
+        l2StateHashes: NonEmptyList[StackPartition] => Map[BlockNumber, L2StateHash] = certifyAll
     ) = {
         val end = BlockCreationEndTime(now + 1.second)
         val fallback = headConfig.txTiming.newFallbackStartTime(end)
@@ -207,7 +209,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(minorBlock)),
           initialEvacuationMap = initialMap,
-          l2StateHashes = certifyAll(StackPartition.partition(NonEmptyList.one(minorBlock)))
+          l2StateHashes = l2StateHashes(StackPartition.partition(NonEmptyList.one(minorBlock)))
         )
     }
 
@@ -384,6 +386,191 @@ class StackEffectsBuilderTest extends AnyFunSuite {
     // `SettlementTxSeqBuilderTest`. Exercises both boundary directions in one build — absorb
     // a 10 ADA deposit and withdraw the 20 ADA pot — through SettlementTxSeq.Build.
     test("a real settlement preserves treasury.value == map + equity + beacon") {
+        val (majorBlock, treasury, initialMap) = realSettlementScenario
+        val result = StackEffectsBuilder.mkEffectsRegular(
+          config = headConfig,
+          initialTreasury = treasury,
+          partitions = StackPartition.partition(NonEmptyList.one(majorBlock)),
+          initialEvacuationMap = initialMap,
+          l2StateHashes = certifyAll(StackPartition.partition(NonEmptyList.one(majorBlock)))
+        )
+        result match {
+            case Right((_, newTreasury, newMap, _)) =>
+                val imbalance = newTreasury.value - newMap.totalValue -
+                    Value(newTreasury.equity.coin) - treasuryTokenValue
+                assert(
+                  imbalance.isZero,
+                  s"the settlement builder leaked value: imbalance=$imbalance " +
+                      s"(treasury=${newTreasury.value}, map=${newMap.totalValue}, " +
+                      s"equity=${newTreasury.equity.coin})"
+                )
+            case Left(err) => fail(s"settlement build failed: $err")
+        }
+    }
+
+    // ---- L2 state certificate (design/l2-state-certificate.md) ----
+
+    /** A digest distinct from [[testL2StateHash]], so an assertion cannot pass by the builder
+      * reaching for the treasury's inherited value instead of the block's.
+      */
+    private def distinctL2StateHash(fill: Int): L2StateHash =
+        L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(fill.toByte)))
+
+    test("a settlement's treasury datum certifies its major block's L2 state") {
+        val (majorBlock, treasury, initialMap) = realSettlementScenario
+        val certified = distinctL2StateHash(0x71)
+        StackEffectsBuilder.mkEffectsRegular(
+          config = headConfig,
+          initialTreasury = treasury,
+          partitions = StackPartition.partition(NonEmptyList.one(majorBlock)),
+          initialEvacuationMap = initialMap,
+          l2StateHashes = Map(majorBlock.brief.blockNum -> certified)
+        ) match {
+            case Right((effects, newTreasury, _, _)) =>
+                val settlementDatum = effects.partitions.head match {
+                    case p: PartitionEffects.Major[?] => p.settlement.treasuryProduced.datum
+                    case other => fail(s"expected a Major partition, got $other")
+                }
+                assert(
+                  newTreasury.datum.l2StateHash == certified.byteString
+                      && settlementDatum.l2StateHash == certified.byteString
+                )
+            case Left(err) => fail(s"settlement build failed: $err")
+        }
+    }
+
+    test("a minor partition's SEC certifies its last block's L2 state, on-chain bytes included") {
+        val certified = distinctL2StateHash(0x72)
+        mkMinorStackResult(
+          diffs = Nil,
+          treasuryValue = Value(Coin(10_000_000L)),
+          initialMap = singletonMap("aa", obligation(5_000_000L, seed = 50)),
+          l2StateHashes = partitions =>
+              StackEffectsBuilder.certifiedBlocks(partitions).map(_ -> certified).toMap
+        ) match {
+            case Right((effects, _, _, _)) =>
+                val sec = effects.partitions.head match {
+                    case p: PartitionEffects.Minor[StandaloneEvacuationCommitment] => p.sec
+                    case other => fail(s"expected a Minor partition, got $other")
+                }
+                // The signed bytes are what makes it a certificate: rebuild the on-chain record
+                // the SEC must have serialized and compare byte for byte.
+                val expectedHeader: Array[Byte] = StandaloneEvacuationCommitmentOnchain(
+                  StandaloneEvacuationCommitmentOnchain(
+                    headId = headConfig.headTokenNames.treasuryTokenName.bytes,
+                    versionMajor = BigInt(sec.blockVersion.major.convert),
+                    versionMinor = BigInt(sec.blockVersion.minor.convert),
+                    commitment = sec.kzgCommitment,
+                    l2StateHash = certified.byteString
+                  )
+                )
+                val actualHeader: Array[Byte] = sec.header
+                assert(
+                  sec.l2StateHash == certified && actualHeader.sameElements(expectedHeader)
+                )
+            case Left(err) => fail(s"minor stack build failed: $err")
+        }
+    }
+
+    test("a certified block with no L2 state hash fails the stack rather than inventing one") {
+        mkMinorStackResult(
+          diffs = Nil,
+          treasuryValue = Value(Coin(10_000_000L)),
+          initialMap = singletonMap("aa", obligation(5_000_000L, seed = 50)),
+          l2StateHashes = _ => Map.empty
+        ) match {
+            case Left(StackEffectsBuilder.Error.L2StateHashMissing(blockNum)) =>
+                assert(blockNum == BlockNumber(1))
+            case other => fail(s"expected L2StateHashMissing, got $other")
+        }
+    }
+
+    test("certifiedBlocks: each major, the last of every minor run, and nothing for a final") {
+        // minor 1 | major 2, minor 3, minor 4 | major 5 | final 6
+        val blocks = NonEmptyList.of(
+          bareBlock(minorBrief(1, BlockVersion.Full(0, 1))),
+          bareBlock(majorBrief(2, BlockVersion.Full(1, 0))),
+          bareBlock(minorBrief(3, BlockVersion.Full(1, 1))),
+          bareBlock(minorBrief(4, BlockVersion.Full(1, 2))),
+          bareBlock(majorBrief(5, BlockVersion.Full(2, 0))),
+          bareBlock(finalBrief(6, BlockVersion.Full(3, 0)))
+        )
+        assert(
+          StackEffectsBuilder.certifiedBlocks(StackPartition.partition(blocks)) ==
+              List(1, 2, 4, 5).map(BlockNumber(_))
+        )
+    }
+
+    /** A block result carrying only its brief — enough for anything that reads block kinds and
+      * numbers alone, such as partitioning and [[StackEffectsBuilder.certifiedBlocks]].
+      */
+    private def bareBlock(brief: BlockBrief.Next): BlockResult = {
+        val fallback = headConfig.txTiming.newFallbackStartTime(BlockCreationEndTime(now))
+        BlockResult(
+          brief = brief,
+          evacuationMapDiff = Nil,
+          payoutObligations = Nil,
+          payoutRequestIds = Nil,
+          postDatedRefundTxs = Nil,
+          absorbedDeposits = Nil,
+          competingFallbackTxTime = fallback
+        )
+    }
+
+    private def minorBrief(n: Int, version: BlockVersion.Full): BlockBrief.Minor =
+        BlockBrief.Minor(
+          BlockHeader.Minor(
+            blockNum = BlockNumber(n),
+            blockVersion = version,
+            startTime = BlockCreationStartTime(now),
+            endTime = BlockCreationEndTime(now),
+            fallbackTxStartTime =
+                headConfig.txTiming.newFallbackStartTime(BlockCreationEndTime(now)),
+            forcedMajorBlockWakeupTime = headConfig.txTiming.forcedMajorBlockWakeupTime(
+              headConfig.txTiming.newFallbackStartTime(BlockCreationEndTime(now))
+            ),
+            mDepositDecisionWakeupTime = None
+          ),
+          BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
+        )
+
+    private def majorBrief(n: Int, version: BlockVersion.Full): BlockBrief.Major =
+        BlockBrief.Major(
+          BlockHeader.Major(
+            blockNum = BlockNumber(n),
+            blockVersion = version,
+            startTime = BlockCreationStartTime(now),
+            endTime = BlockCreationEndTime(now),
+            fallbackTxStartTime =
+                headConfig.txTiming.newFallbackStartTime(BlockCreationEndTime(now)),
+            forcedMajorBlockWakeupTime = headConfig.txTiming.forcedMajorBlockWakeupTime(
+              headConfig.txTiming.newFallbackStartTime(BlockCreationEndTime(now))
+            ),
+            mDepositDecisionWakeupTime = None
+          ),
+          BlockBody.Major(
+            requests = List.empty,
+            depositsAbsorbed = List.empty,
+            depositsRejected = List.empty
+          )
+        )
+
+    private def finalBrief(n: Int, version: BlockVersion.Full): BlockBrief.Final =
+        BlockBrief.Final(
+          BlockHeader.Final(
+            blockNum = BlockNumber(n),
+            blockVersion = version,
+            startTime = BlockCreationStartTime(now),
+            endTime = BlockCreationEndTime(now)
+          ),
+          BlockBody.Final(requests = List.empty, depositsRejected = List.empty)
+        )
+
+    /** The real-settlement scenario: absorb a 10 ADA deposit and withdraw the 20 ADA pot in one
+      * major block, against a treasury balanced going in (120 ADA + beacon == 20 ADA map + 100 ADA
+      * equity + beacon). Returns the block, the treasury, and the opening map.
+      */
+    private def realSettlementScenario: (BlockResult, MultisigTreasuryUtxo, EvacuationMap) = {
         val prevEnd = BlockCreationEndTime(now)
         val end = BlockCreationEndTime(now + 10.seconds)
         val competingFallback = headConfig.txTiming.newFallbackStartTime(prevEnd)
@@ -448,25 +635,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           value = Value(Coin(120_000_000L)) + treasuryTokenValue,
           equity = Equity(Coin(100_000_000L)).get
         )
-        val result = StackEffectsBuilder.mkEffectsRegular(
-          config = headConfig,
-          initialTreasury = treasury,
-          partitions = StackPartition.partition(NonEmptyList.one(majorBlock)),
-          initialEvacuationMap = initialMap,
-          l2StateHashes = certifyAll(StackPartition.partition(NonEmptyList.one(majorBlock)))
-        )
-        result match {
-            case Right((_, newTreasury, newMap, _)) =>
-                val imbalance = newTreasury.value - newMap.totalValue -
-                    Value(newTreasury.equity.coin) - treasuryTokenValue
-                assert(
-                  imbalance.isZero,
-                  s"the settlement builder leaked value: imbalance=$imbalance " +
-                      s"(treasury=${newTreasury.value}, map=${newMap.totalValue}, " +
-                      s"equity=${newTreasury.equity.coin})"
-                )
-            case Left(err) => fail(s"settlement build failed: $err")
-        }
+        (majorBlock, treasury, initialMap)
     }
 
     test("accepts a minor partition and returns the folded map") {
