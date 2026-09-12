@@ -7,6 +7,7 @@ import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.multisig.ledger.stack.PartitionEffects.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{ConsensusStoreReader, DepositDecision}
@@ -33,7 +34,11 @@ object ResolvedEffect:
         blockNumber: BlockNumber,
         kind: EffectKind,
         tx: Transaction,
-        rolloutIndex: Option[Int]
+        rolloutIndex: Option[Int],
+        /** The L2 state digest a settlement certifies, read off its treasury datum; `None` for
+          * every other kind. See `docs/spec/l2-state-certificate.md`.
+          */
+        l2StateHash: Option[L2StateHash] = None
     ) extends ResolvedEffect
 
     /** A standalone evacuation commitment — not a real tx, so its `l1TxId` is synthetic. */
@@ -220,8 +225,7 @@ final class EffectsResolver(reader: ConsensusStoreReader[IO]):
         val opener = blockNums.head
         pe match
             case p: Major[StandaloneEvacuationCommitment.MultiSigned] =>
-                val opening = ResolvedEffect
-                    .Tx(p.settlement.tx.id, opener, EffectKind.Settlement, p.settlement.tx, None) ::
+                val opening = settlementEffectOf(opener, p) ::
                     ResolvedEffect
                         .Tx(p.fallback.tx.id, opener, EffectKind.Fallback, p.fallback.tx, None) ::
                     rolloutEffects(opener, p.rollouts)
@@ -246,6 +250,23 @@ final class EffectsResolver(reader: ConsensusStoreReader[IO]):
                 val sec = ResolvedEffect
                     .Sec(EffectIds.secL1TxId(p.sec.commitment), p.sec.commitment.blockNum, p.sec)
                 p.refunds.traverse(attributeRefund(_, opener)).map(sec :: _)
+
+    /** A major partition's settlement as a resolved effect, carrying the L2 state digest its
+      * treasury datum certifies — the one value a reader cannot get from the tx bytes without
+      * decoding Plutus `Data`.
+      */
+    private def settlementEffectOf(
+        opener: BlockNumber,
+        p: Major[StandaloneEvacuationCommitment.MultiSigned]
+    ): ResolvedEffect.Tx =
+        ResolvedEffect.Tx(
+          p.settlement.tx.id,
+          opener,
+          EffectKind.Settlement,
+          p.settlement.tx,
+          None,
+          Some(L2StateHash(p.settlement.treasuryProduced.datum.l2StateHash))
+        )
 
     private def rolloutEffects(
         block: BlockNumber,
@@ -306,8 +327,7 @@ final class EffectsResolver(reader: ConsensusStoreReader[IO]):
     ): List[ResolvedEffect] =
         pe match
             case p: Major[StandaloneEvacuationCommitment.MultiSigned] =>
-                ResolvedEffect
-                    .Tx(p.settlement.tx.id, opener, EffectKind.Settlement, p.settlement.tx, None) ::
+                settlementEffectOf(opener, p) ::
                     p.sec.toList.map(ms =>
                         ResolvedEffect
                             .Sec(EffectIds.secL1TxId(ms.commitment), ms.commitment.blockNum, ms)
@@ -337,8 +357,7 @@ final class EffectsResolver(reader: ConsensusStoreReader[IO]):
         pe match
             case p: Major[StandaloneEvacuationCommitment.MultiSigned] =>
                 Some(
-                  ResolvedEffect
-                      .Tx(p.settlement.tx.id, opener, EffectKind.Settlement, p.settlement.tx, None)
+                  settlementEffectOf(opener, p)
                 )
             case _ => None
 

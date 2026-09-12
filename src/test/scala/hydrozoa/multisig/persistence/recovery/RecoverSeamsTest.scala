@@ -22,7 +22,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand, RestoreError}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand, L2StateHash, RestoreError}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey, Timestamped}
@@ -85,9 +85,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                   ledger,
                   None,
                   config.initialEvacuationMap,
+                  config.initialL2StateHash,
                   emm,
-                  config.l2ParamsHash,
-                  ContraTracer.nullTracer
+                  config.l2ParamsHash
                 )
                 viaState <- JointLedger.State.recoverState(p, None)
             yield assert(viaRecover.isEmpty && viaState.isEmpty)
@@ -141,9 +141,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                   ledger,
                   Some(BlockNumber(2)),
                   config.initialEvacuationMap,
+                  config.initialL2StateHash,
                   emm,
-                  config.l2ParamsHash,
-                  ContraTracer.nullTracer
+                  config.l2ParamsHash
                 )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(done.isDefined && anchored == L2CommandNumber(2L))
@@ -182,9 +182,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                   ledger,
                   Some(BlockNumber(2)),
                   config.initialEvacuationMap,
+                  config.initialL2StateHash,
                   emm,
-                  config.l2ParamsHash,
-                  ContraTracer.nullTracer
+                  config.l2ParamsHash
                 )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(
@@ -389,6 +389,7 @@ class RecoverSeamsTest extends AnyFunSuite:
               blockNum = BlockNumber(lastBlock),
               blockVersion = BlockVersion.Full(0, 0),
               kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              l2StateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
               header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
                 Array.fill[Byte](32)(7)
               )
@@ -469,9 +470,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       None,
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       None,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(r == Right(None))
@@ -495,9 +496,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       None,
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       None,
-                      foreign,
-                      ContraTracer.nullTracer
+                      foreign
                     )
                     .attempt
             yield assert(
@@ -507,6 +508,40 @@ class RecoverSeamsTest extends AnyFunSuite:
                   case _ => false
               },
               s"expected an L2ParamsMismatch, got $r"
+            )
+        }
+    }
+
+    /** The evacuation-map check one layer down: the map is only the L1-compatible projection of the
+      * L2 state, so two ledgers can project the same payouts from different states. The
+      * initialization transaction has already certified the configured digest on L1
+      * (`docs/spec/l2-state-certificate.md`), so booting on would certify a state nobody agreed to.
+      */
+    test("JointLedger.recover refuses to boot when the L2 ledger holds a different initial state") {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                foreign = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5a)))
+                r <- JointLedger.State
+                    .recover(
+                      p,
+                      ledger,
+                      None,
+                      config.initialEvacuationMap,
+                      foreign,
+                      None,
+                      config.l2ParamsHash
+                    )
+                    .attempt
+            yield assert(
+              r.swap.toOption.exists {
+                  case RestoreError.InitialL2StateMismatch(expected, actual) =>
+                      expected == foreign
+                      && actual == EutxoL2Ledger.initialStateHash(config.initialEvacuationMap)
+                  case _ => false
+              },
+              s"expected an InitialL2StateMismatch, got $r"
             )
         }
     }
@@ -526,9 +561,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       None,
                       divergent,
+                      config.initialL2StateHash,
                       None,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(
@@ -574,9 +609,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       Some(BlockNumber(2)),
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       emm,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(r.map(_.isDefined) == Right(true))
@@ -613,9 +648,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       Some(BlockNumber(2)),
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       emm,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(
@@ -642,9 +677,9 @@ class RecoverSeamsTest extends AnyFunSuite:
                       ledger,
                       Some(BlockNumber(2)),
                       config.initialEvacuationMap,
+                      config.initialL2StateHash,
                       emm,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
@@ -687,6 +722,7 @@ class RecoverSeamsTest extends AnyFunSuite:
               blockNum = BlockNumber(1),
               blockVersion = BlockVersion.Full(0, 0),
               kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              l2StateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
               header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
                 Array.fill[Byte](32)(7)
               )
@@ -921,6 +957,7 @@ class RecoverSeamsTest extends AnyFunSuite:
               blockNum = BlockNumber(lastBlock),
               blockVersion = BlockVersion.Full(0, 0),
               kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              l2StateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
               header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
                 Array.fill[Byte](32)(7)
               )

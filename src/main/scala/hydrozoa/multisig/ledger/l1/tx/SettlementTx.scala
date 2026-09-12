@@ -15,6 +15,7 @@ import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.{BuilderResult, explain
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.l1.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, Equity, MultisigTreasuryUtxo, RolloutUtxo}
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import monocle.{Focus, Lens}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{Coin, Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
@@ -143,6 +144,7 @@ private object SettlementTxOps {
 
         case class NoPayouts(override val config: Config)(
             override val kzgCommitment: KzgCommitment,
+            override val l2StateHash: L2StateHash,
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
             override val depositsToSpend: List[DepositUtxo],
@@ -160,6 +162,7 @@ private object SettlementTxOps {
 
         case class WithPayouts(override val config: Config)(
             override val kzgCommitment: KzgCommitment,
+            override val l2StateHash: L2StateHash,
             override val majorVersionProduced: BlockVersion.Major,
             override val treasuryToSpend: MultisigTreasuryUtxo,
             override val depositsToSpend: List[DepositUtxo],
@@ -185,6 +188,12 @@ private object SettlementTxOps {
         import Error.*
 
         def config: Config
+
+        /** The L2 ledger's digest of the state the settled major block leaves behind — what this
+          * settlement certifies, beside `kzgCommitment`'s evacuation map. See
+          * [[MultisigTreasuryUtxo.Datum.l2StateHash]].
+          */
+        def l2StateHash: L2StateHash
 
         def settlementTxEndTime: SettlementTxEndTime
 
@@ -304,7 +313,8 @@ private object SettlementTxOps {
                       MultisigTreasuryUtxo
                           .Datum(
                             commit = kzgCommitment,
-                            versionMajor = majorVersionProduced.convert
+                            versionMajor = majorVersionProduced.convert,
+                            l2StateHash = l2StateHash.byteString
                           )
                           .toData
                     )
@@ -349,7 +359,8 @@ private object SettlementTxOps {
                   treasuryTokenName = config.headTokenNames.treasuryTokenName,
                   utxoId = TransactionInput(ctx.transaction.id, 0),
                   address = config.headMultisigAddress,
-                  datum = MultisigTreasuryUtxo.Datum(kzgCommitment, majorVersionProduced),
+                  datum = MultisigTreasuryUtxo
+                      .Datum(kzgCommitment, majorVersionProduced, l2StateHash.byteString),
                   value = output.value,
                   equity = equity
                 )

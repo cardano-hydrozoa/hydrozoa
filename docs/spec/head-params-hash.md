@@ -384,7 +384,8 @@ both datums from local config and compares each:
 
 ```scala
 expectedTreasuryDatum      = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
-  config.initialEvacuationMap
+  config.initialEvacuationMap,
+  config.initialL2StateHash
 )
 expectedMultisigRegimeDatum = MultisigRegimeUtxo.mkDatum(headParamsHash)
 ```
@@ -396,11 +397,12 @@ topology, or setup-ladder anchor differs from the one the initialization transac
 for cannot parse that transaction, so it never signs block zero and the head does not start
 split.
 
-The treasury datum is compared **field by field** rather than as a whole, because its two fields
-fail for two unrelated reasons — a wrong initial evacuation map (`commit`) and a stale version
-(`versionMajor`) — and one opaque message would not tell the operator which. The regime datum
-holds one field and is compared whole, with a message naming both digests: it is the only one of
-the three an operator can act on.
+The treasury datum is compared **field by field** rather than as a whole, because its three fields
+fail for three unrelated reasons — a wrong initial evacuation map (`commit`), a stale version
+(`versionMajor`), and a wrong opening L2 state (`l2StateHash`, see
+`docs/spec/l2-state-certificate.md`) — and one opaque message would not tell the operator which.
+The regime datum holds one field and is compared whole, with a message naming both digests: it is
+the only one of these an operator can act on.
 
 `Parse` takes the digest as an already-computed `Hash32` rather than deriving it: computing it
 needs nearly the whole head config, and `Parse` deliberately asks for only the five sections it

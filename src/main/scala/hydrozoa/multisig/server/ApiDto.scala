@@ -991,7 +991,8 @@ object ApiDto {
         private given TapirConfig = tapirTag(kindTag)
 
         final case class InitializationView(blockNumber: Int, txCbor: String) extends EffectView
-        final case class SettlementView(blockNumber: Int, txCbor: String) extends EffectView
+        final case class SettlementView(blockNumber: Int, txCbor: String, l2StateHash: String)
+            extends EffectView
         final case class FallbackView(blockNumber: Int, txCbor: String) extends EffectView
         final case class RolloutView(blockNumber: Int, txCbor: String) extends EffectView
         final case class FinalizationView(blockNumber: Int, txCbor: String) extends EffectView
@@ -999,6 +1000,8 @@ object ApiDto {
         final case class SecView(
             blockNumber: Int,
             secOnchainSerialized: String,
+            kzgCommitment: String,
+            l2StateHash: String,
             headSignatures: List[String],
             coilSignatures: List[String]
         ) extends EffectView
@@ -1011,14 +1014,36 @@ object ApiDto {
     final case class TxEffectView(l1TxId: String, blockNumber: Int, txCbor: String)
     given Codec[TxEffectView] = deriveCodec
 
+    /** A settlement effect — the block-scoped `settlement` endpoint's response. Carries its
+      * `l1TxId`, `txCbor` (hex), and `l2StateHash`: the L2 state digest its treasury datum
+      * certifies (`docs/spec/l2-state-certificate.md`), surfaced so a reader need not decode the
+      * datum out of `txCbor` to see it. The settlement is the head's L1-anchored certificate, where
+      * an SEC's is peer-signed only.
+      */
+    final case class SettlementEffectView(
+        l1TxId: String,
+        blockNumber: Int,
+        txCbor: String,
+        l2StateHash: String
+    )
+    given Codec[SettlementEffectView] = deriveCodec
+
     /** A standalone evacuation commitment (SEC) effect — the block-scoped `sec` endpoint's
       * response. Carries its `l1TxId` (the synthetic hash), on-chain bytes, and split hard-ack
       * signatures.
+      *
+      * Those bytes plus those signatures are the block's **L2 state certificate**
+      * (`docs/spec/l2-state-certificate.md`): a signed statement of the state at that block,
+      * checkable against the head peer verification keys a reader already holds from config.
+      * `kzgCommitment` and `l2StateHash` are the two commitments it carries, decoded out of the
+      * on-chain bytes so a reader needs no Plutus decoder to see them.
       */
     final case class SecEffectView(
         l1TxId: String,
         blockNumber: Int,
         secOnchainSerialized: String,
+        kzgCommitment: String,
+        l2StateHash: String,
         headSignatures: List[String],
         coilSignatures: List[String]
     )
@@ -1083,11 +1108,12 @@ object ApiDto {
             val cbor = txCborHex(tx)
             tx.kind match
                 case EffectKind.Initialization => EffectView.InitializationView(blockNumber, cbor)
-                case EffectKind.Settlement     => EffectView.SettlementView(blockNumber, cbor)
-                case EffectKind.Fallback       => EffectView.FallbackView(blockNumber, cbor)
-                case EffectKind.Rollout        => EffectView.RolloutView(blockNumber, cbor)
-                case EffectKind.Finalization   => EffectView.FinalizationView(blockNumber, cbor)
-                case EffectKind.Refund         => EffectView.RefundView(blockNumber, cbor)
+                case EffectKind.Settlement =>
+                    EffectView.SettlementView(blockNumber, cbor, settlementL2StateHashHex(tx))
+                case EffectKind.Fallback     => EffectView.FallbackView(blockNumber, cbor)
+                case EffectKind.Rollout      => EffectView.RolloutView(blockNumber, cbor)
+                case EffectKind.Finalization => EffectView.FinalizationView(blockNumber, cbor)
+                case EffectKind.Refund       => EffectView.RefundView(blockNumber, cbor)
                 case EffectKind.Sec =>
                     throw new IllegalStateException(s"tx effect ${tx.l1TxId.toHex} tagged Sec")
         case sec: ResolvedEffect.Sec =>
@@ -1095,6 +1121,8 @@ object ApiDto {
             EffectView.SecView(
               sec.blockNumber.convert,
               secOnchainHex(sec),
+              sec.commitment.commitment.kzgCommitment.toHex,
+              sec.commitment.commitment.l2StateHash.toHex,
               headSignatures,
               coilSignatures
             )
@@ -1103,6 +1131,27 @@ object ApiDto {
     def mkTxEffectView(tx: ResolvedEffect.Tx): TxEffectView =
         TxEffectView(tx.l1TxId.toHex, tx.blockNumber.convert, txCborHex(tx))
 
+    /** Map a settlement to the block-scoped `settlement` view (carries `l1TxId`). */
+    def mkSettlementEffectView(tx: ResolvedEffect.Tx): SettlementEffectView =
+        SettlementEffectView(
+          tx.l1TxId.toHex,
+          tx.blockNumber.convert,
+          txCborHex(tx),
+          settlementL2StateHashHex(tx)
+        )
+
+    /** A settlement's certified L2 state digest (hex). Every settlement carries one on its treasury
+      * datum, and `EffectsResolver` reads it off there, so an absence is a resolver bug.
+      */
+    private def settlementL2StateHashHex(tx: ResolvedEffect.Tx): String =
+        tx.l2StateHash
+            .getOrElse(
+              throw new IllegalStateException(
+                s"settlement effect ${tx.l1TxId.toHex} resolved without its l2StateHash"
+              )
+            )
+            .toHex
+
     /** Map an SEC effect to the block-scoped `sec` view (carries `l1TxId`). */
     def mkSecEffectView(sec: ResolvedEffect.Sec, nHeadPeers: Int): SecEffectView =
         val (headSignatures, coilSignatures) = secSignatures(sec, nHeadPeers)
@@ -1110,6 +1159,8 @@ object ApiDto {
           sec.l1TxId.toHex,
           sec.blockNumber.convert,
           secOnchainHex(sec),
+          sec.commitment.commitment.kzgCommitment.toHex,
+          sec.commitment.commitment.l2StateHash.toHex,
           headSignatures,
           coilSignatures
         )

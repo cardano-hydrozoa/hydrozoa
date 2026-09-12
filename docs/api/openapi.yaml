@@ -398,7 +398,8 @@ paths:
     get:
       tags:
       - Blocks
-      description: The block's settlement effect in full, or 404 if it has none.
+      description: The block's settlement effect in full, with the L2 state digest
+        its treasury datum certifies, or 404 if it has none.
       operationId: getHeadBlockEffect_settlement
       parameters:
       - name: block-number
@@ -413,7 +414,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TxEffect'
+                $ref: '#/components/schemas/SettlementEffect'
         default:
           description: ''
           content:
@@ -1544,12 +1545,18 @@ components:
       required:
       - blockNumber
       - secOnchainSerialized
+      - kzgCommitment
+      - l2StateHash
       - type
       properties:
         blockNumber:
           type: integer
           format: int32
         secOnchainSerialized:
+          type: string
+        kzgCommitment:
+          type: string
+        l2StateHash:
           type: string
         headSignatures:
           type: array
@@ -1569,6 +1576,8 @@ components:
       - l1TxId
       - blockNumber
       - secOnchainSerialized
+      - kzgCommitment
+      - l2StateHash
       properties:
         l1TxId:
           type: string
@@ -1576,6 +1585,10 @@ components:
           type: integer
           format: int32
         secOnchainSerialized:
+          type: string
+        kzgCommitment:
+          type: string
+        l2StateHash:
           type: string
         headSignatures:
           type: array
@@ -1591,6 +1604,7 @@ components:
       required:
       - blockNumber
       - txCbor
+      - l2StateHash
       - type
       properties:
         blockNumber:
@@ -1598,9 +1612,29 @@ components:
           format: int32
         txCbor:
           type: string
+        l2StateHash:
+          type: string
         type:
           type: string
           const: settlement
+    SettlementEffect:
+      title: SettlementEffect
+      type: object
+      required:
+      - l1TxId
+      - blockNumber
+      - txCbor
+      - l2StateHash
+      properties:
+        l1TxId:
+          type: string
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
+        l2StateHash:
+          type: string
     StackStats:
       title: StackStats
       type: object

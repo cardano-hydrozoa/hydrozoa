@@ -129,7 +129,8 @@ object InitializationTx {
                 )
 
                 expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
-                  config.initialEvacuationMap
+                  config.initialEvacuationMap,
+                  config.initialL2StateHash
                 )
 
                 expectedMultisigRegimeDatum = MultisigRegimeUtxo.mkDatum(headParamsHash)

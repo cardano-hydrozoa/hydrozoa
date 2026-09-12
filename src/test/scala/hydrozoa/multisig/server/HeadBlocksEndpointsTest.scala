@@ -13,6 +13,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWi
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, DepositDecision, RequestBlockEntry, Timestamped}
@@ -27,6 +28,7 @@ import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.TransactionHash
+import scalus.uplc.builtin.ByteString
 
 /** The `/head/blocks` queries through the HTTP layer, against a stubbed [[ConsensusStoreReader]]:
   * the listing (block 0 synthesized from config + the spine briefs), the details' confirmation
@@ -95,12 +97,15 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                   blockNum = BlockNumber(1),
                   blockVersion = BlockVersion.Full(1, 0),
                   kzgCommitment = EvacuationMap.empty.kzgCommitment,
+                  l2StateHash =
+                      L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
                   header = StandaloneEvacuationCommitmentOnchain(
                     StandaloneEvacuationCommitmentOnchain(
                       headId = headConfig.headTokenNames.treasuryTokenName.bytes,
                       versionMajor = BigInt(1),
                       versionMinor = BigInt(0),
-                      commitment = EvacuationMap.empty.kzgCommitment
+                      commitment = EvacuationMap.empty.kzgCommitment,
+                      l2StateHash = ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))
                     )
                   )
                 ),
