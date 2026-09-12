@@ -334,7 +334,7 @@ object Model:
                 brief <- state.blockCycle match {
                     case BlockCycle.InProgress(_, _, prevVersion, accumulator) =>
                         // The digest comes from the request body the model holds, the way a peer
-                        // derives it from the body it received (design/block-hash.md).
+                        // derives it from the body it received (docs/spec/block-hash.md).
                         val events: List[(RequestId, RequestHash, ValidityFlag)] =
                             accumulator.map((le, _, flag) =>
                                 (le.requestId, le.request.body.mkHash, flag)

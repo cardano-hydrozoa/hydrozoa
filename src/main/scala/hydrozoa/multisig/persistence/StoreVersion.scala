@@ -21,10 +21,10 @@ object StoreVersion:
       *   - 3: [[StoreIdentity]] arrived. Bumped rather than treating an unstamped store as fresh,
       *     which would bless whatever store the node happens to be pointed at on its first open —
       *     exactly the mistake the stamp exists to catch. Existing stores rebuild.
-      *   - 4: content digests (`design/block-hash.md`). A `Request` record gains its `request_hash`
-      *     field; a `Block` brief and every value carrying one — `SoftConfirmation`, `BlockResult`
-      *     — gain `blockHash` and a per-request digest; a `SoftConfirmation`'s signature list is
-      *     keyed `softAckSignatures`, and an SEC's `signatures`.
+      *   - 4: content digests (`docs/spec/block-hash.md`). A `Request` record gains its
+      *     `request_hash` field; a `Block` brief and every value carrying one — `SoftConfirmation`,
+      *     `BlockResult` — gain `blockHash` and a per-request digest; a `SoftConfirmation`'s
+      *     signature list is keyed `softAckSignatures`, and an SEC's `signatures`.
       */
     val current: Int = 4
 
