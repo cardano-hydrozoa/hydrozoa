@@ -20,7 +20,6 @@ import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
@@ -276,12 +275,12 @@ final case class RuleBasedActor(
             case Nil =>
                 DisputeAction.Abstain
             case multiSec :: _ =>
-                // `headerMultiSigned` is peer-position-aligned over
+                // `signatures` is peer-position-aligned over
                 // `allHeadPeers.sorted ++ allCoilPeers.sorted` (Some/None per peer). The first
                 // `nHeadPeers` slots are the head peers (AllOf, always Some); the rest are the coil
                 // peers in sorted order — exactly the sparse `coilMultisig` the dispute-resolution
                 // script verifies position for position, so pass the coil tail through unchanged.
-                val (head, coil) = multiSec.headerMultiSigned.splitAt(config.nHeadPeers.convert)
+                val (head, coil) = multiSec.signatures.splitAt(config.nHeadPeers.convert)
                 DisputeAction.Vote(
                   sec = RuleBasedActor.toOnchain(multiSec.commitment),
                   signatures = head.flatten,
@@ -300,7 +299,7 @@ final case class RuleBasedActor(
         versionMajor: BigInt
     ): IO[List[StandaloneEvacuationCommitment.MultiSigned]] =
         for {
-            markers <- Markers.derive(persistence.backend, config.ownPeerId)
+            markers <- Markers.derive(persistence, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
@@ -337,7 +336,7 @@ final case class RuleBasedActor(
       */
     private[rulebased] def loadEvacuationInputs(versionMajor: BigInt): IO[EvacuationInputs] =
         for {
-            markers <- Markers.derive(persistence.backend, config.ownPeerId)
+            markers <- Markers.derive(persistence, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
@@ -440,7 +439,7 @@ final case class RuleBasedActor(
             IO.pure(config.initialEvacuationMap.kzgCommitment -> config.initialEvacuationMap)
         else
             for {
-                markers <- Markers.derive(persistence.backend, config.ownPeerId)
+                markers <- Markers.derive(persistence, config.ownPeerId)
                 latest <- markers.hardConfirmed.liftTo[IO](
                   MissingState("no hard-confirmed stack on disk")
                 )
@@ -1261,8 +1260,8 @@ object RuleBasedActor {
     enum DisputeAction:
         case Vote(
             sec: StandaloneEvacuationCommitment.Onchain,
-            signatures: List[BlockHeader.Minor.HeaderSignature],
-            coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]]
+            signatures: List[StandaloneEvacuationCommitment.Signature],
+            coilSignatures: List[Option[StandaloneEvacuationCommitment.Signature]]
         )
         case Abstain
 

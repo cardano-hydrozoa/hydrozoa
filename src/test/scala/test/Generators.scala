@@ -92,7 +92,6 @@ object Generators {
                 mv <- Gen.posNum[BigInt]
                 // Verify that this is the correct length!
                 kzg <- genByteStringOfN(32)
-                _ <- genByteStringOfN(32)
 
             } yield MultisigTreasuryUtxo.Datum(
               commit = kzg,
@@ -149,6 +148,7 @@ object Generators {
             config: HeadPeers.Section & CardanoNetwork.Section & HasTokenNames
         ): Gen[MultisigRegimeUtxo] = for {
             utxoId <- Arbitrary.arbitrary[TransactionInput]
+            headParamsHash <- genByteStringOfN(32)
             _ = Value(
               Coin.zero,
               MultiAsset(
@@ -161,7 +161,8 @@ object Generators {
             )
 
         } yield MultisigRegimeUtxo(
-          input = utxoId
+          input = utxoId,
+          datum = MultisigRegimeUtxo.Datum(headParamsHash)
         )
 
         def genPayoutObligation(

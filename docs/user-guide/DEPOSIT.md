@@ -71,7 +71,8 @@ deposit to guarantee this.
 
 1. **Register** the deposit with the head so it screens the payload and schedules absorption:
    `POST {headUri}/head/requests` with a `DepositRequest` carrying `l1Payload` (the **unsigned**
-   deposit-tx CBOR) and `l2Payload` (from step 1). The head checks the pin and the accept-by
+   deposit-tx CBOR), `l2Payload` (from step 1), and the `requestHash` you computed over the two
+   ([REQUEST-HASH.md](REQUEST-HASH.md)). The head checks the digest, the pin, and the accept-by
    deadline; a rejection here is soft — fix and retry.
 2. **Sign** the deposit tx with your wallet key and **submit it to L1 yourself** (e.g. via
    Blockfrost). The head does not submit deposits.

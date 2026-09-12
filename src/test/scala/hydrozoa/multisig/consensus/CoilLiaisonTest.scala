@@ -138,7 +138,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
     /** Per-coil actors + the Ref recording what its slow-consensus slot receives. */
     private final case class CoilParts(
         coilNum: CoilPeerNumber,
-        pending: Deferred[IO, HeadMultisigRegimeManager.Connections],
+        pending: HeadMultisigRegimeManager.PendingConnections,
         coilSeen: Ref[IO, Vector[HardAck]],
         coilSlowConsensus: SlowConsensusActor.Handle,
         coilLiaison: PeerLiaisonCoilToHub.Handle,
@@ -164,7 +164,10 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                 Persistence.fromBackend(backend, persistenceTracer).flatMap { persistence =>
                     ActorSystem[IO]("coil-liaison-test").use { system =>
                         for {
-                            headPending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
+                            headPending <- Deferred[IO, Either[
+                              Throwable,
+                              HeadMultisigRegimeManager.Connections
+                            ]]
                             hubSeen <- Ref[IO].of(Vector.empty[HardAck])
                             hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
                             sequencer <- system.actorOf(
@@ -181,7 +184,10 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         )
                                 }
                                 for {
-                                    pending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
+                                    pending <- Deferred[IO, Either[
+                                      Throwable,
+                                      HeadMultisigRegimeManager.Connections
+                                    ]]
                                     coilSeen <- Ref[IO].of(Vector.empty[HardAck])
                                     coilSlowConsensus <- system.actorOf(
                                       new HardAckRecorder(coilSeen)
@@ -238,7 +244,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         coilPeers.map(c => c.coilNum -> c.coilLiaison).toMap,
                                   )
                                 )
-                            _ <- headPending.complete(headConnections)
+                            _ <- headPending.complete(Right(headConnections))
                             _ <- coilPeers.traverse_ { c =>
                                 baseConnections(system, slowConsensus = c.coilSlowConsensus)
                                     .map(
@@ -247,7 +253,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         remoteHubLiaison = Some(c.hubLiaison),
                                       )
                                     )
-                                    .flatMap(c.pending.complete)
+                                    .flatMap(conns => c.pending.complete(Right(conns)))
                             }
 
                             // Let the initial population/own-hard-ack handshakes settle, then

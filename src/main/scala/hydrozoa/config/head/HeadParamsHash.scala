@@ -1,0 +1,155 @@
+package hydrozoa.config.head
+
+import hydrozoa.config.HydrozoaBlueprint
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
+import hydrozoa.config.head.multisig.timing.TxTiming.Durations.given
+import hydrozoa.lib.crypto.Preimage
+import hydrozoa.multisig.ledger.block.BlockHeader
+import java.nio.charset.StandardCharsets.UTF_8
+import scalus.cardano.ledger.Hash32
+
+/** The digest that pins a head's agreed configuration, as defined in
+  * `docs/spec/head-params-hash.md`.
+  *
+  * It takes the bootstrap context and block zero's header rather than a whole
+  * [[HeadConfig.Section]] because it must be computable **before** the initialization transaction
+  * is parsed: `HeadConfig`'s decoder needs the digest to hand to `InitializationTx.Parse`, and only
+  * the block brief's header — never the transaction — is part of the preimage.
+  *
+  * It covers the **whole head config**, not only the [[parameters.HeadParameters]] case class: the
+  * head parameters, the L1 network, the per-peer equity split, the script references, block zero's
+  * timing, and the coil hub topology. Peers never exchange their configs, so this is what makes a
+  * disagreement visible — the multisig regime datum carries it, and a peer that computes a
+  * different value cannot parse the initialization transaction and so never signs block zero.
+  *
+  * ```
+  * headParamsHash = blake2b_256(
+  *      "gummiworm-head-params-v1"
+  *   || <HeadParameters, in declaration order>
+  *   || <cardanoNetwork> || <initialEquityContributions> || <scriptReferences>
+  *   || <initialBlockTiming> || <coilHubTopology>
+  * )
+  * ```
+  *
+  * The layout is written out byte by byte rather than delegating to a JSON or CBOR encoder.
+  * `QuantizedFiniteDuration`, `Coin` and `PositiveInt` each have their own codec quirks, and a
+  * codec tweak that silently moved this value — once it is written into a regime datum — would
+  * leave a live head unable to parse its own initialization transaction.
+  *
+  * See `docs/spec/head-params-hash.md` for what each field is doing here, what is deliberately left
+  * out, and the checks that compare this value.
+  */
+object HeadParamsHash {
+
+    /** Grants read access to the digest without dragging in the whole [[HeadConfig.Section]].
+      * Transaction builders that reconstruct the multisig regime output ask for this and nothing
+      * more; the datum form is [[hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeOutput.datum]]'s
+      * business.
+      */
+    trait Section {
+        def headParamsHash: Hash32
+    }
+
+    /** Mixed in before anything else so this digest can never collide with a hash of the same bytes
+      * taken for another purpose. ASCII, no terminator — the fixed-width field that follows makes
+      * the boundary unambiguous.
+      */
+    val domainTag: Array[Byte] = "gummiworm-head-params-v1".getBytes(UTF_8)
+
+    def apply(
+        config: HeadConfig.Bootstrap.Section,
+        initialBlockHeader: BlockHeader.Initial
+    ): Hash32 = {
+        val out = Preimage()
+        out.raw(domainTag)
+
+        // -- HeadParameters.txTiming
+        out.duration(config.minSettlementDuration.convert)
+        out.duration(config.inactivityMarginDuration.convert)
+        out.duration(config.silenceDuration.convert)
+        out.duration(config.depositSubmissionDuration.convert)
+        out.duration(config.depositMaturityDuration.convert)
+        out.duration(config.depositAbsorptionDuration.convert)
+
+        // -- HeadParameters.fallbackContingency
+        val collective = config.collectiveContingency
+        out.coin(collective.publicVoteDeposit)
+        out.coin(collective.fallbackTxFee)
+        out.coin(collective.minAdaForTreasury)
+        out.coin(collective.minAdaForRegime)
+        val individual = config.individualContingency
+        out.coin(individual.collateralDeposit)
+        out.coin(individual.tallyTxFee)
+        out.coin(individual.voteDeposit)
+        out.coin(individual.voteTxFee)
+
+        // -- HeadParameters: disputeResolutionConfig / settlementConfig / blockConfig
+        out.duration(config.votingDuration)
+        out.u32(config.maxDepositsAbsorbedPerBlock.convert)
+        out.u32(config.maxRequestsPerBlock.convert)
+        out.u32(config.backpressureCoefficient.convert)
+
+        // `rateLimits` is deliberately absent: it is node-local, and nothing a follower validates
+        // depends on it. See docs/spec/head-params-hash.md, "What is deliberately excluded".
+
+        // -- HeadParameters: the rest
+        out.u32(config.coilQuorum)
+        out.hash32(config.l2ParamsHash)
+        out.framed(config.l2Ledger.configString.getBytes(UTF_8))
+        out.bool(config.identityIsomorphism)
+
+        // -- cardanoNetwork. `networkId` is scalus's own id byte, which covers `Network.Other` too;
+        // `protocolMagic` alone does not determine it, because `CardanoNetwork.Custom` pairs an
+        // arbitrary `CardanoInfo` with an arbitrary magic. The protocol params are absent on
+        // purpose: they are fetched from the chain and move with hard forks, so they are not
+        // something the peers agree on.
+        out.u64(config.protocolMagic)
+        out.u8(config.network.networkId)
+        val slotConfig = config.slotConfig
+        out.u64(slotConfig.zeroTime)
+        out.u64(slotConfig.zeroSlot)
+        out.u64(slotConfig.slotLength)
+
+        // -- initialEquityContributions, ascending by HeadPeerNumber. The per-peer split, not just
+        // the total: only the total reaches the treasury value.
+        val equity = config.initialEquityContributions.toSortedMap
+        out.u32(equity.size)
+        equity.foreach { (peer, coin) =>
+            out.u32(peer.convert)
+            out.coin(coin)
+        }
+
+        // -- scriptReferences. Pin an output reference exactly where the chain pins one, and the
+        // hash everywhere else: the two Plutus scripts contribute their hashes (a build mismatch
+        // nothing else catches), the setup ladder its rung-0 outref (what the regime datum
+        // records as `setupG2Ladder`).
+        out.scriptHash(HydrozoaBlueprint.treasuryScriptHash)
+        out.scriptHash(HydrozoaBlueprint.disputeScriptHash)
+        out.transactionInput(config.setupLadderAnchor)
+
+        // -- initialBlockTiming. `endTime` carries the whole header: it reaches the initialization
+        // tx's validity end, and the other four terms are derived from it and the tx timing
+        // already hashed above. They stay in the preimage because dropping a term would mean a new
+        // domain tag for nothing.
+        val header = initialBlockHeader
+        out.instant(header.startTime.convert)
+        out.instant(header.endTime.convert)
+        out.instant(header.fallbackTxStartTime.convert)
+        out.instant(header.forcedMajorBlockWakeupTime.convert)
+        header.mDepositDecisionWakeupTime match {
+            case None => out.bool(false)
+            case Some(wakeup) =>
+                out.bool(true)
+                out.instant(wakeup.convert)
+        }
+
+        // -- coilHubTopology, ascending by CoilPeerNumber. Coil peer numbers are contiguous from
+        // zero, so a hub's position in the sequence is its coil peer number and is not repeated.
+        val coilPeers = config.coilPeers
+        val hubs = coilPeers.coilPeerNumbers.flatMap(coilPeers.hubHeadPeerNumber)
+        out.u32(hubs.size)
+        hubs.foreach(hub => out.u32(hub.convert))
+
+        out.mkDigest
+    }
+}

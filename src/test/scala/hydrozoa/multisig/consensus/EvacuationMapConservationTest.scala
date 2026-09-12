@@ -105,8 +105,10 @@ object EvacuationMapConservationTest extends Properties("EvacuationMap conservat
           treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
           utxoId = fixed(Arbitrary.arbitrary[TransactionInput], seed = 1),
           address = headConfig.headMultisigAddress,
-          datum =
-              MultisigTreasuryUtxo.Datum(ByteString.fromArray(Array.fill[Byte](48)(0)), BigInt(3)),
+          datum = MultisigTreasuryUtxo.Datum(
+            ByteString.fromArray(Array.fill[Byte](48)(0)),
+            BigInt(3)
+          ),
           value = Value(Coin(potLovelace + 1_000_000L)) + treasuryTokenValue,
           equity = Equity(Coin(1_000_000L)).get
         )

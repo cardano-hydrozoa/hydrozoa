@@ -1,7 +1,7 @@
 package hydrozoa.multisig.persistence.codec
 
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder}
-import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
@@ -12,8 +12,8 @@ import scalus.uplc.builtin.ByteString
   *
   * The SEC's `header` field is `StandaloneEvacuationCommitment.Onchain.Serialized` (opaque
   * `IArray[Byte]`); we ride the public `Serialized.fromBytes` constructor added for the codec.
-  * `BlockHeader.Minor.HeaderSignature` is similarly an opaque `IArray[Byte]` with a public bytes
-  * constructor.
+  * [[StandaloneEvacuationCommitment.Signature]] is similarly an opaque `IArray[Byte]` with a public
+  * bytes constructor.
   */
 object SecCodec:
 
@@ -28,14 +28,14 @@ object SecCodec:
             StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(bs.bytes)
         )
 
-    given headerSignatureEncoder: Encoder[BlockHeader.Minor.HeaderSignature] = Encoder.instance {
-        sig =>
-            val bytes: Array[Byte] = sig // implicit Conversion[HeaderSignature, Array[Byte]]
+    given secSignatureEncoder: Encoder[StandaloneEvacuationCommitment.Signature] =
+        Encoder.instance { sig =>
+            val bytes: Array[Byte] = sig // implicit Conversion[Signature, Array[Byte]]
             ByteString.fromArray(bytes).asJson
-    }
+        }
 
-    given headerSignatureDecoder: Decoder[BlockHeader.Minor.HeaderSignature] =
-        byteStringDecoder.map(bs => BlockHeader.Minor.HeaderSignature(IArray.from(bs.bytes)))
+    given secSignatureDecoder: Decoder[StandaloneEvacuationCommitment.Signature] =
+        byteStringDecoder.map(bs => StandaloneEvacuationCommitment.Signature(IArray.from(bs.bytes)))
 
     given standaloneEvacCommitmentEncoder: Encoder[StandaloneEvacuationCommitment] =
         Encoder.instance { sec =>
@@ -68,7 +68,7 @@ object SecCodec:
         Encoder.instance { ms =>
             Json.obj(
               "commitment" -> ms.commitment.asJson,
-              "headerMultiSigned" -> ms.headerMultiSigned.asJson
+              "signatures" -> ms.signatures.asJson
             )
         }
 
@@ -77,10 +77,10 @@ object SecCodec:
             for
                 commitment <- c.downField("commitment").as[StandaloneEvacuationCommitment]
                 sigs <- c
-                    .downField("headerMultiSigned")
-                    .as[List[Option[BlockHeader.Minor.HeaderSignature]]]
+                    .downField("signatures")
+                    .as[List[Option[StandaloneEvacuationCommitment.Signature]]]
             yield StandaloneEvacuationCommitment.MultiSigned(
               commitment = commitment,
-              headerMultiSigned = sigs
+              signatures = sigs
             )
         }

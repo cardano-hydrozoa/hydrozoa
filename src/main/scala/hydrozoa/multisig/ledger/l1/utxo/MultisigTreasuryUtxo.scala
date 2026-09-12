@@ -71,13 +71,20 @@ object MultisigTreasuryUtxo {
         def treasuryToSpend: MultisigTreasuryUtxo
     }
 
+    /** Both fields move with the head: `commit` with the evacuation map, `versionMajor` with each
+      * settlement. The head's configuration digest is not here — it is immutable for the head's
+      * life, so it rides the multisig regime utxo's datum
+      * ([[MultisigRegimeUtxo.Datum.headParamsHash]]), which is written once and never rewritten.
+      */
     final case class Datum(
         commit: KzgCommitment,
         versionMajor: BigInt
     ) derives FromData,
           ToData
 
-    def mkInitMultisigTreasuryDatum(initialEvacuationMap: EvacuationMap): Datum =
+    def mkInitMultisigTreasuryDatum(
+        initialEvacuationMap: EvacuationMap
+    ): Datum =
         Datum(
           initialEvacuationMap.kzgCommitment,
           BigInt(BlockVersion.Major(0).toLong)

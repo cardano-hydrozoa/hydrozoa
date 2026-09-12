@@ -37,7 +37,11 @@ trait RequestSequencer(
     l2Screener: L2Screener[IO],
     tracer: ContraTracer[IO, EventSequencerEvent],
     persistence: Persistence[IO],
-    metrics: PeerMetrics
+    metrics: PeerMetrics,
+    /** The boot markers, derived once by the regime manager (§5.2); this actor projects
+      * `nextRequestNumber` rather than re-reading its own Request spine.
+      */
+    markers: Markers
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[RequestSequencer.Connections]](None)
     private val state = State()
@@ -68,7 +72,7 @@ trait RequestSequencer(
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
-                _connections <- x.get
+                _connections <- x.get.flatMap(IO.fromEither)
                 _ <- connections.set(
                   Some(
                     Connections(
@@ -122,7 +126,22 @@ trait RequestSequencer(
                               }
                           }
                   }
-                  screened.flatMap {
+                  // Two gates, both refusing before an id exists and both counting as screening:
+                  // the digest check is a stateless admission check like the rest, and its reason
+                  // string is what tells the two apart.
+                  //
+                  // The digest goes first — an end-to-end check that the request this head holds is
+                  // the request the client built, which fails exactly where a truncated payload or
+                  // a client-side encoding change otherwise passes silently. Nothing is persisted
+                  // and no RequestNumber is consumed, so the submitter retries with the request
+                  // they meant.
+                  val admitted: IO[Either[String, Unit]] =
+                      userRequest.checkRequestHash.fold(
+                        reason => IO.pure(Left(reason)),
+                        _ => screened
+                      )
+
+                  admitted.flatMap {
                       case Left(reason) =>
                           IO(metrics.onLocalRejected(RejectionKind.Screening)) *>
                               IO.pure(Left(UserRequest.Rejected(reason)))
@@ -186,7 +205,7 @@ trait RequestSequencer(
             _ <- initializeConnections
             // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
             // empty store -> RequestNumber(0), the same cold value.
-            next <- Markers.recoverNextRequestNumber(persistence.backend, ownHeadPeerNum)
+            next = markers.nextRequestNumber
             _ <- state.seedNextRequestNum(next)
             // Seed the confirmed high-water from the highest already-assigned own request (next - 1).
             // Treating assigned-as-confirmed opens the backpressure window optimistically after a
@@ -253,7 +272,8 @@ object RequestSequencer {
         l2Screener: L2Screener[IO],
         tracer: ContraTracer[IO, EventSequencerEvent],
         persistence: Persistence[IO],
-        metrics: PeerMetrics
+        metrics: PeerMetrics,
+        markers: Markers
     ): IO[RequestSequencer] =
         IO(
           new RequestSequencer(
@@ -262,7 +282,8 @@ object RequestSequencer {
             l2Screener,
             tracer,
             persistence,
-            metrics
+            metrics,
+            markers
           ) {}
         )
 

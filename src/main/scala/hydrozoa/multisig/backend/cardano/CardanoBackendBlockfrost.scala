@@ -20,7 +20,6 @@ import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.Future
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
@@ -45,7 +44,10 @@ import scalus.uplc.builtin.{ByteString, Data}
 class CardanoBackendBlockfrost private (
     private val backendService: BackendService,
     private val pageSize: Int,
-    private val blockfrostProviderFuture: Future[BlockfrostProvider],
+    /** Builds a FRESH provider. Called again after a failure -- see [[provider]]. */
+    private val mkProvider: IO[BlockfrostProvider],
+    /** Memoises the provider ON SUCCESS ONLY. */
+    private val providerRef: Ref[IO, Option[BlockfrostProvider]],
     protected val tracer: ContraTracer[IO, CardanoBackendEvent],
     // Base URL + project id for the raw tx-utxos read in [[continuingTx]] — BloxBean's
     // `TxContentUtxoInputs` model drops the per-input tx_hash/output_index/collateral/reference we
@@ -53,6 +55,27 @@ class CardanoBackendBlockfrost private (
     private val baseUrl: String,
     private val apiKey: String
 ) extends CardanoBackend[IO] {
+
+    /** The Scalus provider, built on first use and memoised **only if it succeeds**.
+      *
+      * ⛔ This used to be a plain `Future[BlockfrostProvider]` created eagerly at construction. A
+      * Scala `Future` memoises its outcome — including its failure — so a single Blockfrost blip at
+      * the moment the backend was built poisoned every later `fetchLatestParams` for the entire
+      * life of the process, with no retry and no way back short of a restart. The node looked
+      * healthy: it polled L1 fine, because `utxosAt` goes through BloxBean's service and never
+      * touches this.
+      *
+      * That is disqualifying for a start-up gate built on protocol parameters — one blip and the
+      * gate could never be satisfied. So: retry on failure, memoise on success.
+      *
+      * ⚠️ Two concurrent first-callers may each build one; the loser's is discarded. Harmless (the
+      * provider is a stateless HTTP wrapper) and cheaper than serialising every access.
+      */
+    private def provider: IO[BlockfrostProvider] =
+        providerRef.get.flatMap {
+            case Some(p) => IO.pure(p)
+            case None    => mkProvider.flatTap(p => providerRef.set(Some(p)))
+        }
 
     private val httpClient: HttpClient = HttpClient.newHttpClient()
 
@@ -683,8 +706,8 @@ class CardanoBackendBlockfrost private (
 
     override def fetchLatestParams: IO[Either[Error, ProtocolParams]] =
         (for
-            provider <- IO.fromFuture(IO.pure(blockfrostProviderFuture))
-            result <- IO.fromFuture(IO.pure(provider.fetchLatestParams))
+            p <- provider
+            result <- IO.fromFuture(IO.pure(p.fetchLatestParams))
         yield Right(result))
             .handleError(e =>
                 Left(Unexpected(s"${e.getMessage}, caused by: ${
@@ -693,8 +716,8 @@ class CardanoBackendBlockfrost private (
             )
 
     def getStartupParams: IO[Either[Error, ProtocolParams]] =
-        (for provider <- IO.fromFuture(IO.pure(blockfrostProviderFuture))
-        yield Right(provider.cardanoInfo.protocolParams))
+        (for p <- provider
+        yield Right(p.cardanoInfo.protocolParams))
             .handleError(e =>
                 Left(Unexpected(s"${e.getMessage}, caused by: ${
                         if e.getCause != null then e.getCause.getMessage else "N/A"
@@ -720,32 +743,33 @@ object CardanoBackendBlockfrost:
         // NB: Bloxbean requires the trailing slash
         val backendService = BFBackendService(s"$baseUrl/", apiKey)
 
-        // 2. Scalus blockfrost provider
-        val blockfrostProviderFuture =
-            network match {
-                case Left(std) =>
-                    std match {
-                        case CardanoNetwork.Mainnet =>
-                            BlockfrostProvider.mainnet(apiKey)
-                        case CardanoNetwork.Preprod =>
-                            BlockfrostProvider.preprod(apiKey)
-                        case CardanoNetwork.Preview =>
-                            BlockfrostProvider.preview(apiKey)
+        // 2. Scalus blockfrost provider, as a RETRYABLE IO rather than an eager Future: each
+        //    evaluation starts a fresh fetch, so a failure is not memoised. See `provider`.
+        val mkProvider: IO[BlockfrostProvider] = IO.defer(IO.fromFuture(IO.delay(network match {
+            case Left(std) =>
+                std match {
+                    case CardanoNetwork.Mainnet =>
+                        BlockfrostProvider.mainnet(apiKey)
+                    case CardanoNetwork.Preprod =>
+                        BlockfrostProvider.preprod(apiKey)
+                    case CardanoNetwork.Preview =>
+                        BlockfrostProvider.preview(apiKey)
 
-                    }
-                case Right(custom, customBaseUrl) =>
-                    BlockfrostProvider.create(
-                      apiKey = apiKey,
-                      baseUrl = customBaseUrl,
-                      network = custom.network,
-                      slotConfig = custom.cardanoInfo.slotConfig
-                    )
-            }
+                }
+            case Right(custom, customBaseUrl) =>
+                BlockfrostProvider.create(
+                  apiKey = apiKey,
+                  baseUrl = customBaseUrl,
+                  network = custom.network,
+                  slotConfig = custom.cardanoInfo.slotConfig
+                )
+        })))
 
         new CardanoBackendBlockfrost(
           backendService,
           pageSize,
-          blockfrostProviderFuture,
+          mkProvider,
+          Ref.unsafe[IO, Option[BlockfrostProvider]](None),
           tracer,
           baseUrl,
           apiKey

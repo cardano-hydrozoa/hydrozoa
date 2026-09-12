@@ -6,7 +6,6 @@ import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.config.ScriptReferenceUtxos
-import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.block.BlockConfig
@@ -14,14 +13,14 @@ import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
-import hydrozoa.config.node.NodeConfig
+import hydrozoa.config.head.{HeadConfig, HeadParamsHash}
+import hydrozoa.config.node.{NodeConfig, PrivateSecrets}
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
@@ -30,15 +29,16 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
-import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
+import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationMap}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.syntax.*
-import io.circe.{Decoder, DecodingFailure, Encoder, Json, parser}
+import io.circe.{Decoder, DecodingFailure, Encoder, Json, JsonObject, parser}
 import java.nio.charset.StandardCharsets
+import java.nio.file.attribute.PosixFilePermissions
 import java.nio.file.{Files, Path}
 import java.security.SecureRandom
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
@@ -172,16 +172,15 @@ object Bootstrap:
 
     /** Assembly-time defaults (`defaults.json`): everything the head needs that is neither peer
       * topology (the roster), script references, nor the opening L2 state — the L1 network, the
-      * head protocol parameters, the per-peer equity contributions, and (optionally) the block-zero
-      * timing anchors. [[InitBootstrapFiles]] writes these with demo defaults for the operators to
-      * adjust before [[BuildHeadConfig]]. Block-zero timing is optional: omit it and
-      * [[BuildHeadConfig]] anchors the initial block to wall-clock at build time.
+      * head protocol parameters, the per-peer equity contributions, and (optionally) block zero's
+      * end time. [[InitBootstrapFiles]] writes these with demo defaults for the operators to adjust
+      * before [[BuildHeadConfig]]. `blockZeroEndTime` is optional: omit it and [[BuildHeadConfig]]
+      * anchors the initial block to wall-clock at build time.
       */
     final case class BootstrapDefaults(
         cardanoNetwork: CardanoNetwork,
         headParams: BootstrapHeadParams,
         initialEquityContributions: Map[HeadPeerNumber, Coin],
-        blockZeroStartTime: Option[BlockCreationStartTime],
         blockZeroEndTime: Option[BlockCreationEndTime]
     )
 
@@ -240,7 +239,6 @@ object Bootstrap:
         scriptReferenceUtxos: ScriptReferenceUtxos.Unresolved,
         initialL2State: List[L2Output],
         initialEquityContributions: Map[HeadPeerNumber, Coin],
-        blockZeroStartTime: Option[BlockCreationStartTime],
         blockZeroEndTime: Option[BlockCreationEndTime]
     )
 
@@ -291,7 +289,6 @@ object Bootstrap:
           scriptReferenceUtxos = refUtxos,
           initialL2State = l2State,
           initialEquityContributions = defaults.initialEquityContributions,
-          blockZeroStartTime = defaults.blockZeroStartTime,
           blockZeroEndTime = defaults.blockZeroEndTime
         )
     }
@@ -336,9 +333,12 @@ object Bootstrap:
         l2Ledger: L2LedgerKind,
         mbInitialEvacuationMap: Option[EvacuationMap]
     ): IO[HeadConfig] = for {
-        blockCreationStartTime <- bootstrapConfig.blockZeroStartTime.fold(
-          realTimeQuantizedInstant(cardanoNetwork.slotConfig).map(BlockCreationStartTime(_))
-        )(IO.pure)
+        // Equity comes from the config (per head peer). Its total is what the treasury backs beyond
+        // the L2 value; the per-peer split is recorded but the init tx consumes only the sum.
+        initialEquityContributions <- IO.fromOption(
+          NonEmptyMap.fromMap(SortedMap.from(bootstrapConfig.initialEquityContributions))
+        )(RuntimeException("initialEquityContributions must be non-empty"))
+        totalEquity = initialEquityContributions.toSortedMap.values.foldLeft(Coin.zero)(_ + _)
 
         bhp = bootstrapConfig.headParams
         headParams = HeadParameters(
@@ -348,9 +348,19 @@ object Bootstrap:
           settlementConfig = bhp.settlementConfig,
           blockConfig = bhp.blockConfig,
           coilQuorum = bhp.coilQuorum,
-          // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
-          // a zero hash rather than empty bytes (which fail the length check).
-          l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
+          // The L2 ledger reports this at every `restoreTo` anchor and JointLedger checks it
+          // against this value (docs/spec/head-params-hash.md). Bootstrap has no ledger running, so
+          // it sources the value rather than asking: the built-in ledger's digest is a code
+          // constant.
+          // TODO: a remote ledger's digest has to come from the operator (the ledger prints it
+          //  out-of-band, as it already does for the initial evacuation map). Until that config
+          //  field exists, a remote head carries a zero hash and the remote reports nothing, so
+          //  the check warns instead of comparing.
+          l2ParamsHash = l2Ledger match {
+              case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.l2ParamsHash
+              case L2LedgerKind.AnyRemote =>
+                  Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32)))
+          },
           l2Ledger = l2Ledger,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
           identityIsomorphism = false,
@@ -363,13 +373,6 @@ object Bootstrap:
         initialL2Value = mbInitialEvacuationMap.fold(
           Value.combine(bootstrapConfig.initialL2State.map(_.value))
         )(_.totalValue)
-
-        // Equity comes from the config (per head peer). Its total is what the treasury backs beyond
-        // the L2 value; the per-peer split is recorded but the init tx consumes only the sum.
-        initialEquityContributions <- IO.fromOption(
-          NonEmptyMap.fromMap(SortedMap.from(bootstrapConfig.initialEquityContributions))
-        )(RuntimeException("initialEquityContributions must be non-empty"))
-        totalEquity = initialEquityContributions.toSortedMap.values.foldLeft(Coin.zero)(_ + _)
 
         headPeers <- IO.fromOption(
           HeadPeers(
@@ -528,30 +531,24 @@ object Bootstrap:
           )
         )(IO.pure)
 
+        // Block zero's header is built before the transactions, not read back off them: the init
+        // tx's regime datum carries `headParamsHash`, and the header is part of that digest's
+        // preimage. Every field follows from `blockCreationEndTime`, which is exactly what
+        // `InitializationTxSeq.Build` derives the fallback's start time from.
+        initialBlockHeader = BlockHeader.Initial(blockCreationEndTime)(using headParams.txTiming)
+        headParamsHash = HeadParamsHash(bootstrap, initialBlockHeader)
+
         initTxSeq <- InitializationTxSeq
-            .Build(bootstrap, funding)(blockCreationEndTime)
+            .Build(bootstrap, funding)(blockCreationEndTime, headParamsHash)
             .result
             .fold(
               e => logger.error(e.toString) >> IO.raiseError(e),
               IO.pure
             )
 
-        fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
-        forcedMajorBlockWakeupTime = headParams.txTiming.forcedMajorBlockWakeupTime(
-          fallbackTxStartTime
-        )
-
         initialBlock = InitialBlock(
           Block.Unsigned.Initial(
-            blockBrief = BlockBrief.Initial(
-              BlockHeader.Initial(
-                startTime = blockCreationStartTime,
-                endTime = blockCreationEndTime,
-                fallbackTxStartTime = fallbackTxStartTime,
-                forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
-                mDepositDecisionWakeupTime = None,
-              )
-            ),
+            blockBrief = BlockBrief.Initial(initialBlockHeader),
             // Unsigned init+fallback — slow consensus's stack-0 hard-ack flow signs them at boot.
             effects = BlockEffects.Unsigned.Initial(
               initializationTx = initTxSeq.initializationTx,
@@ -817,14 +814,22 @@ object GenerateKeyPair:
     ): IO[Unit] = for {
         templateStr <- IO.blocking(Files.readString(templatePath))
         template <- IO.fromEither(parser.parse(templateStr))
-        filled <- IO.fromEither(
+        result <- IO.fromEither(
           fillPrivateConfig(template, role, vKeyHex, sKeyHex).left.map(
             new IllegalArgumentException(_)
           )
         )
+        (filled, secrets) = result
+        envPath = outPath.resolveSibling(PrivateSecrets.defaultFileName)
         _ <- IO.blocking {
             Option(outPath.getParent).foreach(Files.createDirectories(_))
             Files.writeString(outPath, filled.spaces2)
+            Files.writeString(
+              envPath,
+              secrets.map((k, v) => s"$k=$v").toList.sorted.mkString("", "\n", "\n")
+            )
+            // The config beside it is meant to be shareable; this file is the reason that is safe.
+            Files.setPosixFilePermissions(envPath, PosixFilePermissions.fromString("rw-------"))
         }
     } yield ()
 
@@ -839,24 +844,52 @@ object GenerateKeyPair:
         role: Role,
         vKeyHex: String,
         sKeyHex: String
-    ): Either[String, Json] = {
-        def mkWallet(v: String, s: String): Json = Json.obj(
-          "verificationKey" -> Json.fromString(v),
-          "signingKey" -> Json.fromString(s)
-        )
+    ): Either[String, (Json, Map[String, String])] = {
         val walletField = role match {
             case Role.Head => "ownHeadWallet"
             case Role.Coil => "ownCoilWallet"
         }
+        // The generated signing key never enters the config; only its public half does, and the
+        // node re-pairs the two at boot and refuses if they disagree.
+        val ownWallet = Json.obj("verificationKey" -> Json.fromString(vKeyHex))
+
+        /** Lift a secret the template still carries out of the config and into the env map. */
+        def lift(obj: JsonObject, field: String): (JsonObject, Option[String]) =
+            obj(field).flatMap(_.asString) match
+                case Some(v) if v.nonEmpty => (obj.remove(field), Some(v))
+                case _                     => (obj, None)
+
         for {
             obj <- template.asObject.toRight("template is not a JSON object")
-            withWallet = obj
-                .add("ownPeerPrivate", Json.obj(walletField -> mkWallet(vKeyHex, sKeyHex)))
-            filled = role match {
+            withWallet = obj.add("ownPeerPrivate", Json.obj(walletField -> ownWallet))
+            roleFixed = role match {
                 case Role.Head => withWallet
                 case Role.Coil => withWallet.remove("remoteScreenerUri")
             }
-        } yield Json.fromJsonObject(filled)
+            (noBlockfrost, bfKey) = lift(roleFixed, "blockfrostApiKey")
+            (noAdmin, adminPw) = lift(noBlockfrost, "adminPassword")
+            evac = noAdmin("nodeOperationEvacuationConfig").flatMap(_.asObject)
+            ruleBased = evac.flatMap(_.apply("ruleBasedWallet")).flatMap(_.asObject)
+            ruleKey = ruleBased
+                .flatMap(_.apply("signingKey"))
+                .flatMap(_.asString)
+                .filter(_.nonEmpty)
+            cleaned = (evac, ruleBased) match
+                case (Some(e), Some(rb)) =>
+                    noAdmin.add(
+                      "nodeOperationEvacuationConfig",
+                      Json.fromJsonObject(
+                        e.add("ruleBasedWallet", Json.fromJsonObject(rb.remove("signingKey")))
+                      )
+                    )
+                case _ => noAdmin
+            secrets = List(
+              Some("HYDROZOA_SIGNING_KEY" -> sKeyHex),
+              bfKey.map("HYDROZOA_BLOCKFROST_API_KEY" -> _),
+              adminPw.map("HYDROZOA_ADMIN_PASSWORD" -> _),
+              ruleKey.map("HYDROZOA_RULE_BASED_SIGNING_KEY" -> _)
+            ).flatten.toMap
+        } yield (Json.fromJsonObject(cleaned), secrets)
     }
 
     private def mkHex(bytes: Array[Byte]): String = bytes.map("%02x".format(_)).mkString
@@ -1231,8 +1264,7 @@ end BuildHeadConfig
   * contributions — with demo defaults) and an `l2-cardano-eutxo.json` template (a min-ada
   * placeholder per head peer's L1 address, which the operators edit into the opening distribution).
   * Block-zero timing is left out of the defaults, so [[BuildHeadConfig]] anchors the initial block
-  * to wall-clock at build time; operators who want to pin it add `blockZeroStartTime` /
-  * `blockZeroEndTime` (epoch millis).
+  * to wall-clock at build time; operators who want to pin it add `blockZeroEndTime` (epoch millis).
   *
   * Usage:
   * {{{
@@ -1304,7 +1336,7 @@ object InitBootstrapFiles:
             equity = roster.headPeers.indices
                 .map(i => HeadPeerNumber(i) -> (if i == 0 then Coin.ada(100) else Coin.zero))
                 .toMap
-            defaults = Bootstrap.BootstrapDefaults(network, headParams, equity, None, None)
+            defaults = Bootstrap.BootstrapDefaults(network, headParams, equity, None)
             defaultsJson = {
                 given CardanoNetwork.Section = network
                 defaults.asJson.deepDropNullValues

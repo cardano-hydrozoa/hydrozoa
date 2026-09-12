@@ -304,7 +304,7 @@ private object SettlementTxOps {
                       MultisigTreasuryUtxo
                           .Datum(
                             commit = kzgCommitment,
-                            versionMajor = majorVersionProduced.convert,
+                            versionMajor = majorVersionProduced.convert
                           )
                           .toData
                     )

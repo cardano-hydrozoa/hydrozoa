@@ -26,6 +26,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quant
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendBlockfrost, CardanoBackendEvent, CardanoBackendEventFormat, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
@@ -35,7 +36,7 @@ import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat, StoreIdentity}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
@@ -87,6 +88,24 @@ object MultiPeerHeadHarness:
     ): IO[Option[Instant]] =
         if useTestControl then IO.pure(None)
         else IO.realTimeInstant.map(t => Some(t.plusSeconds(offset.toSeconds)))
+
+    /** The first L1 sample a regime manager boots from, read here as `Serve` reads it: before the
+      * manager starts, so `ReplayActor.replay` only has to queue it.
+      *
+      * No retry ladder, unlike production — the harness's backend is in-process and a failed read
+      * is a broken fixture, not a transient outage, so it should fail the test loudly.
+      */
+    def readFirstPollResults(
+        cardanoBackend: L1Backend[IO],
+        config: NodeConfig
+    ): IO[PollResults] =
+        cardanoBackend
+            .utxosAt(config.initializationTx.treasuryProduced.address)
+            .flatMap {
+                case Right(utxos) => IO.pure(PollResults(utxos.keySet))
+                case Left(err) =>
+                    IO.raiseError(new RuntimeException(s"harness boot L1 sample failed: $err"))
+            }
 
     /** Head initial-block-end-time generator anchored on [[mkTakeoffTime]]. When `takeoffTime` is
       * `Some`, quantize it to the peer's slot config. When `None`, generate a random Jan-1-2026 +
@@ -719,14 +738,14 @@ object MultiPeerHeadHarness:
             peerConnections <- Resource.eval(
               peerMrms.toList
                   .traverse { case (peerNum, peerMrm) =>
-                      peerMrm.mrm.connectionsDeferred.get.map(peerNum -> _)
+                      peerMrm.mrm.connectionsDeferred.get.flatMap(IO.fromEither).map(peerNum -> _)
                   }
                   .map(_.toMap)
             )
             coilConnections <- Resource.eval(
               coilMrms.toList
                   .traverse { case (coilNum, coilMrm) =>
-                      coilMrm.mrm.connectionsDeferred.get.map(coilNum -> _)
+                      coilMrm.mrm.connectionsDeferred.get.flatMap(IO.fromEither).map(coilNum -> _)
                   }
                   .map(_.toMap)
             )
@@ -805,7 +824,7 @@ object MultiPeerHeadHarness:
                         .allocated
                         .map(_._1)
                     (mrm, ref) = spawned
-                    conns <- mrm.connectionsDeferred.get
+                    conns <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
                     // Cancel the victim's previous tick (its CardanoLiaison is now stopped), then
                     // start a fresh supervised tick against the new connections.
                     _ <- headTicks.get.flatMap(_.getOrElse(peerNum, IO.unit))
@@ -849,7 +868,7 @@ object MultiPeerHeadHarness:
                         .allocated
                         .map(_._1)
                     (mrm, ref) = spawned
-                    conns <- mrm.connectionsDeferred.get
+                    conns <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
                     _ <- coilTicks.get.flatMap(_.getOrElse(coilNum, IO.unit))
                     tickFib <- tickSupervisor.supervise(
                       Ticks.tickLoop(coilPollingPeriodOf(coilNum), conns)
@@ -1126,6 +1145,7 @@ object MultiPeerHeadHarness:
             peerNum: HeadPeerNumber,
             mode: Mode,
             cfs: List[Cf],
+            identity: StoreIdentity,
             tracer: ContraTracer[IO, PersistenceEvent],
         ): Resource[IO, BackendStore[IO]] =
             mode match
@@ -1133,7 +1153,7 @@ object MultiPeerHeadHarness:
                 case Mode.RocksDb(root) =>
                     val dir = root.resolve(s"peer-${peerNum: Int}")
                     Resource.eval(IO.blocking(Files.createDirectories(dir))) >>
-                        RocksDbBackendStore.open(dir, cfs, tracer)
+                        RocksDbBackendStore.open(dir, cfs, identity, tracer)
 
     // ===================================
     // Transport — per-mode bring-up
@@ -1509,6 +1529,12 @@ object MultiPeerHeadHarness:
                     coilPeers = multiNodeConfig.headConfig.coilPeers.coilPeerNumbers,
                     hubs = multiNodeConfig.headConfig.coilPeers.hubHeadPeerNumbers,
                   ),
+                  StoreIdentity(
+                    headParamsHash = nodeConfig.headParamsHash,
+                    headId = nodeConfig.headId,
+                    headAddress = nodeConfig.headMultisigAddress,
+                    ownPeerId = nodeConfig.ownPeerId
+                  ),
                   persistenceTracer,
                 )
                 .flatMap { backendStore =>
@@ -1571,9 +1597,13 @@ object MultiPeerHeadHarness:
                 // A real node runs the 1 Hz sampler for the whole life of the process
                 // (`Serve.scala`); without it the runtime gauges read their initial values.
                 _ <- metrics.sampler().background
+                // Read where `Serve` reads it: before the regime manager starts, so `replay` only
+                // has to queue it. See `ReplayActor.replay`.
+                firstPollResults <- Resource.eval(readFirstPollResults(cardanoBackend, nodeConfig))
                 mrm <- HeadMultisigRegimeManager.resource(
                   nodeConfig,
                   cardanoBackend,
+                  firstPollResults,
                   l2Ledger,
                   EutxoL2Screener(nodeConfig),
                   persistence,
@@ -1648,9 +1678,11 @@ object MultiPeerHeadHarness:
                 // A coil runs the 1 Hz sampler too, and for the same reason: without it the
                 // runtime gauges never leave their initial values.
                 _ <- metrics.sampler().background
+                firstPollResults <- Resource.eval(readFirstPollResults(cardanoBackend, coilConfig))
                 mrm <- CoilMultisigRegimeManager.resource(
                   coilConfig,
                   cardanoBackend,
+                  firstPollResults,
                   l2Ledger,
                   persistence,
                   metrics,

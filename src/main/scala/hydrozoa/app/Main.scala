@@ -1,11 +1,13 @@
 package hydrozoa.app
 
+import cats.effect.unsafe.IORuntimeConfig
 import cats.effect.{ExitCode, IO}
 import com.monovore.decline.effect.CommandIOApp
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.BuildInfo
 import hydrozoa.app.cli.{Scaffold, SubmitDeposit, SubmitL2Transaction}
 import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles, KeygenFleet, Migrate, PrintHeadZeroAddress}
+import scala.concurrent.duration.DurationInt
 
 /** The `hydrozoa` command-line entry point: a single dispatcher over every deployment and runtime
   * command. Each subcommand is defined next to its logic and surfaced here as a `Command` value:
@@ -31,6 +33,22 @@ object Main
       header = "Hydrozoa — multi-party state channels for Cardano",
       version = BuildInfo.version
     ):
+
+    /** Bound how long shutdown may hang after a signal.
+      *
+      * cats-effect defaults `shutdownHookTimeout` to `Duration.Inf`, so a finalizer that cannot
+      * complete makes the process ignore SIGTERM outright — it then needs SIGKILL, and anything
+      * downstream of the stuck finalizer never releases. A wedged node holding its RocksDB LOCK is
+      * the case that bit us: `docker stop -t 120` waits the full two minutes and kills it anyway.
+      *
+      * A finite bound converts that into a slower-than-usual exit. Finalizers past the deadline are
+      * skipped, which is safe for the store specifically: the OS releases the lock on process death
+      * and RocksDB recovers from its WAL, which is the same path any crash takes.
+      *
+      * This is a backstop, not a fix — a shutdown that needs it has a bug worth finding.
+      */
+    override protected def runtimeConfig: IORuntimeConfig =
+        super.runtimeConfig.copy(shutdownHookTimeout = 30.seconds)
 
     /** The `version` subcommand: print the version, git revision, and build time baked in at
       * compile time (see [[BuildInfo]]).

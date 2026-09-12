@@ -3,7 +3,6 @@ package hydrozoa.multisig.consensus
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -12,7 +11,6 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, JournalScan, RawJournalEntry, ReplayCursors}
 import hydrozoa.multisig.persistence.{JournalKey, Markers, Persistence, StoreKey}
-import scalus.cardano.address.ShelleyAddress
 
 /** The boot-time replay seam (R3 §8 step 3). Not a long-lived cats-actors `Actor`: it is the
   * one-shot routine `HeadMultisigRegimeManager` runs **inline** after spawning the consensus actors
@@ -24,9 +22,10 @@ import scalus.cardano.address.ShelleyAddress
   *
   * What it does, in order:
   *
-  *   1. Sample L1 directly (`CardanoBackend.utxosAt(treasuryAddress)`) and seed BlockWeaver's first
-  *      [[PollResults]], so deposit decisions proceed immediately rather than waiting on
-  *      CardanoLiaison's poll cadence (§5.5).
+  *   1. Seed BlockWeaver's first [[PollResults]], so deposit decisions proceed immediately rather
+  *      than waiting on CardanoLiaison's poll cadence (§5.5). The value is read from L1 by `Serve`
+  *      before the actor system exists and handed in — see [[replay]] for why the read cannot
+  *      happen here.
   *   2. Reconstruct the in-flight acked-but-unconfirmed stack — at most one (single-flight; the §9
   *      "crash mid-stack" case) — from its persisted `Stack.Unsigned` + this peer's hard-acks, and
   *      hand it to `SlowConsensusActor` so it re-forms its cell and re-aggregates. StackComposer
@@ -56,35 +55,45 @@ object ReplayActor:
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None
     )
 
-    /** Run the boot replay (see the object docstring), for either peer type. Pure over the store +
-      * a one-shot L1 read; all effects are mailbox sends to `targets`. The fast side and the slow
-      * side are now common to both peer types: the slow-side own-ack journal is the one
-      * `PeerId`-keyed `HardAck` journal, so `own: PeerId` flows straight into
-      * `JournalKey.HardAck(own, n)` with no peer-type branch (§10 Q10). `peers` is every head peer
-      * (own included on a head peer), `hubs` every hub head peer (their `HubHardAck` journals carry
-      * the coil quorum SCA aggregates, read by both peer types), `coils` the hubbed coils whose ack
-      * gap a hub re-feeds (`Nil` off a hub). `own`, `treasuryAddress` and `leadsFastBlock` — the
-      * fast-cycle leadership predicate, always false on a coil — come from the node config.
+    /** Run the boot replay (see the object docstring), for either peer type. Pure over the store;
+      * all effects are mailbox sends to `targets`. The fast side and the slow side are now common
+      * to both peer types: the slow-side own-ack journal is the one `PeerId`-keyed `HardAck`
+      * journal, so `own: PeerId` flows straight into `JournalKey.HardAck(own, n)` with no peer-type
+      * branch (§10 Q10). `peers` is every head peer (own included on a head peer), `hubs` every hub
+      * head peer (their `HubHardAck` journals carry the coil quorum SCA aggregates, read by both
+      * peer types), `coils` the hubbed coils whose ack gap a hub re-feeds (`Nil` off a hub). `own`
+      * and `leadsFastBlock` — the fast-cycle leadership predicate, always false on a coil — come
+      * from the node config.
+      *
+      * `firstPollResults` is read from L1 by the caller, NOT here. This runs inside an uncancelable
+      * actor message handler, so a read that retries would be uninterruptible; `Serve` establishes
+      * the fact on the app fiber and hands it down. Queuing it is still this function's job: it has
+      * to reach BlockWeaver's mailbox before the start barrier opens, or the weaver acts on
+      * `PollResults.empty` and rejects every mature deposit as `NotInPollResults`.
       */
     def replay(
         persistence: Persistence[IO],
-        cardanoBackend: CardanoBackend[IO],
+        firstPollResults: PollResults,
         targets: Targets,
         own: PeerId,
         peers: List[HeadPeerNumber],
         hubs: List[HeadPeerNumber],
         coils: List[CoilPeerNumber],
-        treasuryAddress: ShelleyAddress,
-        leadsFastBlock: BlockNumber => Boolean
+        leadsFastBlock: BlockNumber => Boolean,
+        markers: Markers
     )(using CardanoNetwork.Section): IO[Unit] =
         val backend = persistence.backend
+        // `hardAckedStack` is a marker like the rest now, and the bundle is the manager's, derived
+        // once: `StackComposer` reads the same value, so the two cannot disagree — which is the
+        // whole point, since an adjustment applied to the bundle has to reach both.
+        val hardAckedStack = markers.hardAckedStack
         for
-            markers <- Markers.derive(backend, own)
-            // The slow-side own-ack journal is the one `PeerId`-keyed `HardAck` journal — both the
-            // acked stack (the StackComposer/aggregator floor) and the in-flight handoff's own acks
-            // come from it, for either peer type (§10 Q10).
-            ownAck <- recoverOwnAck(persistence, own, markers.hardConfirmed, markers.hardAcked)
-            (hardAckedStack, inflight) = ownAck
+            inflight <- reconstructInflightHandoff(
+              persistence,
+              own,
+              markers.hardConfirmed,
+              hardAckedStack
+            )
             // Fail-safe (CR6/CR7): refuse to start on an inconsistent store (confirmed > acked).
             _ <- validateInvariants(
               markers.softConfirmed,
@@ -93,7 +102,7 @@ object ReplayActor:
               hardAckedStack
             )
             // 1. First L1 sample → BlockWeaver, so deposit decisions don't wait on the poll tick.
-            _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
+            _ <- targets.blockWeaver ! firstPollResults
             // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA.
             _ <- inflight.traverse_(targets.slowConsensusActor ! _)
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
@@ -154,20 +163,6 @@ object ReplayActor:
       * so this avoids re-scanning the own `HardAck` CF. The own ack journal is the one
       * `PeerId`-keyed `HardAck` journal, so `own: PeerId` works for both peer types (§10 Q10).
       */
-    private def recoverOwnAck(
-        persistence: Persistence[IO],
-        own: PeerId,
-        hardConfirmed: Option[StackNumber],
-        hardAcked: Option[HardAckNumber]
-    )(using
-        CardanoNetwork.Section
-    ): IO[(Option[StackNumber], Option[SlowConsensusActor.StackHandoff])] =
-        for
-            hardAckedStack <- hardAcked.traverse(n =>
-                persistence.getOrFail(JournalKey.HardAck(own, n)).map(_.payload.stackNum)
-            )
-            inflight <- reconstructInflightHandoff(persistence, own, hardConfirmed, hardAckedStack)
-        yield (hardAckedStack, inflight)
 
     /** Boot-time consistency fail-safe (CR6/CR7): a confirmed mark must never exceed its acked mark
       * (`confirmed ≤ acked` — we confirm only what we have acked). A violation means a torn or
@@ -196,18 +191,6 @@ object ReplayActor:
                 s"fastBlockMark=$fastBlockMark, hardAckedStack=$hardAckedStack"
           )
         )
-
-    /** Read L1 directly and send BlockWeaver the first [[PollResults]] (§5.5). */
-    private def seedFirstPollResults(
-        cardanoBackend: CardanoBackend[IO],
-        treasuryAddress: ShelleyAddress,
-        blockWeaver: BlockWeaver.Handle
-    ): IO[Unit] =
-        cardanoBackend.utxosAt(treasuryAddress).flatMap {
-            case Left(err) =>
-                IO.raiseError(new RuntimeException(s"ReplayActor L1 sample failed: $err"))
-            case Right(utxos) => blockWeaver ! PollResults(utxos.keySet)
-        }
 
     /** Reconstruct the handoff for the in-flight stack — the last own-acked stack, **iff** it is
       * not yet hard-confirmed (`hardConfirmed < hardAckedStack`). Its `Stack.Unsigned` was

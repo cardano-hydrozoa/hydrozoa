@@ -16,7 +16,7 @@ import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.{Markers, Persistence}
 import scala.concurrent.duration.DurationInt
 
 /** Shared scaffolding for [[HeadMultisigRegimeManager]] and [[CoilMultisigRegimeManager]]: the
@@ -54,7 +54,21 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
     /** Completed by the subclass's [[preStartLocal]] once every actor is spawned and the
       * `Connections` slots are populated.
       */
-    val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
+    val connectionsDeferred: Deferred[IO, Either[Throwable, Connections]] =
+        Deferred.unsafe[IO, Either[Throwable, Connections]]
+
+    /** The inner barrier every child actor parks on until this manager has populated `Connections`.
+      *
+      * Held here rather than created inside [[preStartLocal]] so that a boot which never reaches
+      * the completion still has something to complete: a failure there used to leave both barriers
+      * empty forever, and the process could not exit. The children stayed parked inside
+      * `ActorCell.invoke(...).uncancelable`, the actor system's `Supervisor(await = true)` waited
+      * on them rather than cancelling, the store's release sat downstream of that wait, and the app
+      * fiber itself never reached `waitForTermination` — so SIGTERM had nothing to cancel and the
+      * node needed SIGKILL with its RocksDB LOCK still held.
+      */
+    val pendingConnections: HeadMultisigRegimeManager.PendingConnections =
+        Deferred.unsafe[IO, Either[Throwable, Connections]]
 
     /** Node lifecycle status backing the user-facing server's `/ready` endpoint. Advanced
       * monotonically (via [[NodeStatus.advanceTo]]) by [[CardanoLiaison]] as the L1 target state
@@ -105,7 +119,13 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
-        case PreStart => preStartLocal
+        // A boot failure must reach both barriers, or nothing parked on them can ever unpark.
+        // `complete` is idempotent-by-outcome here: on the happy path `preStartLocal` has already
+        // filled them and these are no-ops.
+        case PreStart =>
+            preStartLocal.onError(e =>
+                (pendingConnections.complete(Left(e)) >> connectionsDeferred.complete(Left(e))).void
+            )
         case TerminatedChild(childType, _) =>
             tracer.traceWith(LifecycleEvent.TerminatedActor(childType))
         case TerminatedDependency(dependencyType, _) =>
@@ -144,11 +164,19 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
         cardanoBackend: CardanoBackend[IO],
         l2Ledger: L2Ledger[IO],
         persistence: Persistence[IO],
-        pendingConnections: Deferred[IO, Connections],
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections,
+        markers: Markers,
     ): IO[CoreActors] =
         for {
             blockWeaver <- context.actorOf(
-              BlockWeaver(config, pendingConnections, tracers.blockWeaver, metrics, persistence)
+              BlockWeaver(
+                config,
+                pendingConnections,
+                tracers.blockWeaver,
+                metrics,
+                persistence,
+                markers
+              )
             )
             cardanoLiaison <- context.actorOf(
               CardanoLiaison(
@@ -181,7 +209,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 l2Ledger,
                 tracers.jointLedger,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
             stackComposer <- context.actorOf(
@@ -190,7 +219,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 pendingConnections,
                 tracers.stackComposer,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
             slowConsensusActor <- context.actorOf(
@@ -199,7 +229,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 pendingConnections,
                 tracers.slowConsensusActor,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
         } yield CoreActors(

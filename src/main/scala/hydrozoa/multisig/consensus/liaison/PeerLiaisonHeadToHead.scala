@@ -67,16 +67,18 @@ abstract class PeerLiaisonHeadToHead(
     private def resolveConnections: IO[PeerLiaisonHeadToHead.Connections] =
         pendingConnections match {
             case shared: HeadMultisigRegimeManager.PendingConnections =>
-                shared.get.map(s =>
-                    PeerLiaisonHeadToHead.Connections(
-                      blockWeaver = s.blockWeaver,
-                      consensusActor = s.consensusActor,
-                      stackComposer = s.stackComposer,
-                      slowConsensusActor = s.slowConsensusActor,
-                      remote = s.remoteHeadLiaisons(remoteHead.peerNum),
-                      coilRelay = s.coilRelay
+                shared.get
+                    .flatMap(IO.fromEither)
+                    .map(s =>
+                        PeerLiaisonHeadToHead.Connections(
+                          blockWeaver = s.blockWeaver,
+                          consensusActor = s.consensusActor,
+                          stackComposer = s.stackComposer,
+                          slowConsensusActor = s.slowConsensusActor,
+                          remote = s.remoteHeadLiaisons(remoteHead.peerNum),
+                          coilRelay = s.coilRelay
+                        )
                     )
-                )
             case own: PeerLiaisonHeadToHead.Connections => IO.pure(own)
         }
 
