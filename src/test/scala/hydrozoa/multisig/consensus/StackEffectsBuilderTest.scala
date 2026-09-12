@@ -408,7 +408,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
         }
     }
 
-    // ---- L2 state certificate (design/l2-state-certificate.md) ----
+    // ---- L2 state certificate (docs/spec/l2-state-certificate.md) ----
 
     /** A digest distinct from [[testL2StateHash]], so an assertion cannot pass by the builder
       * reaching for the treasury's inherited value instead of the block's.

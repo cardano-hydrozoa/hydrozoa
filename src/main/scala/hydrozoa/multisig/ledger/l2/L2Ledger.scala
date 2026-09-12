@@ -63,7 +63,7 @@ object RestoreError:
       * The counterpart of [[EvacuationMapMismatch]] one layer down: that one says the two sides
       * disagree about the L1-bound payouts, this one that they disagree about the L2 state behind
       * them. The initialization transaction has already certified the configured value on L1
-      * (`design/l2-state-certificate.md`), so running on would mean certifying, at every
+      * (`docs/spec/l2-state-certificate.md`), so running on would mean certifying, at every
       * settlement, a state nobody agreed to.
       */
     final case class InitialL2StateMismatch(
@@ -173,10 +173,10 @@ trait L2StateReader[F[_]] {
     /** The digests of the ledger's state as of `commandNumber`, **without moving the ledger**: read
       * the state, digest it, discard it.
       *
-      * This is what certifies state (`design/l2-state-certificate.md`). The slow side asks at each
-      * partition boundary of a closed stack, and by then the fast side has cut further blocks, so
-      * the ledger's tip is ahead of the boundary — [[L2Ledger.restoreTo]] there would rewind a live
-      * ledger out from under block production. Every peer derives its own effect bodies and
+      * This is what certifies state (`docs/spec/l2-state-certificate.md`). The slow side asks at
+      * each partition boundary of a closed stack, and by then the fast side has cut further blocks,
+      * so the ledger's tip is ahead of the boundary — [[L2Ledger.restoreTo]] there would rewind a
+      * live ledger out from under block production. Every peer derives its own effect bodies and
       * `HardAckSignatureVerifier` checks signatures against them, so this must answer the same
       * value on every peer for the same `commandNumber`, which is why it addresses a command number
       * rather than "now".
@@ -262,7 +262,7 @@ object L2Ledger {
       * two peers can agree on every evacuable output and still have diverged in the ledger that
       * produced them. `l2ParamsHash` never moves, so it is what keeps asking whether this is still
       * the right *ledger*. See `docs/spec/head-params-hash.md` and
-      * `design/l2-state-certificate.md`.
+      * `docs/spec/l2-state-certificate.md`.
       *
       * **All three are mandatory.** A ledger that cannot report them is not one this head can
       * drive: without `l2StateHash` it cannot build a settlement or an SEC at all, and without

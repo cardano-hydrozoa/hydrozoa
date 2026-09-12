@@ -6,7 +6,7 @@ import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
 
 /** A digest over the elements that constitute an L2 ledger's state, as defined in
-  * `design/l2-state-certificate.md`.
+  * `docs/spec/l2-state-certificate.md`.
   *
   * It is the value a head **certifies**: the settlement's treasury datum and the standalone
   * evacuation commitment each carry one beside their evacuation-map commitment, so an effect plus

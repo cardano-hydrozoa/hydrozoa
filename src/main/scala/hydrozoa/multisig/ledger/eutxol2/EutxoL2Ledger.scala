@@ -448,7 +448,7 @@ case class EutxoL2Ledger private (
     /** Read-only counterpart of [[restoreTo]]: reconstruct the state as of `commandNumber`, digest
       * it, and drop it. The live position, the store's tip and the freeze are all untouched, which
       * is what lets the slow side ask about a partition boundary the fast side has already run past
-      * (`design/l2-state-certificate.md`).
+      * (`docs/spec/l2-state-certificate.md`).
       *
       * **At the tip this reads the live state and digests it** — no snapshot load, no re-fold, no
       * store round trip. [[EutxoL2Ledger.State.commandNumber]] tracks the store's tip on both

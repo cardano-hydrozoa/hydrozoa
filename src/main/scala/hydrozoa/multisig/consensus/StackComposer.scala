@@ -53,8 +53,8 @@ final case class StackComposer(
     tracer: ContraTracer[IO, StackComposerEvent],
     persistence: Persistence[IO],
     /** The L2 ledger, narrowed to its read-only slice: every carrier this actor derives certifies
-      * the L2 state at its block (`design/l2-state-certificate.md`), and reading that state is the
-      * only thing the slow side asks of the ledger. JointLedger remains its sole driver.
+      * the L2 state at its block (`docs/spec/l2-state-certificate.md`), and reading that state is
+      * the only thing the slow side asks of the ledger. JointLedger remains its sole driver.
       */
     l2StateReader: L2StateReader[IO],
     metrics: PeerMetrics,

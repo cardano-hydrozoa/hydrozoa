@@ -31,7 +31,7 @@ import spire.math.Rational
   *   ([[hydrozoa.multisig.ledger.l2.L2StateHash]]) — the state *behind* the evacuation map, which
   *   is only its L1-compatible projection. Explicit and agreed for the same reason: the init tx
   *   commits to it in the treasury datum and every node verifies that
-  *   (`design/l2-state-certificate.md`). Its construction is the backend's, so a `cardano-eutxo`
+  *   (`docs/spec/l2-state-certificate.md`). Its construction is the backend's, so a `cardano-eutxo`
   *   head derives it from [[initialEvacuationMap]]
   *   ([[hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger.initialStateHash]]) and an `any-remote` head
   *   takes it from what that ledger reports about its own initial state, the same route

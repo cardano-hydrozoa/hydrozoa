@@ -24,7 +24,7 @@ final case class L2Snapshot(
 ) {
 
     /** This state's [[L2StateHash]] — the value the head certifies on the effects a partition
-      * produces (`design/l2-state-certificate.md`).
+      * produces (`docs/spec/l2-state-certificate.md`).
       *
       * ```
       * l2StateHash(S) = blake2b_256(

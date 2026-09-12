@@ -509,7 +509,7 @@ object Bootstrap:
         )(IO.pure)
 
         // The opening L2 state's own digest, which the init tx's treasury datum certifies
-        // (design/l2-state-certificate.md). Its construction is the backend's, so bootstrap sources
+        // (docs/spec/l2-state-certificate.md). Its construction is the backend's, so bootstrap sources
         // it the same way it sources `l2ParamsHash`: the built-in ledger's is derivable from the
         // opening evacuation map without a ledger running.
         // TODO: a remote ledger's has to come from the operator, printed out-of-band beside the

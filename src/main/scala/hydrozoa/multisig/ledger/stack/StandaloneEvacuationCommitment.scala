@@ -21,7 +21,7 @@ import scalus.cardano.onchain.plutus.v3.TokenName
   *
   * Per spec the on-L1 record is `(headId, blockVersion, kzgCommitment)`, with `blockVersion`
   * flattened to `(versionMajor, versionMinor)` in the datum encoding, and `l2StateHash` added
-  * beside the commitment (`design/l2-state-certificate.md`) — so [[Onchain]] below carries five
+  * beside the commitment (`docs/spec/l2-state-certificate.md`) — so [[Onchain]] below carries five
   * fields: `(headId, versionMajor, versionMinor, commitment, l2StateHash)`. `headId` is fixed per
   * head (the `HYDR` token asset name) and pins the SEC to this head for the dispute-resolution
   * script's cross-head-contamination check. It is supplied at SEC construction time from the head's

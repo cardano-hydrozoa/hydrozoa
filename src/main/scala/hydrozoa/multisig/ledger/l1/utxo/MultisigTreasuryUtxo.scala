@@ -84,7 +84,7 @@ object MultisigTreasuryUtxo {
       *   two peers that agree on every evacuable payout and still diverged in the ledger that
       *   produced them do not both get their settlement signed. The datum is N-of-N multisigned by
       *   the hard-ack flow and lands on L1, which makes settlement the head's strongest state
-      *   anchor and as sparse as its major cadence (`design/l2-state-certificate.md`).
+      *   anchor and as sparse as its major cadence (`docs/spec/l2-state-certificate.md`).
       *
       * Unlike `headParamsHash` it moves with every settlement, which is why it earns a seat on a
       * datum copied to L1 each time.

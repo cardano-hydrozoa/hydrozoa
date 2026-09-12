@@ -986,9 +986,9 @@ object ApiDto {
 
     /** A settlement effect — the block-scoped `settlement` endpoint's response. Carries its
       * `l1TxId`, `txCbor` (hex), and `l2StateHash`: the L2 state digest its treasury datum
-      * certifies (`design/l2-state-certificate.md`), surfaced so a reader need not decode the datum
-      * out of `txCbor` to see it. The settlement is the head's L1-anchored certificate, where an
-      * SEC's is peer-signed only.
+      * certifies (`docs/spec/l2-state-certificate.md`), surfaced so a reader need not decode the
+      * datum out of `txCbor` to see it. The settlement is the head's L1-anchored certificate, where
+      * an SEC's is peer-signed only.
       */
     final case class SettlementEffectView(
         l1TxId: String,
@@ -1003,10 +1003,10 @@ object ApiDto {
       * signatures.
       *
       * Those bytes plus those signatures are the block's **L2 state certificate**
-      * (`design/l2-state-certificate.md`): a signed statement of the state at that block, checkable
-      * against the head peer verification keys a reader already holds from config. `kzgCommitment`
-      * and `l2StateHash` are the two commitments it carries, decoded out of the on-chain bytes so a
-      * reader needs no Plutus decoder to see them.
+      * (`docs/spec/l2-state-certificate.md`): a signed statement of the state at that block,
+      * checkable against the head peer verification keys a reader already holds from config.
+      * `kzgCommitment` and `l2StateHash` are the two commitments it carries, decoded out of the
+      * on-chain bytes so a reader needs no Plutus decoder to see them.
       */
     final case class SecEffectView(
         l1TxId: String,

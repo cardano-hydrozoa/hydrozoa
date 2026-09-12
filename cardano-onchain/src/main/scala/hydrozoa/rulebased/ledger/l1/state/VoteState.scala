@@ -112,9 +112,9 @@ end VoteState
   * `l2StateHash` is the L2 ledger's own digest of the state the committed minor block leaves
   * behind, beside `commitment`'s evacuation map — the same pair the settlement's treasury datum
   * carries, so that minor-only stacks (which produce no settlement) also certify their state
-  * (`design/l2-state-certificate.md`). The dispute-resolution script does not read it; it is here
-  * because the script verifies the peers' signatures over `serialiseData(sec.toData)`, and that is
-  * what makes the field a signed statement rather than a hint.
+  * (`docs/spec/l2-state-certificate.md`). The dispute-resolution script does not read it; it is
+  * here because the script verifies the peers' signatures over `serialiseData(sec.toData)`, and
+  * that is what makes the field a signed statement rather than a hint.
   *
   * **Field order is load-bearing, and `l2StateHash` is last for that reason.** The validator reads
   * `headId`, `versionMajor`, `versionMinor` and `commitment` by position and otherwise

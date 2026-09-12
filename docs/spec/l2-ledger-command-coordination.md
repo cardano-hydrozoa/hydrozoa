@@ -282,7 +282,7 @@ evacuationMapHash(M) = blake2b_256(
 
 A digest over the elements that constitute the ledger's own state — the value the head puts on the
 effects a stack produces, so that an effect plus its N-of-N hard-ack signatures is a signed
-statement of the state that partition ends at (`design/l2-state-certificate.md`). It is what a peer
+statement of the state that partition ends at (`docs/spec/l2-state-certificate.md`). It is what a peer
 joining with no history is handed instead of trusting whoever seeds it.
 
 **Unlike the evacuation map digest, this one is not a shared construction.** The evacuation map

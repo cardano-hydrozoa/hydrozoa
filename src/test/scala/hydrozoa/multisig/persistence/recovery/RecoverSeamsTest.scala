@@ -515,7 +515,7 @@ class RecoverSeamsTest extends AnyFunSuite:
     /** The evacuation-map check one layer down: the map is only the L1-compatible projection of the
       * L2 state, so two ledgers can project the same payouts from different states. The
       * initialization transaction has already certified the configured digest on L1
-      * (`design/l2-state-certificate.md`), so booting on would certify a state nobody agreed to.
+      * (`docs/spec/l2-state-certificate.md`), so booting on would certify a state nobody agreed to.
       */
     test("JointLedger.recover refuses to boot when the L2 ledger holds a different initial state") {
         withStore { p =>

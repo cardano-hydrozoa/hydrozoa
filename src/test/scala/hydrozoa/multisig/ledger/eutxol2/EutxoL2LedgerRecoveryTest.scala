@@ -411,7 +411,7 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
         }
     }
 
-    // --- stateAt (the read-only sibling; design/l2-state-certificate.md) ------
+    // --- stateAt (the read-only sibling; docs/spec/l2-state-certificate.md) ------
 
     test("stateAt at the tip reports the live state and leaves the ledger where it was") {
         run {

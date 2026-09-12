@@ -370,7 +370,7 @@ start split.
 
 The fields fail for unrelated reasons — a wrong initial evacuation map (`commit`), a stale version
 (`versionMajor`), a configuration disagreement (`headParamsHash`), and a wrong opening L2 state
-(`l2StateHash`, see `design/l2-state-certificate.md`) — and only the configuration one is
+(`l2StateHash`, see `docs/spec/l2-state-certificate.md`) — and only the configuration one is
 something an operator can act on, so each carries its own message naming the two digests.
 
 `Parse` takes the digest as an already-computed `Hash32` rather than deriving it: computing it

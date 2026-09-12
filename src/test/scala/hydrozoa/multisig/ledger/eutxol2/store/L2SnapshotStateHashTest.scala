@@ -16,7 +16,7 @@ import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genGenesisObligation
 
 /** [[L2Snapshot.stateHash]] — the built-in ledger's [[hydrozoa.multisig.ledger.l2.L2StateHash]]
-  * construction (`design/l2-state-certificate.md`).
+  * construction (`docs/spec/l2-state-certificate.md`).
   *
   * The digest is what a head certifies on its settlement datums and SECs, and every peer derives
   * its own copy of an effect body before verifying the hard-ack signatures over it, so the two

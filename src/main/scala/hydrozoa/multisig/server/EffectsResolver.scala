@@ -36,7 +36,7 @@ object ResolvedEffect:
         tx: Transaction,
         rolloutIndex: Option[Int],
         /** The L2 state digest a settlement certifies, read off its treasury datum; `None` for
-          * every other kind. See `design/l2-state-certificate.md`.
+          * every other kind. See `docs/spec/l2-state-certificate.md`.
           */
         l2StateHash: Option[L2StateHash] = None
     ) extends ResolvedEffect
