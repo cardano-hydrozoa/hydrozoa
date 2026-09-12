@@ -7,7 +7,6 @@ import cats.implicits.*
 import hydrozoa.multisig.consensus.SlowConsensusActor.Cell
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, RefundTx, TxSignature}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StandaloneEvacuationCommitment}
 import scalus.cardano.ledger.{Transaction, TransactionHash, VKeyWitness}
@@ -101,7 +100,7 @@ final class HardAckAggregator() {
     def collectSecSignatures(
         cell: Cell.WaitingRound2 | Cell.WaitingSole,
         signers: List[PeerId]
-    ): List[List[Option[BlockHeader.HeaderSignature]]] =
+    ): List[List[Option[StandaloneEvacuationCommitment.Signature]]] =
         regularPartitions(cell.unsigned) match {
             case None => Nil
             case Some(parts) =>
@@ -159,7 +158,7 @@ final class HardAckAggregator() {
     def attachWitnesses(
         unsigned: Stack.Unsigned,
         wmap: WitnessMap,
-        evac: List[List[Option[BlockHeader.HeaderSignature]]]
+        evac: List[List[Option[StandaloneEvacuationCommitment.Signature]]]
     ): IO[StackEffects.HardConfirmed] = unsigned.effects match {
         case r: StackEffects.Unsigned.Regular =>
             r.partitions.toList

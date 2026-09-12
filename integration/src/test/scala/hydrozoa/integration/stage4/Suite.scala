@@ -599,8 +599,10 @@ case class Stage4Suite(
         val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid).toLong
         val modelTotal = l2TxReqIds.size.toLong
         val sutL2Events =
-            canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) => depositIds.contains(r) }
-        val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid).toLong
+            canonicalBriefs.flatMap(_.requests).filterNot { case (r, _, _) =>
+                depositIds.contains(r)
+            }
+        val sutValid = sutL2Events.count(_._3 == ValidityFlag.Valid).toLong
         val sutTotal = sutL2Events.size.toLong
 
         // sutValid/sutTotal <= modelValid/modelTotal  iff  sutValid*modelTotal <= modelValid*sutTotal
@@ -664,7 +666,7 @@ case class Stage4Suite(
                 val vMaj = brief.blockVersion.major.convert
                 val vMin = brief.blockVersion.minor.convert
                 val leader = (brief.blockNum: Int) % nPeers
-                val evs = brief.requests.map { case (reqId, flag) =>
+                val evs = brief.requests.map { case (reqId, _, flag) =>
                     val f = if flag == ValidityFlag.Valid then "V" else "I"
                     s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
                 }
@@ -691,10 +693,10 @@ case class Stage4Suite(
             val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
             val modelTotal = l2TxReqIds.size
             val sutL2Events =
-                canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) =>
+                canonicalBriefs.flatMap(_.requests).filterNot { case (r, _, _) =>
                     depositIds.contains(r)
                 }
-            val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
+            val sutValid = sutL2Events.count(_._3 == ValidityFlag.Valid)
             val sutTotal = sutL2Events.size
 
             val peersLine =

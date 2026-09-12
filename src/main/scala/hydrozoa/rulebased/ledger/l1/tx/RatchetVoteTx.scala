@@ -9,7 +9,6 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.addrKeyHash
 import hydrozoa.lib.cardano.scalus.contextualscalus
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
@@ -72,8 +71,8 @@ private object RatchetVoteTxOps {
         regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
-        signatures: List[BlockHeader.Minor.HeaderSignature],
-        coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]],
+        signatures: List[StandaloneEvacuationCommitment.Signature],
+        coilSignatures: List[Option[StandaloneEvacuationCommitment.Signature]],
     ) {
 
         def result(using config: Config): Either[Error, RatchetVoteTx] =

@@ -104,7 +104,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                     )
                   )
                 ),
-                headerMultiSigned = List.empty
+                signatures = List.empty
               ),
               refunds = List.empty
             )

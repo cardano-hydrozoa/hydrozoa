@@ -23,12 +23,14 @@ paths:
                 summary: Submit an L2 transaction
                 value:
                   l2Payload: 84a400d9010281825820…
+                  requestHash: 58828159…
                   type: transaction
               deposit:
                 summary: Register an L1 deposit
                 value:
                   l1Payload: 84a400d9010281825820…
                   l2Payload: a1024568656164…
+                  requestHash: ac596c7f…
                   type: deposit
         required: true
       responses:
@@ -810,11 +812,14 @@ components:
       type: object
       required:
       - requestId
+      - requestHash
       - validity
       properties:
         requestId:
           type: integer
           format: int64
+        requestHash:
+          type: string
         validity:
           type: string
           enum:
@@ -1631,11 +1636,14 @@ components:
       required:
       - l1Payload
       - l2Payload
+      - requestHash
       - type
       properties:
         l1Payload:
           type: string
         l2Payload:
+          type: string
+        requestHash:
           type: string
         type:
           type: string
@@ -1655,9 +1663,12 @@ components:
       type: object
       required:
       - l2Payload
+      - requestHash
       - type
       properties:
         l2Payload:
+          type: string
+        requestHash:
           type: string
         type:
           type: string
