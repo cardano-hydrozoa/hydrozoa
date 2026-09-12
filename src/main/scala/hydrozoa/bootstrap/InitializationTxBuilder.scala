@@ -17,7 +17,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 import scalus.cardano.txbuilder.TxBalancingError.InsufficientFunds
-import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
 
 /** Builds the head's initialization transaction. This lives in the `hydrozoa.bootstrap` package
@@ -128,7 +127,13 @@ object InitializationTxBuilder {
 
             object Sends {
                 def apply(): List[Send] =
-                    List(Treasury(), MultisigRegimeOutput.send(using config)) ++ ChangeOutputs()
+                    List(Treasury(), multisigRegimeOutput.send(using config)) ++ ChangeOutputs()
+
+                /** Derived once here and reused for the produced [[MultisigRegimeUtxo]], so the
+                  * output the transaction carries and the utxo the head remembers cannot drift.
+                  */
+                private[bootstrap] val multisigRegimeOutput: MultisigRegimeOutput =
+                    MultisigRegimeOutput(MultisigRegimeUtxo.mkDatum(headParamsHash))
 
                 object Treasury {
                     def apply(): Send = Send(treasuryOutput)
@@ -144,7 +149,6 @@ object InitializationTxBuilder {
                     private[bootstrap] val treasuryDatum =
                         MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
                           config.initialEvacuationMap,
-                          ByteString.fromArray(headParamsHash.bytes),
                           config.initialL2StateHash
                         )
 
@@ -174,6 +178,7 @@ object InitializationTxBuilder {
 
                 val multisigRegimeProduced = MultisigRegimeUtxo(
                   input = TransactionInput(finalized.transaction.id, multisigRegimeIndex),
+                  datum = Steps.Sends.multisigRegimeOutput.datum
                 )
 
                 val equityCoin =

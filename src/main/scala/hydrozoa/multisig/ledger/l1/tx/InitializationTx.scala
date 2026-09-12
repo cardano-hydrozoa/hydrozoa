@@ -96,8 +96,8 @@ object InitializationTx {
         /** @param headParamsHash
           *   the digest of the reader's own head config, passed in already computed rather than
           *   derived from [[Config]]: computing it needs nearly the whole head config, and this
-          *   parser deliberately asks for only the five sections it uses. See
-          *   `docs/spec/head-params-hash.md`.
+          *   parser deliberately asks for only the five sections it uses. Compared against the
+          *   multisig regime output's inline datum below. See `docs/spec/head-params-hash.md`.
           */
         final case class Parse(config: Config)(
             blockCreationEndTime: BlockCreationEndTime,
@@ -130,9 +130,10 @@ object InitializationTx {
 
                 expectedTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum(
                   config.initialEvacuationMap,
-                  ByteString.fromArray(headParamsHash.bytes),
                   config.initialL2StateHash
                 )
+
+                expectedMultisigRegimeDatum = MultisigRegimeUtxo.mkDatum(headParamsHash)
 
                 actualOutputs = tx.body.value.outputs.map(_.value)
 
@@ -220,7 +221,7 @@ object InitializationTx {
                   Data.fromData[MultisigTreasuryUtxo.Datum](encodedTreasuryDatum)
                 ).toEither.left
                     .map(_ => InvalidTransactionError("data decoding of treasury datum failed"))
-                // Field by field, not a whole-datum equality: the three fields fail for three
+                // Field by field, not a whole-datum equality: the two fields fail for two
                 // unrelated reasons, and only a per-field message tells the operator which.
                 _ <-
                     if decodedTreasuryDatum.commit == expectedTreasuryDatum.commit then Right(())
@@ -241,21 +242,6 @@ object InitializationTx {
                                 s" expected ${expectedTreasuryDatum.versionMajor}"
                           )
                         )
-                // The configuration-agreement gate. Peers never compare configs with each other;
-                // they each compare against this one transaction, so agreeing with it is agreeing
-                // with each other (docs/spec/head-params-hash.md).
-                _ <-
-                    if decodedTreasuryDatum.headParamsHash == expectedTreasuryDatum.headParamsHash
-                    then Right(())
-                    else
-                        Left(
-                          InvalidTransactionError(
-                            "this node's head config does not match the one the head was " +
-                                "initialized with: the initialization tx pins headParamsHash " +
-                                s"${decodedTreasuryDatum.headParamsHash.toHex}, this config " +
-                                s"hashes to ${expectedTreasuryDatum.headParamsHash.toHex}"
-                          )
-                        )
 
                 // script
                 _ <-
@@ -268,8 +254,8 @@ object InitializationTx {
                         )
 
                 //////
-                // Multisig regime is coherent: expected address, contains only MR token and ADA, datum is None, HNS in
-                // reference script
+                // Multisig regime is coherent: expected address, contains only MR token and ADA, datum pins this
+                // head's config digest, HNS in reference script
 
                 // address
                 _ <-
@@ -295,11 +281,33 @@ object InitializationTx {
                     else Left(InvalidTransactionError("multisig regime output has wrong value"))
 
                 // datum
+                encodedMultisigRegimeDatum <- actualMultisigRegimeOutput.datumOption match {
+                    case None =>
+                        Left(InvalidTransactionError("multisig regime output datum missing"))
+                    case Some(Inline(i)) => Right(i)
+                    case Some(_) =>
+                        Left(InvalidTransactionError("multisig regime output datum not inline"))
+                }
+                decodedMultisigRegimeDatum <- Try(
+                  Data.fromData[MultisigRegimeUtxo.Datum](encodedMultisigRegimeDatum)
+                ).toEither.left
+                    .map(_ =>
+                        InvalidTransactionError("data decoding of multisig regime datum failed")
+                    )
+                // The configuration-agreement gate. Peers never compare configs with each other;
+                // they each compare against this one transaction, so agreeing with it is agreeing
+                // with each other (docs/spec/head-params-hash.md).
                 _ <-
-                    if actualMultisigRegimeOutput.datumOption.isEmpty then Right(())
+                    if decodedMultisigRegimeDatum == expectedMultisigRegimeDatum
+                    then Right(())
                     else
                         Left(
-                          InvalidTransactionError("multisig witness utxo has a non-empty datum")
+                          InvalidTransactionError(
+                            "this node's head config does not match the one the head was " +
+                                "initialized with: the initialization tx pins headParamsHash " +
+                                s"${decodedMultisigRegimeDatum.headParamsHash.toHex}, this config " +
+                                s"hashes to ${expectedMultisigRegimeDatum.headParamsHash.toHex}"
+                          )
                         )
 
                 _ <-
@@ -391,7 +399,8 @@ object InitializationTx {
               initializationTxEndTime = initializationTxEndTime,
               treasuryProduced = treasury,
               multisigRegimeProduced = MultisigRegimeUtxo(
-                input = TransactionInput(tx.id, md.multisigRegimeIx)
+                input = TransactionInput(tx.id, md.multisigRegimeIx),
+                datum = expectedMultisigRegimeDatum
               ),
               headTokenNames = config.headTokenNames,
               resolvedUtxos = resolvedUtxos,

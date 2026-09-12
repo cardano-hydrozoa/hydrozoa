@@ -58,7 +58,7 @@ object EvacuationInputsTest extends Properties("Evacuation Inputs Test") {
             l2StateHash = L2StateHash(testL2StateHash),
             header = StandaloneEvacuationCommitmentOnchain(blockHeader),
           ),
-          headerMultiSigned = env.multisignHeaderSparse(blockHeader),
+          signatures = env.multisignHeaderSparse(blockHeader),
         )
         val regularStack = StackEffects.HardConfirmed.Regular(
           NonEmptyList.of(PartitionEffects.Minor(sec = multiSigned, refunds = List.empty))

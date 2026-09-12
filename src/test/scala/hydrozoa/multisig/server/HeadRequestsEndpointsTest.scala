@@ -10,7 +10,7 @@ import hydrozoa.multisig.consensus.UserRequest.{DepositRequest, TransactionReque
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackEffects, StackNumber}
@@ -82,12 +82,8 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
         new ConsensusStoreReader[IO]:
             def blockBriefs: IO[List[BlockBrief.Next]] = IO.pure(Nil)
             def blockBrief(num: BlockNumber): IO[Option[BlockBrief.Next]] = IO.pure(None)
-            def softConfirmation(
-                num: BlockNumber
-            ): IO[Option[Timestamped[Block.SoftConfirmed.Next]]] =
-                IO.pure(softBlock.collect {
-                    case (b, at) if b == num => Timestamped(stampFor(at), null)
-                })
+            def softConfirmedAt(num: BlockNumber): IO[Option[Instant]] =
+                IO.pure(softBlock.collect { case (b, at) if b == num => at })
             def stackOf(num: BlockNumber): IO[Option[StackNumber]] =
                 IO.pure(hardStack.collect { case (b, s, _) if b == num => s })
             def hardConfirmation(

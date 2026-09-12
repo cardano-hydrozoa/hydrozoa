@@ -79,8 +79,21 @@ class BootstrapMembershipTest extends AnyFunSuite {
           decoded.cardanoNetwork == network &&
               decoded.headParams.coilQuorum == 2 &&
               decoded.initialEquityContributions.size == 2 &&
-              decoded.blockZeroStartTime.isEmpty
+              decoded.blockZeroEndTime.isEmpty
         )
+    }
+
+    test("a defaults.json carrying blockZeroStartTime still decodes; the field is ignored") {
+        // Block zero's start time is its end time now, so `defaults.json` no longer offers it.
+        // A bootstrap directory written before that must still assemble.
+        val network = CardanoNetwork.Preview
+        given CardanoNetwork.Section = network
+        val stale = Json.obj("blockZeroStartTime" -> 1_767_225_600_000L.asJson)
+        val withStartTime = mkPreviewDefaults(coilQuorum = 2).asJson.deepMerge(stale)
+        val decoded = withStartTime
+            .as[Bootstrap.BootstrapDefaults]
+            .fold(e => fail(s"decode failed: $e"), identity)
+        assert(decoded.cardanoNetwork == network && decoded.blockZeroEndTime.isEmpty)
     }
 
     test(
@@ -125,7 +138,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
               config.headPeers.size == 1 &&
               config.initialEquityContributions.get(HeadPeerNumber(0)).contains(Coin.ada(100)) &&
               config.initialL2State.isEmpty &&
-              config.blockZeroStartTime.isEmpty
+              config.blockZeroEndTime.isEmpty
         )
     }
 
@@ -156,7 +169,6 @@ class BootstrapMembershipTest extends AnyFunSuite {
           headParams = headParams,
           initialEquityContributions =
               Map(HeadPeerNumber(0) -> Coin.ada(100), HeadPeerNumber(1) -> Coin.zero),
-          blockZeroStartTime = None,
           blockZeroEndTime = None
         )
     }

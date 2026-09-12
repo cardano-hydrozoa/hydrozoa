@@ -179,8 +179,8 @@ object StackEffectsBuilder {
         // SEC over a (minor) block — self-contained: carries the serialized on-chain commitment
         // bytes so the signer/verifier need no BlockResult lookup (see StandaloneEvacuationCommitment).
         // The SEC's `header` is the on-chain commitment record (with KZG), built directly from
-        // `SEC.Onchain` rather than via the fast-cycle `signingBytes` path, so the soft-ack signing
-        // shape (no KZG) and the on-chain SEC shape (with KZG) stay independent.
+        // `SEC.Onchain`. It shares nothing with what a soft-ack signs — a block's `BlockHash` — so
+        // the two signed shapes stay independent.
         //
         // `kzg` is the KZG commitment of the evacuation map at the END of the block being
         // committed (computed slow-side by folding diffs over the running map).

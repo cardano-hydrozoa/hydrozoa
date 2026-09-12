@@ -920,7 +920,7 @@ class RecoverSeamsTest extends AnyFunSuite:
     private def softConfirmedOf(br: BlockResult): Block.SoftConfirmed.Next =
         br.brief match
             case m: BlockBrief.Minor =>
-                Block.SoftConfirmed.Minor(m, headerMultiSigned = Nil, finalizationRequested = false)
+                Block.SoftConfirmed.Minor(m, softAckSignatures = Nil, finalizationRequested = false)
             case other => fail(s"fixture builds Minor briefs; got $other")
 
     private def blockResult(blockNum: Int): IO[BlockResult] =

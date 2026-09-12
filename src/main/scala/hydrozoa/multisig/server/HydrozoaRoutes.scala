@@ -95,12 +95,16 @@ class HydrozoaRoutes(
               jsonBody[SubmitRequestView].examples(
                 List(
                   EndpointIO.Example.of(
-                    SubmitRequestView.SubmitTransactionView("84a400d9010281825820…"),
+                    SubmitRequestView.SubmitTransactionView("84a400d9010281825820…", "58828159…"),
                     name = Some("transaction"),
                     summary = Some("Submit an L2 transaction")
                   ),
                   EndpointIO.Example.of(
-                    SubmitRequestView.SubmitDepositView("84a400d9010281825820…", "a1024568656164…"),
+                    SubmitRequestView.SubmitDepositView(
+                      "84a400d9010281825820…",
+                      "a1024568656164…",
+                      "ac596c7f…"
+                    ),
                     name = Some("deposit"),
                     summary = Some("Register an L1 deposit")
                   )
@@ -854,20 +858,20 @@ class HydrozoaRoutes(
     private def blockConfirmation(num: BlockNumber): IO[BlockConfirmationView] =
         confirmationTimes(num).map((soft, hard) => ApiDto.mkBlockConfirmationView(soft, hard))
 
-    /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants derived
-      * from the records' arrival stamps: the soft-confirmation record, and — through the block →
-      * stack index — the hard-confirmation record. Each moment is present exactly when this peer
-      * holds that record (`wallClockOf` is total), so it also serves as the rung discriminant.
+    /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants: the
+      * soft-confirmation moment the reader resolves (derived for block zero, which never writes a
+      * `SoftConfirmation` record), and — through the block → stack index — the hard-confirmation
+      * record's. Each is present exactly when this peer holds that confirmation, so the pair also
+      * serves as the rung discriminant.
       */
     private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
         for {
-            soft <- consensusReader.softConfirmation(num)
+            softAt <- consensusReader.softConfirmedAt(num)
             stack <- consensusReader.stackOf(num)
             hard <- stack match {
                 case None    => IO.pure(None)
                 case Some(s) => consensusReader.hardConfirmation(s)
             }
-            softAt <- soft.traverse(t => consensusReader.wallClockOf(t.stamp))
             hardAt <- hard.traverse(t => consensusReader.wallClockOf(t.stamp))
         } yield (softAt, hardAt)
 
@@ -958,9 +962,9 @@ object HydrozoaRoutes {
       */
     private[server] def decodedEvent(path: String, request: UserRequest): RequestDecoded =
         request match
-            case UserRequest.DepositRequest(body) =>
+            case UserRequest.DepositRequest(body, _) =>
                 RequestDecoded(path, "Deposit", body.l1Payload.size + body.l2Payload.size)
-            case UserRequest.TransactionRequest(body) =>
+            case UserRequest.TransactionRequest(body, _) =>
                 RequestDecoded(path, "Transaction", body.l2Payload.size)
 
     val apiTitle: String = "Hydrozoa node API"

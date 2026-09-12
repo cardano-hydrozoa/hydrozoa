@@ -3,13 +3,10 @@ package hydrozoa.config.head
 import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.given
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.lib.crypto.Preimage
 import hydrozoa.multisig.ledger.block.BlockHeader
-import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets.UTF_8
-import scala.concurrent.duration.FiniteDuration
-import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, Hash32, ScriptHash, TransactionInput}
-import scalus.uplc.builtin.{ByteString, platform}
+import scalus.cardano.ledger.Hash32
 
 /** The digest that pins a head's agreed configuration, as defined in
   * `docs/spec/head-params-hash.md`.
@@ -22,7 +19,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   * It covers the **whole head config**, not only the [[parameters.HeadParameters]] case class: the
   * head parameters, the L1 network, the per-peer equity split, the script references, block zero's
   * timing, and the coil hub topology. Peers never exchange their configs, so this is what makes a
-  * disagreement visible — the multisig treasury datum carries it, and a peer that computes a
+  * disagreement visible — the multisig regime datum carries it, and a peer that computes a
   * different value cannot parse the initialization transaction and so never signs block zero.
   *
   * ```
@@ -36,7 +33,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   *
   * The layout is written out byte by byte rather than delegating to a JSON or CBOR encoder.
   * `QuantizedFiniteDuration`, `Coin` and `PositiveInt` each have their own codec quirks, and a
-  * codec tweak that silently moved this value — once it is written into a treasury datum — would
+  * codec tweak that silently moved this value — once it is written into a regime datum — would
   * leave a live head unable to parse its own initialization transaction.
   *
   * See `docs/spec/head-params-hash.md` for what each field is doing here, what is deliberately left
@@ -45,13 +42,12 @@ import scalus.uplc.builtin.{ByteString, platform}
 object HeadParamsHash {
 
     /** Grants read access to the digest without dragging in the whole [[HeadConfig.Section]].
-      * Transaction builders that must write it into a treasury datum ask for this and nothing more.
+      * Transaction builders that reconstruct the multisig regime output ask for this and nothing
+      * more; the datum form is [[hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeOutput.datum]]'s
+      * business.
       */
     trait Section {
         def headParamsHash: Hash32
-
-        /** The digest in the form the treasury datum holds it. */
-        final def headParamsHashBytes: ByteString = ByteString.fromArray(headParamsHash.bytes)
     }
 
     /** Mixed in before anything else so this digest can never collide with a hash of the same bytes
@@ -64,7 +60,7 @@ object HeadParamsHash {
         config: HeadConfig.Bootstrap.Section,
         initialBlockHeader: BlockHeader.Initial
     ): Hash32 = {
-        val out = Buffer()
+        val out = Preimage()
         out.raw(domainTag)
 
         // -- HeadParameters.txTiming
@@ -131,8 +127,10 @@ object HeadParamsHash {
         out.scriptHash(HydrozoaBlueprint.disputeScriptHash)
         out.transactionInput(config.setupLadderAnchor)
 
-        // -- initialBlockTiming. Only `startTime` and `endTime` reach the initialization
-        // transaction's validity end; the other three reach no transaction at all.
+        // -- initialBlockTiming. `endTime` carries the whole header: it reaches the initialization
+        // tx's validity end, and the other four terms are derived from it and the tx timing
+        // already hashed above. They stay in the preimage because dropping a term would mean a new
+        // domain tag for nothing.
         val header = initialBlockHeader
         out.instant(header.startTime.convert)
         out.instant(header.endTime.convert)
@@ -152,55 +150,6 @@ object HeadParamsHash {
         out.u32(hubs.size)
         hubs.foreach(hub => out.u32(hub.convert))
 
-        Hash[Blake2b_256, Any](platform.blake2b_256(ByteString.unsafeFromArray(out.bytes)))
-    }
-
-    /** Accumulates the preimage. Variable-width values are length-framed and fixed-width ones are
-      * not, so no two distinct configs can produce the same byte string.
-      */
-    private final class Buffer {
-        private val buffer = ByteArrayOutputStream()
-
-        def bytes: Array[Byte] = buffer.toByteArray
-
-        def raw(value: Array[Byte]): Unit = buffer.write(value)
-
-        def framed(value: Array[Byte]): Unit = {
-            u32(value.length)
-            buffer.write(value)
-        }
-
-        def u8(value: Int): Unit = buffer.write(value & 0xff)
-
-        def u32(value: Int): Unit = {
-            buffer.write((value >>> 24) & 0xff)
-            buffer.write((value >>> 16) & 0xff)
-            buffer.write((value >>> 8) & 0xff)
-            buffer.write(value & 0xff)
-        }
-
-        def u64(value: Long): Unit = {
-            u32((value >>> 32).toInt)
-            u32(value.toInt)
-        }
-
-        def bool(value: Boolean): Unit = u8(if value then 0x01 else 0x00)
-
-        def coin(value: Coin): Unit = u64(value.value)
-
-        def duration(value: QuantizedFiniteDuration): Unit = finiteDuration(value.finiteDuration)
-
-        def finiteDuration(value: FiniteDuration): Unit = u64(value.toMillis)
-
-        def instant(value: QuantizedInstant): Unit = u64(value.instant.toEpochMilli)
-
-        def hash32(value: Hash32): Unit = raw(value.bytes)
-
-        def scriptHash(value: ScriptHash): Unit = raw(value.bytes)
-
-        def transactionInput(value: TransactionInput): Unit = {
-            raw(value.transactionId.bytes)
-            u32(value.index)
-        }
+        out.mkDigest
     }
 }

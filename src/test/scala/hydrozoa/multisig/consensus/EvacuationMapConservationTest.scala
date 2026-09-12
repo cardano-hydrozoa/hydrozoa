@@ -108,7 +108,6 @@ object EvacuationMapConservationTest extends Properties("EvacuationMap conservat
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0)),
             testL2StateHash.byteString
           ),
           value = Value(Coin(potLovelace + 1_000_000L)) + treasuryTokenValue,

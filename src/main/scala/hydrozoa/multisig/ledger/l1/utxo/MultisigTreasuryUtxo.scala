@@ -72,11 +72,11 @@ object MultisigTreasuryUtxo {
         def treasuryToSpend: MultisigTreasuryUtxo
     }
 
-    /** @param headParamsHash
-      *   the digest pinning the head's agreed configuration
-      *   (`hydrozoa.config.head.HeadParamsHash`). Written by the initialization tx and carried
-      *   forward unchanged by every settlement: peers rebuild a settlement before signing it, so a
-      *   peer whose configuration drifts stops being able to get blocks signed.
+    /** Every field moves with the head: `commit` with the evacuation map, `versionMajor` with each
+      * settlement, `l2StateHash` with the L2 state behind them. The head's configuration digest is
+      * not here — it is immutable for the head's life, so it rides the multisig regime utxo's datum
+      * ([[MultisigRegimeUtxo.Datum.headParamsHash]]), which is written once and never rewritten.
+      *
       * @param l2StateHash
       *   the L2 ledger's digest of the state this datum's block leaves behind
       *   ([[hydrozoa.multisig.ledger.l2.L2StateHash]]). Where `commit` commits to the evacuation
@@ -86,29 +86,23 @@ object MultisigTreasuryUtxo {
       *   the hard-ack flow and lands on L1, which makes settlement the head's strongest state
       *   anchor and as sparse as its major cadence (`docs/spec/l2-state-certificate.md`).
       *
-      * Unlike `headParamsHash` it moves with every settlement, which is why it earns a seat on a
-      * datum copied to L1 each time.
-      *
       * No validator reads this datum — the multisig treasury sits under a native script — so the
       * enforcement is entirely off-chain, in the peers' rebuild-before-signing.
       */
     final case class Datum(
         commit: KzgCommitment,
         versionMajor: BigInt,
-        headParamsHash: ByteString,
         l2StateHash: ByteString
     ) derives FromData,
           ToData
 
     def mkInitMultisigTreasuryDatum(
         initialEvacuationMap: EvacuationMap,
-        headParamsHash: ByteString,
         initialL2StateHash: L2StateHash
     ): Datum =
         Datum(
           initialEvacuationMap.kzgCommitment,
           BigInt(BlockVersion.Major(0).toLong),
-          headParamsHash,
           initialL2StateHash.byteString
         )
 

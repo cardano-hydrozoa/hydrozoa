@@ -270,7 +270,7 @@ object DisputeActorTestHelpers {
       * find the SEC there, returning
       * `Vote(sec = blockHeader, signatures = ..., coilSignatures = ...)`.
       *
-      * `headerMultiSigned` is the sparse, peer-position-aligned signature list (see
+      * `signatures` is the sparse, peer-position-aligned signature list (see
       * [[MultiNodeConfig.multisignHeaderSparse]]) — the signing coils are a non-prefix subset, so
       * this exercises the alignment the on-chain coil-signature check requires; `loadAction` splits
       * it at `nHeadPeers` into the head `signatures` and the sparse coil `coilSignatures`.
@@ -295,7 +295,7 @@ object DisputeActorTestHelpers {
         val multiSigned: StandaloneEvacuationCommitment.MultiSigned =
             StandaloneEvacuationCommitment.MultiSigned(
               commitment = offchainSec,
-              headerMultiSigned = env.multisignHeaderSparse(blockHeader),
+              signatures = env.multisignHeaderSparse(blockHeader),
             )
         val partition: PartitionEffects[StandaloneEvacuationCommitment.MultiSigned] =
             PartitionEffects.Minor(sec = multiSigned, refunds = List.empty)

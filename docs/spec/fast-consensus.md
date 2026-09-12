@@ -13,7 +13,11 @@ Soft-confirmation requires soft-acks from **every** head peer, including the lea
 
 ## Terminology
 
-- **ack** (soft) — one peer's Ed25519 signature over `BlockHeader.Section.signingBytes`.
+- **ack** (soft) — one peer's Ed25519 signature (`SoftAck.Signature`) over the brief's `blockHash`:
+  the 32 digest bytes and nothing beside them. Signing the digest is what makes the ack set attest
+  to the block's requests, their order, their validity flags and its absorption decisions — see
+  `design/block-hash.md`. No version rides beside it: ratcheting reads the SEC's own versions, on
+  the slow side.
   Per-peer event, transported by `PeerLiaison`, collected by `FastConsensusActor`.
 - **confirmation** (soft) — the saturated set of acks, emitted as `Block.SoftConfirmed`.
   Aggregated event, consumed by `BlockWeaver` and by the slow side's `StackComposer`.
@@ -34,7 +38,7 @@ collection. The same distinction appears on the slow side (hard-ack vs hard-conf
 
 `BlockBrief.Next = Minor | Major | Final` is the wire-broadcast composition record (no
 block 0 — it never travels). The leader produces it; followers reproduce it locally and
-agree by signing the same header bytes.
+agree by signing the same `blockHash`.
 
 ## Leadership
 
@@ -96,18 +100,23 @@ same brief locally from the same inputs (deterministic).
 Produces blocks on **every** peer, not just the leader: the leader builds the block from its
 inputs and broadcasts the brief; a follower re-produces the same block from the same
 (deterministic) inputs and verifies it arrives at the identical brief
-(`panicOnMismatchWithExpectedBrief`). It is also the L2 executor (applies each block's L2
-transactions) and owns the deposit map, making the per-block deposit decisions (absorb vs.
-refund) from `PollResults` — the set of deposit utxos currently visible on L1, which
-`CardanoLiaison` polls and forwards through `BlockWeaver` (delivered with the block-completion
-command; needed only for regular, non-final blocks). On local block completion
+(`panicOnMismatchWithExpectedBrief`, one 32-byte `blockHash` comparison). In the rebuilt body, a
+request this peer assigned carries the digest its `RequestSequencer` verified at submission, and
+every other peer's request carries one recomputed from the body this peer holds
+(`JointLedger.mkHashOf`), and a carried digest that does not describe its body stops the peer
+rather than entering a block. So two peers that received different payloads under the same
+`RequestId` reach different `blockHash`es, and the mismatch surfaces here. It is also the L2
+executor (applies each block's L2 transactions) and owns the deposit map, making the per-block
+deposit decisions (absorb vs. refund) from `PollResults` — the set of deposit utxos currently
+visible on L1, which `CardanoLiaison` polls and forwards through `BlockWeaver` (delivered with the
+block-completion command; needed only for regular, non-final blocks). On local block completion
 (`completeBlockRegular` / `completeBlockFinal`) it:
 
 1. Broadcasts `BlockBrief.Next` directly to `PeerLiaisons` (leader only) — briefs are not
    routed through `FastConsensusActor`.
 2. Signs the brief and sends its own `SoftAck` to the local `FastConsensusActor`.
 3. Forwards `BlockBrief.Next` to the local `FastConsensusActor` (so verification has the
-   header bytes).
+   `blockHash` the acks sign).
 4. Emits `BlockResult` to `StackComposer` (slow side; independent of the soft-ack round).
 
 `BlockResult` is the slow-side's per-block input: brief + evacuation-map diff + payout
@@ -124,7 +133,7 @@ Soft-ack aggregator. Inputs:
   leader brief lands at the follower's `PeerLiaison`, which routes it to `BlockWeaver`; the
   follower's `JointLedger` then re-produces the brief and forwards its own copy here.
 
-Verifies each soft-ack's signature against the brief's `signingBytes` and accumulates per
+Verifies each soft-ack's signature against the brief's `blockHash` and accumulates per
 `blockNum`. When all head peers' acks are present, emits `Block.SoftConfirmed` to:
 - `BlockWeaver` — frees the next-block decision.
 - `StackComposer` — paired with the corresponding `BlockResult` to mark the block

@@ -2,9 +2,8 @@ package hydrozoa.multisig.consensus.ack
 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.ledger.stack.{StackNumber, StandaloneEvacuationCommitment}
 
 /** A head peer's hard acknowledgment of a closed stack — see `consensus/slow-consensus` in the
   * spec.
@@ -193,8 +192,7 @@ object HardAck {
           * Round-coupling (unlock vs not) lives at this round-1-payload-scoped slot level — NOT on
           * partition-level data — because being "the unlock partition" is a property of the stack's
           * round-1 slicing, not of the partition itself. Tx-body sigs are [[TxSignature]]; the
-          * standalone evac commitment is signed over a block header so its signature is a
-          * [[BlockHeader.HeaderSignature]].
+          * standalone evac commitment's is a [[StandaloneEvacuationCommitment.Signature]].
           */
         sealed trait PartitionSigs
 
@@ -217,14 +215,14 @@ object HardAck {
                 fallback: TxSignature,
                 rollouts: List[TxSignature],
                 refunds: List[TxSignature],
-                sec: Option[BlockHeader.HeaderSignature]
+                sec: Option[StandaloneEvacuationCommitment.Signature]
             ) extends Complete
 
             final case class MajorPartial(
                 fallback: TxSignature,
                 rollouts: List[TxSignature],
                 refunds: List[TxSignature],
-                sec: Option[BlockHeader.HeaderSignature]
+                sec: Option[StandaloneEvacuationCommitment.Signature]
             ) extends Partial
 
             final case class FinalComplete(
@@ -240,7 +238,7 @@ object HardAck {
               * mid-sequence (trailing minors are absorbed into their Major partition's `sec`).
               */
             final case class Minor(
-                sec: BlockHeader.HeaderSignature,
+                sec: StandaloneEvacuationCommitment.Signature,
                 refunds: List[TxSignature]
             ) extends PartitionSigs
         }
@@ -297,7 +295,7 @@ object HardAck {
       * [[Round1Payload.PartitionSigs.Minor]], inlined for the wire).
       */
     final case class SolePayload(
-        sec: BlockHeader.HeaderSignature,
+        sec: StandaloneEvacuationCommitment.Signature,
         refunds: List[TxSignature]
     ) extends Payload {
         override def round: Round = Round.Sole

@@ -16,7 +16,6 @@ class HydrozoaLocalCodecsTest extends AnyFunSuite:
         val datum = MultisigTreasuryUtxo.Datum(
           commit = ByteString.fromArray(Array.fill[Byte](48)(0xab.toByte)),
           versionMajor = BigInt(7),
-          headParamsHash = ByteString.fromArray(Array.fill[Byte](32)(0xcd.toByte)),
           l2StateHash = ByteString.fromArray(Array.fill[Byte](32)(0xef.toByte))
         )
         val json = datum.asJson.noSpaces

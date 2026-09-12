@@ -8,8 +8,8 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash
 import hydrozoa.lib.cardano.scalus.contextualscalus
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.ledger.l1.DisputeActorTestHelpers.{mkBallotBoxUtxo, mkRuleBasedTreasury}
 import hydrozoa.rulebased.ledger.l1.DisputeTestFixtures.mkRegimeUtxoPure
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, VoteRedeemer}
@@ -138,8 +138,8 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitmentOnchain,
-        signatures: List[BlockHeader.Minor.HeaderSignature],
-        coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]],
+        signatures: List[StandaloneEvacuationCommitment.Signature],
+        coilSignatures: List[Option[StandaloneEvacuationCommitment.Signature]],
         votingDeadline: Slot
     )(using config: VoteTx.Config): Either[SomeBuildError, Transaction] = {
         val redeemer = DisputeRedeemer.Vote(

@@ -5,8 +5,8 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import hydrozoa.multisig.metrics.{PeerStats, RateView, TimingStats}
 import hydrozoa.multisig.persistence.DepositDecision
@@ -17,7 +17,7 @@ import io.circe.{Codec, Decoder, Encoder}
 import java.time.Instant
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.{DatumOption, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.ledger.{Blake2b_256, DatumOption, Hash, TransactionInput, TransactionOutput, Value}
 import scalus.uplc.builtin.ByteString
 import sttp.tapir.generic.Configuration as TapirConfig
 import sttp.tapir.{Schema, SchemaType, Validator}
@@ -395,6 +395,12 @@ object ApiDto {
 
     /** A deposit submission: the unsigned deposit-tx CBOR (`l1Payload`) and the serialized L2
       * outputs it spawns on absorption (`l2Payload`), both lowercase hex.
+      *
+      * Every variant also carries `requestHash`, the digest the **submitter** computed over the
+      * payloads it is sending. The head re-derives it and refuses the request if the two differ,
+      * which is an end-to-end check that the request the head holds is the request the client built
+      * — the failure a truncated payload or a client-side encoding change produces silently
+      * otherwise. `docs/user-guide/REQUEST-HASH.md` specifies the construction.
       */
     sealed trait SubmitRequestView
     object SubmitRequestView:
@@ -406,27 +412,45 @@ object ApiDto {
         private given CirceConfig = circeTag(submitTag)
         private given TapirConfig = tapirTag(submitTag)
 
-        final case class SubmitDepositView(l1Payload: String, l2Payload: String)
+        final case class SubmitDepositView(
+            l1Payload: String,
+            l2Payload: String,
+            requestHash: String
+        ) extends SubmitRequestView
+        final case class SubmitTransactionView(l2Payload: String, requestHash: String)
             extends SubmitRequestView
-        final case class SubmitTransactionView(l2Payload: String) extends SubmitRequestView
         given Codec[SubmitRequestView] = ConfiguredCodec.derived
         given Schema[SubmitRequestView] = Schema.derived
 
     /** Decode a submit body into a domain `UserRequest` (hex payloads to bytes), or a client-facing
       * error message when a payload is not lowercase hex.
+      *
+      * The submitted `requestHash` is carried through as given, not recomputed: whether it matches
+      * the payloads is the question [[hydrozoa.multisig.consensus.RequestSequencer]] answers, and
+      * deriving it here would answer it by construction.
       */
     def toUserRequest(view: SubmitRequestView): Either[String, UserRequest] =
         def hex(field: String, value: String): Either[String, ByteString] =
             Try(ByteString.fromHex(value)).toEither.left.map(_ => s"$field must be lowercase hex")
+        def digest(value: String): Either[String, RequestHash] =
+            hex("requestHash", value).flatMap(bytes =>
+                if bytes.size == 32 then Right(RequestHash.fromHash(Hash[Blake2b_256, Any](bytes)))
+                else Left(s"requestHash must be 32 bytes, got ${bytes.size}")
+            )
         view match
-            case SubmitRequestView.SubmitDepositView(l1Payload, l2Payload) =>
+            case SubmitRequestView.SubmitDepositView(l1Payload, l2Payload, requestHash) =>
                 for {
                     l1 <- hex("l1Payload", l1Payload)
                     l2 <- hex("l2Payload", l2Payload)
-                } yield UserRequest.DepositRequest(UserRequestBody.DepositRequestBody(l1, l2))
-            case SubmitRequestView.SubmitTransactionView(l2Payload) =>
-                hex("l2Payload", l2Payload).map(l2 =>
-                    UserRequest.TransactionRequest(UserRequestBody.TransactionRequestBody(l2))
+                    hash <- digest(requestHash)
+                } yield UserRequest.DepositRequest(UserRequestBody.DepositRequestBody(l1, l2), hash)
+            case SubmitRequestView.SubmitTransactionView(l2Payload, requestHash) =>
+                for {
+                    l2 <- hex("l2Payload", l2Payload)
+                    hash <- digest(requestHash)
+                } yield UserRequest.TransactionRequest(
+                  UserRequestBody.TransactionRequestBody(l2),
+                  hash
                 )
 
     /** `{ "error": ... }` — the error body used across the API. */
@@ -569,10 +593,14 @@ object ApiDto {
     )
     given Codec[BlockDetailsView] = deriveCodec
 
-    /** One of a block's transactions: the opaque request id woven into the block and the validity
-      * verdict it received there.
+    /** One of a block's transactions: the opaque request id woven into the block, the digest of the
+      * request body that id names (hex), and the validity verdict it received there.
+      *
+      * `requestHash` is what lets a submitter recognize their own request in a block: it is the
+      * same value they computed over the body they sent, so matching it needs neither the id nor
+      * anyone's arithmetic. See `docs/user-guide/REQUEST-HASH.md`.
       */
-    final case class BlockRequestView(requestId: Long, validity: ValidityView)
+    final case class BlockRequestView(requestId: Long, requestHash: String, validity: ValidityView)
     given Codec[BlockRequestView] = deriveCodec
 
     /** The block-body body — the block's content: its transactions (the requests woven into it,
@@ -593,7 +621,9 @@ object ApiDto {
         BlockBodyView(
           number = brief.blockNum.convert,
           blockType = blockTypeView(brief),
-          transactions = brief.requests.map((id, v) => BlockRequestView(id.asI64, validityView(v))),
+          transactions = brief.requests.map((id, requestHash, validity) =>
+              BlockRequestView(id.asI64, requestHash.toHex, validityView(validity))
+          ),
           depositsAbsorbed = brief.depositsAbsorbed.map(_.asI64),
           depositsRejected = brief.depositsRejected.map(_.asI64)
         )
@@ -1149,7 +1179,7 @@ object ApiDto {
         sec: ResolvedEffect.Sec,
         nHeadPeers: Int
     ): (List[String], List[String]) =
-        val sigsHex = sec.commitment.headerMultiSigned.map {
+        val sigsHex = sec.commitment.signatures.map {
             case Some(sig) =>
                 val bytes: Array[Byte] = sig
                 ByteString.fromArray(bytes).toHex

@@ -58,7 +58,6 @@ class RolloutPayoutOrderingTest extends AnyFunSuite:
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(7),
-            ByteString.fromArray(Array.fill[Byte](32)(0)),
             testL2StateHash.byteString
           ),
           value = totalPayoutValue + Value(equity.coin),

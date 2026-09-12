@@ -108,7 +108,6 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0)),
             testL2StateHash.byteString
           ),
           // Generous ADA so the build succeeds even under the buggy (double-counting) path — the
@@ -198,7 +197,6 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0)),
             testL2StateHash.byteString
           ),
           value = treasuryValue + treasuryTokenValue,
@@ -275,7 +273,6 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0)),
             testL2StateHash.byteString
           ),
           value = Value(Coin(2_000_000_000L)) + treasuryTokenValue,
@@ -326,7 +323,6 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0)),
             testL2StateHash.byteString
           ),
           value = Value(Coin(2_000_000_000L)) + treasuryTokenValue,
@@ -629,7 +625,6 @@ class StackEffectsBuilderTest extends AnyFunSuite {
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
             BigInt(3),
-            ByteString.fromArray(Array.fill[Byte](32)(0)),
             testL2StateHash.byteString
           ),
           value = Value(Coin(120_000_000L)) + treasuryTokenValue,
