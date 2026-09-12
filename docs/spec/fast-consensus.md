@@ -16,7 +16,7 @@ Soft-confirmation requires soft-acks from **every** head peer, including the lea
 - **ack** (soft) — one peer's Ed25519 signature (`SoftAck.Signature`) over the brief's `blockHash`:
   the 32 digest bytes and nothing beside them. Signing the digest is what makes the ack set attest
   to the block's requests, their order, their validity flags and its absorption decisions — see
-  `design/block-hash.md`. No version rides beside it: ratcheting reads the SEC's own versions, on
+  `docs/spec/block-hash.md`. No version rides beside it: ratcheting reads the SEC's own versions, on
   the slow side.
   Per-peer event, transported by `PeerLiaison`, collected by `FastConsensusActor`.
 - **confirmation** (soft) — the saturated set of acks, emitted as `Block.SoftConfirmed`.

@@ -10,7 +10,7 @@ import scodec.bits.ByteVector
 
 type RequestHash = RequestHash.RequestHash
 
-/** The digest of a user request's body — `requestHash` in `design/block-hash.md`.
+/** The digest of a user request's body — `requestHash` in `docs/spec/block-hash.md`.
   *
   * The content counterpart of [[RequestId]]: an id names a position in one peer's sequence, this
   * names the bytes that sit there. A block body carries both, which is what ties the two together —
