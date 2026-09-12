@@ -74,7 +74,8 @@ receives the value at the output's address on L1.
    withdrawal outputs' indices). Keep inputs and outputs balanced.
 3. **Sign** with your wallet's vkey — an ordinary Cardano signature.
 4. **Submit** the signed tx's CBOR to the head: `POST {headUri}/head/requests` with a
-   `TransactionRequest`. You get back a `requestId` to track it.
+   `TransactionRequest`, carrying the `requestHash` you computed over the payload
+   ([REQUEST-HASH.md](REQUEST-HASH.md)). You get back a `requestId` to track it.
 
 ## Worked example
 

@@ -5,7 +5,7 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardA
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.BatchNumber
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -98,8 +98,7 @@ class CoilCodecsTest extends AnyFunSuite {
         val softAck = SoftAck(
           ackId = SoftAckId(h0, SoftAckNumber(5)),
           blockNum = BlockNumber(11),
-          headerSignature =
-              BlockHeader.Minor.HeaderSignature(IArray[Byte](1.toByte, 2.toByte, 3.toByte)),
+          signature = SoftAck.Signature(IArray[Byte](1.toByte, 2.toByte, 3.toByte)),
           finalizationRequested = true,
         )
         val headHardAck = HardAck(

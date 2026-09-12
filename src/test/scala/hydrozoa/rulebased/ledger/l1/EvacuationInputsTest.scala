@@ -54,7 +54,7 @@ object EvacuationInputsTest extends Properties("Evacuation Inputs Test") {
             kzgCommitment = minorMap.kzgCommitment,
             header = StandaloneEvacuationCommitmentOnchain(blockHeader),
           ),
-          headerMultiSigned = env.multisignHeaderSparse(blockHeader),
+          signatures = env.multisignHeaderSparse(blockHeader),
         )
         val regularStack = StackEffects.HardConfirmed.Regular(
           NonEmptyList.of(PartitionEffects.Minor(sec = multiSigned, refunds = List.empty))

@@ -89,6 +89,6 @@ class ConsensusStoreReaderTest extends AnyFunSuite:
             ),
             BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
           ),
-          headerMultiSigned = Nil,
+          softAckSignatures = Nil,
           finalizationRequested = false
         )

@@ -24,7 +24,7 @@ import hydrozoa.multisig.consensus.{CoilRelay, FastConsensusActor, StackComposer
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.l1.deposits.map.{DepositsMap, DepositsMapEvent}
@@ -40,7 +40,7 @@ import monocle.Focus.focus
 import scalus.cardano.ledger.Hash32
 
 private case class UserRequestState(
-    requests: List[(RequestId, ValidityFlag)],
+    requests: List[(RequestId, RequestHash, ValidityFlag)],
     postDatedRefundTxs: Vector[RefundTx.PostDated]
 )
 
@@ -228,8 +228,13 @@ final case class JointLedger(
         case req: UserRequestWithId.TransactionRequest => applyTransaction(req)
     }
 
+    /** Record a request that could not be applied, so the block still names it and its content.
+      *
+      * `requestHash` is the digest this peer builds the block from — see [[JointLedger.mkHashOf]].
+      */
     private def invalidateRequest(
         requestId: RequestId,
+        requestHash: RequestHash,
         e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | String,
         invalidation: JointLedger.Invalidation = JointLedger.Invalidation.PreCommand
     ): IO[Unit] =
@@ -245,7 +250,7 @@ final case class JointLedger(
                 case JointLedger.Invalidation.PostCommand => oldState.incrementCommandNumber
             newState = advanced
                 .focus(_.userRequestState.requests)
-                .modify(_.appended((requestId, Invalid)))
+                .modify(_.appended((requestId, requestHash, Invalid)))
             _ <- state.set(newState)
             _ <- tracer.traceWith(
               JointLedgerEvent.RequestInvalidated(requestId, currentBlockNum, e.toString)
@@ -293,12 +298,14 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.DepositRegistrationStarted(requestId))
 
+            requestHash <- mkHashOrPanic(req)
+
             p <- unsafeGetProducing
             blockStartTime = p.BlockCreationStartTime
             currentBlockNum = p.nextBlockNumber
 
             _ <- registerDepositInMap(p.deposits, req) match {
-                case Left(error) => invalidateRequest(requestId, error)
+                case Left(error) => invalidateRequest(requestId, requestHash, error)
                 case Right((newDeposits, (depositProduced, refundTx))) =>
                     // The accept-by deadline is derived from the deposit tx's TTL during the parse
                     // above (ttl − submissionDuration), so the check can only run post-parse.
@@ -309,6 +316,7 @@ final case class JointLedger(
                     then
                         invalidateRequest(
                           requestId,
+                          requestHash,
                           JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
                             blockStartTime,
                             depositProduced.requestValidityEndTime
@@ -335,6 +343,7 @@ final case class JointLedger(
                                 case L2LedgerResponse.Rejected.RegisterDeposit(_, reason) =>
                                     invalidateRequest(
                                       requestId,
+                                      requestHash,
                                       reason,
                                       JointLedger.Invalidation.PostCommand
                                     )
@@ -346,7 +355,7 @@ final case class JointLedger(
                                           p.setDeposits(newDeposits)
                                               .incrementCommandNumber
                                               .focus(_.userRequestState.requests)
-                                              .modify(_.appended((requestId, Valid)))
+                                              .modify(_.appended((requestId, requestHash, Valid)))
                                               .focus(_.userRequestState.postDatedRefundTxs)
                                               .modify(_.appended(refundTx))
                                         )
@@ -378,6 +387,8 @@ final case class JointLedger(
         for {
             _ <- tracer.traceWith(JointLedgerEvent.TransactionApplicationStarted(requestId))
 
+            requestHash <- mkHashOrPanic(req)
+
             p <- unsafeGetProducing
             currentBlockNum = p.nextBlockNumber
 
@@ -401,6 +412,7 @@ final case class JointLedger(
                         case L2LedgerResponse.Rejected.ApplyTransaction(_, reason) =>
                             invalidateRequest(
                               requestId,
+                              requestHash,
                               reason,
                               JointLedger.Invalidation.PostCommand
                             )
@@ -412,7 +424,7 @@ final case class JointLedger(
                                   p.setL2LedgerState(newL2State)
                                       .incrementCommandNumber
                                       .focus(_.userRequestState.requests)
-                                      .modify(_.appended((requestId, Valid)))
+                                      .modify(_.appended((requestId, requestHash, Valid)))
                                 )
                                 _ <- tracer.traceWith(
                                   JointLedgerEvent.TransactionApplicationCompleted(
@@ -726,7 +738,7 @@ final case class JointLedger(
                     val ack = SoftAck(
                       peerNum = peerNum,
                       blockNum = brief.blockNum,
-                      header = config.ownWallet.mkHeaderSignature(brief.header.signingBytes),
+                      signature = config.ownWallet.mkSoftAckSignature(brief.blockHash),
                       finalizationRequested = localFinalization.asBoolean
                     )
                     persistOwnAckBundle(brief, ack, blockResult).as(Some(ack))
@@ -805,7 +817,7 @@ final case class JointLedger(
             // One reverse-index row per event, in the same atomic bundle: the request's id maps
             // to the block that processed it and the validity verdict it received.
             val withRequestBlocks = brief.requests.foldLeft(bundle) {
-                case (batch, (requestId, validity)) =>
+                case (batch, (requestId, _, validity)) =>
                     batch.put(StoreKey.RequestBlockIndex(requestId))(
                       RequestBlockEntry(brief.blockNum, validity)
                     )
@@ -873,11 +885,22 @@ final case class JointLedger(
                 .get(StoreKey.RequestHighWater(BlockNumber((blockNum: Int) - 1)))
                 .map(_.getOrElse(Map.empty))
 
+    /** Refuse a reference brief that does not describe the block this peer rebuilt.
+      *
+      * The comparison is one 32-byte value. `actualBrief` was built here, so its [[BlockHash]] was
+      * derived from this peer's own header and body; `expectedBrief` arrived carrying the leader's
+      * digest. Comparing the two therefore catches both a genuine content divergence and a leader
+      * whose brief and digest disagree, and it covers every field of a brief — the preimage leaves
+      * nothing out except the digest itself.
+      *
+      * [[briefMismatchSummary]] is what turns the verdict into something an operator can act on: a
+      * digest says two briefs differ, never how.
+      */
     private def panicOnMismatchWithExpectedBrief(
         expectedBrief: Option[BlockBrief],
         actualBrief: BlockBrief
     ): IO[Unit] =
-        IO.unlessA(expectedBrief.fold(true)(_ == actualBrief))(
+        IO.unlessA(expectedBrief.fold(true)(_.blockHash == actualBrief.blockHash))(
           panic(
             "Reference block brief didn't match actual block brief; consensus is broken.\n" +
                 expectedBrief.fold("")(e => s"mismatch:${briefMismatchSummary(e, actualBrief)}\n") +
@@ -926,6 +949,31 @@ final case class JointLedger(
             case lines => lines.mkString("\n  - ", "\n  - ", "")
     }
 
+    /** The digest to build a block from, refusing a request whose carried digest does not describe
+      * its body.
+      *
+      * [[JointLedger.mkHashOf]] returns the carried digest for a request this peer assigned and one
+      * derived from the body for anyone else's, so this comparison is trivially true for an own
+      * request and is the real check for an alien one — at no extra hashing, since the derived
+      * digest is what the comparison already has in hand.
+      *
+      * A mismatch means the bytes this peer holds are not the bytes the sender hashed: the request
+      * was corrupted in transit, or the sender lied about it. Either way this peer cannot weave it
+      * into a block that anyone else will agree with, so it refuses rather than building on it —
+      * which is what carrying the digest between peers is for.
+      */
+    private def mkHashOrPanic(request: UserRequestWithId): IO[RequestHash] = {
+        val hash = JointLedger.mkHashOf(config.ownPeerId, request)
+        IO.unlessA(hash == request.request.requestHash)(
+          panic(
+            "Request digest does not describe its body; consensus is broken.\n" +
+                s"request: ${request.requestId}\n" +
+                s"carried: ${request.request.requestHash.toHex}\n" +
+                s"derived: ${hash.toHex}"
+          ) >> context.self.stop
+        ).as(hash)
+    }
+
     // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
     // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
     private def panic(msg: String): IO[Unit] = throw new RuntimeException(msg)
@@ -940,6 +988,32 @@ final case class JointLedger(
 object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
+
+    /** The digest `JointLedger` builds a block from for `request`.
+      *
+      * A request this head peer assigned carries the digest its own `RequestSequencer` verified
+      * against the body before assigning the id — in memory, or read back from this peer's own
+      * `Request` lane, written after that check — so it is reused, not hashed again.
+      *
+      * Every other request is **alien**: it carries a digest nobody on this peer checked, so it is
+      * recomputed from the body this peer holds. That recompute is what ties an alien [[RequestId]]
+      * to its bytes, and the caller compares the two — an alien request whose carried digest does
+      * not describe its body stops this peer rather than entering a block. A coil peer assigns
+      * nothing, so every request is alien to it.
+      *
+      * Note what that comparison cannot cover. It keys on the id, and liaisons are transport, so a
+      * byzantine peer can send a request under this peer's id; the carried digest is then returned
+      * unexamined and matches itself. Every honest peer still recomputes it, so a digest that does
+      * not describe the body makes this peer's `blockHash` disagree with theirs, and no block
+      * soft-confirms without every head peer's ack. The worst it buys is a stalled head, which a
+      * byzantine peer can cause anyway by withholding its ack; it can never get a wrong block
+      * confirmed.
+      */
+    def mkHashOf(ownPeerId: PeerId, request: UserRequestWithId): RequestHash =
+        ownPeerId match {
+            case PeerId.Head(own) if own == request.requestId.peerNum => request.request.requestHash
+            case _                                                    => request.request.body.mkHash
+        }
 
     type Config = HeadConfig.Section & OwnPeerPrivate.Section
 
