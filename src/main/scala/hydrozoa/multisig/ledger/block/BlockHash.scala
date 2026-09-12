@@ -12,7 +12,7 @@ import scodec.bits.ByteVector
 
 type BlockHash = BlockHash.BlockHash
 
-/** The digest that commits a block to its content, as defined in `design/block-hash.md`.
+/** The digest that commits a block to its content, as defined in `docs/spec/block-hash.md`.
   *
   * Without it a block's four descriptive layers commit to positions and nothing else: a
   * [[RequestId]] names a slot in one peer's sequence, a [[BlockBody]] lists those slots, and a

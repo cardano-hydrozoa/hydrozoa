@@ -10,6 +10,7 @@ graduate here once built). For project-wide conventions, start with the style gu
 
 | Doc | Summary |
 |---|---|
+| [block-hash.md](block-hash.md) | `requestHash` over a user request and `blockHash` over the block that carries it: what each preimage covers, when each is taken, who re-derives and compares them, and why the preimage does not chain to the previous block. |
 | [codecs.md](codecs.md) | Conventions for wire/storage codecs (working notes). |
 | [coil-network.md](coil-network.md) | Coil-ready peers: the follower-only node type, the hub fan-out actors (`CoilRelay`, `CoilAckSequencer`), the threshold multisig, and the head↔coil liaison lanes. |
 | [crash-recovery-testing.md](crash-recovery-testing.md) | How recovery is exercised: the single `Persistence` decorator seam, the three decorators over it (`CrashingPersistence`, `DurabilityOrderOracle`, `SlowPersistence`), the restart primitives and what survives them, and what the link-recovery paths still do not cover. |

@@ -3,7 +3,7 @@
 For whoever implements content commitments on the fast side. It defines `requestHash` over a user
 request and `blockHash` over the block that carries it, says when each is taken, and names what
 compares them. Committing to the *state* a block produces is a separate question, answered in
-`design/l2-state-certificate.md`.
+`docs/spec/l2-state-certificate.md`.
 
 ## Scope
 
@@ -30,7 +30,7 @@ Deferred, with the reasoning kept below because it is what the increment is aimi
   flags to leave it, which is item 4's refactor. Until then the brief carries consequences and is
   announced after applying, as it is today.
 - **State commitments.** Committing to the L2 state and the evacuation map is a separate work
-  item with its own design — `design/l2-state-certificate.md`. It is not a block digest.
+  item with its own design — `docs/spec/l2-state-certificate.md`. It is not a block digest.
 
 The five items above are self-contained: they close the "different payloads under one id" hole
 (point 3 of *The gap*) without changing the shape of a block. The state hole (point 4) is closed
@@ -132,7 +132,7 @@ state digest is scoped out above.
 | `blockHash` | the brief — header fields, the ordered request sequence, flags and absorption decisions | the block leader, and every peer that rebuilds the block | after the block is applied, as briefs are produced today | the block brief |
 
 Committing to the state those requests produced is not a block digest at all — see
-`design/l2-state-certificate.md`.
+`docs/spec/l2-state-certificate.md`.
 
 `blockHash` covers `requestHash`, not the request bytes: the body is a list of
 `(RequestId, requestHash)` pairs, so the block commits to exactly which payload sits at each
@@ -347,7 +347,7 @@ is point 4 of *The gap* — two peers that agree on every request and reach diff
 still compare equal.
 
 That hole is closed by a signed L2 state certificate, designed in
-`design/l2-state-certificate.md`. It is not a block digest and nothing in this document depends on
+`docs/spec/l2-state-certificate.md`. It is not a block digest and nothing in this document depends on
 it; the two work items are independent.
 
 **What holds meanwhile.** `JointLedger.panicOnMismatchWithExpectedBrief` still compares the
@@ -432,7 +432,7 @@ ledger state at `N`, and the evacuation map at `N`. Two halves, verified very di
   at is now provably the block the head agreed on — without closing it.
 
 **Closing it is what the L2 state certificate is for** — a signed statement of the L2 state and
-the evacuation map, designed in `design/l2-state-certificate.md`. That is exactly what a seeding
+the evacuation map, designed in `docs/spec/l2-state-certificate.md`. That is exactly what a seeding
 peer needs and cannot get from a per-block digest it would have to recompute for itself.
 
 **What a snapshot has to carry** is a separate question from what commits to it. Beyond the
@@ -612,14 +612,14 @@ otherwise cause.
 | `Request` journal record | gains `request_hash` (proto field 5) | nothing required. `hydrozoa-store` vendors the record without field 5, and prost skips unknown fields; it can adopt the field whenever it wants the digest. |
 
 **The L2 coordination protocol is untouched by cycle 3.** It moves only when the state commitment
-does (`design/l2-state-certificate.md`): the protocol would gain a state digest landing in
+does (`docs/spec/l2-state-certificate.md`): the protocol would gain a state digest landing in
 `sugar-rush-ledger/types/src/types/coordination/` and `hydrozoa/multisig/ledger/remote/` in the
 same work item, with the golden pins on both sides moved together.
 
 ## Out of scope
 
 - **L2 state certificates.** The state commitment, with its own design in
-  `design/l2-state-certificate.md`. Independent of this work item in both directions.
+  `docs/spec/l2-state-certificate.md`. Independent of this work item in both directions.
 - **Removing `ValidityFlag` from `BlockBody`.** The flags are derivable, so carrying them in the
   brief is redundant rather than wrong. Deleting the field is a change to the block type, the wire
   brief, the journal value and every consumer that reads a flag off a body instead of computing
