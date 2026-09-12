@@ -156,16 +156,24 @@ StandaloneEvacuationCommitmentOnchain(headId, versionMajor, versionMinor, commit
 
 Add `l2StateHash`. This is the one that covers minor-only stacks, which produce no settlement.
 
-**This one is not free.** `StandaloneEvacuationCommitmentOnchain` lives in `cardano-onchain` and
+**This one touches Plutus.** `StandaloneEvacuationCommitmentOnchain` lives in `cardano-onchain` and
 **is read by the dispute validator**: `DisputeResolutionScript` verifies signatures over
-`voteRedeemer.sec.toData |> serialiseData`. A field there changes the Plutus data shape, costs
-script budget on every vote, tally and resolution, and recompiles the validator into new script
-hashes — which changes head addresses.
+`voteRedeemer.sec.toData |> serialiseData`. That is also what makes the field a signed statement
+rather than a hint.
 
-Judged acceptable: one additional field is not a large change to that shape, and the alternative
-is leaving minor-only stacks with no state commitment at all. It does mean this half wants review
-from whoever owns the dispute path, and it wants measuring rather than assuming — see the open
-questions.
+**Appending it costs no recompile, and that is why it goes last.** The validator reads `headId`,
+`versionMajor`, `versionMinor` and `commitment` by position and otherwise re-serialises the
+redeemer's own `Data`, so a field added at the end leaves every index it uses in place:
+
+| SEC field order | `disputeScriptHash` |
+|---|---|
+| before the change | `4c5dd09b855a1090d7e9742b92301e19b75f9bee51af693e93bd72c0` |
+| `l2StateHash` appended | `4c5dd09b855a1090d7e9742b92301e19b75f9bee51af693e93bd72c0` |
+| `l2StateHash` ahead of `commitment` | `7b9cce421f57a8f7fcf2ede1fa9e7988ed465c893485081a175d2af3` |
+
+`src/main/resources/plutus.json` comes out byte-identical, so **head addresses do not move**.
+Inserting a field anywhere but the end would recompile the validator and change every head's
+addresses. The half still wants review from whoever owns the dispute path.
 
 ## What a certificate is, concretely
 
@@ -202,8 +210,8 @@ signatures.
   by nothing here.
 - **It does not change `blockHash`.** The two work items are independent in both directions.
 
-## Still to measure
+## Measured
 
-**What the SEC change costs on-chain** — script budget on vote, tally and resolution, and the size
-of the datum. It is the one part of this that touches Plutus, so measure it; the measurement is not
-expected to change the decision.
+**The SEC change costs no script recompile and no new head addresses** — see [The SEC](#the-sec)
+for the hashes. The datum grows by the 32 bytes of the digest. Script budget on vote, tally and
+resolution is unchanged, because the compiled program is unchanged.
