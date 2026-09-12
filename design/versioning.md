@@ -34,7 +34,7 @@ Deferred:
 |---|---|---|---|
 | owned by | each implementation | the Gummiworm protocol, shared by every implementation | each implementation, one per store |
 | answers | which build is this? | can this peer talk to that one? | can this binary read this directory? |
-| value today | `0.1.14` (`build.sbt`, via `BuildInfo`) | none | consensus store `3`; L2 store none |
+| value today | `0.1.14` (`build.sbt`, via `BuildInfo`) | none | consensus store `4`; L2 store none |
 | compared | never | equality, at connect | equality, at open |
 | on mismatch | — | the link is refused; the node waits | the node refuses to start |
 
@@ -60,7 +60,7 @@ peers of the same head.
 | message semantics | `docs/spec/fast-consensus.md`, `slow-consensus.md`, `coil-network.md` |
 | signing preimages | `BlockHeader.Section.signingBytes` for soft acks; effect transaction bodies for hard acks |
 | effect transaction construction | settlement, finalization, fallback, rollout and refund — each peer derives the body it signs, so peers that derive different bodies cannot combine signatures |
-| digest layouts | `"gummiworm-head-params-v1"`, `"gummiworm-evacuation-map-v1"`, and `requestHash` / `blockHash` once `design/block-hash.md` lands |
+| digest layouts | `"gummiworm-head-params-v1"`, `"gummiworm-evacuation-map-v1"`, `requestHash` and `blockHash` (`docs/spec/block-hash.md`) |
 
 What it does not cover, and what pins each instead:
 
@@ -146,7 +146,7 @@ One integer per store, owned by the implementation.
 
 | store | version | checked |
 |---|---|---|
-| consensus store | `StoreVersion.current = 3` on main (v0.1.14 ships `2`); key `store_version` in `Cf.Meta` | `RocksDbBackendStore.versionCheck` at every open, then `identityCheck` |
+| consensus store | `StoreVersion.current = 4` on main (v0.1.14 ships `2`); key `store_version` in `Cf.Meta` | `RocksDbBackendStore.versionCheck` at every open, then `identityCheck` |
 | L2 store (`RocksDbL2Store`) | none | none — GUM-324 item 3 |
 
 Rules:
@@ -190,7 +190,7 @@ self-asserted peer number, unsigned; a rejected `Hello` is traced and the socket
 
 Text that contradicts the code, fixed in this work item:
 
-1. `StoreVersion.scala` says "Current on-disk schema version — **2**"; `current` is `3`.
+1. `StoreVersion.scala` says "Current on-disk schema version — **2**"; `current` is `4`.
 2. The same scaladoc says bumps wait "until the layout stabilizes"; the file lists two bumps.
 3. The same scaladoc cites "CR6 / §7 versioning note"; CR6 in
    `persistence-and-crash-recovery.md` is write atomicity.
@@ -227,8 +227,7 @@ Text that contradicts the code, fixed in this work item:
    no fixture. Proposal: any behaviour change a peer on the earlier build would disagree with is a
    bump. Who signs off on "would not disagree"?
 2. **Version `1` = what the testnet head initializes with.** That makes every wire change ready
-   before initialization free — the protobuf flip (GUM-315 C1) and `blockHash` (#734) among them.
-   Agreed?
+   before initialization free — the protobuf flip (GUM-315 C1) among them. Agreed?
 3. **Coils in a migration** (GUM-323 open question 3). Equality on hub↔coil assumes the coils move
    to the new version with the head.
 4. **A store change on a live head, outside a migration.** `StoreVersion`'s scaladoc answers with a
