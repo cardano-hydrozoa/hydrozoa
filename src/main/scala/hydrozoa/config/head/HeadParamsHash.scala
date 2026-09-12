@@ -7,7 +7,6 @@ import hydrozoa.lib.crypto.Preimage
 import hydrozoa.multisig.ledger.block.BlockHeader
 import java.nio.charset.StandardCharsets.UTF_8
 import scalus.cardano.ledger.Hash32
-import scalus.uplc.builtin.ByteString
 
 /** The digest that pins a head's agreed configuration, as defined in
   * `docs/spec/head-params-hash.md`.
@@ -20,7 +19,7 @@ import scalus.uplc.builtin.ByteString
   * It covers the **whole head config**, not only the [[parameters.HeadParameters]] case class: the
   * head parameters, the L1 network, the per-peer equity split, the script references, block zero's
   * timing, and the coil hub topology. Peers never exchange their configs, so this is what makes a
-  * disagreement visible — the multisig treasury datum carries it, and a peer that computes a
+  * disagreement visible — the multisig regime datum carries it, and a peer that computes a
   * different value cannot parse the initialization transaction and so never signs block zero.
   *
   * ```
@@ -34,7 +33,7 @@ import scalus.uplc.builtin.ByteString
   *
   * The layout is written out byte by byte rather than delegating to a JSON or CBOR encoder.
   * `QuantizedFiniteDuration`, `Coin` and `PositiveInt` each have their own codec quirks, and a
-  * codec tweak that silently moved this value — once it is written into a treasury datum — would
+  * codec tweak that silently moved this value — once it is written into a regime datum — would
   * leave a live head unable to parse its own initialization transaction.
   *
   * See `docs/spec/head-params-hash.md` for what each field is doing here, what is deliberately left
@@ -43,13 +42,12 @@ import scalus.uplc.builtin.ByteString
 object HeadParamsHash {
 
     /** Grants read access to the digest without dragging in the whole [[HeadConfig.Section]].
-      * Transaction builders that must write it into a treasury datum ask for this and nothing more.
+      * Transaction builders that reconstruct the multisig regime output ask for this and nothing
+      * more; the datum form is [[hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeOutput.datum]]'s
+      * business.
       */
     trait Section {
         def headParamsHash: Hash32
-
-        /** The digest in the form the treasury datum holds it. */
-        final def headParamsHashBytes: ByteString = ByteString.fromArray(headParamsHash.bytes)
     }
 
     /** Mixed in before anything else so this digest can never collide with a hash of the same bytes
@@ -129,8 +127,10 @@ object HeadParamsHash {
         out.scriptHash(HydrozoaBlueprint.disputeScriptHash)
         out.transactionInput(config.setupLadderAnchor)
 
-        // -- initialBlockTiming. Only `startTime` and `endTime` reach the initialization
-        // transaction's validity end; the other three reach no transaction at all.
+        // -- initialBlockTiming. `endTime` carries the whole header: it reaches the initialization
+        // tx's validity end, and the other four terms are derived from it and the tx timing
+        // already hashed above. They stay in the preimage because dropping a term would mean a new
+        // domain tag for nothing.
         val header = initialBlockHeader
         out.instant(header.startTime.convert)
         out.instant(header.endTime.convert)

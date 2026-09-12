@@ -12,6 +12,7 @@ import hydrozoa.lib.logging.ContraTracer
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
+import java.time.Instant
 
 sealed trait BlockHeader extends BlockHeader.Section {
     def asUnsigned: this.type & BlockStatus.Unsigned =
@@ -22,21 +23,41 @@ sealed trait BlockHeader extends BlockHeader.Section {
 
 object BlockHeader {
 
+    /** Block zero's header, fixed in full by its creation end time.
+      *
+      * The initialization transaction pins `endTime` through its validity end and the rest follows:
+      * `fallbackTxStartTime` and `forcedMajorBlockWakeupTime` through [[TxTiming]], `startTime`
+      * because block zero has no creation window, and `mDepositDecisionWakeupTime` because block
+      * zero absorbs no deposits. `endTime` is the whole representation — it is all the header holds
+      * and all its JSON carries.
+      *
+      * @param endTime
+      *   creation end time: when the moderator (head peer 0) received all the information to create
+      *   the head config and broadcast it to the peers.
+      */
     final case class Initial(
-        // Creation start time: when did the peers start negotiating the head config, moderated by peer 0.
-        override val startTime: BlockCreationStartTime,
-        // Creation end time: when did the moderator (peer 0) receive all the information
-        // to create the head config and broadcast it to the peers.
-        override val endTime: BlockCreationEndTime,
-        override val fallbackTxStartTime: FallbackTxStartTime,
-        override val forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime,
-        override val mDepositDecisionWakeupTime: Option[DepositDecisionWakeupTime],
-    ) extends BlockHeader,
+        override val endTime: BlockCreationEndTime
+    )(using txTiming: TxTiming)
+        extends BlockHeader,
           BlockType.Initial,
           NonFinal.Section {
         override transparent inline def blockNum: BlockNumber = Initial.blockNum
         override transparent inline def blockVersion: BlockVersion.Full = Initial.blockVersion
         override transparent inline def header: BlockHeader.Initial = this
+
+        /** Block zero has no creation window: it skips the fast cycle entirely, so there is no
+          * moment at which its weaving started. The start time is the end time.
+          */
+        override def startTime: BlockCreationStartTime = BlockCreationStartTime(endTime.convert)
+
+        override val fallbackTxStartTime: FallbackTxStartTime =
+            txTiming.newFallbackStartTime(endTime)
+
+        override val forcedMajorBlockWakeupTime: ForcedMajorBlockWakeupTime =
+            txTiming.forcedMajorBlockWakeupTime(fallbackTxStartTime)
+
+        /** Block zero absorbs no deposits, so it never wakes up to decide on one. */
+        override val mDepositDecisionWakeupTime: Option[DepositDecisionWakeupTime] = None
     }
 
     given (using CardanoNetwork.Section): Codec[BlockHeader.Minor] = deriveCodec[BlockHeader.Minor]
@@ -215,59 +236,23 @@ object BlockHeader {
         final transparent inline def blockNum: BlockNumber = BlockNumber.zero
         final transparent inline def blockVersion: BlockVersion.Full = BlockVersion.Full.zero
 
+        /** Block zero's header travels as its end time alone; the reader rebuilds the rest from the
+          * same [[TxTiming]] the writer used.
+          */
         given blockHeaderInitialEncoder: Encoder[BlockHeader.Initial] with {
-            def helper(f: BlockHeader.Initial => QuantizedInstant)(using
-                bh: BlockHeader.Initial
-            ): Json =
-                f(bh).instant.toEpochMilli.asJson
-
-            override def apply(initBH: BlockHeader.Initial): Json = {
-                given BlockHeader.Initial = initBH
-
-                Json.obj(
-                  "startTime" -> helper(_.startTime),
-                  "endTime" -> helper(_.endTime),
-                  "fallbackTxStartTime" -> helper(_.fallbackTxStartTime),
-                  "forcedMajorBlockWakeupTime" -> helper(_.forcedMajorBlockWakeupTime),
-                  "depositDecisionWakeupTime" -> initBH.mDepositDecisionWakeupTime.fold(Json.Null)(
-                    t => t.convert.instant.toEpochMilli.asJson
-                  ),
-                )
-            }
+            override def apply(initBH: BlockHeader.Initial): Json =
+                Json.obj("endTime" -> initBH.endTime.instant.toEpochMilli.asJson)
         }
 
         given blockHeaderInitialDecoder(using
-            config: CardanoNetwork.Section
+            config: CardanoNetwork.Section,
+            txTiming: TxTiming
         ): Decoder[BlockHeader.Initial] =
             Decoder.instance { c =>
-                given HCursor = c
-
-                def helper(fieldName: String)(using
-                    c: HCursor
-                ): Either[DecodingFailure, QuantizedInstant] =
-                    for {
-                        instant <- c
-                            .downField(fieldName)
-                            .as[Long]
-                            .map(java.time.Instant.ofEpochMilli)
-                        res = QuantizedInstant(config.slotConfig, instant)
-                    } yield res
-
                 for {
-                    startTime <- helper("startTime")
-                    endTime <- helper("endTime")
-                    fbtx <- helper("fallbackTxStartTime")
-                    fmbt <- c.downField("forcedMajorBlockWakeupTime").as[ForcedMajorBlockWakeupTime]
-                    mDdwt <- c
-                        .downField("depositDecisionWakeupTime")
-                        .as[Option[DepositDecisionWakeupTime]]
-                } yield BlockHeader.Initial(
-                  BlockCreationStartTime(startTime),
-                  BlockCreationEndTime(endTime),
-                  FallbackTxStartTime(fbtx),
-                  fmbt,
-                  mDdwt,
-                )
+                    millis <- c.downField("endTime").as[Long]
+                    endTime = QuantizedInstant(config.slotConfig, Instant.ofEpochMilli(millis))
+                } yield BlockHeader.Initial(BlockCreationEndTime(endTime))
             }
     }
 

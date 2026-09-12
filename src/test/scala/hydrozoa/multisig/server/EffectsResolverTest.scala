@@ -11,7 +11,7 @@ import hydrozoa.multisig.consensus.UserRequest.{DepositRequest, TransactionReque
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -125,9 +125,7 @@ class EffectsResolverTest extends AnyFunSuite:
             def blockBriefs: IO[List[BlockBrief.Next]] = IO.pure(List(minorBrief))
             def blockBrief(num: BlockNumber): IO[Option[BlockBrief.Next]] =
                 IO.pure(Option.when(num == BlockNumber(1))(minorBrief))
-            def softConfirmation(
-                num: BlockNumber
-            ): IO[Option[Timestamped[Block.SoftConfirmed.Next]]] = IO.pure(None)
+            def softConfirmedAt(num: BlockNumber): IO[Option[Instant]] = IO.pure(None)
             def stackOf(num: BlockNumber): IO[Option[StackNumber]] =
                 IO.pure(Option.when(num == BlockNumber(1))(StackNumber(1)))
             def hardConfirmation(

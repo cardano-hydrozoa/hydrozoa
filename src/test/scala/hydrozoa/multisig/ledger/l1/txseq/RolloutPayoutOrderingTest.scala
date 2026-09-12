@@ -57,8 +57,7 @@ class RolloutPayoutOrderingTest extends AnyFunSuite:
           address = config.headMultisigAddress,
           datum = MultisigTreasuryUtxo.Datum(
             ByteString.fromArray(Array.fill[Byte](48)(0)),
-            BigInt(7),
-            ByteString.fromArray(Array.fill[Byte](32)(0))
+            BigInt(7)
           ),
           value = totalPayoutValue + Value(equity.coin),
           equity = equity

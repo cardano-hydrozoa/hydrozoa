@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.block
 
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.event.RequestHash
@@ -17,11 +18,14 @@ sealed trait BlockBrief extends BlockBrief.Section {
 }
 
 object BlockBrief {
-    // N.B.: technically we only need the cardano network for the decoder.
-    given (using cardanoNetwork: CardanoNetwork.Section): Codec[BlockBrief] =
-        deriveCodec[BlockBrief]
-    given (using cardanoNetwork: CardanoNetwork.Section): Codec[BlockBrief.Initial] =
-        deriveCodec[BlockBrief.Initial]
+    // N.B.: technically we only need the cardano network for the decoder. Block zero's brief is
+    // the exception that also needs the tx timing, to rebuild the derived header fields its JSON
+    // does not carry — so its encoder and decoder are given separately.
+    given (using CardanoNetwork.Section): Encoder[BlockBrief] = deriveEncoder[BlockBrief]
+    given (using CardanoNetwork.Section, TxTiming): Decoder[BlockBrief] = deriveDecoder[BlockBrief]
+    given Encoder[BlockBrief.Initial] = deriveEncoder[BlockBrief.Initial]
+    given (using CardanoNetwork.Section, TxTiming): Decoder[BlockBrief.Initial] =
+        deriveDecoder[BlockBrief.Initial]
     given bbMinorCodec(using CardanoNetwork.Section): Codec[BlockBrief.Minor] =
         deriveCodec[BlockBrief.Minor]
     given bbMajorCodec(using CardanoNetwork.Section): Codec[BlockBrief.Major] =

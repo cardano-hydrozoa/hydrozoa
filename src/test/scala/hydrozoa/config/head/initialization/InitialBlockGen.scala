@@ -4,13 +4,12 @@ import cats.data.ReaderT
 import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.{HeadConfig, HeadParamsHash, generateHeadConfigBootstrap}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Prop, Properties}
-import scala.concurrent.duration.DurationInt
 import test.{GenWithTestPeers, TestPeers, TestPeersSpec, given}
 
 def generateInitialBlock(
@@ -27,20 +26,8 @@ def generateInitialBlock(
         blockCreationEndTime <- generateBlockCreationEndTime
 
         // The header is built before the transactions, as `Bootstrap.mkSharedHeadConfig` does:
-        // `headParamsHash` covers it and the init tx's treasury datum carries that digest.
-        fallbackTxStartTime = config.headParameters.txTiming.newFallbackStartTime(
-          blockCreationEndTime
-        )
-        forcedMajorBlockWakeupTime = config.headParameters.txTiming.forcedMajorBlockWakeupTime(
-          fallbackTxStartTime
-        )
-        header = BlockHeader.Initial(
-          startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
-          endTime = blockCreationEndTime,
-          fallbackTxStartTime = fallbackTxStartTime,
-          forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
-          mDepositDecisionWakeupTime = None,
-        )
+        // `headParamsHash` covers it and the init tx's regime datum carries that digest.
+        header = BlockHeader.Initial(blockCreationEndTime)(using config.headParameters.txTiming)
 
         initTxSeqResult = InitializationTxSeq
             .Build(config, funding)(blockCreationEndTime, HeadParamsHash(config, header))
