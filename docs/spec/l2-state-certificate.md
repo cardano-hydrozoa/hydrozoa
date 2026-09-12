@@ -1,6 +1,6 @@
 # L2 state certificate
 
-For whoever implements state commitments. It closes the one gap `design/block-hash.md` leaves
+For whoever implements state commitments. It closes the one gap `docs/spec/block-hash.md` leaves
 open — nothing commits to the L2 state a block produced — and it does so without a new digest,
 a new message, or a new effect type: the effects a stack already produces become the certificate.
 

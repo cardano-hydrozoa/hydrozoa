@@ -10,7 +10,7 @@ import java.nio.ByteBuffer
   * stabilizes — see [[current]].
   */
 object StoreVersion:
-    /** Current on-disk schema version — **2**.
+    /** Current on-disk schema version — **5**.
       *
       * The format still churns freely during development, so we do **not** track
       * backward-incompatible bumps as migrations: a format change just rebuilds the store, and the
@@ -25,8 +25,12 @@ object StoreVersion:
       *     `request_hash` field; a `Block` brief and every value carrying one — `SoftConfirmation`,
       *     `BlockResult` — gain `blockHash` and a per-request digest; a `SoftConfirmation`'s
       *     signature list is keyed `softAckSignatures`, and an SEC's `signatures`.
+      *   - 5: L2 state certificates (`docs/spec/l2-state-certificate.md`). An SEC gains
+      *     `l2StateHash` — both the offchain record and the on-chain bytes it serializes — and so
+      *     does the multisig treasury datum, which every persisted settlement and treasury value
+      *     carries.
       */
-    val current: Int = 4
+    val current: Int = 5
 
     /** The key under which the schema version is stored in [[Cf.Meta]]. */
     val key: Array[Byte] = "store_version".getBytes("UTF-8")
