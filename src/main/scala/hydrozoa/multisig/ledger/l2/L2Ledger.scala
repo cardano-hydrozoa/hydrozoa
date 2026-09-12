@@ -264,19 +264,15 @@ object L2Ledger {
       * the right *ledger*. See `docs/spec/head-params-hash.md` and
       * `design/l2-state-certificate.md`.
       *
-      * @param l2StateHash
-      *   `None` from a remote ledger that does not report it yet. Transitional, like
-      *   `l2ParamsHash`: a head driving such a ledger cannot certify its state and says so rather
-      *   than certifying a value it made up. Remove the `Option` once the remote side ships the
-      *   field.
-      * @param l2ParamsHash
-      *   `None` from a remote ledger that does not report it yet. Transitional: the head then
-      *   cannot check which ledger it is driving, so it warns rather than failing. Remove the
-      *   `Option` once the remote side ships the field.
+      * **All three are mandatory.** A ledger that cannot report them is not one this head can
+      * drive: without `l2StateHash` it cannot build a settlement or an SEC at all, and without
+      * `l2ParamsHash` nothing says it is the ledger the peers agreed on. An `Option` here would buy
+      * only a later and less legible failure — a head that boots and then fails at its first stack
+      * close — so a remote that omits one fails the frame as the protocol violation it is.
       */
     final case class Digests(
         evacuationMapHash: EvacuationMapHash,
-        l2StateHash: Option[L2StateHash],
-        l2ParamsHash: Option[Hash32]
+        l2StateHash: L2StateHash,
+        l2ParamsHash: Hash32
     )
 }

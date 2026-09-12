@@ -224,10 +224,10 @@ object RemoteL2LedgerCodecs {
                       for {
                           tip <- body.downField("tip").as[L2CommandNumber]
                           hash <- body.downField("evacuationMapHash").as[EvacuationMapHash]
-                          // Both optional while the remote side ships them; see
-                          // `L2Ledger.Digests`.
-                          l2State <- body.downField("l2StateHash").as[Option[L2StateHash]]
-                          l2Params <- body.downField("l2ParamsHash").as[Option[Hash32]]
+                          // Both mandatory: a remote that omits either is not a ledger this
+                          // head can drive. See `L2Ledger.Digests`.
+                          l2State <- body.downField("l2StateHash").as[L2StateHash]
+                          l2Params <- body.downField("l2ParamsHash").as[Hash32]
                       } yield RestoreResponse.Restored(tip, hash, l2State, l2Params)
                   case "RestoreFailed" =>
                       val body = c.downField("RestoreFailed")
@@ -254,7 +254,6 @@ object RemoteL2LedgerCodecs {
                       "l2StateHash" -> l2StateHash.asJson,
                       "l2ParamsHash" -> l2ParamsHash.asJson
                     )
-                    .dropNullValues
               )
           case RestoreResponse.RestoreFailed(requested, tip, reason) =>
               io.circe.Json.obj(
@@ -285,10 +284,10 @@ object RemoteL2LedgerCodecs {
                       for {
                           at <- body.downField("at").as[L2CommandNumber]
                           hash <- body.downField("evacuationMapHash").as[EvacuationMapHash]
-                          // Both optional while the remote side ships them; see
-                          // `L2Ledger.Digests`.
-                          l2State <- body.downField("l2StateHash").as[Option[L2StateHash]]
-                          l2Params <- body.downField("l2ParamsHash").as[Option[Hash32]]
+                          // Both mandatory: a remote that omits either is not a ledger this
+                          // head can drive. See `L2Ledger.Digests`.
+                          l2State <- body.downField("l2StateHash").as[L2StateHash]
+                          l2Params <- body.downField("l2ParamsHash").as[Hash32]
                       } yield StateAtResponse.StateReported(at, hash, l2State, l2Params)
                   case "StateAtFailed" =>
                       val body = c.downField("StateAtFailed")
@@ -315,7 +314,6 @@ object RemoteL2LedgerCodecs {
                       "l2StateHash" -> l2StateHash.asJson,
                       "l2ParamsHash" -> l2ParamsHash.asJson
                     )
-                    .dropNullValues
               )
           case StateAtResponse.StateAtFailed(requested, tip, reason) =>
               io.circe.Json.obj(

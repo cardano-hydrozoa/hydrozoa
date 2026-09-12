@@ -356,8 +356,8 @@ object Bootstrap:
           // constant.
           // TODO: a remote ledger's digest has to come from the operator (the ledger prints it
           //  out-of-band, as it already does for the initial evacuation map). Until that config
-          //  field exists, a remote head carries a zero hash and the remote reports nothing, so
-          //  the check warns instead of comparing.
+          //  field exists, a remote head carries a zero hash, which the reported digest will not
+          //  match — an any-remote head does not boot. GUM-327.
           l2ParamsHash = l2Ledger match {
               case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.l2ParamsHash
               case L2LedgerKind.AnyRemote =>
@@ -513,8 +513,8 @@ object Bootstrap:
         // it the same way it sources `l2ParamsHash`: the built-in ledger's is derivable from the
         // opening evacuation map without a ledger running.
         // TODO: a remote ledger's has to come from the operator, printed out-of-band beside the
-        //  initial evacuation map. Until that config field exists, a remote head certifies a zero
-        //  hash on its init tx.
+        //  initial evacuation map. Until that config field exists, a remote head would certify a
+        //  zero hash on its init tx and then refuse to boot against the real digest. GUM-327.
         initialL2StateHash = l2Ledger match {
             case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.initialStateHash(evacMap)
             case L2LedgerKind.AnyRemote =>

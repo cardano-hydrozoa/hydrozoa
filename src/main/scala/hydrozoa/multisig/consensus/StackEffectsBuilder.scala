@@ -518,10 +518,9 @@ object StackEffectsBuilder {
           *   deposit-decisions command (or the block-level aggregate backstop).
           */
         /** No [[L2StateHash]] was supplied for a block whose effect must certify one (see
-          * [[certifiedBlocks]]). The L2 ledger could not report the state at that block — a remote
-          * that does not implement the field, or one that has pruned past it — so this peer cannot
-          * build the effect body the others will sign, and says so rather than certifying a value
-          * it invented.
+          * [[certifiedBlocks]]) — a caller that passed an incomplete map. The digests a ledger
+          * reports are mandatory, so `StackComposer` always covers every certified block; this is
+          * the tripwire for any other caller of this (public, pure) function.
           */
         final case class L2StateHashMissing(blockNum: BlockNumber) extends Error {
             override def toString: String =

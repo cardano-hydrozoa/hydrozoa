@@ -510,8 +510,8 @@ case class EutxoL2Ledger private (
               .map(map =>
                   L2Ledger.Digests(
                     evacuationMapHash = map.digest,
-                    l2StateHash = Some(L2Snapshot.fromState(s).stateHash),
-                    l2ParamsHash = Some(EutxoL2Ledger.l2ParamsHash)
+                    l2StateHash = L2Snapshot.fromState(s).stateHash,
+                    l2ParamsHash = EutxoL2Ledger.l2ParamsHash
                   )
               )
         )

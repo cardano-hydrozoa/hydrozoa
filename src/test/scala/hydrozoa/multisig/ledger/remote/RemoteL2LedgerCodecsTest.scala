@@ -11,6 +11,7 @@ import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, RestoreResponse,
 import io.circe.syntax.*
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
+import scalus.cardano.ledger.Hash32
 import scalus.uplc.builtin.ByteString
 
 /** Round-trip tests for the `L2LedgerResponse` wire codec: every branch carries the command number,
@@ -93,7 +94,15 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
         )
     }
 
-    // Golden wire-shape tests pinning the exact SugarRush #140 JSON for the three restoreTo frames —
+    /** The digests a reporting ledger sends, as fixed test vectors. */
+    private val evacMapHash =
+        EvacuationMapHash(ByteString.fromArray(Array.fill[Byte](32)(0xab.toByte)))
+    private val stateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0xcd.toByte)))
+    private val paramsHash = Hash32.fromByteString(
+      ByteString.fromArray(Array.fill[Byte](32)(0xef.toByte))
+    )
+
+    // Golden wire-shape tests pinning the exact SugarRush #140 JSON for the restoreTo frames —
     // the cross-repo contract with the SugarRush ledger. Each asserts both the encoded string equals
     // the canonical JSON and the JSON decodes back to the original value.
 
@@ -106,30 +115,23 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
         )
     }
 
-    test("Restored success encodes to the canonical SugarRush wire shape and round-trips") {
-        // The same vector SugarRush pins in `types/src/types/coordination/restore.rs`. A remote
-        // that reports neither optional digest drops both fields, so this vector is unchanged by
-        // `l2StateHash` joining the frame.
-        val hash = EvacuationMapHash(ByteString.fromArray(Array.fill[Byte](32)(0xab.toByte)))
+    test("Restored encodes to the canonical SugarRush wire shape and round-trips") {
+        // The vector SugarRush pins in `types/src/types/coordination/restore.rs`, now with all
+        // three digests — they are mandatory, so a remote that sends only `evacuationMapHash` is
+        // refused at the frame (the next test).
         val response: RestoreResponse =
-            RestoreResponse.Restored(L2CommandNumber(7L), hash, None, None)
+            RestoreResponse.Restored(L2CommandNumber(7L), evacMapHash, stateHash, paramsHash)
         val json = response.asJson.noSpaces
         assert(
-          json == """{"Restored":{"tip":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab"}}"""
+          json == """{"Restored":{"tip":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","l2ParamsHash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"}}"""
               && io.circe.parser.decode[RestoreResponse](json) == Right(response)
         )
     }
 
-    test("Restored carries l2StateHash when the remote reports one, and round-trips") {
-        val hash = EvacuationMapHash(ByteString.fromArray(Array.fill[Byte](32)(0xab.toByte)))
-        val stateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0xcd.toByte)))
-        val response: RestoreResponse =
-            RestoreResponse.Restored(L2CommandNumber(7L), hash, Some(stateHash), None)
-        val json = response.asJson.noSpaces
-        assert(
-          json == """{"Restored":{"tip":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"""
-              && io.circe.parser.decode[RestoreResponse](json) == Right(response)
-        )
+    test("Restored without the state/params digests is refused, not read as an absence") {
+        val json =
+            """{"Restored":{"tip":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab"}}"""
+        assert(io.circe.parser.decode[RestoreResponse](json).isLeft)
     }
 
     test("StateAt request encodes to its canonical wire shape and round-trips") {
@@ -142,13 +144,11 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
     }
 
     test("StateReported encodes to its canonical wire shape and round-trips") {
-        val hash = EvacuationMapHash(ByteString.fromArray(Array.fill[Byte](32)(0xab.toByte)))
-        val stateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0xcd.toByte)))
         val response: StateAtResponse =
-            StateAtResponse.StateReported(L2CommandNumber(7L), hash, Some(stateHash), None)
+            StateAtResponse.StateReported(L2CommandNumber(7L), evacMapHash, stateHash, paramsHash)
         val json = response.asJson.noSpaces
         assert(
-          json == """{"StateReported":{"at":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"""
+          json == """{"StateReported":{"at":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","l2ParamsHash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"}}"""
               && io.circe.parser.decode[StateAtResponse](json) == Right(response)
         )
     }

@@ -87,8 +87,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   config.initialEvacuationMap,
                   config.initialL2StateHash,
                   emm,
-                  config.l2ParamsHash,
-                  ContraTracer.nullTracer
+                  config.l2ParamsHash
                 )
                 viaState <- JointLedger.State.recoverState(p, None)
             yield assert(viaRecover.isEmpty && viaState.isEmpty)
@@ -144,8 +143,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   config.initialEvacuationMap,
                   config.initialL2StateHash,
                   emm,
-                  config.l2ParamsHash,
-                  ContraTracer.nullTracer
+                  config.l2ParamsHash
                 )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(done.isDefined && anchored == L2CommandNumber(2L))
@@ -186,8 +184,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   config.initialEvacuationMap,
                   config.initialL2StateHash,
                   emm,
-                  config.l2ParamsHash,
-                  ContraTracer.nullTracer
+                  config.l2ParamsHash
                 )
                 anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(
@@ -475,8 +472,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       config.initialEvacuationMap,
                       config.initialL2StateHash,
                       None,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(r == Right(None))
@@ -502,8 +498,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       config.initialEvacuationMap,
                       config.initialL2StateHash,
                       None,
-                      foreign,
-                      ContraTracer.nullTracer
+                      foreign
                     )
                     .attempt
             yield assert(
@@ -536,8 +531,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       config.initialEvacuationMap,
                       foreign,
                       None,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(
@@ -569,8 +563,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       divergent,
                       config.initialL2StateHash,
                       None,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(
@@ -618,8 +611,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       config.initialEvacuationMap,
                       config.initialL2StateHash,
                       emm,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(r.map(_.isDefined) == Right(true))
@@ -658,8 +650,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       config.initialEvacuationMap,
                       config.initialL2StateHash,
                       emm,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(
@@ -688,8 +679,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                       config.initialEvacuationMap,
                       config.initialL2StateHash,
                       emm,
-                      config.l2ParamsHash,
-                      ContraTracer.nullTracer
+                      config.l2ParamsHash
                     )
                     .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))

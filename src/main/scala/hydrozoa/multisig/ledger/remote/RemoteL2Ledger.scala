@@ -523,16 +523,14 @@ object RemoteL2Ledger {
         /** `evacuationMapHash` is the remote's [[EvacuationMapHash]] at `tip` — the digest the
           * caller checks its own evacuation map against.
           *
-          * @param l2StateHash
-          *   absent from a remote that does not report it yet; see [[L2Ledger.Digests]].
-          * @param l2ParamsHash
-          *   absent from a remote that does not report it yet; see [[L2Ledger.Digests]].
+          * `l2StateHash` and `l2ParamsHash` are mandatory: a remote that omits either is not a
+          * ledger this head can drive. See [[L2Ledger.Digests]].
           */
         final case class Restored(
             tip: L2CommandNumber,
             evacuationMapHash: EvacuationMapHash,
-            l2StateHash: Option[L2StateHash],
-            l2ParamsHash: Option[Hash32]
+            l2StateHash: L2StateHash,
+            l2ParamsHash: Hash32
         ) extends RestoreResponse {
             def commandNumber: L2CommandNumber = tip
         }
@@ -561,17 +559,13 @@ object RemoteL2Ledger {
         /** `at` equals the requested command number. The digests are of the state the remote holds
           * as of that number; its own position is unchanged.
           *
-          * @param l2StateHash
-          *   absent from a remote that does not report it yet; see [[L2Ledger.Digests]]. A head
-          *   driving such a ledger cannot certify its L2 state.
-          * @param l2ParamsHash
-          *   absent from a remote that does not report it yet; see [[L2Ledger.Digests]].
+          * `l2StateHash` and `l2ParamsHash` are mandatory, as on [[RestoreResponse.Restored]].
           */
         final case class StateReported(
             at: L2CommandNumber,
             evacuationMapHash: EvacuationMapHash,
-            l2StateHash: Option[L2StateHash],
-            l2ParamsHash: Option[Hash32]
+            l2StateHash: L2StateHash,
+            l2ParamsHash: Hash32
         ) extends StateAtResponse {
             def commandNumber: L2CommandNumber = at
         }

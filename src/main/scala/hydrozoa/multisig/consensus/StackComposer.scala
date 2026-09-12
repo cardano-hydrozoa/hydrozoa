@@ -575,9 +575,9 @@ final case class StackComposer(
       * ledger's own position is untouched; see [[L2StateReader.stateAt]] for why it cannot be
       * `restoreTo`.
       *
-      * A ledger that does not report an `l2StateHash` yields no entry, and
-      * [[StackEffectsBuilder.mkEffectsRegular]] then fails the stack with
-      * `Error.L2StateHashMissing` rather than certifying a value nobody computed.
+      * Every reported digest is mandatory ([[L2StateReader]]), so this covers every block
+      * [[StackEffectsBuilder.certifiedBlocks]] names — a ledger that cannot report one fails its
+      * own frame rather than leaving a gap here.
       */
     private def l2StateHashesFor(
         partitions: NonEmptyList[StackPartition]
@@ -592,9 +592,9 @@ final case class StackComposer(
                         .stateAt(commandNumber)
                         .value
                         .flatMap(IO.fromEither)
-                } yield digests.l2StateHash.map(blockNum -> _)
+                } yield blockNum -> digests.l2StateHash
             )
-            .map(_.flatten.toMap)
+            .map(_.toMap)
 
     /** Sign this peer's own hard-acks for every round the stack will need, allocating monotonic
       * `HardAckNumber`s from the local counter. Bundles `(unsigned, ownAcks)` into a

@@ -422,7 +422,7 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 digests <- run.ledger.stateAt(tip).value.flatMap(IO.fromEither)
                 after <- run.ledger.peekState
             yield assert(
-              digests.l2StateHash.contains(L2Snapshot.fromState(run.finalState).stateHash)
+              digests.l2StateHash == L2Snapshot.fromState(run.finalState).stateHash
                   && after.commandNumber == tip
                   && after == run.finalState
             )
@@ -442,7 +442,7 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                     .flatMap(IO.fromEither)
                 after <- run.ledger.peekState
             yield assert(
-              digests.l2StateHash.contains(L2Snapshot.fromState(past).stateHash)
+              digests.l2StateHash == L2Snapshot.fromState(past).stateHash
                   && after.commandNumber == L2CommandNumber(total.toLong)
                   && after == run.finalState
             )
