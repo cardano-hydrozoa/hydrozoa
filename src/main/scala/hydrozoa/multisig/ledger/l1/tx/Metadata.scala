@@ -4,7 +4,6 @@ import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Type
 import scala.util.Try
-import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
 import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, Metadatum, ProtocolVersion, Transaction, Word64}
 import scalus.uplc.builtin.ByteString
 
@@ -46,7 +45,8 @@ sealed trait Metadata(val txType: EnrichedTx.Type) {
 
         val txTypeMdMap = Metadatum.Map(Map(Metadatum.Text(txTypeName) -> headMdMap))
 
-        MD(Map(Word64(CIP67.Tags.head) -> txTypeMdMap))
+        // Alonzo-format (not Shelley-era Metadata) so Amaru accepts the submitted transaction.
+        AuxiliaryData.AlonzoFormat(Some(Map(Word64(CIP67.Tags.head) -> txTypeMdMap)))
     }
 }
 
@@ -59,17 +59,17 @@ object Metadata {
             protocolVersion: ProtocolVersion,
             txSerialized: Array[Byte]
         ): Either[ParseError, (HeadId, T)] = for {
-            md <- parseMdFromTxSerialized(protocolVersion, txSerialized)
-            res <- parse(md)
+            auxData <- parseAuxDataFromTxSerialized(protocolVersion, txSerialized)
+            res <- parse(auxData)
         } yield res
 
         final def parse(tx: Transaction): Either[ParseError, (HeadId, T)] = for {
-            md <- parseMdFromTx(tx)
-            res <- parse(md)
+            auxData <- parseAuxDataFromTx(tx)
+            res <- parse(auxData)
         } yield res
 
-        final def parse(md: MD): Either[ParseError, (HeadId, T)] = for {
-            hydrMap <- parseHydrMapFromMd(md)
+        final def parse(auxData: AuxiliaryData): Either[ParseError, (HeadId, T)] = for {
+            hydrMap <- parseHydrMapFromAuxData(auxData)
             roleMap <- parseRoleMapFromHydrMap(txType, hydrMap)
             innerMapRes <- parseInnerMapFromRoleMap(roleMap)
             (headId, innerMap) = innerMapRes
@@ -265,33 +265,29 @@ object Metadata {
             Right(Settlement())
     }
 
-    private def parseMdFromTxSerialized(
+    private def parseAuxDataFromTxSerialized(
         protocolVersion: ProtocolVersion,
         txSerialized: Array[Byte]
-    ): Either[ParseError, MD] =
+    ): Either[ParseError, AuxiliaryData] =
         for {
             tx <- Try(Transaction.fromCbor(txSerialized)(using protocolVersion)).toEither.left
                 .map(CborDecodingError(_))
-            md <- parseMdFromTx(tx)
-        } yield md
+            auxData <- parseAuxDataFromTx(tx)
+        } yield auxData
 
-    private def parseMdFromTx(tx: Transaction): Either[ParseError, MD] = for {
-        ad <- tx.auxiliaryData.toRight(MissingAuxData)
-        md: MD <- ad.value match {
-            case md: MD => Right(md)
-            case _      => Left(AuxDataIsNotMetadata)
-        }
-    } yield md
+    private def parseAuxDataFromTx(tx: Transaction): Either[ParseError, AuxiliaryData] =
+        tx.auxiliaryData.toRight(MissingAuxData).map(_.value)
 
-    private def parseHydrMapFromMd(md: MD): Either[ParseError, Metadatum.Map] = for {
-        hydrEntry <- md.metadata
-            .get(Word64(CIP67.Tags.head))
-            .toRight(MissingCIP67Tag)
-        hydrMap <- hydrEntry match {
-            case m: Metadatum.Map => Right(m)
-            case _                => Left(MetadataValueIsNotMap)
-        }
-    } yield hydrMap
+    private def parseHydrMapFromAuxData(auxData: AuxiliaryData): Either[ParseError, Metadatum.Map] =
+        for {
+            hydrEntry <- auxData.getMetadata
+                .get(Word64(CIP67.Tags.head))
+                .toRight(MissingCIP67Tag)
+            hydrMap <- hydrEntry match {
+                case m: Metadatum.Map => Right(m)
+                case _                => Left(MetadataValueIsNotMap)
+            }
+        } yield hydrMap
 
     private def parseRoleMapFromHydrMap(
         txType: EnrichedTx.Type,
@@ -339,9 +335,6 @@ object Metadata {
     }
     case object MissingAuxData extends ParseError {
         override def toString: String = "Auxiliary Data is missing from the transaction"
-    }
-    case object AuxDataIsNotMetadata extends ParseError {
-        override def toString: String = "Auxiliary data is not metadata"
     }
     case object MissingCIP67Tag extends ParseError {
         override def toString: String =
