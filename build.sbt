@@ -230,6 +230,10 @@ lazy val core: Project = (project in file("."))
         // Logging
         "ch.qos.logback" % "logback-classic" % "1.5.18",
         "org.typelevel" %% "log4cats-slf4j" % "2.7.1",
+        // ContraTracer port (extracted to its own repo), served via JitPack. Package stays
+        // `hydrozoa.lib.logging`; the SLF4J layer (Slf4jTracer/Slf4jMsg/LogEvent) remains local.
+        // JitPack strips the Scala `_3` suffix, hence a single `%`. See jitpack resolver below.
+        "com.github.cardano-hydrozoa" % "contratracer" % "0.1.1",
         // Used for input/output
         "org.scala-lang" %% "toolkit" % "0.7.0",
         // cats
