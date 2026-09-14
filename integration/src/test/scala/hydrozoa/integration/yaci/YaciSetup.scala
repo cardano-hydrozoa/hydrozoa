@@ -33,10 +33,11 @@ object YaciSetup {
 
     private val log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("YaciSetup"))
 
-    /** Reset the devnet, fund every head + coil peer, deploy the treasury/dispute/G2 reference
-      * scripts (from head peer 0's wallet — its post-deploy change stays as genesis funding),
-      * resolve them, and query each funded peer's genesis UTxOs. Coil peers are funded too because
-      * coil-side RBAs need ADA-only wallet UTxOs for collateral (see `yaciTestSauceGenesis`).
+    /** Reset the devnet, fund every head + coil peer, deploy the treasury/dispute/regime/G2
+      * reference scripts (from head peer 0's wallet — its post-deploy change stays as genesis
+      * funding), resolve them, and query each funded peer's genesis UTxOs. Coil peers are funded
+      * too because coil-side RBAs need ADA-only wallet UTxOs for collateral (see
+      * `yaciTestSauceGenesis`).
       */
     def prepare(devKit: DevKit, nHeadPeers: Int, nCoilPeers: Int = 0): IO[Ready] =
         MultiPeerHeadHarness.CardanoBackend.yaciNetwork(devKit).flatMap { network =>

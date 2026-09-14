@@ -22,8 +22,8 @@ import scalus.cardano.ledger.{ScriptRef, TransactionInput, Utxo}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
 
-/** Deploy the rule-based treasury and dispute validators as reference scripts, and (once) the G2
-  * setup ladder as inline-datum utxos, on L1.
+/** Deploy the rule-based treasury, dispute and regime validators as reference scripts, and (once)
+  * the G2 setup ladder as inline-datum utxos, on L1.
   *
   * Usage:
   * {{{
@@ -33,7 +33,7 @@ import scalus.uplc.builtin.ByteString
   *
   * The G2 setup ladder never changes, so it is deployed exactly once; the validator scripts change
   * per release. Pass `--ladder-refs <existing ref-utxos.json>` to reuse an already-deployed ladder
-  * and redeploy only the two validators. Without it, the ladder is deployed too (bootstrap).
+  * and redeploy only the three validators. Without it, the ladder is deployed too (bootstrap).
   *
   * Builds and submits chained [[DeploymentTx]]s funded from the wallet carried by the given keygen
   * private config (change returns to the wallet, so the head funding survives): one per validator
@@ -85,7 +85,8 @@ object DeployScriptsAndG2Setup:
     lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "deploy-scripts-and-g2-setup",
-          header = "Deploy the treasury + dispute validators, and the G2 setup ladder, on L1"
+          header =
+              "Deploy the treasury + dispute + regime validators, and the G2 setup ladder, on L1"
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
@@ -159,16 +160,19 @@ object DeployScriptsAndG2Setup:
               s"Deployed dispute script hash:  ${HydrozoaBlueprint.disputeScriptHash.toHex}"
             )
             _ <- log.info(
+              s"Deployed regime script hash:   ${HydrozoaBlueprint.regimeScriptHash.toHex}"
+            )
+            _ <- log.info(
               s"Explorer: https://$explorerHost/tx/" +
                   unresolved.rulebasedTreasuryScriptInput.transactionId.toHex
             )
         } yield ExitCode.Success
     }
 
-    /** Build, sign, submit, and await the treasury + dispute deployment reference scripts (and,
-      * unless `reusedLadderInputs` is given, the G2 setup ladder) from `wallet`'s funding UTxOs on
-      * `backend`, returning the deployed reference inputs. Shared by the CLI and the integration
-      * harness (Yaci).
+    /** Build, sign, submit, and await the treasury + dispute + regime deployment reference scripts
+      * (and, unless `reusedLadderInputs` is given, the G2 setup ladder) from `wallet`'s funding
+      * UTxOs on `backend`, returning the deployed reference inputs. Shared by the CLI and the
+      * integration harness (Yaci).
       */
     def deploy(
         backend: CardanoBackend[IO],
@@ -188,9 +192,9 @@ object DeployScriptsAndG2Setup:
               NonEmptyList.fromList(utxosMap.toList.map(Utxo(_, _)))
             )(RuntimeException(s"No UTxOs at ${address.toBech32.get}; fund the wallet first"))
 
-            // Treasury deployment spends the wallet UTxOs; the dispute deployment chains off its
-            // change output, and the setup-ladder deployment (when not reused) off the dispute tx's
-            // change (a deployment tx's change is its last output, after the payload outputs).
+            // Treasury deployment spends the wallet UTxOs; each later deployment chains off the
+            // previous tx's change output (a deployment tx's change is its last output, after the
+            // payload outputs): dispute, then regime, then — when not reused — the setup ladder.
             treasuryTx <- IO.fromEither(
               DeploymentTx
                   .Build(
@@ -227,6 +231,24 @@ object DeployScriptsAndG2Setup:
               TransactionInput(disputeSigned.id, 1),
               disputeSigned.body.value.outputs(1).value
             )
+            regimeTx <- IO.fromEither(
+              DeploymentTx
+                  .Build(
+                    NonEmptyList.one(disputeChange),
+                    NonEmptyList.one(
+                      DeploymentTx.DeployedPayload
+                          .script(ScriptRef(HydrozoaBlueprint.regimeScript))
+                    )
+                  )
+                  .result
+                  .left
+                  .map(e => RuntimeException(s"Failed to build regime deployment tx: $e"))
+            )
+            regimeSigned = wallet.signTx(regimeTx.tx)
+            regimeChange = Utxo(
+              TransactionInput(regimeSigned.id, 1),
+              regimeSigned.body.value.outputs(1).value
+            )
 
             // Deploy the ladder only when not reusing an existing one.
             ladderTxOpt <- reusedLadderInputs match {
@@ -235,7 +257,7 @@ object DeployScriptsAndG2Setup:
                     IO.fromEither(
                       DeploymentTx
                           .Build(
-                            NonEmptyList.one(disputeChange),
+                            NonEmptyList.one(regimeChange),
                             SetupLadder.rungDatums.map(DeploymentTx.DeployedPayload.data(_))
                           )
                           .result
@@ -252,6 +274,8 @@ object DeployScriptsAndG2Setup:
             _ <- submit(backend, RawTx(treasurySigned))
             _ <- log.info(s"Submitting dispute deployment tx: ${disputeSigned.id}")
             _ <- submit(backend, RawTx(disputeSigned))
+            _ <- log.info(s"Submitting regime deployment tx: ${regimeSigned.id}")
+            _ <- submit(backend, RawTx(regimeSigned))
             _ <- ladderSignedOpt match {
                 case Some(s) =>
                     log.info(s"Submitting setup-ladder deployment tx: ${s.id}") *>
@@ -262,10 +286,12 @@ object DeployScriptsAndG2Setup:
             _ <- log.info("Waiting for the reference UTxOs to appear on L1...")
             _ <- awaitUtxo(backend, treasuryTx.deployedUtxos.head)
             _ <- awaitUtxo(backend, disputeTx.deployedUtxos.head)
+            _ <- awaitUtxo(backend, regimeTx.deployedUtxos.head)
             _ <- ladderInputs.traverse_(awaitUtxo(backend, _))
         } yield ScriptReferenceUtxos.Unresolved(
           rulebasedTreasuryScriptInput = treasuryTx.deployedUtxos.head,
           disputeResolutionScriptInput = disputeTx.deployedUtxos.head,
+          rulebasedRegimeScriptInput = regimeTx.deployedUtxos.head,
           setupLadderInputs = ladderInputs
         )
 
