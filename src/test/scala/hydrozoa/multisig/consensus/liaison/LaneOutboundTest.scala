@@ -249,8 +249,20 @@ class LaneOutboundTest extends AnyFunSuite {
             items += n; lane.append(n).unsafeRunSync()
         }
         // #2 is evicted, so this is a journal serve — the ceiling must apply to it too.
-        val _ = assert(lane.reply(2, ceiling = Some(4)).unsafeRunSync() == Items(List(2, 3, 4)))
+        val _ = assert(lane.reply(2, servable = _ <= 4).unsafeRunSync() == Items(List(2, 3, 4)))
         assert(journal.reads == 1)
+    }
+
+    test("a ceiling read off a non-monotonic dimension truncates short, never across a gap") {
+        // The coil-hard-ack case: the lane numbers contiguously, but the dimension the ceiling
+        // reads (a stack number carried on the item) does not rise with that numbering, because a
+        // hub stamps arrivals from many coil peers in arrival order. `takeWhile` stops at the first
+        // item above the ceiling; the later qualifying items are deferred to the next pull rather
+        // than served across the hole they would leave.
+        val lane = contiguousFrom(0, maxPerReply = 4)
+        (0 to 3).foreach(n => lane.append(n).unsafeRunSync())
+        val stackOf = Map(0 -> 1, 1 -> 9, 2 -> 1, 3 -> 1)
+        assert(lane.reply(0, servable = n => stackOf(n) <= 1).unsafeRunSync() == Items(List(0)))
     }
 
     test("an evicted entry the journal cannot serve raises instead of replying empty") {

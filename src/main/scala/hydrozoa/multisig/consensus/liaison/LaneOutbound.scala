@@ -138,13 +138,18 @@ final class LaneOutbound[T, N] private (
       * remote's cursor is ahead of what we could have produced (protocol desync — the caller
       * raises), else the (possibly empty) slice.
       */
-    def reply(remoteCursor: N, ceiling: Option[N] = None): IO[Reply[T]] =
-        // `ceiling`, when set, is an absolute upper bound on the item numbers we may serve this reply
-        // (on top of `maxPerReply` and the released high-water) — the request lane passes the
-        // puller's backpressure ceiling. Items are monotonic ascending, so a `takeWhile`/`filter`
-        // keeps the contiguous prefix at or below it.
-        def withinCeiling(items: List[T]): List[T] =
-            ceiling.fold(items)(c => items.takeWhile(item => numberOf(item) <= c))
+    def reply(remoteCursor: N, servable: T => Boolean = _ => true): IO[Reply[T]] =
+        // `servable` is the puller's backpressure ceiling, expressed as a predicate so a lane can be
+        // bounded in a dimension other than its own numbering: the hard-ack lanes ceiling on the
+        // ack's `stackNum`, which is NOT their `HardAckNumber` (a stack draws one ack or two). It
+        // applies on top of `maxPerReply` and the released high-water.
+        //
+        // `takeWhile`, never `filter`: a lane is contiguous, so serving a prefix and stopping is the
+        // only truncation the remote's `verify` accepts — dropping an item from the middle leaves a
+        // gap it rejects. Where the predicate's dimension rises monotonically with the lane's number
+        // the prefix is exact; where it does not, the serve is short but never wrong, and the remote
+        // collects the rest on its next pull.
+        def withinCeiling(items: List[T]): List[T] = items.takeWhile(servable)
         lastAppended.get.flatMap { last =>
             // The remote may never legitimately ask past our next-producible number.
             val bound = next(last)

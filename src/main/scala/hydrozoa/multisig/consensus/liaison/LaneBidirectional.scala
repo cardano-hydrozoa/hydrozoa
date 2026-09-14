@@ -24,8 +24,8 @@ final class LaneBidirectional[T, N] private (
 ) {
     // ---- Outbound ----
     def append(item: T): IO[Unit] = out.append(item)
-    def reply(remoteCursor: N, ceiling: Option[N] = None): IO[LaneOutbound.Reply[T]] =
-        out.reply(remoteCursor, ceiling)
+    def reply(remoteCursor: N, servable: T => Boolean = _ => true): IO[LaneOutbound.Reply[T]] =
+        out.reply(remoteCursor, servable)
     def outboxIsEmpty: IO[Boolean] = out.outboxIsEmpty
     def seedHighWaterOutbox(highWater: Option[N]): IO[Unit] = out.seedHighWater(highWater)
 

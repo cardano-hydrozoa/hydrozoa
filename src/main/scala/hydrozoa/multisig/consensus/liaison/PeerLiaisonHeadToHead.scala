@@ -341,7 +341,10 @@ abstract class PeerLiaisonHeadToHead(
             blockR <- blockLane.reply(get.block)
             stackR <- stackLane.reply(get.stack)
             // Cap the served request slice at the puller's backpressure ceiling.
-            reqR <- requestLane.reply(get.request, ceiling = Some(get.requestCeiling))
+            reqR <- requestLane.reply(
+              get.request,
+              servable = _.requestId.requestNum <= get.requestCeiling
+            )
             saR <- softAckLane.reply(get.softAck)
             hhR <- hardAckLane.reply(get.headHardAck)
             hubR <- hubHardAckLane.reply(get.hubHardAck)
