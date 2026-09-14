@@ -42,6 +42,14 @@ final case class BlockWeaver(
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
+    /** How far each head peer's request stream has advanced ([[RequestCursors]]). This actor's own
+      * bookkeeping, not part of the weaving state: no [[BlockWeaver.State]] reads it, and the gate
+      * that advances it sits above the state machine. Declared before its first reader — a
+      * `private val` read from earlier in the class body trips Scala's safe-init check, which is a
+      * hard error under CI's `-Werror`.
+      */
+    private val requestCursors: Ref[IO, RequestCursors] = Ref.unsafe(RequestCursors.cold)
+
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
         _ <- context.become(receive)
@@ -52,7 +60,7 @@ final case class BlockWeaver(
           PartialFunction.fromFunction(req =>
               for {
                   // Refuse a request that breaks its author's stream, before any state sees it
-                  _ <- admitRequest(state.connections)(req)
+                  _ <- admitRequest(req)
                   // Handle the request using the current state's handler
                   mNewState <- state.react(config)(req)
                   // If the handler returns a new state, become that state.
@@ -70,7 +78,7 @@ final case class BlockWeaver(
                 connections <- initializeConnections
                 // Before the first request is admitted, so a resumed stream is judged against the
                 // high-water the store records rather than against zero.
-                _ <- seedRequestCursors(connections)
+                _ <- seedRequestCursors
                 // Same anchor as `JointLedger.preStartLocal`: the two step the spine in lockstep —
                 // now guaranteed, because both project the one bundle rather than each re-reading.
                 recovered <- State.recover(
@@ -94,13 +102,11 @@ final case class BlockWeaver(
       * feeds for a peer is exactly the one [[admitRequest]] expects next. A cold store seeds
       * nothing: every stream opens at `RequestNumber.zero`.
       */
-    private def seedRequestCursors(connections: BlockWeaver.Connections): IO[Unit] =
+    private def seedRequestCursors: IO[Unit] =
         markers.fastBlockMark.traverse_(anchor =>
             persistence
                 .getOrFail(StoreKey.RequestHighWater(anchor))
-                .flatMap(highWater =>
-                    connections.requestCursors.set(RequestCursors.resume(highWater))
-                )
+                .flatMap(highWater => requestCursors.set(RequestCursors.resume(highWater)))
         )
 
     /** Stop the weaver on a request that does not continue its author's stream.
@@ -109,10 +115,10 @@ final case class BlockWeaver(
       * recovery cursor and every block's per-author ordering rest on, so a node that has lost track
       * of a stream must not go on weaving blocks from it. See [[RequestCursors]].
       */
-    private def admitRequest(connections: BlockWeaver.Connections)(req: Request): IO[Unit] =
+    private def admitRequest(req: Request): IO[Unit] =
         req match {
             case ur: UserRequestWithId =>
-                connections.requestCursors
+                requestCursors
                     .modify(cursors =>
                         cursors.accept(ur.requestId) match {
                             case Right(advanced) => (advanced, IO.unit)
@@ -131,8 +137,7 @@ final case class BlockWeaver(
               blockWeaver = context.self,
               jointLedger = c.jointLedger,
               metrics = metrics,
-              wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None),
-              requestCursors = Ref.unsafe[IO, RequestCursors](RequestCursors.cold)
+              wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None)
             )
         case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
     }
@@ -164,13 +169,7 @@ object BlockWeaver {
           * derives from `minSettlementDuration` — routinely hours. An uncancelled fiber therefore
           * outlives its block by that much, and at a high block rate they accumulate.
           */
-        wakeupFiber: Ref[IO, Option[FiberIO[Unit]]],
-        /** How far each head peer's request stream has advanced (see [[RequestCursors]]). Lives
-          * here for the same reason as `wakeupFiber`: every state already carries `Connections`,
-          * and the gate that advances it sits above the state machine rather than inside any one
-          * state — every state that accepts a request would otherwise have to repeat the check.
-          */
-        requestCursors: Ref[IO, RequestCursors]
+        wakeupFiber: Ref[IO, Option[FiberIO[Unit]]]
     )
 
     final case class ConnectionsPartial(jointLedger: JointLedger.Handle, metrics: PeerMetrics) {
@@ -178,8 +177,7 @@ object BlockWeaver {
           blockWeaver = blockWeaver,
           jointLedger = jointLedger,
           metrics = metrics,
-          wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None),
-          requestCursors = Ref.unsafe[IO, RequestCursors](RequestCursors.cold)
+          wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None)
         )
     }
 

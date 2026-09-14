@@ -22,10 +22,6 @@ import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
   */
 final case class RequestCursors private (highWater: Map[HeadPeerNumber, RequestNumber]) {
 
-    /** The request number `peerNum`'s next request must carry. */
-    def nextExpected(peerNum: HeadPeerNumber): RequestNumber =
-        highWater.get(peerNum).fold(RequestNumber.zero)(_.increment)
-
     /** Advance `requestId`'s author by one, or name the break in its stream.
       *
       * One comparison covers all three failures: a gap (a number was skipped), a reordering (an
@@ -42,6 +38,10 @@ final case class RequestCursors private (highWater: Map[HeadPeerNumber, RequestN
               s" ${expected: Long}, got ${requestId.requestNum: Long}"
         )
     }
+
+    /** The request number `peerNum`'s next request must carry. */
+    private def nextExpected(peerNum: HeadPeerNumber): RequestNumber =
+        highWater.get(peerNum).fold(RequestNumber.zero)(_.increment)
 }
 
 object RequestCursors {
