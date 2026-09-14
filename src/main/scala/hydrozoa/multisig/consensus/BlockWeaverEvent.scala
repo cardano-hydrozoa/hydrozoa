@@ -37,6 +37,12 @@ object BlockWeaverEvent:
       */
     final case class RetiredOnFinalBlock(blockNum: BlockNumber) extends BlockWeaverEvent
 
+    /** A deposit request the leader dropped rather than weaving into a block it already knows is
+      * final. Registering it would build a post-dated refund tx for a deposit no later block can
+      * ever absorb.
+      */
+    final case class DepositDroppedFromFinalBlock(requestId: RequestId) extends BlockWeaverEvent
+
     final case class RequestAddedToMempool(requestId: RequestId) extends BlockWeaverEvent
 
     final case class AwaitedRequestReceived(requestId: RequestId) extends BlockWeaverEvent

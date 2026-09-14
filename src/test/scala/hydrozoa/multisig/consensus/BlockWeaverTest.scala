@@ -17,8 +17,8 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
-import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
+import hydrozoa.multisig.consensus.UserRequest.{DepositRequest, TransactionRequest}
+import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -103,6 +103,17 @@ object BlockWeaverTestHelpers {
         } yield UserRequestWithId(
           userRequest = userRequest,
           requestId = requestId
+        )
+
+    /** A deposit request. Its payloads are never parsed here — the weaver routes on the request's
+      * kind alone, and the joint ledger that would parse them is a mock.
+      */
+    def genDepositRequest: Gen[UserRequestWithId] =
+        genRequestId.map(requestId =>
+            UserRequestWithId(
+              userRequest = DepositRequest(DepositRequestBody(ByteString.empty, ByteString.empty)),
+              requestId = requestId
+            )
         )
 
     /** Like [[mkBlockWeaverActor]] but also returns the weaver's event stream.
@@ -402,6 +413,65 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) {
               case CompleteBlockFinal(None, _) => ()
           })
+      } yield true
+    )
+
+    // ===================================
+    // Carol (2), armed to lead an upfront-known final block, drops deposits but weaves transactions
+    // ===================================
+    val _ = property(
+      "Carol (2) drops a deposit from an upfront-known final block, but still weaves a transaction"
+    ) = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          deposit <- pick(genDepositRequest.label("deposit arriving for the final block"))
+          transaction <- pick(genUserRequest.label("transaction arriving for the final block"))
+          made <- mkBlockWeaverActorWithEvents(Carol.headPeerNumber)
+          weaver = made._1
+          seen = made._2
+          // Follow block 1, then take the confirmation that announces finalization: Carol arms as
+          // leader of block 2 knowing — before the block is opened — that it will be final.
+          brief1 <- mkDummyBlockBrief1(config.headConfig)
+          _ <- lift((weaver ! brief1) >> env.system.waitForIdle())
+          _ <- lift(
+            (weaver ! Block.SoftConfirmed.Minor(
+              brief1,
+              softAckSignatures = List.empty,
+              finalizationRequested = true
+            )) >> env.system.waitForIdle()
+          )
+          startsAfterArming <- lift(IO(env.jointLedgerMock.startBlockNums.get))
+          // The deposit must neither open block 2 nor reach the joint ledger.
+          _ <- lift((weaver ! deposit) >> env.system.waitForIdle())
+          startsAfterDeposit <- lift(IO(env.jointLedgerMock.startBlockNums.get))
+          fedAfterDeposit <- lift(IO(env.jointLedgerMock.events.get))
+          _ <- assertWith(
+            startsAfterDeposit == startsAfterArming,
+            s"a deposit must not open the final block: $startsAfterArming -> $startsAfterDeposit"
+          )
+          _ <- assertWith(
+            !fedAfterDeposit.contains(deposit),
+            s"the deposit must not reach the joint ledger, but it fed $fedAfterDeposit"
+          )
+          _ <- assertWith(
+            seen.get.exists {
+                case BlockWeaverEvent.DepositDroppedFromFinalBlock(id) => id == deposit.requestId
+                case _                                                 => false
+            },
+            "the drop must be traced"
+          )
+          // A transaction still completes the final block, so the drop is about deposits only.
+          _ <- lift((weaver ! transaction) >> env.system.waitForIdle())
+          _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) {
+              case CompleteBlockFinal(None, _) => ()
+          })
+          fedAtEnd <- lift(IO(env.jointLedgerMock.events.get))
+          _ <- assertWith(
+            fedAtEnd == List(transaction),
+            s"the final block must hold the transaction and nothing else, but it fed $fedAtEnd"
+          )
       } yield true
     )
 
