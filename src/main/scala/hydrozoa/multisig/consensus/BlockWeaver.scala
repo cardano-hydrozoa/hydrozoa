@@ -754,12 +754,22 @@ object BlockWeaver {
 
                 export Leader.ProcessingReadyRequests.NextReactiveState
 
+                /** This peer already asked for finalization, so the block it is arming to lead
+                  * completes as the head's final block whatever arrives in it.
+                  */
+                private val isBlockFinal: Boolean = finalizationLocallyTriggered.asBoolean
+
                 override def act(config: Config): IO[Some[NextReactiveState]] = for {
                     _ <- logStateTransition
                     // Became leader of this block: start its "lead" clock (closed at the brief, in FCA).
                     _ <- IO(connections.metrics.onLeadStart((leadingBlockNum: Int).toLong))
                     _ <- realTimeQuantizedInstant(config.slotConfig)
-                    extracted <- extractRequestsForBlock(config)
+                    // Nothing absorbs a deposit registered in the final block, so drop the pending
+                    // ones rather than weaving them in. Holding them back instead would leave
+                    // overflow in the mempool below the block cap, which the cap check in
+                    // `AwaitingConfirmation` reads as "nothing held back".
+                    weavingMempool <- if isBlockFinal then dropPendingDeposits else IO.pure(mempool)
+                    extracted <- extractRequestsForBlock(config)(weavingMempool)
                     (requests, survivingMempool) = extracted
                     // How many requests this lead pulled out of the mempool, and what's left behind.
                     _ <- IO(connections.metrics.onLeaderMempoolDrain(requests.size))
@@ -783,15 +793,27 @@ object BlockWeaver {
                     )
                 } yield newState
 
+                /** Drop every pending deposit request, naming each one in the trace. */
+                private def dropPendingDeposits: IO[Mempool] = {
+                    val (dropped, survivingMempool) = mempool.dropDepositRequests
+                    dropped
+                        .traverse_(request =>
+                            tracer.traceWith(
+                              BlockWeaverEvent.DepositDroppedFromFinalBlock(request.requestId)
+                            )
+                        )
+                        .as(survivingMempool)
+                }
+
                 /** Extract at most [[BlockConfig.Section.maxRequestsPerBlock]] requests for the
                   * block this peer is leading, preferring this peer's own requests (fairness); the
                   * overflow stays in the surviving mempool for later blocks.
                   */
                 private def extractRequestsForBlock(
                     config: Config
-                ): IO[(List[UserRequestWithId], Mempool)] = {
+                )(weavingMempool: Mempool): IO[(List[UserRequestWithId], Mempool)] = {
                     val (requests, survivingMempool) =
-                        mempool.extractInOrderPreferring(
+                        weavingMempool.extractInOrderPreferring(
                           ownHeadPeerNum(config),
                           config.maxRequestsPerBlock
                         )
@@ -842,8 +864,25 @@ object BlockWeaver {
 
                 export Leader.AwaitingConfirmation.{NextReactiveState, Unexpected}
 
+                /** This peer already asked for finalization, so the open block completes as the
+                  * head's final block — `completeNextBlock` below reads the same flag. A
+                  * `finalizationRequested` carried by another peer does not count here: it only
+                  * reaches this state on the confirmation that completes the block, by which point
+                  * the block's requests are already applied.
+                  */
+                private val isBlockFinal: Boolean = finalizationLocallyTriggered.asBoolean
+
+                /** Drop a deposit the open block cannot absorb; the state is unchanged. */
+                private def dropDepositFromFinalBlock(requestId: RequestId): IO[Some[this.type]] =
+                    tracer.traceWith(
+                      BlockWeaverEvent.DepositDroppedFromFinalBlock(requestId)
+                    ) >> pure(this)
+
                 override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
                     req match {
+                        case ur: UserRequestWithId.DepositRequest if isBlockFinal =>
+                            dropDepositFromFinalBlock(ur.requestId)
+
                         case ur: UserRequestWithId =>
                             // First block is implicitly confirmed, so we complete it immediately —
                             // as the final block when finalization was requested (mirroring
@@ -1122,6 +1161,22 @@ object BlockWeaver {
 
                 private val currentBlockNumber = previousBlockConfirmed.blockNum.increment
 
+                /** The block this peer is armed to open completes as the head's final block — the
+                  * same condition `completeBlock` below decides on, known here before the block is
+                  * opened because the confirmation carrying it has already arrived.
+                  */
+                private val isBlockFinal: Boolean =
+                    finalizationLocallyTriggered.asBoolean ||
+                        previousBlockConfirmed.finalizationRequested
+
+                /** Drop a deposit the final block cannot absorb, leaving the block unopened: a
+                  * request that is not going to be woven must not be what starts the block either.
+                  */
+                private def dropDepositFromFinalBlock(requestId: RequestId): IO[Some[this.type]] =
+                    tracer.traceWith(
+                      BlockWeaverEvent.DepositDroppedFromFinalBlock(requestId)
+                    ) >> pure(this)
+
                 override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
                     // Completing this block is the moment its wakeup stops being wanted.
                     // Cancel-on-replace alone does not cover it: leadership rotates, so the peer
@@ -1144,6 +1199,9 @@ object BlockWeaver {
                     }
 
                     req match {
+                        case ur: UserRequestWithId.DepositRequest if isBlockFinal =>
+                            dropDepositFromFinalBlock(ur.requestId)
+
                         case ur: UserRequestWithId =>
                             for {
                                 _ <- sendStartBlock(config)(currentBlockNumber)

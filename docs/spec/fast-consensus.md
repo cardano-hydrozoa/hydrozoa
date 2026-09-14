@@ -95,6 +95,23 @@ Decides what the next block looks like — per-block leader/follower mode switch
 The leader instructs `JointLedger` to produce `BlockBrief.Next`. Followers reproduce the
 same brief locally from the same inputs (deterministic).
 
+**Deposits and the final block.** A leader that knows, before it opens a block, that the block
+completes as `Final` drops every deposit request instead of weaving it in: no later block can
+absorb a deposit registered there, so registering it only builds a post-dated refund tx for a
+deposit that will be refunded anyway. The weaver knows this in three places —
+`Leader.ProcessingReadyRequests` and `Leader.AwaitingConfirmation` when finalization was
+triggered on this peer, and `Leader.AwaitingRequest` when it was triggered anywhere (the
+previous block's `Block.SoftConfirmed.finalizationRequested`). In `AwaitingRequest` a dropped
+deposit also leaves the block unopened: a request that is not going to be woven must not be
+what starts the block.
+
+The decision is the leader's alone and needs no agreement. A follower forwards only the
+requests the brief names, so a deposit the leader dropped never reaches the follower's
+`JointLedger` either, and the two still reach the same `blockHash`. The dropped request keeps
+the status any request that no block includes has — `UNPROCESSED` on
+`GET /head/requests/{id}` — which is already the outcome for everything left in a mempool when
+the head finalizes.
+
 ### `JointLedger` (`multisig/ledger/joint/JointLedger.scala`)
 
 Produces blocks on **every** peer, not just the leader: the leader builds the block from its

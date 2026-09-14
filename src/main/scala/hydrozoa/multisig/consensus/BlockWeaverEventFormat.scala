@@ -27,6 +27,8 @@ object BlockWeaverEventFormat:
                 trace(s"ignoring soft block confirmation ${blockNum: Int}")
             case RetiredOnFinalBlock(blockNum) =>
                 info(s"final block ${blockNum: Int} woven — no further blocks, retiring")
+            case DepositDroppedFromFinalBlock(requestId) =>
+                info(s"deposit request $requestId dropped — the block being woven is final")
             case RequestAddedToMempool(requestId) =>
                 info(s"request $requestId added to mempool")
             case AwaitedRequestReceived(requestId) =>

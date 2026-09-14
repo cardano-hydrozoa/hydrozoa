@@ -1,7 +1,7 @@
 package hydrozoa.multisig.consensus.mempool
 
-import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
-import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
+import hydrozoa.multisig.consensus.UserRequest.{DepositRequest, TransactionRequest}
+import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId
@@ -24,6 +24,12 @@ object MempoolTest extends Properties("Mempool") {
 
     private def req(id: RequestId): UserRequestWithId =
         UserRequestWithId(TransactionRequest(TransactionRequestBody(ByteString.empty)), id)
+
+    private def depositReq(id: RequestId): UserRequestWithId =
+        UserRequestWithId(
+          DepositRequest(DepositRequestBody(ByteString.empty, ByteString.empty)),
+          id
+        )
 
     private val idPool: Vector[RequestId] =
         (for { p <- poolPeers; n <- poolNums } yield RequestId(p, n)).toVector
@@ -81,6 +87,24 @@ object MempoolTest extends Properties("Mempool") {
         // The surviving mempool keeps the remainder in arrival order (nothing lost or reordered).
         (inOrder(surviving) == rs.filterNot(expected.contains)) :| "surviving order wrong"
     }
+
+    val _ = property("dropDepositRequests removes exactly the deposits, both sides in order") =
+        forAll(genRequests, Gen.choose(0, 100)) { (rs, depositPercent) =>
+            // Retag a share of the requests as deposits, keeping their ids and arrival order.
+            val mixed = rs.zipWithIndex.map((r, i) =>
+                if (i * 100) % 101 < depositPercent then depositReq(r.requestId) else r
+            )
+            val (dropped, surviving) = build(mixed).dropDepositRequests
+
+            val expectedDropped = mixed.collect { case d: UserRequestWithId.DepositRequest => d }
+            val expectedSurviving = mixed.filterNot(expectedDropped.contains)
+
+            (dropped == expectedDropped) :| s"dropped $dropped != $expectedDropped" &&
+            (inOrder(surviving) == expectedSurviving) :| "surviving order wrong" &&
+            (surviving.size == mixed.size - expectedDropped.size) :| "surviving size wrong" &&
+            expectedDropped
+                .forall(d => surviving.getRequest(d.requestId).isEmpty) :| "a deposit survived"
+        }
 
     val _ = property(
       "extractRequestsWhile is Complete when every id is present, in the requested order"

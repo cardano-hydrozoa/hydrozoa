@@ -109,6 +109,27 @@ final case class Mempool private (
             (copy(bySeq = bySeq - seq, seqOf = seqOf - requestId), request)
         }
 
+    /** Remove every deposit request, returning those removed in arrival order alongside the
+      * surviving mempool.
+      *
+      * Only a leader weaving a block it already knows is final calls this: a deposit registered
+      * there can never be absorbed, so holding it until the block completes only postpones the same
+      * drop. Removing them keeps the "overflow survives only at the block cap" property that
+      * [[extractInOrderPreferring]] and the leader's cap check rely on.
+      */
+    def dropDepositRequests: (List[UserRequestWithId], Mempool) = {
+        // `bySeq.toVector` is (seq, request) in arrival order, so the dropped list is too.
+        val deposits = bySeq.toVector.collect {
+            case entry @ (_, _: UserRequestWithId.DepositRequest) =>
+                entry
+        }
+        val survivingMempool = copy(
+          bySeq = bySeq -- deposits.iterator.map(_._1),
+          seqOf = seqOf -- deposits.iterator.map(_._2.requestId)
+        )
+        (deposits.map(_._2).toList, survivingMempool)
+    }
+
     /** Extract up to `limit` requests for block production, preferring those authored by
       * `preferredPeer` so a leader's own users are not starved when the mempool is full (fairness).
       * Within each author the arrival (i.e. request-number) order is preserved — only the
