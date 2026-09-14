@@ -29,7 +29,7 @@ class ExportTest extends AnyFunSuite {
         assert(blueprint.preamble.title == "Hydrozoa Rule-Based Regime Validators")
         assert(blueprint.preamble.version.contains("1.0.0"))
         assert(blueprint.preamble.license.contains("Apache-2.0"))
-        assert(blueprint.validators.length == 2)
+        assert(blueprint.validators.length == 3)
     }
 
     test("Blueprint is up-to-date with compiled scripts") {
@@ -90,6 +90,28 @@ class ExportTest extends AnyFunSuite {
         ) {
             freshTreasury.compiledCode
         }
+
+        // Check Rule-Based Regime Validator
+        val freshRegime = freshBlueprint.validators(2)
+        val existingRegime = existingBlueprint.validators(2)
+
+        assertResult(
+          existingRegime.hash,
+          "Rule-Based Regime script hash mismatch. " +
+              s"Expected: ${existingRegime.hash}, " +
+              s"Got: ${freshRegime.hash}. " +
+              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+        ) {
+            freshRegime.hash
+        }
+
+        assertResult(
+          existingRegime.compiledCode,
+          "Rule-Based Regime compiled code should match. " +
+              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+        ) {
+            freshRegime.compiledCode
+        }
     }
 
     test("Blueprint contains correct validator metadata") {
@@ -120,6 +142,14 @@ class ExportTest extends AnyFunSuite {
           "Treasury validator should have compiled code"
         )
         assert(treasuryValidator.hash.isDefined, "Treasury validator should have script hash")
+
+        // Check Rule-Based Regime Validator
+        val regimeValidator = blueprint.validators(2)
+        assert(regimeValidator.title == "Rule-Based Regime Validator")
+        assert(regimeValidator.datum.isDefined, "Regime validator should have datum schema")
+        assert(regimeValidator.redeemer.isDefined, "Regime validator should have redeemer schema")
+        assert(regimeValidator.compiledCode.isDefined, "Regime validator should have compiled code")
+        assert(regimeValidator.hash.isDefined, "Regime validator should have script hash")
     }
 
     test("Blueprint datum and redeemer schemas are present") {
@@ -152,5 +182,15 @@ class ExportTest extends AnyFunSuite {
         val treasuryRedeemer = treasuryValidator.redeemer.get
         assert(treasuryRedeemer.schema.title.contains("TreasuryRedeemer"))
         assert(treasuryRedeemer.schema.anyOf.isDefined, "TreasuryRedeemer should be an enum")
+
+        // Check Rule-Based Regime schemas
+        val regimeValidator = blueprint.validators(2)
+        val regimeDatum = regimeValidator.datum.get
+        assert(regimeDatum.schema.title.contains("RuleBasedRegimeDatum"))
+        assert(regimeDatum.schema.fields.isDefined, "RuleBasedRegimeDatum should have fields")
+
+        val regimeRedeemer = regimeValidator.redeemer.get
+        assert(regimeRedeemer.schema.title.contains("RegimeRedeemer"))
+        assert(regimeRedeemer.schema.anyOf.isDefined, "RegimeRedeemer should be an enum with anyOf")
     }
 }

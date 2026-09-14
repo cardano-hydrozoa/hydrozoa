@@ -100,7 +100,7 @@ final case class RuleBasedActor(
             traced(
               before = RuleBasedActorEvent.Regime.Querying,
               action = cardanoBackend.utxosAt(
-                address = config.headMultisigAddress,
+                address = config.ruleBasedRegimeAddress,
                 asset = (
                   config.headMultisigScript.policyId,
                   config.headTokenNames.regimeWitnessTokenName
@@ -234,10 +234,10 @@ final case class RuleBasedActor(
             }
         } yield treasuryUtxo
 
-    /** Read the regime utxo (by HRWT beacon at the head multisig address) and parse it. The
-      * rule-based txs reference it for the immutable head-identity fields. Missing or datum-less is
-      * recoverable — the HRWT still sits in the datum-less multisig regime utxo until the fallback
-      * tx lands (or it was rolled back); other parse failures throw.
+    /** Read the regime utxo (by HRWT beacon at the rule-based regime script address) and parse it.
+      * The rule-based txs reference it for the immutable head-identity fields. Missing is
+      * recoverable — the HRWT sits in the multisig regime utxo, at the head multisig address, until
+      * the fallback tx moves it here (or the fallback was rolled back); parse failures throw.
       */
     private def getRegime: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] = {
         val regimeMissing: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] =
@@ -251,8 +251,6 @@ final case class RuleBasedActor(
                 case (i, o) :: Nil =>
                     RuleBasedRegimeUtxo.parse(Utxo(i, o)) match {
                         case Right(u) => pure(u)
-                        case Left(_: RuleBasedRegimeOutput.ParseError.RegimeDatumMissing) =>
-                            regimeMissing
                         case Left(e) =>
                             raiseError(Error.ParseError.Regime.WrappedRegimeParseError(e))
                     }

@@ -1,6 +1,8 @@
 package hydrozoa.rulebased.ledger.l1.utxo
 
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedRegimeValidator.RegimeRedeemer
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedRegimeValidator.given
 import hydrozoa.rulebased.ledger.l1.state.RegimeState.RuleBasedRegimeDatum
 import hydrozoa.rulebased.ledger.l1.state.RegimeState.given
 import scala.util.{Failure, Success, Try}
@@ -10,15 +12,21 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.onchain.plutus.prelude.List as PList
 import scalus.cardano.onchain.plutus.v3.{TxId, TxOutRef}
+import scalus.cardano.txbuilder.Datum.DatumInlined
+import scalus.cardano.txbuilder.ScriptSource.PlutusScriptAttached
+import scalus.cardano.txbuilder.ThreeArgumentPlutusScriptWitness
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ReferenceOutput, Send, Spend}
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.{fromData, toData}
 
 /** The rule-based regime utxo: the HRWT beacon plus the immutable head-identity datum, produced by
-  * the FallbackTx at the head multisig (native script) address. The head-identity datum is what
-  * distinguishes it from the multisig regime utxo at the same address, which carries the head's
-  * `headParamsHash` instead. Consumed only as a reference input during the rule-based regime; spent
-  * (and its beacon burned) by the DeinitTx.
+  * the FallbackTx at the [[hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedRegimeValidator]]
+  * address. Consumed only as a reference input during the rule-based regime; spent (and its beacon
+  * burned) by the DeinitTx.
+  *
+  * It sits at its own validator rather than at the head multisig address — where the multisig
+  * regime utxo carrying `headParamsHash` lives — so that a sweep of that address cannot consume it:
+  * without the regime utxo the rule-based treasury can neither resolve nor evacuate.
   */
 final case class RuleBasedRegimeUtxo(input: TransactionInput) {
 
@@ -28,12 +36,17 @@ final case class RuleBasedRegimeUtxo(input: TransactionInput) {
     def referenceOutput(using config: RuleBasedRegimeOutput.Config): ReferenceOutput =
         ReferenceOutput(toUtxo)
 
-    /** Spends the regime utxo under the head multisig native script (attached by value, so the step
-      * is order-independent). Any spend requires the unanimous multisig — the deinit condition.
+    /** Spends the regime utxo under its own validator, which accepts only a tx that burns both the
+      * HRWT this utxo holds and the treasury beacon. The script comes from the deployed reference
+      * utxo, so the spending tx must also carry `config.referenceRegime`.
       */
     def spend(using config: RuleBasedRegimeOutput.Config): Spend = Spend(
       toUtxo,
-      config.headMultisigScript.witnessValue
+      ThreeArgumentPlutusScriptWitness(
+        PlutusScriptAttached,
+        RegimeRedeemer.Deinit.toData,
+        DatumInlined
+      )
     )
 }
 
@@ -77,7 +90,7 @@ case object RuleBasedRegimeOutput {
     )
 
     def toOutput(using config: Config): Babbage = Babbage(
-      address = config.headMultisigAddress,
+      address = config.ruleBasedRegimeAddress,
       value = Value(config.collectiveContingency.minAdaForRegime) +
           Value.asset(
             config.headMultisigScript.policyId,
@@ -96,7 +109,7 @@ case object RuleBasedRegimeOutput {
     def validate(output: TransactionOutput)(using config: Config): Either[ParseError, Unit] =
         for {
             _ <- output.address match {
-                case sa: ShelleyAddress if sa == config.headMultisigAddress => Right(())
+                case sa: ShelleyAddress if sa == config.ruleBasedRegimeAddress => Right(())
                 case _ => Left(ParseError.RegimeAtWrongAddress(output))
             }
 
@@ -128,7 +141,7 @@ case object RuleBasedRegimeOutput {
 
         override def getMessage: String = this match
             case RegimeAtWrongAddress(output) =>
-                s"Regime utxo is not at the head multisig address: $output"
+                s"Regime utxo is not at the rule-based regime script address: $output"
             case RegimeBeaconMissing(output) =>
                 s"Regime utxo does not hold exactly one HRWT beacon token: $output"
             case RegimeDatumMissing(output) =>
