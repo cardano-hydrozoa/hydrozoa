@@ -73,7 +73,7 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
           _.blockNum,
           BlockNumber(1),
           _.increment,
-          outboxCap = 1024,
+          outboxDepth = 1024,
           serveFromJournal = (_, _) => IO.pure(Nil)
         )
 

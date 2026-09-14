@@ -64,6 +64,11 @@ object FastConsensusActor:
           * hub's coil peers receive it. `None` off a hub.
           */
         coilRelay: Option[CoilRelay.Handle] = None,
+        /** A coil peer's uplink to its hub: [[SoftConfirmedHighWater]] is sent here so the liaison
+          * can anchor its block, soft-ack and request pull ceilings. `None` on a head peer, whose
+          * mesh lanes need no ceiling beyond the request one the liaisons already carry.
+          */
+        coilUplink: Option[liaison.LiaisonProtocol.CoilToHubHandle] = None,
     )
 
     /** One cell per in-flight block number. A cell knows the block number it is collecting for, may
@@ -194,6 +199,7 @@ class FastConsensusActor(
                       headPeerLiaisons = _connections.headPeerLiaisons,
                       stackComposer = _connections.stackComposer,
                       coilRelay = _connections.coilRelay,
+                      coilUplink = _connections.coilUplink,
                     )
                   )
                 )
@@ -333,14 +339,19 @@ class FastConsensusActor(
         _ <- conn.blockWeaver ! confirmed
         _ <- conn.stackComposer ! confirmed
 
-        // Backpressure: tell the sequencer and the mesh liaisons this block's per-author high-water
-        // request number so they can advance their confirmed-high-water windows. A block carries
-        // only the authors that appear in it, so an empty map is a no-op (docs/spec/fast-consensus).
+        // Backpressure: announce this block and the per-author high-water request number it carried,
+        // so recipients can advance their confirmed-high-water windows. A block carries only the
+        // authors that appear in it, so an empty map leaves every recipient unchanged
+        // (docs/spec/fast-consensus.md).
+        //
+        // Sent on EVERY soft-confirmation, empty map included: a coil peer anchors its block and
+        // soft-ack pull ceilings on `blockNum`, which advances whether or not the block carried
+        // requests. `coilUplink` is the only non-empty recipient on a coil peer.
         requestHighWater = ReplayCursors.maxRequestNumberPerPeer(confirmed.requests.map(_._1))
-        _ <- IO.whenA(requestHighWater.nonEmpty) {
-            val msg = SoftConfirmedHighWater(requestHighWater)
-            conn.requestSequencer.traverse_(_ ! msg) >> conn.headPeerLiaisons.traverse_(_ ! msg)
-        }
+        highWaterMsg = SoftConfirmedHighWater(confirmed.blockNum, requestHighWater)
+        _ <- conn.requestSequencer.traverse_(_ ! highWaterMsg)
+        _ <- conn.headPeerLiaisons.traverse_(_ ! highWaterMsg)
+        _ <- conn.coilUplink.traverse_(_ ! highWaterMsg)
 
         // Announce any postponed own-ack for the next block now that this cell is done.
         _ <- cell.postponedNextBlockOwnAck.traverse_(announceAck)
