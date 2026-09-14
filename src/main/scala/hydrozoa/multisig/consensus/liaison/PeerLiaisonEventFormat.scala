@@ -29,6 +29,11 @@ object PeerLiaisonEventFormat:
                 debug(s"dropping stale reply batch=$received (outstanding=$outstanding)")
             case BatchRejected(batchNum, reason) =>
                 warn(s"rejecting reply batch=$batchNum: $reason")
+            case CoilHardAckHeadRefused(hub, askedStack, ceilingStack) =>
+                debug(
+                  s"coil-hard-ack lane head refused: hub=$hub askedStack=$askedStack " +
+                      s"ceilingStack=$ceilingStack"
+                )
         }
     }
 

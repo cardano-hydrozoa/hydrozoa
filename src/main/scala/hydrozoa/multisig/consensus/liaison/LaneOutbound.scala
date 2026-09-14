@@ -212,6 +212,12 @@ final class LaneOutbound[T, N] private (
                             }
         }
 
+    /** The item held at `number`, iff the outbox still holds it. **Diagnostics only**: `None` means
+      * "outside the in-memory window", NOT "does not exist" — the journal may well have it. Never
+      * drive protocol decisions off this; use [[reply]], which consults both.
+      */
+    def heldAt(number: N): IO[Option[T]] = outbox.get.map(_.get(number))
+
     /** Whether the outbox currently holds nothing (for the link's empty-batch bookkeeping). */
     def outboxIsEmpty: IO[Boolean] = outbox.get.map(_.isEmpty)
 }

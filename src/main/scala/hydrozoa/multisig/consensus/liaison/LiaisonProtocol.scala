@@ -3,7 +3,7 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.IO
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, SoftAck}
-import hydrozoa.multisig.consensus.{SoftConfirmedHighWater, UserRequestWithId}
+import hydrozoa.multisig.consensus.{HardConfirmedHighWater, SoftConfirmedHighWater, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.stack.StackBrief
 
@@ -60,11 +60,13 @@ object LiaisonProtocol {
             (BlockBrief.Next | StackBrief | UserRequestWithId | SoftAck | HardAck | HardAckWithId)
 
     /** Coil → hub: pulls the full population ([[BatchMessages.Population.New]]) and serves the
-      * hub's pull of this coil peer's own hard-ack ([[BatchMessages.OwnHardAck.Get]]). Accepts only
-      * its own `HardAck` to append.
+      * hub's pull of this coil peer's own hard-ack ([[BatchMessages.OwnHardAck.Get]]). Accepts its
+      * own `HardAck` to append, plus the two local confirmation notifications its pull ceilings are
+      * anchored on (design/liaison-backpressure.md).
       */
     type CoilToHubRequest =
-        Control | BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck
+        Control | BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck |
+            SoftConfirmedHighWater | HardConfirmedHighWater
 
     type HeadToHeadHandle = ActorRef[IO, HeadToHeadRequest]
     type HubToCoilHandle = ActorRef[IO, HubToCoilRequest]

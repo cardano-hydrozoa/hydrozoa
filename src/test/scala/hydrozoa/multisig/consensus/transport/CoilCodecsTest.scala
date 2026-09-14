@@ -72,11 +72,15 @@ class CoilCodecsTest extends AnyFunSuite {
         val get = Population.Get(
           batchNum = BatchNumber(5),
           block = BlockNumber(1),
+          blockCeiling = BlockNumber(4),
           stack = StackNumber(1),
+          stackCeiling = StackNumber(2),
           requests = Map(h0 -> RequestNumber.zero),
+          requestCeilings = Map(h0 -> RequestNumber(3000L)),
           softAcks = Map(h0 -> SoftAckNumber.zero.increment),
           headHardAcks = Map(h0 -> HardAckNumber.zero),
-          coilHardAcks = Map(h0 -> HubHardAckNumber.zero)
+          coilHardAcks = Map(h0 -> HubHardAckNumber.zero),
+          coilHardAckCeiling = StackNumber(21)
         )
         assert(roundTrip(CoilFrame.Msg(get)) == CoilFrame.Msg(get))
     }

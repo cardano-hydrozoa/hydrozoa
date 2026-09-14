@@ -5,6 +5,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
@@ -14,7 +15,7 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, H
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, SlowConsensusActor, StackComposer, UserRequestWithId}
+import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, HardConfirmedHighWater, SlowConsensusActor, SoftConfirmedHighWater, StackComposer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -141,6 +142,16 @@ abstract class PeerLiaisonCoilToHub(
           serveFromJournal = ownHardAckBacking.serveFromJournal
         )
 
+    // ---- Pull ceiling anchors -------------------------------------------------------------------
+    // This peer's OWN confirmed progress, learned from its local consensus actors. Every pull
+    // ceiling is measured from these, never from a lane cursor: a cursor moves whenever we consume,
+    // so a cursor-relative bound could never refuse anything. Cold values mean "nothing confirmed
+    // yet", which is exactly the tightest correct ceiling on a fresh boot.
+    private val softConfirmedBlock = Ref.unsafe[IO, BlockNumber](BlockNumber.zero)
+    private val hardConfirmedStack = Ref.unsafe[IO, StackNumber](StackNumber.zero)
+    private val confirmedRequestHighWater =
+        Ref.unsafe[IO, Map[HeadPeerNumber, RequestNumber]](Map.empty)
+
     // ---- Connections ----------------------------------------------------------------------------
     private val connections =
         Ref.unsafe[IO, Option[PeerLiaisonCoilToHub.Connections]](None)
@@ -157,15 +168,48 @@ abstract class PeerLiaisonCoilToHub(
         )
 
     // ---- Pull half (population) -----------------------------------------------------------------
+    // Cold ceilings: nothing is confirmed yet, so these are the tightest correct bounds. `start`
+    // rebuilds the whole request from the live lanes and anchors before the first pull, so these
+    // values only ever supply the batch number.
     private val initialGet: Population.Get = Population.Get(
       batchNum = BatchNumber.zero,
       block = BlockNumber(1),
+      blockCeiling = blockCeiling(BlockNumber.zero),
       stack = StackNumber(1),
+      stackCeiling = stackCeiling(StackNumber.zero),
       requests = headPeerNums.map(_ -> RequestNumber.zero).toMap,
+      requestCeilings = headPeerNums.map(_ -> requestCeiling(RequestNumber.zero)).toMap,
       softAcks = headPeerNums.map(_ -> SoftAckNumber.zero.increment).toMap,
       headHardAcks = headPeerNums.map(_ -> HardAckNumber.zero).toMap,
-      coilHardAcks = hubNums.map(_ -> HubHardAckNumber.zero).toMap
+      coilHardAcks = hubNums.map(_ -> HubHardAckNumber.zero).toMap,
+      coilHardAckCeiling = coilHardAckCeiling(StackNumber.zero)
     )
+
+    /** Blocks past the soft-confirmed one this peer will buffer — the same coefficient the request
+      * window scales by, so the block, soft-ack and request lanes advance together rather than one
+      * starving another.
+      */
+    private def blockCeiling(softConfirmed: BlockNumber): BlockNumber =
+        BlockNumber((softConfirmed: Int) + config.backpressureCoefficient)
+
+    /** One stack past the hard-confirmed one. A leader already gates stack N+1 on N
+      * hard-confirming, so nothing beyond the next stack can exist to serve.
+      */
+    private def stackCeiling(hardConfirmed: StackNumber): StackNumber =
+        StackNumber((hardConfirmed: Int) + 1)
+
+    /** [[PeerLiaisonCoilToHub.coilHardAckStackWindow]] for why this window is far wider. */
+    private def coilHardAckCeiling(hardConfirmed: StackNumber): StackNumber =
+        StackNumber((hardConfirmed: Int) + PeerLiaisonCoilToHub.coilHardAckStackWindow)
+
+    /** The request ceiling for one author: `backpressureCoefficient` blocks' cap past its confirmed
+      * high-water, matching what that author's sequencer may admit — the mesh's rule, applied per
+      * author because the hub serves every author's lane down this one link.
+      */
+    private def requestCeiling(confirmed: RequestNumber): RequestNumber =
+        RequestNumber(
+          (confirmed: Long) + config.backpressureCoefficient * config.maxRequestsPerBlock
+        )
 
     private def buildGet(batchNum: BatchNumber): IO[Population.Get] =
         for {
@@ -179,7 +223,24 @@ abstract class PeerLiaisonCoilToHub(
             ch <- coilHardAckLanes.toList
                 .traverse { case (h, l) => l.cursor.map(h -> _) }
                 .map(_.toMap)
-        } yield Population.Get(batchNum, b, s, r, sa, hh, ch)
+            block <- softConfirmedBlock.get
+            stack <- hardConfirmedStack.get
+            confirmed <- confirmedRequestHighWater.get
+        } yield Population.Get(
+          batchNum = batchNum,
+          block = b,
+          blockCeiling = blockCeiling(block),
+          stack = s,
+          stackCeiling = stackCeiling(stack),
+          requests = r,
+          requestCeilings = headPeerNums
+              .map(h => h -> requestCeiling(confirmed.getOrElse(h, RequestNumber.zero)))
+              .toMap,
+          softAcks = sa,
+          headHardAcks = hh,
+          coilHardAcks = ch,
+          coilHardAckCeiling = coilHardAckCeiling(stack)
+        )
 
     /** Verify every lane against its cursor; iff all match, advance them all (atomic). */
     private def accept(pop: Population.New): IO[Either[String, Unit]] = {
@@ -306,11 +367,25 @@ abstract class PeerLiaisonCoilToHub(
         PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: CoilToHubRequest): IO[Unit] = req match {
-        case PreStart            => preStartLocal
-        case ResendCurrent       => puller.resend
-        case pop: Population.New => puller.handleReply(pop)
-        case get: OwnHardAck.Get => server.handleGet(get)
-        case ack: HardAck        => ownHardAckLane.append(ack) >> server.afterAppend
+        case PreStart                   => preStartLocal
+        case ResendCurrent              => puller.resend
+        case pop: Population.New        => puller.handleReply(pop)
+        case get: OwnHardAck.Get        => server.handleGet(get)
+        case ack: HardAck               => ownHardAckLane.append(ack) >> server.afterAppend
+        case hw: SoftConfirmedHighWater =>
+            // Merge by max: a block carries only the authors that appear in it, and blocks arrive
+            // in order but the notification is advisory, never a cursor.
+            softConfirmedBlock.update(cur => Ordering[BlockNumber].max(cur, hw.blockNum)) >>
+                confirmedRequestHighWater.update(cur =>
+                    hw.highWater.foldLeft(cur) { case (acc, (peer, rn)) =>
+                        acc.updated(
+                          peer,
+                          acc.get(peer).fold(rn)(Ordering[RequestNumber].max(_, rn))
+                        )
+                    }
+                )
+        case hc: HardConfirmedHighWater =>
+            hardConfirmedStack.update(cur => Ordering[StackNumber].max(cur, hc.stackNum))
     }
 
     private def preStartLocal: IO[Unit] =
@@ -386,7 +461,21 @@ object PeerLiaisonCoilToHub {
         IO(new PeerLiaisonCoilToHub(config, pendingConnections, tracer, persistence) {})
 
     type Config =
-        OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section
+        OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section &
+            BlockConfig.Section
+
+    /** Stacks past this coil peer's hard-confirmed stack that its `coilHardAck` lanes will accept.
+      *
+      * Wider than every other window, and deliberately so. A hub stamps coil acks in ARRIVAL order
+      * across all its coil peers, so stack numbers do not rise with that lane's numbering, and a
+      * ceiling that refuses the ack at the cursor stops a contiguous lane. Any window >= 1 is
+      * provably safe — a coil emits an ack for stack N+1 only after locally hard-confirming N, so a
+      * full quorum for N is always stamped below any N+1 ack — and this is margin over that proof,
+      * not a substitute for it. See design/liaison-backpressure.md.
+      *
+      * A constant rather than a config field: it is a correctness margin, not an operating knob.
+      */
+    val coilHardAckStackWindow: Int = 20
 
     type Handle = ActorRef[IO, LiaisonProtocol.CoilToHubRequest]
 
