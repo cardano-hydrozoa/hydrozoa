@@ -1,11 +1,15 @@
 # Liaison backpressure
 
-For whoever implements GUM-310. Its single job: for **every** lane on **every** liaison
-link, fix what it carries, how wide a reply is, and what ceiling bounds it — in one
-place. Graduates into [`docs/spec/coil-network.md`](../docs/spec/coil-network.md) §5.5
-once the hub->coil ceilings land; until then only the mesh `request` ceiling exists.
+For whoever works on the liaison lanes next. Its single job: for **every** lane on
+**every** link, record what it carries, how wide a reply is, and what ceiling bounds it
+— in one place.
 
-## What a ceiling is here
+Still in `design/` rather than `docs/spec/` because one change is outstanding: the brief
+and ack lanes reply one item at a time today, and lifting that moves numbers in every
+table below. It graduates into
+[`docs/spec/coil-network.md`](../docs/spec/coil-network.md) §5.5 once it does.
+
+## What a ceiling is
 
 A `GetMsgBatch` carries a **cursor** per lane — the next number the puller expects. A
 **ceiling** is the separate bound the puller sends saying how far past its own
@@ -13,17 +17,16 @@ A `GetMsgBatch` carries a **cursor** per lane — the next number the puller exp
 (`servable: T => Boolean`), so a lane can be bounded in a dimension other than its own
 numbering.
 
-Anchor a ceiling to **confirmed** progress, never to the cursor: `cursor + k` moves
-whenever the puller consumes, so it can refuse nothing — that is a batch-size cap, not
-backpressure.
+A ceiling anchors to **confirmed** progress, never to a cursor. A cursor moves whenever
+the puller consumes, so a cursor-relative bound refuses nothing — that is a batch-size
+cap, not backpressure.
 
-Truncation is always `takeWhile`, never `filter`. A contiguous lane tolerates a short
-serve, not a hole, because the remote's `LaneInbound.verify` requires consecutive
-numbers.
+Truncation is `takeWhile`, never `filter`. A contiguous lane tolerates a short serve, not
+a hole, because the remote's `LaneInbound.verify` requires consecutive numbers.
 
-`maxPerReply` is load-bearing twice over: it sets the reply width **and**, since
-GUM-310's first commit, the outbox size (`capacity = peerLiaisonOutboxDepth *
-maxPerReply`). Raising a lane's reply width grows its cache in step.
+`maxPerReply` is load-bearing twice: it sets the reply width **and** the outbox size
+(`capacity = peerLiaisonOutboxDepth * maxPerReply`). Raising a lane's reply width grows
+its cache in step.
 
 ## Mesh (head <-> head) — `Mesh.Get` / `Mesh.New`
 
@@ -39,37 +42,38 @@ so every lane has both an outbox and a cursor.
 | 5 | `hardAckLane` | `HardAck` | `HardAckNumber` | contiguous | 1 | none |
 | 6 | `hubHardAckLane` | `HardAckWithId` | `HubHardAckNumber` | contiguous | 1 | none |
 
-**Unchanged by GUM-310.** N-of-N confirmation gates production, so a leader cannot run
-ahead: blocks and stacks are self-limiting and the ack lanes track them. Only user
-requests have an unbounded producer, which is why lane 3 is the only one ceilinged.
+Five lanes need no ceiling: N-of-N confirmation gates production, so a leader cannot run
+ahead — blocks and stacks are self-limiting and the ack lanes track them. Only user
+requests have an unbounded producer, which is why lane 3 is the only one bounded.
 
 Lane 6 carries the same re-sequenced coil acks as the hub->coil link's lane 6, so it has
 the same non-monotonic `stackNum` — it simply is not ceilinged, so that never arises.
 
 ## Hub -> coil — `Population.Get` / `Population.New`
 
-The hub serves the **full population**. All `LaneOutbound`, all contiguous.
+The hub serves the **full population** and can run arbitrarily far ahead of one coil
+peer, so every lane is bounded. All `LaneOutbound`, all contiguous.
 
 | # | lane | count | item | numbered by | `maxPerReply` | ceiling dimension | anchor + window | ordering agrees? |
 |---|---|---|---|---|---|---|---|---|
 | 1 | `blockLane` | 1 | `BlockBrief.Next` | `BlockNumber` | 1 | `BlockNumber` | soft-confirmed block **+ `backpressureCoefficient`** | yes |
 | 2 | `stackLane` | 1 | `StackBrief` | `StackNumber` | 1 | `StackNumber` | hard-confirmed stack **+ 1** | yes |
 | 3 | `requestLanes` | `nHeadPeers` | `UserRequestWithId` | `RequestNumber` | `peerLiaisonMaxRequestsPerBatch` | `RequestNumber` | per-author confirmed **+ `backpressureCoefficient * maxRequestsPerBlock`** | yes |
-| 4 | `softAckLanes` | `nHeadPeers` | `SoftAck` | `SoftAckNumber` | 1 | same — `SoftAckNumber` *is* the block number | soft-confirmed block **+ `backpressureCoefficient`** | yes |
+| 4 | `softAckLanes` | `nHeadPeers` | `SoftAck` | `SoftAckNumber` | 1 | `blockNum` — a `SoftAckNumber` *is* the block number | soft-confirmed block **+ `backpressureCoefficient`** | yes |
 | 5 | `headHardAckLanes` | `nHeadPeers` | `HardAck` | `HardAckNumber` | 1 | **`ack.stackNum`** | hard-confirmed stack **+ 1** | yes — round-1 or sole precedes round-2, stacks close in order |
-| 6 | `coilHardAckLanes` | `nHubs` | `HardAckWithId` | `HubHardAckNumber` | 1 | **`ack.stackNum`** | hard-confirmed stack **+ 20** | **no** — `CoilAckSequencer` stamps arrivals from many coils |
+| 6 | `coilHardAckLanes` | `nHubs` | `HardAckWithId` | `HubHardAckNumber` | 1 | **`ack.stackNum`** | hard-confirmed stack **+ `coilHardAckStackWindow`** (20) | **no** — `CoilAckSequencer` stamps arrivals from many coils |
 
-Lanes share anchors, so `Population.Get` carries four values, not six:
+Lanes share anchors, so `Population.Get` carries four ceilings for six lane families:
 
 | field | serves |
 |---|---|
 | `blockCeiling: BlockNumber` | lanes 1, 4 |
 | `stackCeiling: StackNumber` | lanes 2, 5 |
-| `coilHardAckCeiling: StackNumber` | lane 6 |
 | `requestCeilings: Map[HeadPeerNumber, RequestNumber]` | lane 3 |
+| `coilHardAckCeiling: StackNumber` | lane 6 |
 
-`blockCeiling` and a `softAckLanes` cursor are the same value in different types, so
-lane 4 converts rather than taking a field of its own.
+`blockCeiling` and a `softAckLanes` cursor are the same value in different types, so lane
+4 converts rather than taking a field of its own.
 
 ## Coil -> hub — `OwnHardAck.Get` / `OwnHardAck.New`
 
@@ -91,7 +95,7 @@ one at its cursor, and any window >= 1 admits it.
 `HubHardAckNumber` on arrival across all of a hub's coil peers — the number is transport
 ordering only — so a straggler's ack for an earlier stack lands among a later stack's.
 
-### Why lane 6 still cannot deadlock
+### Why lane 6 cannot deadlock
 
 The apparent danger: a coil at hard-confirmed `S` with window `w` refuses an ack for
 stack `S + w + 1` sitting at its cursor. If the acks it still needs were behind that
@@ -117,31 +121,41 @@ straggler: the acks needed are the ones that already formed the head's quorum. I
 survives the quorum being spread across hubs — each hub's lane carries its share below
 the blocking point, and the coil needs quorum in aggregate, not per lane.
 
-**+20 is margin over that proof, not a substitute for it.**
+`coilHardAckStackWindow` is margin over that proof, not a substitute for it. It is a
+constant on `PeerLiaisonCoilToHub` rather than a config field: a correctness margin, not
+an operating knob.
 
-One stall does remain, and it is the ceiling working as intended: a coil behind on
-*blocks* rather than acks stops advancing its hard-confirmed stack, so the ack lanes
-reach the ceiling and park until block catch-up moves it.
+Refusing the item **at the coil's cursor** on a `coilHardAckLane` is that proof's
+precondition exactly, so the hub traces it (`PeerLiaisonEvent.CoilHardAckHeadRefused`,
+via `LaneOutbound.heldAt` — outbox-only, diagnostics-only). A few are normal: a coil
+behind on *blocks* rather than acks stops advancing its hard-confirmed stack, so its ack
+lanes reach the ceiling and park until block catch-up moves it, which is the ceiling
+working. A lane that never resumes is not.
 
-When the hub refuses the item **at the coil's cursor** on a `coilHardAckLane`, that is
-the deadlock precondition exactly. Trace it, so a wrong reordering bound surfaces as a
-diagnosable stall rather than a silent permanent one.
+## Where the anchors come from
 
-## Anchors the coil liaison needs
+`PeerLiaisonCoilToHub` measures every ceiling from this peer's own confirmed progress,
+held in three `Ref`s and merged by max.
 
-The ceilings are computed by `PeerLiaisonCoilToHub`, which today holds none of the three
-inputs.
-
-| anchor | source | reaches the liaison? |
+| anchor | arrives as | from |
 |---|---|---|
-| per-author confirmed request high-water | `FastConsensusActor`, as `SoftConfirmedHighWater` | computed on a coil and **dropped** — `requestSequencer` and `headPeerLiaisons` are both empty there |
-| soft-confirmed block | `FastConsensusActor` | no — its `Connections` has no path to the coil liaison |
-| hard-confirmed stack | `SlowConsensusActor` | not sent, but it already holds `coilUplink` |
+| soft-confirmed block | `SoftConfirmedHighWater.blockNum` | `FastConsensusActor`, on every soft-confirmation |
+| per-author confirmed request high-water | `SoftConfirmedHighWater.highWater` | the same message |
+| hard-confirmed stack | `HardConfirmedHighWater.stackNum` | `SlowConsensusActor`, on every hard-confirmation |
 
-So `FastConsensusActor.Connections` needs a `coilUplink` — `None` on a head peer,
-`Some(hubLiaison)` on a coil — mirroring `SlowConsensusActor`, which already has one.
+Both travel `coilUplink`, which `FastConsensusActor` and `SlowConsensusActor` each hold
+as `Option` — `None` on a head peer, whose mesh lanes need no ceiling beyond lane 3's.
 
-## Not doing
+`SoftConfirmedHighWater` is sent on **every** soft-confirmation, empty request map
+included: `blockNum` advances whether or not the block carried requests, and a coil peer
+anchors two lanes on it. `HardConfirmedHighWater` carries the number alone rather than
+the `Stack.HardConfirmed` it came from — a liaison bounds pulls, it does not inspect
+stacks.
+
+Cold values mean "nothing confirmed yet", which is the tightest correct ceiling on a
+fresh boot.
+
+## Out of scope
 
 - **A floor on `coilHardAckLanes`.** A coil cannot compute which acks it may skip: that
   needs the `stackNum` of acks it has not received. A hub could advertise one, but the
@@ -149,5 +163,12 @@ So `FastConsensusActor.Connections` needs a `coilUplink` — `None` on a head pe
   its own durable mark (the shape `StoreKey.CoilStampMark` already has) plus a jump path
   through `LaneInbound.verify`. Raising that lane's `maxPerReply` gets most of the
   catch-up win for none of that cost.
-- **Ceilings on the mesh.** See above.
-- **A ceiling on lane 7.** See above.
+- **Ceilings on the mesh**, and **a ceiling on lane 7**. See above.
+
+## Outstanding
+
+**Lift `maxPerReply` above 1 on the brief and ack lanes.** At 1, a coil peer that has
+fallen behind walks every ack one per round trip, and no ceiling touches that — catch-up
+is round-trip-bound, not buffer-bound. Both `capacity` and the ceilings are already
+written to rescale with it, so it is the reply width and its cache that move, not this
+design.
