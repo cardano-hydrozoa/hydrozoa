@@ -92,17 +92,17 @@ abstract class PeerLiaisonHubToCoil(
     private val coilHardAckBackings =
         hubNums.map(h => h -> LaneOutgoingBacking.hubHardAck(backend, h)).toMap
 
-    // Every outbound lane holds at most this many items; older ones are served from the journal.
+    // Every outbound lane caches this many replies; older entries are served from the journal.
     // One liaison exists per *configured* coil peer, so a coil that is configured but not connected
     // advances no cursor here — the cap is the only thing that bounds its lanes.
-    private val outboxCap: Int = config.peerLiaisonOutboxCap
+    private val outboxDepth: Int = config.peerLiaisonOutboxDepth
 
     private val blockLane =
         LaneOutbound.contiguous[BlockBrief.Next, BlockNumber](
           _.blockNum,
           BlockNumber(1),
           _.increment,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           serveFromJournal = blockBacking.serveFromJournal
         )
     private val stackLane =
@@ -110,7 +110,7 @@ abstract class PeerLiaisonHubToCoil(
           _.stackNum,
           StackNumber(1),
           _.increment,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           serveFromJournal = stackBacking.serveFromJournal
         )
     private val requestLanes: Map[HeadPeerNumber, LaneOutbound[UserRequestWithId, RequestNumber]] =
@@ -120,7 +120,7 @@ abstract class PeerLiaisonHubToCoil(
               RequestNumber.zero,
               _.increment,
               config.peerLiaisonMaxRequestsPerBatch,
-              outboxCap = outboxCap,
+              outboxDepth = outboxDepth,
               serveFromJournal = requestBackings(h).serveFromJournal
             )
         }.toMap
@@ -130,7 +130,7 @@ abstract class PeerLiaisonHubToCoil(
               _.ackNum,
               SoftAckNumber.zero.increment,
               _.increment,
-              outboxCap = outboxCap,
+              outboxDepth = outboxDepth,
               serveFromJournal = softAckBackings(h).serveFromJournal
             )
         }.toMap
@@ -140,7 +140,7 @@ abstract class PeerLiaisonHubToCoil(
               _.hardAckNum,
               HardAckNumber.zero,
               _.increment,
-              outboxCap = outboxCap,
+              outboxDepth = outboxDepth,
               serveFromJournal = headHardAckBackings(h).serveFromJournal
             )
         }.toMap
@@ -151,7 +151,7 @@ abstract class PeerLiaisonHubToCoil(
               _.seqNum,
               HubHardAckNumber.zero,
               _.increment,
-              outboxCap = outboxCap,
+              outboxDepth = outboxDepth,
               serveFromJournal = coilHardAckBackings(h).serveFromJournal
             )
         }.toMap

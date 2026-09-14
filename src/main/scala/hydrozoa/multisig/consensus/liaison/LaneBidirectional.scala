@@ -41,14 +41,14 @@ object LaneBidirectional {
 
     /** A contiguous bidirectional lane: both directions start at `first`, successor `+1`.
       * `serveFromJournal` reads the outbound entries below the in-memory outbox floor from the
-      * store on a reply; `outboxCap` bounds how many that floor leaves in memory.
+      * store on a reply; `outboxDepth` bounds how many replies that floor leaves in memory.
       */
     def contiguous[T, N: Ordering](
         numberOf: T => N,
         first: N,
         increment: N => N,
         maxPerReply: Int = 1,
-        outboxCap: Int,
+        outboxDepth: Int,
         serveFromJournal: (N, Int) => IO[List[T]]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
@@ -57,7 +57,7 @@ object LaneBidirectional {
             first,
             increment,
             maxPerReply,
-            outboxCap = outboxCap,
+            outboxDepth = outboxDepth,
             serveFromJournal = serveFromJournal
           ),
           LaneInbound.contiguous(numberOf, first, increment)
@@ -66,14 +66,14 @@ object LaneBidirectional {
     /** A sparse bidirectional lane: outbound follows this side's leader schedule (`outboundNext`),
       * inbound the remote's (`inboundNext`). `zero` is "before the first" for both.
       * `serveFromJournal` reads the outbound entries below the in-memory outbox floor from the
-      * store on a reply; `outboxCap` bounds how many that floor leaves in memory.
+      * store on a reply; `outboxDepth` bounds how many replies that floor leaves in memory.
       */
     def sparse[T, N: Ordering](
         numberOf: T => N,
         zero: N,
         outboundNext: N => Option[N],
         inboundNext: N => Option[N],
-        outboxCap: Int,
+        outboxDepth: Int,
         serveFromJournal: (N, Int) => IO[List[T]]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
@@ -81,7 +81,7 @@ object LaneBidirectional {
             numberOf,
             zero,
             outboundNext,
-            outboxCap = outboxCap,
+            outboxDepth = outboxDepth,
             serveFromJournal = serveFromJournal
           ),
           LaneInbound.sparse(numberOf, zero, inboundNext)

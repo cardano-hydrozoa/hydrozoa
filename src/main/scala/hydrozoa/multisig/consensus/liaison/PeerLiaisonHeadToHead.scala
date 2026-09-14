@@ -99,15 +99,15 @@ abstract class PeerLiaisonHeadToHead(
     private val hubHardAckBacking: Option[LaneOutgoingBacking[HardAckWithId, HubHardAckNumber]] =
         Option.when(ownIsHub)(LaneOutgoingBacking.hubHardAck(backend, ownHeadPeerNum))
 
-    // Every outbound lane holds at most this many items; older ones are served from the journal.
-    private val outboxCap: Int = config.peerLiaisonOutboxCap
+    // Every outbound lane caches this many replies; older entries are served from the journal.
+    private val outboxDepth: Int = config.peerLiaisonOutboxDepth
 
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       numberOf = _.blockNum,
       zero = BlockNumber.zero,
       outboundNext = config.nextOwnLeaderBlock,
       inboundNext = after => Some(remoteHead.nextLeaderBlock(after)),
-      outboxCap = outboxCap,
+      outboxDepth = outboxDepth,
       serveFromJournal = blockBacking.serveFromJournal
     )
     private val stackLane = LaneBidirectional.sparse[StackBrief, StackNumber](
@@ -115,7 +115,7 @@ abstract class PeerLiaisonHeadToHead(
       zero = StackNumber.zero,
       outboundNext = config.nextOwnSlowLeaderStack,
       inboundNext = after => Some(remoteHead.nextSlowLeaderStack(after)),
-      outboxCap = outboxCap,
+      outboxDepth = outboxDepth,
       serveFromJournal = stackBacking.serveFromJournal
     )
     private val requestLane = LaneBidirectional.contiguous[UserRequestWithId, RequestNumber](
@@ -123,7 +123,7 @@ abstract class PeerLiaisonHeadToHead(
       RequestNumber.zero,
       _.increment,
       config.peerLiaisonMaxRequestsPerBatch,
-      outboxCap = outboxCap,
+      outboxDepth = outboxDepth,
       serveFromJournal = requestBacking.serveFromJournal
     )
     private val softAckLane =
@@ -131,7 +131,7 @@ abstract class PeerLiaisonHeadToHead(
           _.ackNum,
           SoftAckNumber.zero.increment,
           _.increment,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           serveFromJournal = softAckBacking.serveFromJournal
         )
     private val hardAckLane =
@@ -139,7 +139,7 @@ abstract class PeerLiaisonHeadToHead(
           _.hardAckNum,
           HardAckNumber.zero,
           _.increment,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           serveFromJournal = hardAckBacking.serveFromJournal
         )
     private val hubHardAckLane =
@@ -147,7 +147,7 @@ abstract class PeerLiaisonHeadToHead(
           _.seqNum,
           HubHardAckNumber.zero,
           _.increment,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           // A non-hub has no `HubHardAck` CF, and also never appends here — so `reply` answers from
           // the un-seeded high-water without asking, and this is unreachable. Raising rather than
           // returning nothing keeps it that way: were a non-hub ever to append, the item would be

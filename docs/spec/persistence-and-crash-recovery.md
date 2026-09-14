@@ -873,7 +873,7 @@ differing only in which lanes each serves.
   - **Queue stays empty.** No payloads are eagerly seeded; it fills only as live
     production appends new items, and `reply` serves anything else from the journal.
     That is not a recovery-only mode — it is what the cap makes routine for any remote
-    lagging more than `peerLiaisonOutboxCap` behind.
+    lagging more than `peerLiaisonOutboxDepth` replies behind.
   - **One scalar is restored** — the high-water number (`lastAppended = max(journal
     key)`, payload-free — `LaneOutgoingBacking.highWater`). It is not state to serve; it
     exists so (a) the first post-crash `append` is legal — live production resumes at
@@ -912,8 +912,9 @@ differing only in which lanes each serves.
   bounds an outbox only as well as its remote pulls, though: a configured peer that
   never connects never advances a cursor, so its lanes retain everything the process
   has relayed. `LaneOutbound` therefore also caps each outbox at
-  `peerLiaisonOutboxCap` items (floored at that lane's `maxPerReply`) and evicts the
-  oldest past it. Eviction costs only a store read: everything on a lane is durable
+  `peerLiaisonOutboxDepth * maxPerReply` items — that many replies' worth, so one
+  setting means the same slack on a lane serving one item as on one serving a full
+  request batch — and evicts the oldest past it. Eviction costs only a store read: everything on a lane is durable
   before it is appended (CR4), so an evicted item is still servable — the same path
   every lane uses from a cold start.
 - **Inputs:** remote lane entries — **cursor-gated (CR8)**.

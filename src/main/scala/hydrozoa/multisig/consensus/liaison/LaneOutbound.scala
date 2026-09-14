@@ -43,8 +43,8 @@ import scala.collection.immutable.TreeMap
   * @param maxPerReply
   *   how many items a single [[reply]] may carry (1 for single-item lanes; the request lane
   *   batches).
-  * @param outboxCap
-  *   how many items to keep in memory; see [[capacity]] for the floor applied to it.
+  * @param outboxDepth
+  *   how many *replies* to keep in memory; see [[capacity]] for the item count it yields.
   * @param serveFromJournal
   *   read up to `limit` durable items from a number, for a pull below the outbox floor.
   */
@@ -52,19 +52,21 @@ final class LaneOutbound[T, N] private (
     numberOf: T => N,
     next: Option[N] => Option[N],
     maxPerReply: Int,
-    outboxCap: Int,
+    outboxDepth: Int,
     serveFromJournal: (N, Int) => IO[List[T]]
 )(using ord: Ordering[N]) {
     import LaneOutbound.*
     import ord.mkOrderingOps
 
-    /** The outbox's item cap: `outboxCap`, floored at [[maxPerReply]].
+    /** The outbox's item cap: [[outboxDepth]] replies' worth, i.e. `outboxDepth * maxPerReply`.
       *
-      * The floor is what keeps the outbox worth having. A reply may carry `maxPerReply` items, so a
-      * cap below that could not serve even a perfectly current remote from memory — every pull on
-      * the request lane (`maxPerReply` = `peerLiaisonMaxRequestsPerBatch`) would go to the store.
+      * Sizing in replies rather than items is what makes one knob correct on every lane. A reply
+      * carries at most `maxPerReply` items, so a remote falls below the floor only after lagging
+      * `outboxDepth` replies — the same slack on a lane that serves one item as on one that serves
+      * `peerLiaisonMaxRequestsPerBatch`, whose item counts are otherwise incomparable. It also
+      * rescales on its own when a lane's `maxPerReply` is raised.
       */
-    private val capacity: Int = math.max(outboxCap, maxPerReply)
+    private val capacity: Int = outboxDepth * maxPerReply
 
     private val lastAppended = Ref.unsafe[IO, Option[N]](None)
     private val outbox = Ref.unsafe[IO, TreeMap[N, T]](TreeMap.empty)
@@ -259,14 +261,14 @@ object LaneOutbound {
         first: N,
         increment: N => N,
         maxPerReply: Int = 1,
-        outboxCap: Int,
+        outboxDepth: Int,
         serveFromJournal: (N, Int) => IO[List[T]]
     ): LaneOutbound[T, N] =
         new LaneOutbound[T, N](
           numberOf = numberOf,
           next = _.fold(Some(first))(last => Some(increment(last))),
           maxPerReply = maxPerReply,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           serveFromJournal = serveFromJournal
         )
 
@@ -279,14 +281,14 @@ object LaneOutbound {
         numberOf: T => N,
         zero: N,
         next: N => Option[N],
-        outboxCap: Int,
+        outboxDepth: Int,
         serveFromJournal: (N, Int) => IO[List[T]]
     ): LaneOutbound[T, N] =
         new LaneOutbound[T, N](
           numberOf = numberOf,
           next = last => next(last.getOrElse(zero)),
           maxPerReply = 1,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           serveFromJournal = serveFromJournal
         )
 }

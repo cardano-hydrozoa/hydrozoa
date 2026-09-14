@@ -137,7 +137,7 @@ abstract class PeerLiaisonCoilToHub(
           _.hardAckNum,
           HardAckNumber.zero,
           _.increment,
-          outboxCap = config.peerLiaisonOutboxCap,
+          outboxDepth = config.peerLiaisonOutboxDepth,
           serveFromJournal = ownHardAckBacking.serveFromJournal
         )
 
