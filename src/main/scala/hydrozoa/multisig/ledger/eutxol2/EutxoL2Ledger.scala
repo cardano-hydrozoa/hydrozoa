@@ -7,8 +7,9 @@ import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
+import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.multisig.ledger.eutxol2.store.L2StoreCodecs.snapshotCodec
 import hydrozoa.multisig.ledger.eutxol2.store.{L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -20,6 +21,7 @@ import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
 import hydrozoa.multisig.ledger.l2.L2LedgerResponse.UnrecoverableError
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.bullet.borer.Cbor
+import io.circe.syntax.*
 import java.nio.charset.StandardCharsets.UTF_8
 import monocle.syntax.all.*
 import scala.collection.immutable.TreeMap
@@ -467,50 +469,93 @@ case class EutxoL2Ledger private (
             }
             .flatMap(digestsOf)
 
-    /** **Not implemented — the representation is still being chosen (GUM-312, GUM-324).**
+    /** Serialize the state at `commandNumber` as the JSON encoding of its [[L2Snapshot]] — the same
+      * bytes the store already writes for a snapshot, and the same projection: `activeUtxos`,
+      * `transientTokens`, `pendingDeposits`, and the command number they stand at.
       *
-      * The pieces this backend would build it from already exist, which is why the choice is worth
-      * making deliberately rather than by accident: [[reconstruct]] produces the state at any
-      * command number at or below the tip, [[L2Snapshot.fromState]] projects the recoverable subset
-      * (`activeUtxos`, `transientTokens`, `pendingDeposits`), and `L2StoreCodecs` already
-      * round-trips that exactly, because the store persists it. An export could be that encoding
-      * and nothing more.
+      * Read-only, like [[stateAt]] beside it, and reconstructed the same way — at the tip from the
+      * live state, otherwise through [[reconstruct]]. Exporting a past boundary therefore cannot
+      * disturb block production at the current one.
       *
-      * What that leaves open, for whoever picks it up:
-      *
-      *   - **Whether the snapshot encoding is the wire form.** It is a full copy of the utxo set,
-      *     which is what GUM-324 is replacing with a structurally-shared representation. An export
-      *     format pinned to today's encoding becomes a second thing to migrate.
-      *   - **Whether the blob carries its own framing** — a backend tag and a format version — so a
-      *     peer handed the wrong kind of blob says so, instead of failing inside a decoder.
+      * ⚠️ **A full copy of the utxo set, in the store's own encoding.** That is what makes this a
+      * naive implementation and not the final one: GUM-324 replaces this representation with a
+      * structurally-shared map, and carries no framing — no backend tag, no format version — so a
+      * peer handed the wrong kind of blob fails inside a decoder rather than saying so. Both are
+      * fine while the only producer and consumer are two nodes of one head on one build, which
+      * `l2Ledger: L2LedgerKind` and the protocol version together already guarantee.
       */
     override def exportStateAt(
         commandNumber: L2CommandNumber
     ): EitherT[IO, RestoreError, L2StateExport] =
-        EitherT.leftT(
-          RestoreError.StateTransferNotSupported(L2LedgerKind.CardanoEutxo.configString)
-        )
+        EitherT
+            .right(state.get)
+            .flatMap { live =>
+                if live.commandNumber == commandNumber then EitherT.rightT[IO, RestoreError](live)
+                else reconstruct(commandNumber)
+            }
+            .map(s =>
+                L2StateExport(
+                  commandNumber,
+                  IArray.from(
+                    L2Snapshot.fromState(s).asJson.noSpaces.getBytes(UTF_8)
+                  )
+                )
+            )
 
-    /** **Not implemented — the counterpart of [[exportStateAt]], and blocked on the same choice.**
+    /** Adopt an exported state, landing it as a snapshot at `exported.commandNumber` with an empty
+      * log behind it — the shape a peer seeded at a start point has, and one [[reconstruct]] reads
+      * without special-casing, since it loads the latest snapshot at or before its target and folds
+      * whatever log follows.
       *
-      * Beyond the representation, importing raises questions exporting does not:
+      * **Only from genesis.** A ledger that has applied anything refuses rather than overwriting
+      * it: seeding happens at boot, before JointLedger exists to drive this class one message at a
+      * time, so a non-genesis ledger here means the call arrived somewhere it was not meant to.
+      * That also disposes of the freeze question — a genesis ledger cannot be frozen.
       *
-      *   - **What it does to the store.** A joining peer's log has no commands to replay, so the
-      *     adopted state has to land as a snapshot at `exported.commandNumber` with an empty log
-      *     behind it — which is a store whose tip is non-zero with nothing logged below it, a shape
-      *     [[reconstruct]] has never had to read.
-      *   - **Whether it may run on a live ledger.** Every other path into this class is driven by
-      *     JointLedger one message at a time; a join happens at boot, before that driver exists.
-      *     Refusing unless the ledger is at genesis is the narrow rule, and probably the right one.
-      *   - **What it does to a freeze.** [[restoreTo]] rewinding past a freeze clears it; adopting
-      *     a state wholesale arguably should too, but for a different reason.
+      * **The store is written before the in-memory state.** A crash between the two leaves the
+      * snapshot durable and the next boot reconstructs from it; the reverse order would lose the
+      * adoption entirely. The digests are computed from the state actually reached, never read out
+      * of the blob, so the caller can check them against a signed certificate.
       */
     override def importState(
         exported: L2StateExport
     ): EitherT[IO, RestoreError, L2Ledger.Digests] =
-        EitherT.leftT(
-          RestoreError.StateTransferNotSupported(L2LedgerKind.CardanoEutxo.configString)
-        )
+        for {
+            live <- EitherT.right[RestoreError](state.get)
+            _ <- EitherT.cond[IO](
+              live.commandNumber == L2CommandNumber.zero,
+              (),
+              RestoreError.StateImportRefused(
+                s"the ledger is at command number ${live.commandNumber}, not genesis; " +
+                    "a state may only be adopted into a ledger that has applied nothing"
+              )
+            )
+            snapshot <- EitherT.fromEither[IO](
+              io.circe.parser
+                  .decode[L2Snapshot](
+                    new String(IArray.genericWrapArray(exported.bytes).toArray, UTF_8)
+                  )
+                  .left
+                  .map(e =>
+                      RestoreError.StateImportRefused(
+                        s"exported state did not decode as an L2 snapshot: ${e.getMessage}"
+                      )
+                  )
+            )
+            _ <- EitherT.cond[IO](
+              snapshot.commandNumber == exported.commandNumber,
+              (),
+              RestoreError.StateImportRefused(
+                s"exported state is labelled command number ${exported.commandNumber} but " +
+                    s"describes ${snapshot.commandNumber}"
+              )
+            )
+            restored = restoreFromSnapshot((exported.commandNumber, snapshot))
+            _ <- EitherT.right[RestoreError](store.putSnapshot(exported.commandNumber, snapshot))
+            _ <- EitherT.right[RestoreError](store.putTip(exported.commandNumber))
+            _ <- EitherT.right[RestoreError](state.set(restored))
+            digests <- digestsOf(restored)
+        } yield digests
 
     /** Reconstruct the committed state as of `commandNumber` without publishing it: load the latest
       * snapshot `<= commandNumber` (or genesis), then re-fold the *logged* (applied) commands in
