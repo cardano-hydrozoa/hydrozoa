@@ -636,6 +636,9 @@ object Serve {
             peerT <- Resource.eval(
               WsPeerTransport.create(
                 ownHeadPeerId,
+                nodeConfig.ownWallet,
+                nodeConfig.headConfig,
+                nodeConfig.headParamsHash,
                 remoteHeadUris.keys.toList,
                 tracers.peerTransport
               )
@@ -644,7 +647,14 @@ object Serve {
                 if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
                 else
                     Resource
-                        .eval(HubWsTransport.create(hubbedCoils, tracers.hubWsTransport))
+                        .eval(
+                          HubWsTransport.create(
+                            hubbedCoils,
+                            nodeConfig.headConfig.coilPeers,
+                            nodeConfig.headParamsHash,
+                            tracers.hubWsTransport
+                          )
+                        )
                         .map(Some(_))
             meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
             hubRoutes =
@@ -722,7 +732,14 @@ object Serve {
         val cpwtTracer =
             Slf4jTracer.sink.contramap(CoilPeerWsTransportEventFormat.humanFormat(ownCoilNum))
         for {
-            t <- Resource.eval(CoilPeerWsTransport.create(ownCoilNum, cpwtTracer))
+            t <- Resource.eval(
+              CoilPeerWsTransport.create(
+                ownCoilNum,
+                nodeConfig.ownWallet,
+                nodeConfig.headParamsHash,
+                cpwtTracer
+              )
+            )
             _ <- t.startDialer(wsClient, hubUri)
             coilFactory: Resource[
               IO,

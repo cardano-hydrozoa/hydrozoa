@@ -3,17 +3,24 @@ package hydrozoa.multisig.consensus.transport
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
+import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.consensus.transport.Codecs.given
 import io.circe.*
 import io.circe.parser.decode
 import io.circe.syntax.*
+import scalus.cardano.ledger.Hash32
 
 /** Wire envelope for the head-peer-mesh WebSocket transport.
   *
-  *   - [[Handshake]] is sent as the first frame on a fresh connection so the recipient knows which
-  *     peer is on the other end, which protocol version it speaks, and what it offers as proof of
-  *     identity.
-  *   - [[Msg]] carries a wire-eligible head↔head batch message ([[Mesh.Get]] or [[Mesh.New]]).
+  * The link opens with a three-frame exchange, in this order:
+  *
+  *   1. [[Challenge]] — the accepting peer's first frame, carrying the nonce that binds the
+  *      dialer's proof to this socket.
+  *   2. [[Handshake]] — the dialer's answer, naming which peer is on the other end, which protocol
+  *      version it speaks, and its proof of the claim.
+  *   3. [[Refused]] — sent instead of accepting, naming why, immediately before the socket closes.
+  *
+  * Then [[Msg]] carries a wire-eligible head↔head batch message ([[Mesh.Get]] or [[Mesh.New]]).
   *
   * This is the `/head` (head-mesh) envelope only. The hub↔coil link has its own envelope
   * ([[CoilFrame]], on the `/hub` route), so `Population` / `OwnHardAck` batches never reach here.
@@ -25,8 +32,14 @@ import io.circe.syntax.*
 sealed trait HeadFrame
 object HeadFrame {
 
-    /** The dialing peer's opening frame. `protocolVersion` is `None` from a counterpart too old to
-      * announce one, which is refused the same way a mismatch is ([[ProtocolVersion.check]]).
+    /** The accepting peer's opening frame: a nonce drawn fresh for this socket, which the dialer's
+      * [[Handshake]] signs over. See [[HandshakeNonce]] for why the server issues it.
+      */
+    final case class Challenge(nonce: HandshakeNonce) extends HeadFrame
+
+    /** The dialing peer's answer to a [[Challenge]]. `protocolVersion` is `None` from a counterpart
+      * too old to announce one, which is refused the same way a mismatch is
+      * ([[ProtocolVersion.check]]).
       */
     final case class Handshake(
         peerNum: Int,
@@ -36,12 +49,34 @@ object HeadFrame {
 
     object Handshake {
 
-        /** This node's own handshake: its peer number, the version it speaks, and — until GUM-322 —
-          * no proof of either.
+        /** This node's own handshake: its peer number, the version it speaks, and a proof of both
+          * against the remote's `nonce`, signed with this head peer's own key.
           */
-        def own(peerNum: Int): Handshake =
-            Handshake(peerNum, Some(ProtocolVersion.current), HandshakeAuth.Unauthenticated)
+        def own(
+            peerNum: Int,
+            wallet: PeerWallet,
+            headParamsHash: Hash32,
+            nonce: HandshakeNonce
+        ): Handshake =
+            Handshake(
+              peerNum,
+              Some(ProtocolVersion.current),
+              HandshakeProof.sign(
+                wallet,
+                HandshakeProof.Link.HeadToHead,
+                peerNum,
+                ProtocolVersion.current,
+                headParamsHash,
+                nonce
+              )
+            )
     }
+
+    /** The accepting peer's refusal, sent immediately before it closes the socket, so a refused
+      * dialer is told why rather than watching a connection that opens and then drops on the
+      * server's idle timeout.
+      */
+    final case class Refused(refusal: HandshakeRefusal) extends HeadFrame
 
     final case class Msg(payload: LiaisonProtocol.HeadToHeadRequest) extends HeadFrame
 
@@ -58,6 +93,10 @@ object HeadFrame {
         }
 
     given (using CardanoNetwork.Section): Encoder[HeadFrame] = Encoder.instance {
+        case Challenge(nonce) =>
+            Json.obj("t" -> "challenge".asJson, "nonce" -> nonce.asJson)
+        case Refused(refusal) =>
+            Json.obj("t" -> "refused".asJson, "refusal" -> refusal.asJson)
         case Handshake(peerNum, protocolVersion, auth) =>
             Json.obj(
               "t" -> "handshake".asJson,
@@ -83,6 +122,10 @@ object HeadFrame {
 
     given (using CardanoNetwork.Section): Decoder[HeadFrame] = Decoder.instance(c =>
         c.downField("t").as[String].flatMap {
+            case "challenge" =>
+                c.downField("nonce").as[HandshakeNonce].map(Challenge(_))
+            case "refused" =>
+                c.downField("refusal").as[HandshakeRefusal].map(Refused(_))
             case "handshake" =>
                 for {
                     peerNum <- c.downField("peerNum").as[Int]

@@ -31,24 +31,43 @@ class HeadDialerBudgetTest extends AnyFunSuite {
     private val remoteId = HeadPeerId(HeadPeerNumber(1), nPeers)
     private val remoteUri = Uri.unsafeFromString("ws://peer1.invalid:3001/head")
 
-    /** A quiet-but-live link: a keep-alive Ping every `pingEvery`, which is what holds `WsDuplex`'s
-      * read deadline off a real idle connection. Ends after `pings` so `TestControl` has an end to
-      * reach.
+    /** A quiet-but-live link: the remote's `Challenge` first, then a keep-alive Ping every
+      * `pingEvery`, which is what holds `WsDuplex`'s read deadline off a real idle connection. Ends
+      * after `pings` so `TestControl` has an end to reach.
       */
     private def pinging(pingEvery: FiniteDuration, pings: Int = 200): IO[WSConnection[IO]] =
         Ref.of[IO, Int](pings).map { left =>
             new WSConnection[IO] {
+                private val challenge = WSFrame.Text(
+                  HeadFrame.encode(HeadFrame.Challenge(HandshakeFixture.nonce)),
+                  last = true
+                )
                 override def send(wsf: WSFrame): IO[Unit] = IO.unit
                 override def sendMany[G[_]: cats.Foldable, A <: WSFrame](wsfs: G[A]): IO[Unit] =
                     IO.unit
                 override def receive: IO[Option[WSFrame]] =
-                    IO.sleep(pingEvery) >> left.modify(n => (n - 1, n)).map {
-                        case n if n > 0 => Some(WSFrame.Ping(scodec.bits.ByteVector.empty))
-                        case _          => None
+                    left.modify(n => (n - 1, n)).flatMap {
+                        // The challenge is the accept side's first frame, and it arrives at once —
+                        // the dialer has nothing to send until it does.
+                        case n if n == pings => IO.pure(Some(challenge))
+                        case n if n > 0      => IO.sleep(pingEvery).as(Some(WSFrame.Ping(empty)))
+                        case _               => IO.sleep(pingEvery).as(None)
                     }
                 override def subprotocol: Option[String] = None
             }
         }
+
+    /** A remote that accepts the socket and issues no challenge — silent from the first frame on.
+      */
+    private def silent: IO[WSConnection[IO]] =
+        IO.pure(new WSConnection[IO] {
+            override def send(wsf: WSFrame): IO[Unit] = IO.unit
+            override def sendMany[G[_]: cats.Foldable, A <: WSFrame](wsfs: G[A]): IO[Unit] = IO.unit
+            override def receive: IO[Option[WSFrame]] = IO.never
+            override def subprotocol: Option[String] = None
+        })
+
+    private val empty = scodec.bits.ByteVector.empty
 
     private def dial(
         connect: Resource[IO, WSConnection[IO]],
@@ -58,7 +77,14 @@ class HeadDialerBudgetTest extends AnyFunSuite {
             attempts <- Ref.of[IO, Int](0)
             seen <- Ref.of[IO, Vector[PeerTransportEvent]](Vector.empty)
             tracer = ContraTracer[IO, PeerTransportEvent](e => seen.update(_ :+ e))
-            transport <- WsPeerTransport.create(ownId, List(remoteId), tracer)
+            transport <- WsPeerTransport.create(
+              ownId,
+              HandshakeFixture.headWallet(0),
+              HandshakeFixture.headPeers,
+              HandshakeFixture.headParamsHash,
+              List(remoteId),
+              tracer
+            )
             client = WSClient[IO](respondToPings = false) { (_: WSRequest) =>
                 Resource.eval(attempts.update(_ + 1)).flatMap(_ => connect)
             }
@@ -88,6 +114,22 @@ class HeadDialerBudgetTest extends AnyFunSuite {
         assert(
           (attempts, stalls(events)) == (3, 2),
           "expected a redial per expired budget, each announced; " +
+              s"dialed $attempts times, traced $events"
+        )
+    }
+
+    test("a remote that issues no challenge is given up on, and the dialer keeps redialing") {
+        // The mirror of the coil suite's case: the 10s challenge budget must end each attempt, not
+        // the 30s handshake budget, or an abandoned attempt keeps a socket open past the redial.
+        val (attempts, events) = dial(Resource.eval(silent), 25.seconds)
+        assert(
+          (
+            attempts,
+            events.count(_.isInstanceOf[DialerNoChallenge]),
+            stalls(events),
+            events.count(_.isInstanceOf[DialerConnected])
+          ) == (3, 2, 0, 0),
+          "expected a redial per challenge budget, each announced, and no handshake stall; " +
               s"dialed $attempts times, traced $events"
         )
     }

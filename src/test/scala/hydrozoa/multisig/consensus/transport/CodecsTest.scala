@@ -54,9 +54,39 @@ class CodecsTest extends AnyFunSuite {
         }
     }
 
-    test("Handshake frame round-trips") {
-        val frame = HeadFrame.Handshake.own(peerNum = 7)
+    test("Challenge frame round-trips") {
+        val frame = HeadFrame.Challenge(HandshakeFixture.nonce)
         assert(roundTrip(frame) == frame)
+    }
+
+    test("a signed Handshake round-trips, proof intact") {
+        val frame = HeadFrame.Handshake.own(
+          peerNum = 1,
+          HandshakeFixture.headWallet(1),
+          HandshakeFixture.headParamsHash,
+          HandshakeFixture.nonce
+        )
+        // The signature is an opaque IArray, so structural equality would compare array identities.
+        // JSON stability is the round-trip property that actually holds — as for every other
+        // signature-carrying frame in this suite.
+        assertJsonStable(frame)
+        roundTrip(frame) match {
+            case HeadFrame.Handshake(peerNum, protocolVersion, auth) =>
+                val _ = assert(peerNum == 1)
+                val _ = assert(protocolVersion.contains(ProtocolVersion.current))
+                assert(
+                  HandshakeProof.verify(
+                    HandshakeFixture.headPeers.headPeerVKey(HeadPeerNumber(1)).get,
+                    HandshakeProof.Link.HeadToHead,
+                    claimant = 1,
+                    ProtocolVersion.current,
+                    HandshakeFixture.headParamsHash,
+                    HandshakeFixture.nonce,
+                    auth
+                  ) == Right(())
+                )
+            case other => fail(s"expected a Handshake, got: $other")
+        }
     }
 
     test("a Handshake with no protocol version decodes, so the version check can refuse it") {
@@ -71,6 +101,25 @@ class CodecsTest extends AnyFunSuite {
                       ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
                 )
             case other => fail(s"expected a Handshake, got: $other")
+        }
+    }
+
+    test("a Refused frame round-trips every refusal") {
+        List(
+          HandshakeRefusal.ProtocolVersionMismatch(Some(2), 1),
+          HandshakeRefusal.ProtocolVersionMismatch(None, 1),
+          HandshakeRefusal.NotHubbed(4),
+          HandshakeRefusal.NotInRoster(4),
+          HandshakeRefusal.WrongDialDirection(3, 1),
+          HandshakeRefusal.Unauthenticated,
+          HandshakeRefusal.HeadParamsMismatch(
+            HandshakeFixture.otherHeadParamsHash,
+            HandshakeFixture.headParamsHash
+          ),
+          HandshakeRefusal.BadSignature
+        ).foreach { refusal =>
+            val frame = HeadFrame.Refused(refusal)
+            assert(roundTrip(frame) == frame, s"failed for $refusal")
         }
     }
 

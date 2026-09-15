@@ -28,9 +28,28 @@ object CoilPeerWsTransportEvent:
     /** A frame received on the active dialer connection could not be decoded. */
     final case class DecodeError(cause: Throwable) extends CoilPeerWsTransportEvent
 
+    // ---- handshake ----
+
+    /** The hub refused this coil's handshake and is closing the socket. `refusal` is the operator's
+      * instruction: which of the two configs to go and fix. The dialer keeps redialing.
+      */
+    final case class DialerRefused(refusal: HandshakeRefusal) extends CoilPeerWsTransportEvent
+
+    /** The hub sent no [[CoilFrame.Challenge]] within the budget, so this attempt was dropped. A
+      * hub issues one as the first frame of an accepted socket, so this means it accepted the
+      * connection and then said nothing.
+      */
+    final case class DialerNoChallenge(uri: Uri, after: FiniteDuration)
+        extends CoilPeerWsTransportEvent
+
+    /** A [[CoilFrame.Challenge]] arrived on an already-established link. One socket carries one
+      * challenge, answered before the link opens; a second one is the hub misbehaving.
+      */
+    case object DialerLateChallenge extends CoilPeerWsTransportEvent
+
     // ---- dialer ----
 
-    /** The dialer successfully connected to the hub. */
+    /** The dialer connected to the hub, was challenged, and answered with its handshake. */
     final case class DialerConnected(uri: Uri) extends CoilPeerWsTransportEvent
 
     /** A dialer attempt to the hub failed. */

@@ -49,8 +49,42 @@ class CoilCodecsTest extends AnyFunSuite {
         }
     }
 
-    test("CoilFrame.Handshake round-trips") {
-        val frame = CoilFrame.Handshake.own(coilNum = 3)
+    test("CoilFrame.Challenge round-trips") {
+        val frame = CoilFrame.Challenge(HandshakeFixture.nonce)
+        assert(roundTrip(frame) == frame)
+    }
+
+    test("a signed CoilFrame.Handshake round-trips, proof intact") {
+        val frame = CoilFrame.Handshake.own(
+          coilNum = 1,
+          HandshakeFixture.coilWallet(1),
+          HandshakeFixture.headParamsHash,
+          HandshakeFixture.nonce
+        )
+        // The signature is an opaque IArray, so structural equality would compare array identities;
+        // JSON stability is the round-trip property that holds. Same as [[CodecsTest]].
+        assertJsonStable(frame)
+        roundTrip(frame) match {
+            case CoilFrame.Handshake(coilNum, protocolVersion, auth) =>
+                val _ = assert(coilNum == 1)
+                val _ = assert(protocolVersion.contains(ProtocolVersion.current))
+                assert(
+                  HandshakeProof.verify(
+                    HandshakeFixture.coilPeers.verificationKey(CoilPeerNumber(1)).get,
+                    HandshakeProof.Link.CoilToHub,
+                    claimant = 1,
+                    ProtocolVersion.current,
+                    HandshakeFixture.headParamsHash,
+                    HandshakeFixture.nonce,
+                    auth
+                  ) == Right(())
+                )
+            case other => fail(s"expected a Handshake, got: $other")
+        }
+    }
+
+    test("a CoilFrame.Refused round-trips") {
+        val frame = CoilFrame.Refused(HandshakeRefusal.NotHubbed(3))
         assert(roundTrip(frame) == frame)
     }
 

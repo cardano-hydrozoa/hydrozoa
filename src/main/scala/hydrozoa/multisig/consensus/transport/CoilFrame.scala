@@ -3,19 +3,28 @@ package hydrozoa.multisig.consensus.transport
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
+import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.consensus.transport.Codecs.given
 import io.circe.*
 import io.circe.parser.decode
 import io.circe.syntax.*
+import scalus.cardano.ledger.Hash32
 
 /** Wire envelope for the hub→coil WebSocket link.
   *
-  *   - [[Handshake]] is sent as the coil's first frame so the hub learns which coil peer is on the
-  *     other end (the link is a star — each coil dials its single hub), which protocol version it
-  *     speaks, and what it offers as proof of identity.
-  *   - [[Msg]] carries a wire-eligible hub↔coil batch message ([[Population.Get]] /
-  *     [[Population.New]] pulling/serving the population, [[OwnHardAck.Get]] / [[OwnHardAck.New]]
-  *     pulling/serving the coil's own hard-ack).
+  * The link opens with a three-frame exchange, in this order:
+  *
+  *   1. [[Challenge]] — the hub's first frame on a freshly accepted socket, carrying the nonce that
+  *      binds the coil's proof to this socket.
+  *   2. [[Handshake]] — the coil's answer, naming which coil peer is on the other end (the link is
+  *      a star: each coil dials its single hub), which protocol version it speaks, and its proof of
+  *      the claim.
+  *   3. [[Refused]] — sent instead of accepting, naming why, immediately before the hub closes the
+  *      socket.
+  *
+  * Then [[Msg]] carries a wire-eligible hub↔coil batch message ([[Population.Get]] /
+  * [[Population.New]] pulling/serving the population, [[OwnHardAck.Get]] / [[OwnHardAck.New]]
+  * pulling/serving the coil's own hard-ack).
   *
   * Both link directions ride one duplex, so the wire vocabulary is all four batch shapes; each
   * transport's `send` filters to the subset it actually emits.
@@ -23,8 +32,14 @@ import io.circe.syntax.*
 sealed trait CoilFrame
 object CoilFrame {
 
-    /** The coil's opening frame. `protocolVersion` is `None` from a counterpart too old to announce
-      * one, which the hub refuses the same way it refuses a mismatch ([[ProtocolVersion.check]]).
+    /** The hub's opening frame: a nonce drawn fresh for this socket, which the coil's [[Handshake]]
+      * signs over. See [[HandshakeNonce]] for why the server issues it rather than the coil.
+      */
+    final case class Challenge(nonce: HandshakeNonce) extends CoilFrame
+
+    /** The coil's answer to a [[Challenge]]. `protocolVersion` is `None` from a counterpart too old
+      * to announce one, which the hub refuses the same way it refuses a mismatch
+      * ([[ProtocolVersion.check]]).
       */
     final case class Handshake(
         coilNum: Int,
@@ -34,12 +49,33 @@ object CoilFrame {
 
     object Handshake {
 
-        /** This node's own handshake: its coil number, the version it speaks, and — until GUM-322 —
-          * no proof of either.
+        /** This node's own handshake: its coil number, the version it speaks, and a proof of both
+          * against the hub's `nonce`, signed with this coil peer's own key.
           */
-        def own(coilNum: Int): Handshake =
-            Handshake(coilNum, Some(ProtocolVersion.current), HandshakeAuth.Unauthenticated)
+        def own(
+            coilNum: Int,
+            wallet: PeerWallet,
+            headParamsHash: Hash32,
+            nonce: HandshakeNonce
+        ): Handshake =
+            Handshake(
+              coilNum,
+              Some(ProtocolVersion.current),
+              HandshakeProof.sign(
+                wallet,
+                HandshakeProof.Link.CoilToHub,
+                coilNum,
+                ProtocolVersion.current,
+                headParamsHash,
+                nonce
+              )
+            )
     }
+
+    /** The hub's refusal, sent immediately before it closes the socket. A refused coil is told why
+      * rather than watching a connection that opens and then drops on the server's idle timeout.
+      */
+    final case class Refused(refusal: HandshakeRefusal) extends CoilFrame
 
     final case class Msg(payload: Wire) extends CoilFrame
 
@@ -61,6 +97,8 @@ object CoilFrame {
         }
 
     given (using CardanoNetwork.Section): Encoder[CoilFrame] = Encoder.instance {
+        case Challenge(nonce) =>
+            Json.obj("t" -> "challenge".asJson, "nonce" -> nonce.asJson)
         case Handshake(coilNum, protocolVersion, auth) =>
             Json.obj(
               "t" -> "handshake".asJson,
@@ -68,6 +106,8 @@ object CoilFrame {
               "protocolVersion" -> protocolVersion.asJson,
               "auth" -> auth.asJson
             )
+        case Refused(refusal) =>
+            Json.obj("t" -> "refused".asJson, "refusal" -> refusal.asJson)
         case Msg(payload) =>
             payload match {
                 case x: Population.Get =>
@@ -83,6 +123,10 @@ object CoilFrame {
 
     given (using CardanoNetwork.Section): Decoder[CoilFrame] = Decoder.instance(c =>
         c.downField("t").as[String].flatMap {
+            case "challenge" =>
+                c.downField("nonce").as[HandshakeNonce].map(Challenge(_))
+            case "refused" =>
+                c.downField("refusal").as[HandshakeRefusal].map(Refused(_))
             case "handshake" =>
                 for {
                     coilNum <- c.downField("coilNum").as[Int]

@@ -7,6 +7,7 @@ import fs2.Stream
 import fs2.io.net.SocketOption
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.transport.NodeWsServerEvent.Bound
+import java.nio.charset.StandardCharsets.UTF_8
 import org.http4s.HttpRoutes
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.implicits.*
@@ -65,6 +66,42 @@ object NodeWsServer {
             )
             .build
             .evalTap(_ => tracer.traceWith(Bound(bindHost, bindPort)))
+
+    /** WebSocket close status for a refused handshake: **1008**, policy violation. The peer met the
+      * WebSocket protocol and then failed ours, which is exactly what 1008 is for.
+      */
+    val policyViolation: Int = 1008
+
+    /** A close frame carrying `reason`, to end a send stream on a refusal.
+      *
+      * RFC 6455 caps a close frame's payload at 125 bytes, two of which are the status code, so a
+      * long reason is truncated rather than dropped — the structured refusal rides its own frame
+      * ahead of this one, and this is the part a peer's own WebSocket stack surfaces.
+      */
+    def closeFrame(reason: String): WebSocketFrame =
+        WebSocketFrame
+            .Close(policyViolation, truncateToCloseReason(reason))
+            .getOrElse(WebSocketFrame.Close())
+
+    /** The longest prefix of `reason` that fits a close frame's payload, cut on a character
+      * boundary. Counted in **encoded bytes**, not characters: the refusal strings carry arrows and
+      * other non-ASCII, and a character-count cut would build a frame the encoder then rejects
+      * whole.
+      */
+    private def truncateToCloseReason(reason: String): String = {
+        val bytes = reason.getBytes(UTF_8)
+        if bytes.length <= closeReasonBudget then reason
+        else {
+            // Back off any UTF-8 continuation bytes so the cut lands on a character boundary.
+            val end = (closeReasonBudget to 0 by -1)
+                .find(i => i == 0 || (bytes(i) & 0xc0) != 0x80)
+                .getOrElse(0)
+            new String(bytes, 0, end, UTF_8)
+        }
+    }
+
+    /** A close frame's payload is 125 bytes, two of which carry the status code. */
+    private val closeReasonBudget: Int = 123
 
     /** Merge periodic `Ping` frames into a WS server send stream so an idle-but-live link isn't
       * dropped by `resource`'s `idleTimeout` (nor by NAT/proxy idle timeouts on the path) during

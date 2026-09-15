@@ -26,8 +26,9 @@ class CoilDialerBudgetTest extends AnyFunSuite {
 
     private val hubUri = Uri.unsafeFromString("ws://hub.invalid:3001/ws")
 
-    /** A quiet-but-live link: a keep-alive Ping every `pingEvery`, which is what holds `WsDuplex`'s
-      * read deadline off a real idle connection (`NodeWsServer` pings every 10s).
+    /** A quiet-but-live link: the hub's `Challenge` first, then a keep-alive Ping every
+      * `pingEvery`, which is what holds `WsDuplex`'s read deadline off a real idle connection
+      * (`NodeWsServer` pings every 10s).
       *
       * It closes after `pings` of them rather than running forever, only so `TestControl` has an
       * end to reach: an eternal link leaves work scheduled at every future instant and `tickAll`
@@ -36,18 +37,36 @@ class CoilDialerBudgetTest extends AnyFunSuite {
     private def pinging(pingEvery: FiniteDuration, pings: Int = 200): IO[WSConnection[IO]] =
         Ref.of[IO, Int](pings).map { left =>
             new WSConnection[IO] {
+                private val challenge = WSFrame.Text(
+                  CoilFrame.encode(CoilFrame.Challenge(HandshakeFixture.nonce)),
+                  last = true
+                )
                 override def send(wsf: WSFrame): IO[Unit] = IO.unit
                 override def sendMany[G[_]: cats.Foldable, A <: WSFrame](wsfs: G[A]): IO[Unit] =
                     IO.unit
                 override def receive: IO[Option[WSFrame]] =
-                    IO.sleep(pingEvery) >> left.modify(n => (n - 1, n)).map {
-                        case n if n > 0 => Some(WSFrame.Ping(scodec.bits.ByteVector.empty))
+                    left.modify(n => (n - 1, n)).flatMap {
+                        // The hub's first frame on an accepted socket, and it arrives at once — the
+                        // dialer has nothing to send until it does.
+                        case n if n == pings => IO.pure(Some(challenge))
+                        case n if n > 0      => IO.sleep(pingEvery).as(Some(WSFrame.Ping(empty)))
                         // End of stream: the peer closed its receiving side.
-                        case _ => None
+                        case _ => IO.sleep(pingEvery).as(None)
                     }
                 override def subprotocol: Option[String] = None
             }
         }
+
+    /** A hub that accepts the socket and issues no challenge — silent from the first frame on. */
+    private def silent: IO[WSConnection[IO]] =
+        IO.pure(new WSConnection[IO] {
+            override def send(wsf: WSFrame): IO[Unit] = IO.unit
+            override def sendMany[G[_]: cats.Foldable, A <: WSFrame](wsfs: G[A]): IO[Unit] = IO.unit
+            override def receive: IO[Option[WSFrame]] = IO.never
+            override def subprotocol: Option[String] = None
+        })
+
+    private val empty = scodec.bits.ByteVector.empty
 
     /** Run the real dialer against `connect` for `forHowLong` of virtual time, and report how many
       * dial attempts it made and what it traced.
@@ -60,7 +79,12 @@ class CoilDialerBudgetTest extends AnyFunSuite {
             attempts <- Ref.of[IO, Int](0)
             seen <- Ref.of[IO, Vector[CoilPeerWsTransportEvent]](Vector.empty)
             tracer = ContraTracer[IO, CoilPeerWsTransportEvent](e => seen.update(_ :+ e))
-            transport <- CoilPeerWsTransport.create(CoilPeerNumber(0), tracer)
+            transport <- CoilPeerWsTransport.create(
+              CoilPeerNumber(0),
+              HandshakeFixture.coilWallet(0),
+              HandshakeFixture.headParamsHash,
+              tracer
+            )
             client = WSClient[IO](respondToPings = false) { (_: WSRequest) =>
                 Resource.eval(attempts.update(_ + 1)).flatMap(_ => connect)
             }
@@ -91,6 +115,24 @@ class CoilDialerBudgetTest extends AnyFunSuite {
         assert(
           (attempts, stalls(events)) == (3, 2),
           "expected a redial per expired budget, each announced; " +
+              s"dialed $attempts times, traced $events"
+        )
+    }
+
+    test("a hub that issues no challenge is given up on, and the dialer keeps redialing") {
+        // The challenge budget is 10s and the inter-attempt delay 1s, so 25s covers three attempts
+        // and two expiries. This must be the *challenge* budget that ends each attempt, not the
+        // 30s handshake budget: an attempt that outlived the loop's claim would sit in `receive`
+        // holding an open socket while the loop had already dialed another.
+        val (attempts, events) = dial(Resource.eval(silent), 25.seconds)
+        assert(
+          (
+            attempts,
+            events.count(_.isInstanceOf[DialerNoChallenge]),
+            stalls(events),
+            events.count(_.isInstanceOf[DialerConnected])
+          ) == (3, 2, 0, 0),
+          "expected a redial per challenge budget, each announced, and no handshake stall; " +
               s"dialed $attempts times, traced $events"
         )
     }

@@ -1316,7 +1316,12 @@ object MultiPeerHeadHarness:
                         )
                         Resource
                             .eval(
-                              CoilPeerWsTransport.create(coilNum, cpwtTracer)
+                              CoilPeerWsTransport.create(
+                                coilNum,
+                                coilConfig.ownWallet,
+                                coilConfig.headParamsHash,
+                                cpwtTracer
+                              )
                             )
                             .map(coilNum -> _)
                     }
@@ -1449,6 +1454,7 @@ object MultiPeerHeadHarness:
             peers: Seq[HeadPeerNumber],
         )(using CardanoNetwork.Section): Resource[IO, WsHeadParts] =
             val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
+            val ownNodeConfig = multiNodeConfig.nodeConfigs(peerNum)
             val hubbedCoils = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
             val remoteIds: List[HeadPeerId] =
                 peers.filterNot(_ == peerNum).map(headPeerId(multiNodeConfig, _)).toList
@@ -1460,13 +1466,27 @@ object MultiPeerHeadHarness:
                 Slf4jTracer.sink.contramap(HubWsTransportEventFormat.humanFormat(peerNum))
             for
                 peerT <- Resource.eval(
-                  WsPeerTransport.create(ownHeadPeerId, remoteIds, ptTracer)
+                  WsPeerTransport.create(
+                    ownHeadPeerId,
+                    ownNodeConfig.ownWallet,
+                    ownNodeConfig.headConfig,
+                    ownNodeConfig.headParamsHash,
+                    remoteIds,
+                    ptTracer
+                  )
                 )
                 hubTConcrete: Option[HubWsTransport] <-
                     if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
                     else
                         Resource
-                            .eval(HubWsTransport.create(hubbedCoils, hubTracer))
+                            .eval(
+                              HubWsTransport.create(
+                                hubbedCoils,
+                                ownNodeConfig.headConfig.coilPeers,
+                                ownNodeConfig.headParamsHash,
+                                hubTracer
+                              )
+                            )
                             .map(Some(_))
                 meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
                 hubRoutes = hubTConcrete.toList.map(h =>
