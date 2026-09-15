@@ -1095,17 +1095,12 @@ object StackComposer {
             hardConfirmed: Option[StackNumber],
             hardAckedStack: Option[StackNumber]
         )(using config: HeadConfig.Bootstrap.Section): IO[Option[State]] =
-            // The anchor is `hardAckedStack`; the ack NUMBER only says what to assign next. They can
-            // come apart in exactly one situation: a store seeded from another peer, where the floor
-            // supplies the stack from `hardConfirmed` while this peer's own ack journal is empty
-            // because the donor never recorded an ack from it. `Markers.derive` unpacks the stack
-            // FROM the number, so `(None, Some(_))` is unreachable by reading a store — only the
-            // transplant floor can construct it, which is why treating it as a cold ack counter
-            // cannot change normal operation.
-            //
-            // Zero is the right counter there for the same reason a coil must never be handed fewer
-            // acks than its hub recorded: the donor recorded none, so the hub's cursor for this
-            // peer's ack lane is at zero, which is exactly what it will ask for.
+            // The anchor is `hardAckedStack`; the ack NUMBER only says what to assign next.
+            // `Markers.derive` unpacks the stack FROM the number, so `(None, Some(_))` is
+            // unreachable by reading a store — nothing that derives markers can construct it, which
+            // is why treating it as a cold ack counter cannot change normal operation. Zero is the
+            // right counter for a peer with no own acks: its hub's cursor for that lane is at zero,
+            // which is exactly what it will ask for.
             hardAckedStack match
                 case None => IO.pure(None)
                 case Some(hardAckedStack) =>
