@@ -6,8 +6,8 @@ import hydrozoa.multisig.persistence.codec.DepositUtxoCodec.given
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
 
-/** Persistence-layer JSON codec for [[DepositsMap]] — the value stored at `StoreKey.DepositMap`,
-  * JointLedger's deposits snapshot at `softAcked` (§5.2).
+/** Persistence-layer JSON codec for [[DepositsMap]] — the value stored at
+  * `StoreKey.DepositMap(blockNum)`, JointLedger's deposits map as of that block (§5.2).
   *
   * `DepositsMap` is order-bearing (a `TreeMap` keyed by absorption start time) behind a private
   * constructor, so it is encoded as the flat in-order [[DepositsMap.Entry]] list (`flatten`) and

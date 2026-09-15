@@ -11,7 +11,7 @@ import hydrozoa.config.head.network.CardanoNetwork
   *       .put(JournalKey.Block(blockNum))(brief)
   *       .put(JournalKey.SoftAck(ownPeer, softAckNum))(softAck)
   *       .put(StoreKey.BlockResult(blockNum))(blockResult)
-  *       .put(StoreKey.DepositMap)(depositMap)
+  *       .put(StoreKey.DepositMap(blockNum))(depositMap)
   * }}}
   *
   * Internally the batch records each typed op (key + path-dependent value); at
