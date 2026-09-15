@@ -7,7 +7,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.HeadParameters
+import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.eutxol2.store.{L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
@@ -466,6 +466,51 @@ case class EutxoL2Ledger private (
                 else reconstruct(commandNumber)
             }
             .flatMap(digestsOf)
+
+    /** **Not implemented — the representation is still being chosen (GUM-312, GUM-324).**
+      *
+      * The pieces this backend would build it from already exist, which is why the choice is worth
+      * making deliberately rather than by accident: [[reconstruct]] produces the state at any
+      * command number at or below the tip, [[L2Snapshot.fromState]] projects the recoverable subset
+      * (`activeUtxos`, `transientTokens`, `pendingDeposits`), and `L2StoreCodecs` already
+      * round-trips that exactly, because the store persists it. An export could be that encoding
+      * and nothing more.
+      *
+      * What that leaves open, for whoever picks it up:
+      *
+      *   - **Whether the snapshot encoding is the wire form.** It is a full copy of the utxo set,
+      *     which is what GUM-324 is replacing with a structurally-shared representation. An export
+      *     format pinned to today's encoding becomes a second thing to migrate.
+      *   - **Whether the blob carries its own framing** — a backend tag and a format version — so a
+      *     peer handed the wrong kind of blob says so, instead of failing inside a decoder.
+      */
+    override def exportStateAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, L2StateExport] =
+        EitherT.leftT(
+          RestoreError.StateTransferNotSupported(L2LedgerKind.CardanoEutxo.configString)
+        )
+
+    /** **Not implemented — the counterpart of [[exportStateAt]], and blocked on the same choice.**
+      *
+      * Beyond the representation, importing raises questions exporting does not:
+      *
+      *   - **What it does to the store.** A joining peer's log has no commands to replay, so the
+      *     adopted state has to land as a snapshot at `exported.commandNumber` with an empty log
+      *     behind it — which is a store whose tip is non-zero with nothing logged below it, a shape
+      *     [[reconstruct]] has never had to read.
+      *   - **Whether it may run on a live ledger.** Every other path into this class is driven by
+      *     JointLedger one message at a time; a join happens at boot, before that driver exists.
+      *     Refusing unless the ledger is at genesis is the narrow rule, and probably the right one.
+      *   - **What it does to a freeze.** [[restoreTo]] rewinding past a freeze clears it; adopting
+      *     a state wholesale arguably should too, but for a different reason.
+      */
+    override def importState(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT.leftT(
+          RestoreError.StateTransferNotSupported(L2LedgerKind.CardanoEutxo.configString)
+        )
 
     /** Reconstruct the committed state as of `commandNumber` without publishing it: load the latest
       * snapshot `<= commandNumber` (or genesis), then re-fold the *logged* (applied) commands in
