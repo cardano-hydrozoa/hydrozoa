@@ -34,6 +34,18 @@ object RestoreError:
       */
     final case class StateTransferNotSupported(backend: String) extends RestoreError
 
+    /** An exported state could not be adopted ([[L2Ledger.importState]]): the bytes did not decode
+      * as this backend's state, they describe a different command number than the export claims, or
+      * this ledger is not in a position to adopt one.
+      *
+      * Distinct from [[OtherError]], which means this node's own store or ledger is broken. This
+      * one is about what the donor sent, or about when it was sent — neither of which says anything
+      * is wrong here.
+      */
+    final case class StateImportRefused(message: String) extends RestoreError {
+        override def getMessage: String = message
+    }
+
     /** The ledger's evacuation map at the restored command number is not the one this node holds.
       *
       * At a cold start that means the head config's `initialEvacuationMap` is not the map the L2
