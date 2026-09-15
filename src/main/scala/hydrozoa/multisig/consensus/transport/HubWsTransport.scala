@@ -32,9 +32,9 @@ trait HubTransport {
 
 /** The hub side of the hub→coil WS links: contributes the `/hub` route to the hub's shared
   * [[NodeWsServer]] and serves every coil peer the hub hubs. The hub runs no dialer — each coil
-  * dials in and identifies itself with [[CoilFrame.Hello]]; the hub binds that socket to the coil's
-  * [[CoilPeerNumber]], routes inbound batches to that coil's [[PeerLiaisonHubToCoil]], and drains
-  * that coil's outbox for outbound batches.
+  * dials in and identifies itself with [[CoilFrame.Handshake]]; the hub binds that socket to the
+  * coil's [[CoilPeerNumber]], routes inbound batches to that coil's [[PeerLiaisonHubToCoil]], and
+  * drains that coil's outbox for outbound batches.
   *
   * Outbound is the hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]); inbound is the
   * coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]).
@@ -94,16 +94,27 @@ final class HubWsTransport private (
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     CoilFrame.parse(s) match {
-                        case Right(CoilFrame.Hello(coilNum)) =>
-                            val coil = CoilPeerNumber(coilNum)
-                            if outboxes.contains(coil) then
-                                tracer.traceWith(ServerAccepted(coilNum)) >>
-                                    coilD.complete(coil).void
-                            else tracer.traceWith(ServerRejectedHello(coilNum))
+                        case Right(CoilFrame.Handshake(coilNum, protocolVersion, _)) =>
+                            // Version before roster: a coil speaking another protocol may not even
+                            // mean the same thing by its own number, so there is nothing to look up
+                            // until the two ends agree on the vocabulary. `auth` is carried and not
+                            // checked — the identity is asserted, never proven (GUM-322).
+                            ProtocolVersion.check(protocolVersion) match {
+                                case ProtocolVersion.Check.Incompatible(found, expected) =>
+                                    tracer.traceWith(
+                                      ServerRejectedProtocolVersion(coilNum, found, expected)
+                                    )
+                                case ProtocolVersion.Check.Compatible =>
+                                    val coil = CoilPeerNumber(coilNum)
+                                    if outboxes.contains(coil) then
+                                        tracer.traceWith(ServerAccepted(coilNum)) >>
+                                            coilD.complete(coil).void
+                                    else tracer.traceWith(ServerRejectedHandshake(coilNum))
+                            }
                         case Right(CoilFrame.Msg(payload)) =>
                             coilD.tryGet.flatMap {
                                 case Some(coil) => dispatchInbound(coil, payload)
-                                case None       => tracer.traceWith(ServerMsgBeforeHello)
+                                case None       => tracer.traceWith(ServerMsgBeforeHandshake)
                             }
                         case Left(err) =>
                             tracer.traceWith(ServerDecodeError(err))

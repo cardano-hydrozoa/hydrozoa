@@ -30,14 +30,24 @@ object HubWsTransportEvent:
 
     // ---- server (accept side) ----
 
-    /** The server accepted an inbound connection from a coil after receiving a valid `Hello`. */
+    /** The server accepted an inbound connection from a coil after receiving a valid `Handshake`.
+      */
     final case class ServerAccepted(coilNum: Int) extends HubWsTransportEvent
 
-    /** The server rejected a `Hello` from an unknown coil peer number. */
-    final case class ServerRejectedHello(coilNum: Int) extends HubWsTransportEvent
+    /** The server rejected a `Handshake` from an unknown coil peer number. */
+    final case class ServerRejectedHandshake(coilNum: Int) extends HubWsTransportEvent
 
-    /** A `Msg` frame arrived on the server side before the coil peer sent its `Hello`. */
-    case object ServerMsgBeforeHello extends HubWsTransportEvent
+    /** The server rejected a `Handshake` announcing a protocol version it does not speak. `found`
+      * is `None` for a coil too old to announce one at all.
+      */
+    final case class ServerRejectedProtocolVersion(
+        coilNum: Int,
+        found: Option[Int],
+        expected: Int
+    ) extends HubWsTransportEvent
+
+    /** A `Msg` frame arrived on the server side before the coil peer sent its `Handshake`. */
+    case object ServerMsgBeforeHandshake extends HubWsTransportEvent
 
     /** A frame on the server side could not be decoded. */
     final case class ServerDecodeError(cause: Throwable) extends HubWsTransportEvent

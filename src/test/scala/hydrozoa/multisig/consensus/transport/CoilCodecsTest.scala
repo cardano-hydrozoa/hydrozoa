@@ -49,9 +49,24 @@ class CoilCodecsTest extends AnyFunSuite {
         }
     }
 
-    test("CoilFrame.Hello round-trips") {
-        val frame = CoilFrame.Hello(coilNum = 3)
+    test("CoilFrame.Handshake round-trips") {
+        val frame = CoilFrame.Handshake.own(coilNum = 3)
         assert(roundTrip(frame) == frame)
+    }
+
+    test("a Handshake with no protocol version decodes, so the version check can refuse it") {
+        val text = """{"t":"handshake","coilNum":3}"""
+        CoilFrame.parse(text) match {
+            case Right(CoilFrame.Handshake(coilNum, protocolVersion, auth)) =>
+                assert(coilNum == 3)
+                assert(protocolVersion.isEmpty)
+                assert(auth == HandshakeAuth.Unauthenticated)
+                assert(
+                  ProtocolVersion.check(protocolVersion) ==
+                      ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
+                )
+            case other => fail(s"expected a Handshake, got: $other")
+        }
     }
 
     test("CoilFrame.Msg(OwnHardAck.Get) round-trips") {

@@ -30,7 +30,7 @@ trait CoilTransport {
 
 /** The coil side of the hub→coil WS link: a coil peer runs no server, it dials its single hub's
   * `/hub` endpoint and keeps the link alive with reconnect-on-drop. It identifies itself with
-  * [[CoilFrame.Hello]] so the hub binds the socket to this coil's [[CoilPeerNumber]].
+  * [[CoilFrame.Handshake]] so the hub binds the socket to this coil's [[CoilPeerNumber]].
   *
   * Outbound is the coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]); inbound is the
   * hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]), routed to the local
@@ -67,7 +67,7 @@ final class CoilPeerWsTransport private (
     private def onLine(s: String): IO[Unit] =
         CoilFrame.parse(s) match {
             case Right(CoilFrame.Msg(payload)) => dispatchInbound(payload)
-            case Right(CoilFrame.Hello(_))     => IO.unit
+            case Right(_: CoilFrame.Handshake) => IO.unit
             case Left(err)                     => tracer.traceWith(DecodeError(err))
         }
 
@@ -91,11 +91,12 @@ final class CoilPeerWsTransport private (
         // so a handshake landing on the deadline cannot leave both a live connection and a redial.
         def once(handshook: Deferred[IO, Unit]): IO[Unit] =
             QuietRelease(client.connect(request)).use { conn =>
-                val helloLine = CoilFrame.encode(CoilFrame.Hello(ownCoilNum.convert))
+                val handshakeLine =
+                    CoilFrame.encode(CoilFrame.Handshake.own(ownCoilNum.convert))
                 handshook.complete(()).flatMap {
                     case true =>
                         tracer.traceWith(DialerConnected(hubUri)) >>
-                            conn.send(WSFrame.Text(helloLine)) >>
+                            conn.send(WSFrame.Text(handshakeLine)) >>
                             WsDuplex.run(conn, outbox, onLine)
                     // Lost the claim: the budget expired and the loop has already redialed. Return
                     // instead, so `use` closes this socket rather than leaving a second live

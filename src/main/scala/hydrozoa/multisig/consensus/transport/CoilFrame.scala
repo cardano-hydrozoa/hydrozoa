@@ -10,8 +10,9 @@ import io.circe.syntax.*
 
 /** Wire envelope for the hub→coil WebSocket link.
   *
-  *   - [[Hello]] is sent as the coil's first frame so the hub learns which coil peer is on the
-  *     other end (the link is a star — each coil dials its single hub).
+  *   - [[Handshake]] is sent as the coil's first frame so the hub learns which coil peer is on the
+  *     other end (the link is a star — each coil dials its single hub), which protocol version it
+  *     speaks, and what it offers as proof of identity.
   *   - [[Msg]] carries a wire-eligible hub↔coil batch message ([[Population.Get]] /
   *     [[Population.New]] pulling/serving the population, [[OwnHardAck.Get]] / [[OwnHardAck.New]]
   *     pulling/serving the coil's own hard-ack).
@@ -21,7 +22,25 @@ import io.circe.syntax.*
   */
 sealed trait CoilFrame
 object CoilFrame {
-    final case class Hello(coilNum: Int) extends CoilFrame
+
+    /** The coil's opening frame. `protocolVersion` is `None` from a counterpart too old to announce
+      * one, which the hub refuses the same way it refuses a mismatch ([[ProtocolVersion.check]]).
+      */
+    final case class Handshake(
+        coilNum: Int,
+        protocolVersion: Option[Int],
+        auth: HandshakeAuth
+    ) extends CoilFrame
+
+    object Handshake {
+
+        /** This node's own handshake: its coil number, the version it speaks, and — until GUM-322 —
+          * no proof of either.
+          */
+        def own(coilNum: Int): Handshake =
+            Handshake(coilNum, Some(ProtocolVersion.current), HandshakeAuth.Unauthenticated)
+    }
+
     final case class Msg(payload: Wire) extends CoilFrame
 
     /** The wire-eligible hub↔coil batch messages. */
@@ -42,8 +61,13 @@ object CoilFrame {
         }
 
     given (using CardanoNetwork.Section): Encoder[CoilFrame] = Encoder.instance {
-        case Hello(coilNum) =>
-            Json.obj("t" -> "hello".asJson, "coilNum" -> coilNum.asJson)
+        case Handshake(coilNum, protocolVersion, auth) =>
+            Json.obj(
+              "t" -> "handshake".asJson,
+              "coilNum" -> coilNum.asJson,
+              "protocolVersion" -> protocolVersion.asJson,
+              "auth" -> auth.asJson
+            )
         case Msg(payload) =>
             payload match {
                 case x: Population.Get =>
@@ -59,8 +83,19 @@ object CoilFrame {
 
     given (using CardanoNetwork.Section): Decoder[CoilFrame] = Decoder.instance(c =>
         c.downField("t").as[String].flatMap {
-            case "hello" =>
-                c.downField("coilNum").as[Int].map(Hello(_))
+            case "handshake" =>
+                for {
+                    coilNum <- c.downField("coilNum").as[Int]
+                    // Absent rather than required: a counterpart that announces no version is
+                    // refused by the version check with a legible reason, not by a decode failure
+                    // that reads as a malformed frame.
+                    protocolVersion <- c.downField("protocolVersion").as[Option[Int]]
+                    auth <- c.downField("auth").as[Option[HandshakeAuth]]
+                } yield Handshake(
+                  coilNum,
+                  protocolVersion,
+                  auth.getOrElse(HandshakeAuth.Unauthenticated)
+                )
             case "msg" =>
                 c.downField("kind").as[String].flatMap {
                     case "PopGet" => c.downField("v").as[Population.Get].map(Msg(_))
