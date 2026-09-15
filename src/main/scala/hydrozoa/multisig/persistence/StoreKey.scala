@@ -32,14 +32,16 @@ import scalus.cardano.ledger.TransactionHash
   *     [[StoreKey.RequestHighWater]] — `Cf.RequestHighWater`, keyed by `blockNum`.
   *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
   *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
+  *     [[StoreKey.DepositMap]] — `Cf.DepositMap`, keyed by `blockNum` (per-block; see the case
+  *     docstring for why).
   *   - Reverse-index CFs: [[StoreKey.RequestBlockIndex]] — `Cf.RequestBlockIndex`, keyed by the
   *     request id (its packed i64). [[StoreKey.DepositDecisionIndex]] — `Cf.DepositDecisionIndex`,
   *     keyed by the deposit request's id (its packed i64). [[StoreKey.WithdrawalEffectIndex]] —
   *     `Cf.WithdrawalEffectIndex`, keyed by `(requestId i64, l1TxId)` (many effects per request).
   *     [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by `blockNum`.
   *     [[StoreKey.EffectStackIndex]] — `Cf.EffectStackIndex`, keyed by the effect's `l1TxId`.
-  *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
-  *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
+  *   - Singleton snapshot CFs (one entry total): [[StoreKey.Treasury]], [[StoreKey.CoilStampMark]]
+  *     (a hub's per-coil-peer stamped marks, one keyed blob).
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
   *
   * Each subtype declares its `Value` and a `given codec: StoreCodec[Value]`; the trait's
@@ -170,13 +172,22 @@ object StoreKey:
         val cf: Cf = Cf.WithdrawalEffectIndex
         def encode: Array[Byte] = JournalKey.longBytes(id.asI64) ++ l1TxId.bytes.toArray
 
-    /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */
-    case object DepositMap extends StoreKey:
+    /** Key for [[Cf.DepositMap]] — JointLedger's registered-but-undecided L1 deposits **as of block
+      * `num`**. One entry per block, written in the same atomic bundle as that block's
+      * `BlockResult`, so the two advance together and a crash mid-block cannot separate them.
+      *
+      * Block-keyed (not a singleton) for the same reason [[EvacuationMap]] is: a peer holding only
+      * the map at its own tip can serve no earlier point, and seeding a joining coil needs the map
+      * exactly at the block it is seeded from. Pruning is bounded the same way — anything strictly
+      * older than the retention floor is removable, and the map is bounded in size besides, holding
+      * only deposits still awaiting a decision.
+      */
+    final case class DepositMap(num: BlockNumber) extends StoreKey:
         type Value = DepositsMap
         import DepositMapCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.DepositMap
-        def encode: Array[Byte] = singletonKey
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.Treasury]] — the single blob holding SC's treasury UTXO chain at `hardAcked`.
       *
