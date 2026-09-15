@@ -178,10 +178,17 @@ server. That one server mounts two routes:
   `Population.Get/New` + `OwnHardAck.Get/New`). Mounted only on a hub.
 
 The hub↔coil link is a **star**: each coil peer dials its single hub's `/hub`
-(`CoilPeerWsTransport`) and identifies itself with `CoilFrame.Hello(coilNum)`; the
-hub binds that socket to the coil's `CoilPeerNumber`, routes inbound batches to
-that coil's `PeerLiaisonHubToCoil`, and drains that coil's outbox for outbound
-batches. A coil runs **no server** — only the uplink dialer.
+(`CoilPeerWsTransport`) and opens with `CoilFrame.Handshake(coilNum, protocolVersion,
+auth)`; the hub checks the protocol version, binds that socket to the coil's
+`CoilPeerNumber`, routes inbound batches to that coil's `PeerLiaisonHubToCoil`, and
+drains that coil's outbox for outbound batches. A coil runs **no server** — only the
+uplink dialer.
+
+Both envelopes open the same way: `HeadFrame.Handshake(peerNum, protocolVersion, auth)`
+on the mesh. The version is matched **exactly** (`ProtocolVersion.check`) and a mismatch
+refuses the link, because a bump is answered by migrating the head rather than by two
+versions coexisting on one link. `auth` is carried and not verified — the identity is
+asserted, never proven (GUM-322).
 
 The liaisons reach their counterparts through proxy actors that stand in for the
 remote handle and forward over the transport: `RemoteHubProxy` (coil → hub) and

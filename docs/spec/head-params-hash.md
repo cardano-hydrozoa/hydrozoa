@@ -350,9 +350,10 @@ things.
 What the head does have is payload authentication: consensus messages carry `HeaderSignature`
 and `TxSignature`, verified against the statically configured verification keys, so a stranger
 at the wrong address cannot forge a hard acknowledgement or a settlement signature. What it
-does not have is connection authentication — `CoilFrame.Hello` carries a bare `coilNum` and
-`HubWsTransport` accepts it on nothing more than "is this a coil peer I hub". Closing that is a
-signed handshake over the already-pinned verification keys, tracked in GUM-322.
+does not have is connection authentication — `CoilFrame.Handshake` carries a bare `coilNum` and
+an `auth` that is always `Unauthenticated`, so `HubWsTransport` accepts it on nothing more than a
+matching protocol version and "is this a coil peer I hub". Closing that is a signed handshake over
+the already-pinned verification keys, tracked in GUM-322.
 
 ## The checks
 

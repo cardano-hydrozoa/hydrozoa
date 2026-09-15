@@ -61,17 +61,26 @@ object PeerTransportEvent:
 
     // ---- server (accept side) ----
 
-    /** The server accepted an inbound connection after receiving a valid `Hello`. */
+    /** The server accepted an inbound connection after receiving a valid `Handshake`. */
     final case class ServerAccepted(remote: HeadPeerId) extends PeerTransportEvent
 
-    /** The server rejected a `Hello` because the peer number violates the topology constraint (only
-      * lower-numbered peers dial higher-numbered peers).
+    /** The server rejected a `Handshake` because the peer number violates the topology constraint
+      * (only lower-numbered peers dial higher-numbered peers).
       */
-    final case class ServerRejectedHello(remotePeerNum: Int, ownPeerNum: Int)
+    final case class ServerRejectedHandshake(remotePeerNum: Int, ownPeerNum: Int)
         extends PeerTransportEvent
 
-    /** A `Msg` frame arrived on the server side before the peer sent its `Hello`. */
-    case object ServerMsgBeforeHello extends PeerTransportEvent
+    /** The server rejected a `Handshake` announcing a protocol version it does not speak. `found`
+      * is `None` for a peer too old to announce one at all.
+      */
+    final case class ServerRejectedProtocolVersion(
+        remotePeerNum: Int,
+        found: Option[Int],
+        expected: Int
+    ) extends PeerTransportEvent
+
+    /** A `Msg` frame arrived on the server side before the peer sent its `Handshake`. */
+    case object ServerMsgBeforeHandshake extends PeerTransportEvent
 
     /** A frame on the server side could not be decoded. */
     final case class ServerDecodeError(cause: Throwable) extends PeerTransportEvent
