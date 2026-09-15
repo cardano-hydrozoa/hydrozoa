@@ -358,10 +358,16 @@ type RestoreRequest =
 
 type RestoreResponse =
   // Reconstructed as of the requested number. `tip` equals the request. `evacuationMapHash` is the
-  // digest of the ledger's evacuation map at that state — 32 bytes, hex. `l2StateHash` and
-  // `l2ParamsHash` are likewise 32 bytes, hex. All three are REQUIRED: a ledger that cannot report
-  // one is not a ledger a head can drive.
-  | { "Restored":      { tip: CommandNumber, evacuationMapHash: string,
+  // digest of the ledger's evacuation map at that state — 32 bytes, hex; `evacuationMapKzg` is the
+  // KZG commitment to that SAME map — 48 bytes, hex. `l2StateHash` and `l2ParamsHash` are 32 bytes,
+  // hex. All four are REQUIRED: a ledger that cannot report one is not a ledger a head can drive.
+  //
+  // Two representations of one map because they answer different readers: the hash is what a peer
+  // compares against its own folded map, the commitment is what the head signs and anchors on L1,
+  // and so the only one a peer with no history to fold can check a certificate against. The
+  // evacuation map is a projection of the main compartment, so the ledger is the side that
+  // evaluates it.
+  | { "Restored":      { tip: CommandNumber, evacuationMapHash: string, evacuationMapKzg: string,
                          l2StateHash: string, l2ParamsHash: string } }
   // `requested` is the asked-for number, `tip` the ledger's current durable tip.
   | { "RestoreFailed": { requested: CommandNumber, tip: CommandNumber, reason: string } }
@@ -371,9 +377,9 @@ type StateAtRequest =
   | { "StateAt": { commandNumber: CommandNumber } }
 
 type StateAtResponse =
-  // `at` equals the request. The same three digests `Restored` carries; the ledger's own position
+  // `at` equals the request. The same four digests `Restored` carries; the ledger's own position
   // is unchanged.
-  | { "StateReported": { at: CommandNumber, evacuationMapHash: string,
+  | { "StateReported": { at: CommandNumber, evacuationMapHash: string, evacuationMapKzg: string,
                          l2StateHash: string, l2ParamsHash: string } }
   // The ledger cannot report that number — past its tip, or pruned below it.
   | { "StateAtFailed":  { requested: CommandNumber, tip: CommandNumber, reason: string } }
