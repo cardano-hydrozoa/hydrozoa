@@ -29,8 +29,11 @@ object StoreVersion:
       *     `l2StateHash` — both the offchain record and the on-chain bytes it serializes — and so
       *     does the multisig treasury datum, which every persisted settlement and treasury value
       *     carries.
+      *   - 6: `Cf.DepositMap` is keyed by `blockNum` instead of holding one singleton blob, so the
+      *     deposits map at any retained block is recoverable and servable rather than only the one
+      *     at the tip. The value codec is unchanged; only the key is.
       */
-    val current: Int = 5
+    val current: Int = 6
 
     /** The key under which the schema version is stored in [[Cf.Meta]]. */
     val key: Array[Byte] = "store_version".getBytes("UTF-8")

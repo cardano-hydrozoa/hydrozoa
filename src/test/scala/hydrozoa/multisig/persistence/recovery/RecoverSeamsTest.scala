@@ -102,7 +102,7 @@ class RecoverSeamsTest extends AnyFunSuite:
             for
                 brief <- blockBrief(4)
                 _ <- p.put(JournalKey.Block(BlockNumber(4)))(JournalValue(stamp, brief))
-                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.DepositMap(BlockNumber(4)))(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(4)))(L2CommandNumber(7L))
                 done <- JointLedger.State.recoverState(p, Some(BlockNumber(4)))
             yield assert(
@@ -126,7 +126,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // Crash boundary: fastBlockMark = block 2, recorded at L2 command number 2.
                 brief <- blockBrief(2)
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
-                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.DepositMap(BlockNumber(2)))(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 // The fast anchor IS max(BlockResult), so the anchored blocks must be present:
                 // recover folds their evacuation diffs to reach the map at the anchor.
@@ -167,7 +167,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // so seed Block(2).
                 brief <- blockBrief(2)
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
-                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.DepositMap(BlockNumber(2)))(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 // The fast anchor IS max(BlockResult), so the anchored blocks must be present:
                 // recover folds their evacuation diffs to reach the map at the anchor.
@@ -589,7 +589,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 )
                 brief <- blockBrief(2)
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
-                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.DepositMap(BlockNumber(2)))(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 _ <- (1 to 2).toList.traverse_(n =>
                     blockResult(n).flatMap(br =>
@@ -628,7 +628,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 )
                 brief <- blockBrief(2)
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
-                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.DepositMap(BlockNumber(2)))(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 _ <- (1 to 2).toList.traverse_(n =>
                     blockResult(n).flatMap(br =>
@@ -665,7 +665,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 ledger <- EutxoL2Ledger(config, store)
                 brief <- blockBrief(2)
                 _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
-                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.DepositMap(BlockNumber(2)))(DepositsMap.empty)
                 // L2CommandNumber intentionally not written
                 // Derived: these cases seed EvacuationMap(1) so the STORED map is the fold base.
                 // A hard-coded None would restore the config's initial map instead, and the

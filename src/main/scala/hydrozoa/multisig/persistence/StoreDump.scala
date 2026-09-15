@@ -121,7 +121,7 @@ object StoreDump:
                 try JournalKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
             case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater | Cf.L2CommandNumber |
-                Cf.EvacuationMap | Cf.UnsignedStack | Cf.BlockStackIndex =>
+                Cf.EvacuationMap | Cf.DepositMap | Cf.UnsignedStack | Cf.BlockStackIndex =>
                 if key.length == 4 then s"$cf(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
             case Cf.HardConfirmation =>
@@ -140,7 +140,7 @@ object StoreDump:
                 else hex(key)
             case Cf.EffectStackIndex =>
                 s"EffectStackIndex(${hex(key)})"
-            case Cf.DepositMap | Cf.Treasury | Cf.CoilStampMark =>
+            case Cf.Treasury | Cf.CoilStampMark =>
                 if key.isEmpty then "(singleton)" else hex(key)
             case Cf.Meta =>
                 try s"Meta(${new String(key, "UTF-8")})"
