@@ -43,6 +43,13 @@ class NodeOperationMultisigConfigTest extends AnyFunSuite {
         assert(decode[NodeOperationMultisigConfig](config.asJson.noSpaces) == Right(config))
     }
 
+    test("a config predating coilCatchUpStacks decodes, taking the default") {
+        assert(
+          decode[NodeOperationMultisigConfig](withoutOutboxCap).map(_.coilCatchUpStacks) ==
+              Right(NodeOperationMultisigConfig.defaultCoilCatchUpStacks)
+        )
+    }
+
     /** The other direction of the same operational concern: a deployed config may still carry
       * `transplantStackNumber`, a field this config no longer has. The decoder reads named fields
       * and never asserts the object's shape, so an unknown key is ignored — but "ignored" is the

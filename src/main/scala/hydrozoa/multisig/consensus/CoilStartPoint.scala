@@ -5,6 +5,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, HubHardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, Population}
 import hydrozoa.multisig.consensus.liaison.BatchNumber
@@ -25,11 +26,15 @@ enum StartPoint:
     /** Seed this coil at the enclosed start point. */
     case Offer(offer: Join.Offer)
 
-    /** Nothing to seed — the coil's own marks are already at or past the hub's latest
-      * hard-confirmed stack. An ordinary warm reconnect: it keeps its own cursors and the hub
-      * serves it from where it already is.
+    /** Leave this coil to walk forward over the population lanes — the ticket's **warm reconnect**.
+      * It keeps its own cursors and the hub serves it from where it already is.
+      *
+      * ⛔ This is the common outcome, not the rare one. A hub produces continuously, so a
+      * reconnecting coil is essentially ALWAYS behind; the question is never "is it behind" but "by
+      * more than `coilCatchUpStacks`". Seeding is the exception, for a coil far enough back that
+      * replaying is not worth it.
       */
-    case NotNeeded
+    case CatchUp
 
     /** The hub has no start point it could offer. The coil does what it does today — bootstrap
       * stack 0 from config and catch up over the population — which is correct in both of these
@@ -80,14 +85,25 @@ object StartPoint:
                 IO.pure(Unavailable(Reason.HeadAtStackZero))
             case Some(stack) if stack == StackNumber.zero =>
                 IO.pure(Unavailable(Reason.HeadAtStackZero))
-            case Some(stack) if connected.stack.exists(Ordering[StackNumber].gteq(_, stack)) =>
-                IO.pure(NotNeeded)
+            case Some(stack) if withinCatchUp(connected.stack, stack) =>
+                IO.pure(CatchUp)
             case Some(stack) =>
                 buildOffer(coil, stack, persistence, ledger)
         }
 
-    /** Everything the hub reads to assemble an offer. */
-    type Config = HeadPeers.Section & CardanoNetwork.Section & HeadConfig.Bootstrap.Section
+    /** Everything the hub reads to assemble an offer, plus the catch-up threshold. */
+    type Config = HeadPeers.Section & CardanoNetwork.Section & HeadConfig.Bootstrap.Section &
+        NodeOperationMultisigConfig.Section
+
+    /** Is this coil close enough behind to walk forward over the lanes instead of being seeded?
+      *
+      * A coil reporting **no** stack at all is never within catch-up: it holds nothing to walk
+      * forward from. That is the cold store the whole exchange exists for.
+      */
+    private def withinCatchUp(coilStack: Option[StackNumber], latest: StackNumber)(using
+        config: Config
+    ): Boolean =
+        coilStack.exists(s => (latest: Int) - (s: Int) <= config.coilCatchUpStacks)
 
     /** The latest stack this hub has hard-confirmed — the only start point it offers.
       * `lastKey(Cf.HardConfirmation)`, the same derivation `Markers.hardConfirmed` uses.

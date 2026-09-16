@@ -21,11 +21,12 @@ def generateNodeOperationMultisigConfig(
         maxRequestsPerBatch <- Gen.choose(1, 100)
         outboxCap <- Gen.choose(1, 4096)
         millis <- Gen.choose(1L, maxPollingPeriod.toMillis)
-        // Present and absent, so a codec round-trip covers both shapes of the field.
+        catchUp <- Gen.choose(0, 64)
     } yield NodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = millis.millis,
       peerLiaisonMaxRequestsPerBatch = PositiveInt(maxRequestsPerBatch).get,
       peerLiaisonOutboxCap = PositiveInt(outboxCap).get,
       peerLiaisonResendInterval = 5.seconds,
+      coilCatchUpStacks = catchUp,
       rateLimits = rateLimits
     )
