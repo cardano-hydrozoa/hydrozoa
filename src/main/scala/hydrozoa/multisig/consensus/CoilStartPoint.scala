@@ -21,7 +21,7 @@ import java.nio.ByteBuffer
 /** What a hub decides when a coil peer connects (GUM-312): where that coil should start, or that it
   * should not be seeded at all.
   */
-enum StartPoint:
+enum CoilStartPoint:
 
     /** Seed this coil at the enclosed start point. */
     case Offer(offer: Join.Offer)
@@ -40,9 +40,9 @@ enum StartPoint:
       * stack 0 from config and catch up over the population — which is correct in both of these
       * cases and cheap, because both mean the head has little history.
       */
-    case Unavailable(reason: StartPoint.Reason)
+    case Unavailable(reason: CoilStartPoint.Reason)
 
-object StartPoint:
+object CoilStartPoint:
 
     enum Reason:
         /** The head has not hard-confirmed anything past stack 0, so there is nothing to seed from.
@@ -70,16 +70,16 @@ object StartPoint:
     /** Decide what to offer a coil peer that has just connected.
       *
       * The hub chooses; the coil's `connected` marks are a **hint** used for one thing only —
-      * telling a warm reconnect (already current, [[StartPoint.NotNeeded]]) from a coil that needs
-      * seeding. Everything the coil then adopts is computed here, so a coil that lies about its
-      * marks gets seeded rather than believed.
+      * telling a warm reconnect (already current, [[CoilStartPoint.CatchUp]]) from a coil that
+      * needs seeding. Everything the coil then adopts is computed here, so a coil that lies about
+      * its marks gets seeded rather than believed.
       */
     def decide(
         coil: PeerId.Coil,
         connected: Join.Connected,
         persistence: Persistence[IO],
         ledger: L2Ledger[IO]
-    )(using config: Config): IO[StartPoint] =
+    )(using config: Config): IO[CoilStartPoint] =
         latestHardConfirmed(persistence).flatMap {
             case None =>
                 IO.pure(Unavailable(Reason.HeadAtStackZero))
@@ -118,7 +118,7 @@ object StartPoint:
         stack: StackNumber,
         persistence: Persistence[IO],
         ledger: L2Ledger[IO]
-    )(using config: Config): IO[StartPoint] =
+    )(using config: Config): IO[CoilStartPoint] =
         for {
             effects <- persistence.getOrFail(StoreKey.HardConfirmation(stack)).map(_.payload)
             brief <- persistence.getOrFail(JournalKey.Stack(stack)).map(_.payload)
