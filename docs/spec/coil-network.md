@@ -227,11 +227,16 @@ number; the roster next because the claimed number is what resolves the key the 
 against.
 
 **A refused handshake closes the socket, named.** The server sends a `Refused` carrying one of
-`ProtocolVersionMismatch` / `NotHubbed` / `NotInRoster` / `WrongDialDirection` / `Unauthenticated`
-/ `HeadParamsMismatch` / `BadSignature`, then a WebSocket close with status 1008 and that reason,
+`ProtocolVersionMismatch` / `NotHubbed` / `NotInRoster` / `WrongDialDirection` /
+`HeadParamsMismatch` / `BadSignature`, then a WebSocket close with status 1008 and that reason,
 and traces it. Each case is a different operator action, so they stay distinct rather than
 collapsing into one "rejected". The dialer **keeps redialing** across a refusal — a refusal
 describes the attempt, not the peer.
+
+`auth` is **required**: there is no unproven handshake form, so a frame without one fails to
+decode and is traced as `ServerDecodeError` rather than refused with a reason. That is the one
+handshake fault with no named refusal, and it is reachable only from a build that predates this
+exchange — of which there are none, since no head is live.
 
 A dialer that gets no challenge within its 10 s budget drops the socket and redials; the budget
 stays under the 30 s WebSocket-handshake budget so an abandoned attempt cannot outlive the loop's

@@ -4,6 +4,7 @@ import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerWallet}
+import io.circe.syntax.*
 import scalus.cardano.ledger.{Blake2b_256, Hash, Hash32}
 import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
@@ -49,6 +50,15 @@ object HandshakeFixture {
 
     /** A second nonce, for the replay cases. */
     val otherNonce: HandshakeNonce = nonceOf(0xbb)
+
+    /** A signed proof rendered as it appears in a handshake's `auth` field, for the tests that
+      * hand-write a frame's JSON to exercise a field the frame builders always fill in.
+      */
+    def authJson(link: HandshakeProof.Link, wallet: PeerWallet, claimant: Int): String =
+        HandshakeProof
+            .sign(wallet, link, claimant, ProtocolVersion.current, headParamsHash, nonce)
+            .asJson
+            .noSpaces
 
     def nonceOf(fill: Int): HandshakeNonce =
         HandshakeNonce(ByteVector.fill(HandshakeNonce.sizeBytes.toLong)(fill.toByte))

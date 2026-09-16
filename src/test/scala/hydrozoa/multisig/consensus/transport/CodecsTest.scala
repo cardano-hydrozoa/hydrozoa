@@ -90,12 +90,19 @@ class CodecsTest extends AnyFunSuite {
     }
 
     test("a Handshake with no protocol version decodes, so the version check can refuse it") {
-        val text = """{"t":"handshake","peerNum":7}"""
+        // Proof and all, only the version missing: a counterpart that announces none must reach the
+        // version check with a legible reason, not die in the decoder as a malformed frame.
+        val auth =
+            HandshakeFixture.authJson(
+              HandshakeProof.Link.HeadToHead,
+              HandshakeFixture.headWallet(0),
+              claimant = 7
+            )
+        val text = s"""{"t":"handshake","peerNum":7,"auth":$auth}"""
         HeadFrame.parse(text) match {
-            case Right(HeadFrame.Handshake(peerNum, protocolVersion, auth)) =>
+            case Right(HeadFrame.Handshake(peerNum, protocolVersion, _)) =>
                 assert(peerNum == 7)
                 assert(protocolVersion.isEmpty)
-                assert(auth == HandshakeAuth.Unauthenticated)
                 assert(
                   ProtocolVersion.check(protocolVersion) ==
                       ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
@@ -111,7 +118,6 @@ class CodecsTest extends AnyFunSuite {
           HandshakeRefusal.NotHubbed(4),
           HandshakeRefusal.NotInRoster(4),
           HandshakeRefusal.WrongDialDirection(3, 1),
-          HandshakeRefusal.Unauthenticated,
           HandshakeRefusal.HeadParamsMismatch(
             HandshakeFixture.otherHeadParamsHash,
             HandshakeFixture.headParamsHash

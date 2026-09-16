@@ -62,13 +62,6 @@ class HandshakeProofTest extends AnyFunSuite {
         assert(check(honestCoilAuth()) == Right(()))
     }
 
-    test("a proof offered with no signature is unauthenticated, not a bad signature") {
-        // The two are different operator actions: an old build versus an impersonator.
-        assert(
-          check(HandshakeAuth.Unauthenticated) == Left(HandshakeRefusal.Unauthenticated)
-        )
-    }
-
     test("head params are compared before the signature, so the mismatch is what gets named") {
         assert(
           check(honestCoilAuth(headParamsHash = HandshakeFixture.otherHeadParamsHash)) ==
@@ -128,7 +121,7 @@ class HandshakeProofTest extends AnyFunSuite {
         // `platform.verifyEd25519Signature` throws on a wrong-length signature, and a peer supplies
         // that length — so a transport that let it through would die on a frame instead of
         // refusing one.
-        val garbage = HandshakeAuth.Signed(
+        val garbage = HandshakeAuth(
           HandshakeFixture.headParamsHash,
           HandshakeSignature(IArray.from(Array.fill(7)(0x00.toByte)))
         )

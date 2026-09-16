@@ -133,12 +133,8 @@ object HeadFrame {
                     // refused by the version check with a legible reason, not by a decode failure
                     // that reads as a malformed frame.
                     protocolVersion <- c.downField("protocolVersion").as[Option[Int]]
-                    auth <- c.downField("auth").as[Option[HandshakeAuth]]
-                } yield Handshake(
-                  peerNum,
-                  protocolVersion,
-                  auth.getOrElse(HandshakeAuth.Unauthenticated)
-                )
+                    auth <- c.downField("auth").as[HandshakeAuth]
+                } yield Handshake(peerNum, protocolVersion, auth)
             case "msg" =>
                 c.downField("kind").as[String].flatMap {
                     case "MeshGet" =>

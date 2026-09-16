@@ -34,9 +34,6 @@ enum HandshakeRefusal {
     /** The head mesh's dial topology: a server accepts inbound only from lower-numbered peers. */
     case WrongDialDirection(claimedPeerNum: Int, ownPeerNum: Int)
 
-    /** The handshake asserted an identity and offered no proof of it. */
-    case Unauthenticated
-
     /** The counterpart is on another head, or disagrees with this node about this one. */
     case HeadParamsMismatch(found: Hash32, expected: Hash32)
 
@@ -56,8 +53,6 @@ object HandshakeRefusal {
             s"this head has no peer $peerNum"
         case WrongDialDirection(claimedPeerNum, ownPeerNum) =>
             s"peer $claimedPeerNum must not dial peer $ownPeerNum (lower dials higher)"
-        case Unauthenticated =>
-            "the handshake carried no proof of identity"
         case HeadParamsMismatch(found, expected) =>
             s"head params ${found.toHex}, this node's are ${expected.toHex}"
         case BadSignature =>
@@ -81,8 +76,6 @@ object HandshakeRefusal {
               "peerNum" -> claimedPeerNum.asJson,
               "ownPeerNum" -> ownPeerNum.asJson
             )
-        case Unauthenticated =>
-            Json.obj("r" -> "unauthenticated".asJson)
         case HeadParamsMismatch(found, expected) =>
             Json.obj(
               "r" -> "headParamsMismatch".asJson,
@@ -109,7 +102,6 @@ object HandshakeRefusal {
                     peerNum <- c.downField("peerNum").as[Int]
                     ownPeerNum <- c.downField("ownPeerNum").as[Int]
                 } yield WrongDialDirection(peerNum, ownPeerNum)
-            case "unauthenticated" => Right(Unauthenticated)
             case "headParamsMismatch" =>
                 for {
                     found <- c.downField("found").as[Hash32]

@@ -89,12 +89,18 @@ class CoilCodecsTest extends AnyFunSuite {
     }
 
     test("a Handshake with no protocol version decodes, so the version check can refuse it") {
-        val text = """{"t":"handshake","coilNum":3}"""
+        // Proof and all, only the version missing — see the mirror of this in [[CodecsTest]].
+        val auth =
+            HandshakeFixture.authJson(
+              HandshakeProof.Link.CoilToHub,
+              HandshakeFixture.coilWallet(0),
+              claimant = 3
+            )
+        val text = s"""{"t":"handshake","coilNum":3,"auth":$auth}"""
         CoilFrame.parse(text) match {
-            case Right(CoilFrame.Handshake(coilNum, protocolVersion, auth)) =>
+            case Right(CoilFrame.Handshake(coilNum, protocolVersion, _)) =>
                 assert(coilNum == 3)
                 assert(protocolVersion.isEmpty)
-                assert(auth == HandshakeAuth.Unauthenticated)
                 assert(
                   ProtocolVersion.check(protocolVersion) ==
                       ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)

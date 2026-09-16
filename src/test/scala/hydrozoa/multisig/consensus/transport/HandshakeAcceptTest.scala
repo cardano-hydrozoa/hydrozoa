@@ -108,17 +108,24 @@ class HandshakeAcceptTest extends AnyFunSuite {
         )
     }
 
-    test("a coil offering no proof is refused as unauthenticated") {
-        assertHubRefuses(
-          _ => Some(CoilFrame.encode(unprovenCoilHandshake(1, ProtocolVersion.current))),
-          HandshakeRefusal.Unauthenticated
-        )
-    }
-
     test("a coil speaking another protocol version is refused before its proof is looked at") {
+        // The proof is coil 1's own and good for this socket. The version is checked first, so it
+        // is never reached — which is the point: a peer speaking another protocol may not mean the
+        // same thing by its own number.
         val theirs = ProtocolVersion.current + 1
         assertHubRefuses(
-          _ => Some(CoilFrame.encode(unprovenCoilHandshake(1, theirs))),
+          opening =>
+              hubNonce(opening).map { nonce =>
+                  val auth = HandshakeProof.sign(
+                    HandshakeFixture.coilWallet(1),
+                    HandshakeProof.Link.CoilToHub,
+                    claimant = 1,
+                    theirs,
+                    HandshakeFixture.headParamsHash,
+                    nonce
+                  )
+                  CoilFrame.encode(CoilFrame.Handshake(1, Some(theirs), auth))
+              },
           HandshakeRefusal.ProtocolVersionMismatch(Some(theirs), ProtocolVersion.current)
         )
     }
@@ -341,7 +348,4 @@ class HandshakeAcceptTest extends AnyFunSuite {
               HeadFrame.Handshake.own(peerNum, wallet, HandshakeFixture.headParamsHash, nonce)
             )
         )
-
-    private def unprovenCoilHandshake(coilNum: Int, version: Int): CoilFrame.Handshake =
-        CoilFrame.Handshake(coilNum, Some(version), HandshakeAuth.Unauthenticated)
 }

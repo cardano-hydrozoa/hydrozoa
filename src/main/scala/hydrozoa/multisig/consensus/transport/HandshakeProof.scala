@@ -87,8 +87,8 @@ object HandshakeProof {
         protocolVersion: Int,
         headParamsHash: Hash32,
         nonce: HandshakeNonce
-    ): HandshakeAuth.Signed =
-        HandshakeAuth.Signed(
+    ): HandshakeAuth =
+        HandshakeAuth(
           headParamsHash,
           HandshakeSignature(
             wallet.signMsg(
@@ -112,24 +112,18 @@ object HandshakeProof {
         nonce: HandshakeNonce,
         auth: HandshakeAuth
     ): Either[HandshakeRefusal, Unit] =
-        auth match {
-            case HandshakeAuth.Unauthenticated =>
-                Left(HandshakeRefusal.Unauthenticated)
-            case HandshakeAuth.Signed(headParamsHash, signature) =>
-                // The head params are compared before the signature so a peer on another head is
-                // told which of the two it is. A forged hash only ever fails the signature below,
-                // because the preimage carries it.
-                if headParamsHash != ownHeadParamsHash then
-                    Left(HandshakeRefusal.HeadParamsMismatch(headParamsHash, ownHeadParamsHash))
-                else
-                    val message =
-                        preimage(link, claimant, protocolVersion, headParamsHash, nonce)
-                    Either.cond(
-                      verifyEd25519(vkey, message, signature),
-                      (),
-                      HandshakeRefusal.BadSignature
-                    )
-        }
+        // The head params are compared before the signature so a peer on another head is told which
+        // of the two it is. A forged hash only ever fails the signature below, because the preimage
+        // carries it.
+        if auth.headParamsHash != ownHeadParamsHash then
+            Left(HandshakeRefusal.HeadParamsMismatch(auth.headParamsHash, ownHeadParamsHash))
+        else
+            val message = preimage(link, claimant, protocolVersion, auth.headParamsHash, nonce)
+            Either.cond(
+              verifyEd25519(vkey, message, auth.signature),
+              (),
+              HandshakeRefusal.BadSignature
+            )
 
     /** `platform.verifyEd25519Signature` throws on a malformed key or signature rather than
       * returning false, and a peer supplies both — so a length nobody checked must read as a
