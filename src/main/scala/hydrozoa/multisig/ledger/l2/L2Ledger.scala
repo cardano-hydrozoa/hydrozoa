@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.l2
 
 import cats.Monad
 import cats.data.EitherT
+import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup, EvacuationMapHash}
@@ -328,6 +329,20 @@ object L2Ledger {
       */
     final case class Digests(
         evacuationMapHash: EvacuationMapHash,
+        /** The KZG commitment to the same evacuation map `evacuationMapHash` digests.
+          *
+          * Two representations of one map, both reported, because they answer to different readers.
+          * The hash is what a peer compares against its own folded map. The commitment is what the
+          * head **signs and anchors on L1** — it is the `commit` on a settlement's treasury datum
+          * and the `commitment` on an SEC — so it is the only one of the two a peer with no history
+          * to fold can check a certificate against. That is what a coil peer seeded at a start
+          * point has (GUM-312).
+          *
+          * The ledger is the right side to evaluate it: the evacuation map is a projection of the
+          * main compartment, so producing it is the ledger's own business, and any implementation
+          * that can report `evacuationMapHash` is already holding the map this comes from.
+          */
+        evacuationMapKzg: KzgCommitment,
         l2StateHash: L2StateHash,
         l2ParamsHash: Hash32
     )
