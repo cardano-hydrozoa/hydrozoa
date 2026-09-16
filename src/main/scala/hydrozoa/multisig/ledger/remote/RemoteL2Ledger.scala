@@ -9,6 +9,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMapHash
 import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, L2StateExport, L2StateHash, RegisterDepositResponse, RestoreError}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse, StateAtResponse}
@@ -163,7 +164,14 @@ class RemoteL2Ledger private (
     ): EitherT[IO, RestoreError, L2Ledger.Digests] =
         EitherT(sendRestoreRequest(Request.Restore(commandNumber)).map {
             case r: RestoreResponse.Restored =>
-                Right(L2Ledger.Digests(r.evacuationMapHash, r.l2StateHash, r.l2ParamsHash))
+                Right(
+                  L2Ledger.Digests(
+                    r.evacuationMapHash,
+                    r.evacuationMapKzg,
+                    r.l2StateHash,
+                    r.l2ParamsHash
+                  )
+                )
             case RestoreResponse.RestoreFailed(requested, tip, reason) =>
                 if requested.value > tip.value then
                     Left(RestoreError.CommandNumberTooHigh(requested, tip))
@@ -182,7 +190,14 @@ class RemoteL2Ledger private (
     ): EitherT[IO, RestoreError, L2Ledger.Digests] =
         EitherT(sendStateAtRequest(Request.StateAt(commandNumber)).map {
             case r: StateAtResponse.StateReported =>
-                Right(L2Ledger.Digests(r.evacuationMapHash, r.l2StateHash, r.l2ParamsHash))
+                Right(
+                  L2Ledger.Digests(
+                    r.evacuationMapHash,
+                    r.evacuationMapKzg,
+                    r.l2StateHash,
+                    r.l2ParamsHash
+                  )
+                )
             case StateAtResponse.StateAtFailed(requested, tip, reason) =>
                 if requested.value > tip.value then
                     Left(RestoreError.CommandNumberTooHigh(requested, tip))
@@ -558,6 +573,7 @@ object RemoteL2Ledger {
         final case class Restored(
             tip: L2CommandNumber,
             evacuationMapHash: EvacuationMapHash,
+            evacuationMapKzg: KzgCommitment,
             l2StateHash: L2StateHash,
             l2ParamsHash: Hash32
         ) extends RestoreResponse {
@@ -593,6 +609,7 @@ object RemoteL2Ledger {
         final case class StateReported(
             at: L2CommandNumber,
             evacuationMapHash: EvacuationMapHash,
+            evacuationMapKzg: KzgCommitment,
             l2StateHash: L2StateHash,
             l2ParamsHash: Hash32
         ) extends StateAtResponse {
