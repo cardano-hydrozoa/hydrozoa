@@ -165,7 +165,11 @@ object JoinOfferVerifier:
             _ <- EitherT(verifySecSignatures(sec))
         } yield ()).value
 
-    /** The settlement must be a transaction the chain would have accepted.
+    /** Public alongside [[verifySecSignatures]], and for the same reason: "would the chain have
+      * accepted this transaction, ignoring that its inputs are long spent" is a question worth
+      * asking on its own.
+      *
+      * The settlement must be a transaction the chain would have accepted.
       *
       * **Modulo its inputs already being spent**, which is how a settlement that has been submitted
       * looks from now on: the UTxO state is seeded from the transaction's **own** `resolvedUtxos`
@@ -175,7 +179,7 @@ object JoinOfferVerifier:
       * The slot is zero and unused — the only validators that read it are the two
       * [[historicalValidators]] leaves out.
       */
-    private def checkSettlementValid(
+    def checkSettlementValid(
         settlement: SettlementTx
     )(using config: Config): Either[JoinRefusal, Unit] =
         val context = Context(
