@@ -288,7 +288,11 @@ object JoinOfferVerifier:
             )
         } yield ()
 
-    /** The SEC must carry the same signatures a hard-confirmation required: **every head peer**
+    /** Public because it answers a question worth asking on its own -- did this SEC reach the
+      * quorum a hard-confirmation requires? -- and because nothing else in the tree can answer it:
+      * an SEC is not a transaction, so no validator suite covers it.
+      *
+      * The SEC must carry the same signatures a hard-confirmation required: **every head peer**
       * (AllOf) and **at least `coilQuorum` coil peers** (MOf). Each is checked over the
       * commitment's serialized on-chain record — the message `HardAckSignatureVerifier` uses for a
       * hard-acked SEC.
@@ -310,7 +314,7 @@ object JoinOfferVerifier:
       * signature that is *present and invalid* also does not count: it is worth nothing, whatever
       * it was meant to be.
       */
-    private def verifySecSignatures(
+    def verifySecSignatures(
         sec: Option[StandaloneEvacuationCommitment.MultiSigned]
     )(using config: Config): IO[Either[JoinRefusal, Unit]] =
         sec.fold(IO.pure(Right(()))) { s =>
