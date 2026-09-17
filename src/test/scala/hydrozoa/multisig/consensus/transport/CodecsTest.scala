@@ -63,9 +63,9 @@ class CodecsTest extends AnyFunSuite {
         val text = """{"t":"handshake","peerNum":7}"""
         HeadFrame.parse(text) match {
             case Right(HeadFrame.Handshake(peerNum, protocolVersion, auth)) =>
-                assert(peerNum == 7): Unit
-                assert(protocolVersion.isEmpty): Unit
-                assert(auth == HandshakeAuth.Unauthenticated): Unit
+                val _ = assert(peerNum == 7)
+                val _ = assert(protocolVersion.isEmpty)
+                val _ = assert(auth == HandshakeAuth.Unauthenticated)
                 assert(
                   ProtocolVersion.check(protocolVersion) ==
                       ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)

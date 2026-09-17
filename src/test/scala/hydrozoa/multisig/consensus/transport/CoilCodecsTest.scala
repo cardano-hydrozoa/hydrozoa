@@ -58,9 +58,9 @@ class CoilCodecsTest extends AnyFunSuite {
         val text = """{"t":"handshake","coilNum":3}"""
         CoilFrame.parse(text) match {
             case Right(CoilFrame.Handshake(coilNum, protocolVersion, auth)) =>
-                assert(coilNum == 3): Unit
-                assert(protocolVersion.isEmpty): Unit
-                assert(auth == HandshakeAuth.Unauthenticated): Unit
+                val _ = assert(coilNum == 3)
+                val _ = assert(protocolVersion.isEmpty)
+                val _ = assert(auth == HandshakeAuth.Unauthenticated)
                 assert(
                   ProtocolVersion.check(protocolVersion) ==
                       ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
