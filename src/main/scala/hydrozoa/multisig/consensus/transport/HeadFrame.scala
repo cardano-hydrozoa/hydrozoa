@@ -34,8 +34,23 @@ object HeadFrame {
 
     /** The accepting peer's opening frame: a nonce drawn fresh for this socket, which the dialer's
       * [[Handshake]] signs over. See [[HandshakeNonce]] for why the server issues it.
+      *
+      * It announces `protocolVersion` too, so the dialer reaches its own verdict instead of waiting
+      * to be told. A dialer that checks here refuses before signing a proof for a peer it cannot
+      * talk to, and — the reason that matters — it can name both versions even when the server says
+      * nothing, which is exactly what a server too old to send [[Refused]] does. `None` from a
+      * counterpart too old to announce one, refused the same way a mismatch is
+      * ([[ProtocolVersion.check]]).
       */
-    final case class Challenge(nonce: HandshakeNonce) extends HeadFrame
+    final case class Challenge(nonce: HandshakeNonce, protocolVersion: Option[Int])
+        extends HeadFrame
+
+    object Challenge {
+
+        /** This node's own challenge: a fresh nonce and the version it speaks. */
+        def own(nonce: HandshakeNonce): Challenge =
+            Challenge(nonce, Some(ProtocolVersion.current))
+    }
 
     /** The dialing peer's answer to a [[Challenge]]. `protocolVersion` is `None` from a counterpart
       * too old to announce one, which is refused the same way a mismatch is
@@ -93,8 +108,12 @@ object HeadFrame {
         }
 
     given (using CardanoNetwork.Section): Encoder[HeadFrame] = Encoder.instance {
-        case Challenge(nonce) =>
-            Json.obj("t" -> "challenge".asJson, "nonce" -> nonce.asJson)
+        case Challenge(nonce, protocolVersion) =>
+            Json.obj(
+              "t" -> "challenge".asJson,
+              "nonce" -> nonce.asJson,
+              "protocolVersion" -> protocolVersion.asJson
+            )
         case Refused(refusal) =>
             Json.obj("t" -> "refused".asJson, "refusal" -> refusal.asJson)
         case Handshake(peerNum, protocolVersion, auth) =>
@@ -123,7 +142,12 @@ object HeadFrame {
     given (using CardanoNetwork.Section): Decoder[HeadFrame] = Decoder.instance(c =>
         c.downField("t").as[String].flatMap {
             case "challenge" =>
-                c.downField("nonce").as[HandshakeNonce].map(Challenge(_))
+                for {
+                    nonce <- c.downField("nonce").as[HandshakeNonce]
+                    // Optional for the same reason the handshake's is: a counterpart announcing
+                    // no version gets a legible refusal, not a decode failure.
+                    protocolVersion <- c.downField("protocolVersion").as[Option[Int]]
+                } yield Challenge(nonce, protocolVersion)
             case "refused" =>
                 c.downField("refusal").as[HandshakeRefusal].map(Refused(_))
             case "handshake" =>

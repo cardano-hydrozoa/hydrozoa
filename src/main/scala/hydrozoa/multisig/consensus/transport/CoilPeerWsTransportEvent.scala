@@ -47,6 +47,13 @@ object CoilPeerWsTransportEvent:
       */
     case object DialerLateChallenge extends CoilPeerWsTransportEvent
 
+    /** This coil refused the hub's [[CoilFrame.Challenge]] and dropped the socket without answering
+      * it. The mirror of [[DialerRefused]], which is the hub refusing this coil: here the verdict
+      * is this coil's own, so it holds even against a hub that would never have said why.
+      */
+    final case class DialerRefusedChallenge(refusal: HandshakeRefusal)
+        extends CoilPeerWsTransportEvent
+
     // ---- dialer ----
 
     /** The dialer connected to the hub, was challenged, and answered with its handshake. */

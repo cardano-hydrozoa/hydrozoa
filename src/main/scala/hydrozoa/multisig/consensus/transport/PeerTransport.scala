@@ -123,9 +123,9 @@ final class WsPeerTransport private (
                 tracer.traceWith(ClientDecodeError(remote, err))
         }
 
-    /** The nonce out of a remote's opening frame, or `None` if it opened with something else. */
-    private def challengeNonce(line: String): Option[HandshakeNonce] =
-        HeadFrame.parse(line).toOption.collect { case HeadFrame.Challenge(nonce) => nonce }
+    /** A remote's opening challenge, or `None` if it opened with something else. */
+    private def challenge(line: String): Option[HeadFrame.Challenge] =
+        HeadFrame.parse(line).toOption.collect { case c: HeadFrame.Challenge => c }
 
     /** Long-running dialer for a single remote. Attempts to reconnect forever with a 1-second
       * delay. Outbox is preserved across reconnects.
@@ -145,22 +145,38 @@ final class WsPeerTransport private (
         // `CoilPeerWsTransport`, including why an attempt without a challenge must end itself.
         def once(handshook: Deferred[IO, Unit]): IO[Unit] =
             QuietRelease(client.connect(request)).use { conn =>
-                WsDuplex.firstLine(conn, challengeBudget).map(_.flatMap(challengeNonce)).flatMap {
+                WsDuplex.firstLine(conn, challengeBudget).map(_.flatMap(challenge)).flatMap {
                     case None => tracer.traceWith(DialerNoChallenge(remote, uri, challengeBudget))
-                    case Some(nonce) =>
-                        val handshakeLine = HeadFrame.encode(
-                          HeadFrame.Handshake
-                              .own(ownPeerId.peerNum, ownWallet, headParamsHash, nonce)
-                        )
-                        handshook.complete(()).flatMap {
-                            case true =>
-                                tracer.traceWith(DialerConnected(remote, uri)) >>
-                                    conn.send(WSFrame.Text(handshakeLine)) >>
-                                    WsDuplex.run(conn, outboxes(remote), onLine(remote))
-                            // Lost the claim: the budget expired and the loop has already redialed.
-                            // Return instead, so `use` closes this socket rather than leaving a
-                            // second live connection draining this remote's outbox.
-                            case false => tracer.traceWith(DialerHandshakeLate(remote, uri))
+                    case Some(HeadFrame.Challenge(nonce, protocolVersion)) =>
+                        ProtocolVersion.check(protocolVersion) match {
+                            // Refuse before answering. Signing a proof for a peer this node cannot
+                            // talk to is wasted work, and deciding here is what lets the dialer
+                            // name both versions against a remote that never says why — which is
+                            // what a remote too old to send `Refused` does.
+                            case ProtocolVersion.Check.Incompatible(found, expected) =>
+                                tracer.traceWith(
+                                  DialerRefusedChallenge(
+                                    remote,
+                                    HandshakeRefusal.ProtocolVersionMismatch(found, expected)
+                                  )
+                                )
+                            case ProtocolVersion.Check.Compatible =>
+                                val handshakeLine = HeadFrame.encode(
+                                  HeadFrame.Handshake
+                                      .own(ownPeerId.peerNum, ownWallet, headParamsHash, nonce)
+                                )
+                                handshook.complete(()).flatMap {
+                                    case true =>
+                                        tracer.traceWith(DialerConnected(remote, uri)) >>
+                                            conn.send(WSFrame.Text(handshakeLine)) >>
+                                            WsDuplex.run(conn, outboxes(remote), onLine(remote))
+                                    // Lost the claim: the budget expired and the loop has already
+                                    // redialed. Return instead, so `use` closes this socket rather
+                                    // than leaving a second live connection draining this remote's
+                                    // outbox.
+                                    case false =>
+                                        tracer.traceWith(DialerHandshakeLate(remote, uri))
+                                }
                         }
                 }
             }
@@ -256,7 +272,9 @@ final class WsPeerTransport private (
             // challenge and dies on the server's idle timeout.
             verdictD <- Deferred[IO, Either[HandshakeRefusal, HeadPeerId]]
             sendStream: Stream[IO, WebSocketFrame] =
-                Stream.emit(WebSocketFrame.Text(HeadFrame.encode(HeadFrame.Challenge(nonce)))) ++
+                Stream.emit(
+                  WebSocketFrame.Text(HeadFrame.encode(HeadFrame.Challenge.own(nonce)))
+                ) ++
                     Stream.eval(verdictD.get).flatMap {
                         case Right(remote) =>
                             NodeWsServer.withKeepAlive(keepAlivePing)(

@@ -61,6 +61,11 @@ object PeerTransportEventFormat:
                   s"a challenge arrived from remote=${remote.peerNum: Int} on an established " +
                       "link; ignoring"
                 )
+            case DialerRefusedChallenge(remote, refusal) =>
+                warn(
+                  s"dialer: refusing remote=${remote.peerNum: Int}'s challenge — " +
+                      s"${HandshakeRefusal.describe(refusal)}; dropping the socket and redialing"
+                )
             case ServerAccepted(remote) =>
                 info(s"server: accepted inbound from remote=${remote.peerNum: Int}")
             case ServerRefusedHandshake(remotePeerNum, refusal) =>

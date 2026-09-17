@@ -34,8 +34,23 @@ object CoilFrame {
 
     /** The hub's opening frame: a nonce drawn fresh for this socket, which the coil's [[Handshake]]
       * signs over. See [[HandshakeNonce]] for why the server issues it rather than the coil.
+      *
+      * It announces `protocolVersion` too, so the coil reaches its own verdict instead of waiting
+      * to be told. A coil that checks here refuses before signing a proof for a hub it cannot talk
+      * to, and — the reason that matters — it can name both versions even when the hub says
+      * nothing, which is exactly what a hub too old to send [[Refused]] does. `None` from a
+      * counterpart too old to announce one, refused the same way a mismatch is
+      * ([[ProtocolVersion.check]]).
       */
-    final case class Challenge(nonce: HandshakeNonce) extends CoilFrame
+    final case class Challenge(nonce: HandshakeNonce, protocolVersion: Option[Int])
+        extends CoilFrame
+
+    object Challenge {
+
+        /** This hub's own challenge: a fresh nonce and the version it speaks. */
+        def own(nonce: HandshakeNonce): Challenge =
+            Challenge(nonce, Some(ProtocolVersion.current))
+    }
 
     /** The coil's answer to a [[Challenge]]. `protocolVersion` is `None` from a counterpart too old
       * to announce one, which the hub refuses the same way it refuses a mismatch
@@ -97,8 +112,12 @@ object CoilFrame {
         }
 
     given (using CardanoNetwork.Section): Encoder[CoilFrame] = Encoder.instance {
-        case Challenge(nonce) =>
-            Json.obj("t" -> "challenge".asJson, "nonce" -> nonce.asJson)
+        case Challenge(nonce, protocolVersion) =>
+            Json.obj(
+              "t" -> "challenge".asJson,
+              "nonce" -> nonce.asJson,
+              "protocolVersion" -> protocolVersion.asJson
+            )
         case Handshake(coilNum, protocolVersion, auth) =>
             Json.obj(
               "t" -> "handshake".asJson,
@@ -124,7 +143,12 @@ object CoilFrame {
     given (using CardanoNetwork.Section): Decoder[CoilFrame] = Decoder.instance(c =>
         c.downField("t").as[String].flatMap {
             case "challenge" =>
-                c.downField("nonce").as[HandshakeNonce].map(Challenge(_))
+                for {
+                    nonce <- c.downField("nonce").as[HandshakeNonce]
+                    // Optional for the same reason the handshake's is: a counterpart announcing
+                    // no version gets a legible refusal, not a decode failure.
+                    protocolVersion <- c.downField("protocolVersion").as[Option[Int]]
+                } yield Challenge(nonce, protocolVersion)
             case "refused" =>
                 c.downField("refusal").as[HandshakeRefusal].map(Refused(_))
             case "handshake" =>

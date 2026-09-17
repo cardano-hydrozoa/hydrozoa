@@ -330,10 +330,10 @@ class HandshakeAcceptTest extends AnyFunSuite {
         replies.flatMap(l => CoilFrame.parse(l).toOption).collect { case CoilFrame.Refused(r) => r }
 
     private def hubNonce(opening: String): Option[HandshakeNonce] =
-        CoilFrame.parse(opening).toOption.collect { case CoilFrame.Challenge(nonce) => nonce }
+        CoilFrame.parse(opening).toOption.collect { case c: CoilFrame.Challenge => c.nonce }
 
     private def meshNonce(opening: String): Option[HandshakeNonce] =
-        HeadFrame.parse(opening).toOption.collect { case HeadFrame.Challenge(nonce) => nonce }
+        HeadFrame.parse(opening).toOption.collect { case c: HeadFrame.Challenge => c.nonce }
 
     private def answerAsCoil(coilNum: Int, wallet: PeerWallet)(opening: String): Option[String] =
         hubNonce(opening).map(nonce =>

@@ -77,14 +77,14 @@ final class CoilPeerWsTransport private (
             case Right(CoilFrame.Refused(refusal)) => tracer.traceWith(DialerRefused(refusal))
             // A challenge is answered before the duplex starts, and a hub sends exactly one; a
             // second is the hub misbehaving, not a renegotiation.
-            case Right(CoilFrame.Challenge(_)) => tracer.traceWith(DialerLateChallenge)
+            case Right(_: CoilFrame.Challenge) => tracer.traceWith(DialerLateChallenge)
             case Right(_: CoilFrame.Handshake) => IO.unit
             case Left(err)                     => tracer.traceWith(DecodeError(err))
         }
 
-    /** The nonce out of a hub's opening frame, or `None` if the hub opened with something else. */
-    private def challengeNonce(line: String): Option[HandshakeNonce] =
-        CoilFrame.parse(line).toOption.collect { case CoilFrame.Challenge(nonce) => nonce }
+    /** The hub's opening challenge, or `None` if the hub opened with something else. */
+    private def challenge(line: String): Option[CoilFrame.Challenge] =
+        CoilFrame.parse(line).toOption.collect { case c: CoilFrame.Challenge => c }
 
     /** How long one dial attempt may sit in the WebSocket **handshake** before it is abandoned.
       * Long enough not to give up on an ordinarily slow hub, short enough that a stalled one does
@@ -121,22 +121,36 @@ final class CoilPeerWsTransport private (
         // `WsDuplex.firstLine` leaks when its deadline cancels a read.
         def once(handshook: Deferred[IO, Unit]): IO[Unit] =
             QuietRelease(client.connect(request)).use { conn =>
-                WsDuplex.firstLine(conn, challengeBudget).map(_.flatMap(challengeNonce)).flatMap {
+                WsDuplex.firstLine(conn, challengeBudget).map(_.flatMap(challenge)).flatMap {
                     case None => tracer.traceWith(DialerNoChallenge(hubUri, challengeBudget))
-                    case Some(nonce) =>
-                        val handshakeLine = CoilFrame.encode(
-                          CoilFrame.Handshake
-                              .own(ownCoilNum.convert, ownWallet, headParamsHash, nonce)
-                        )
-                        handshook.complete(()).flatMap {
-                            case true =>
-                                tracer.traceWith(DialerConnected(hubUri)) >>
-                                    conn.send(WSFrame.Text(handshakeLine)) >>
-                                    WsDuplex.run(conn, outbox, onLine)
-                            // Lost the claim: the budget expired and the loop has already redialed.
-                            // Return instead, so `use` closes this socket rather than leaving a
-                            // second live connection draining the shared outbox.
-                            case false => tracer.traceWith(DialerHandshakeLate(hubUri))
+                    case Some(CoilFrame.Challenge(nonce, protocolVersion)) =>
+                        ProtocolVersion.check(protocolVersion) match {
+                            // Refuse before answering. Signing a proof for a hub this coil cannot
+                            // talk to is wasted work, and deciding here is what lets the coil name
+                            // both versions against a hub that never says why — which is what a
+                            // hub too old to send `Refused` does.
+                            case ProtocolVersion.Check.Incompatible(found, expected) =>
+                                tracer.traceWith(
+                                  DialerRefusedChallenge(
+                                    HandshakeRefusal.ProtocolVersionMismatch(found, expected)
+                                  )
+                                )
+                            case ProtocolVersion.Check.Compatible =>
+                                val handshakeLine = CoilFrame.encode(
+                                  CoilFrame.Handshake
+                                      .own(ownCoilNum.convert, ownWallet, headParamsHash, nonce)
+                                )
+                                handshook.complete(()).flatMap {
+                                    case true =>
+                                        tracer.traceWith(DialerConnected(hubUri)) >>
+                                            conn.send(WSFrame.Text(handshakeLine)) >>
+                                            WsDuplex.run(conn, outbox, onLine)
+                                    // Lost the claim: the budget expired and the loop has already
+                                    // redialed. Return instead, so `use` closes this socket rather
+                                    // than leaving a second live connection draining the shared
+                                    // outbox.
+                                    case false => tracer.traceWith(DialerHandshakeLate(hubUri))
+                                }
                         }
                 }
             }

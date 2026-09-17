@@ -135,7 +135,9 @@ final class HubWsTransport private (
             // challenge and dies on the server's idle timeout.
             verdictD <- Deferred[IO, Either[HandshakeRefusal, CoilPeerNumber]]
             sendStream: Stream[IO, WebSocketFrame] =
-                Stream.emit(WebSocketFrame.Text(CoilFrame.encode(CoilFrame.Challenge(nonce)))) ++
+                Stream.emit(
+                  WebSocketFrame.Text(CoilFrame.encode(CoilFrame.Challenge.own(nonce)))
+                ) ++
                     Stream.eval(verdictD.get).flatMap {
                         case Right(coil) =>
                             NodeWsServer.withKeepAlive(keepAlivePing)(

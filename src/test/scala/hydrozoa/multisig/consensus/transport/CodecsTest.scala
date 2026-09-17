@@ -54,9 +54,25 @@ class CodecsTest extends AnyFunSuite {
         }
     }
 
-    test("Challenge frame round-trips") {
-        val frame = HeadFrame.Challenge(HandshakeFixture.nonce)
+    test("Challenge frame round-trips, announcing this build's protocol version") {
+        val frame = HeadFrame.Challenge.own(HandshakeFixture.nonce)
+        val _ = assert(frame.protocolVersion.contains(ProtocolVersion.current))
         assert(roundTrip(frame) == frame)
+    }
+
+    test("a Challenge announcing no protocol version decodes to None, not a decode failure") {
+        // The accept side announces its version so the dialer reaches its own verdict; one that
+        // announces none must still parse, so the refusal names the real problem.
+        val text = s"""{"t":"challenge","nonce":${HandshakeFixture.nonceJson}}"""
+        HeadFrame.parse(text) match {
+            case Right(HeadFrame.Challenge(_, protocolVersion)) =>
+                val _ = assert(protocolVersion.isEmpty)
+                assert(
+                  ProtocolVersion.check(protocolVersion) ==
+                      ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
+                )
+            case other => fail(s"expected a Challenge, got $other")
+        }
     }
 
     test("a signed Handshake round-trips, proof intact") {

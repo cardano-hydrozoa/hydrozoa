@@ -49,9 +49,25 @@ class CoilCodecsTest extends AnyFunSuite {
         }
     }
 
-    test("CoilFrame.Challenge round-trips") {
-        val frame = CoilFrame.Challenge(HandshakeFixture.nonce)
+    test("CoilFrame.Challenge round-trips, announcing this build's protocol version") {
+        val frame = CoilFrame.Challenge.own(HandshakeFixture.nonce)
+        val _ = assert(frame.protocolVersion.contains(ProtocolVersion.current))
         assert(roundTrip(frame) == frame)
+    }
+
+    test("a Challenge announcing no protocol version decodes to None, not a decode failure") {
+        // The hub announces its version so the coil reaches its own verdict; a hub that announces
+        // none must still parse, so the refusal names the real problem.
+        val text = s"""{"t":"challenge","nonce":${HandshakeFixture.nonceJson}}"""
+        CoilFrame.parse(text) match {
+            case Right(CoilFrame.Challenge(_, protocolVersion)) =>
+                val _ = assert(protocolVersion.isEmpty)
+                assert(
+                  ProtocolVersion.check(protocolVersion) ==
+                      ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
+                )
+            case other => fail(s"expected a Challenge, got $other")
+        }
     }
 
     test("a signed CoilFrame.Handshake round-trips, proof intact") {

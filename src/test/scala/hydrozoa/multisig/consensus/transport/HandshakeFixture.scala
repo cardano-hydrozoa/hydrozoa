@@ -60,6 +60,10 @@ object HandshakeFixture {
             .asJson
             .noSpaces
 
+    /** [[nonce]] in its wire form, for hand-built frames that omit a field a codec test is about.
+      */
+    def nonceJson: String = nonce.asJson.noSpaces
+
     def nonceOf(fill: Int): HandshakeNonce =
         HandshakeNonce(ByteVector.fill(HandshakeNonce.sizeBytes.toLong)(fill.toByte))
 

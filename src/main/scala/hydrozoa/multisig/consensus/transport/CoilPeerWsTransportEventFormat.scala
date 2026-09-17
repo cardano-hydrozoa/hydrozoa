@@ -36,6 +36,11 @@ object CoilPeerWsTransportEventFormat:
                 )
             case DialerLateChallenge =>
                 warn("a challenge arrived on an established link; ignoring")
+            case DialerRefusedChallenge(refusal) =>
+                warn(
+                  s"dialer: refusing the hub's challenge — ${HandshakeRefusal.describe(refusal)}" +
+                      "; dropping the socket and redialing"
+                )
             case DialerConnected(uri) =>
                 info(s"dialer: connected to hub at $uri")
             case DialerFailed(cause) =>

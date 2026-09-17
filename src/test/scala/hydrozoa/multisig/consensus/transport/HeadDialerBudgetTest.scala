@@ -35,13 +35,14 @@ class HeadDialerBudgetTest extends AnyFunSuite {
       * `pingEvery`, which is what holds `WsDuplex`'s read deadline off a real idle connection. Ends
       * after `pings` so `TestControl` has an end to reach.
       */
-    private def pinging(pingEvery: FiniteDuration, pings: Int = 200): IO[WSConnection[IO]] =
+    private def pinging(
+        pingEvery: FiniteDuration,
+        pings: Int = 200,
+        opening: HeadFrame.Challenge = HeadFrame.Challenge.own(HandshakeFixture.nonce)
+    ): IO[WSConnection[IO]] =
         Ref.of[IO, Int](pings).map { left =>
             new WSConnection[IO] {
-                private val challenge = WSFrame.Text(
-                  HeadFrame.encode(HeadFrame.Challenge(HandshakeFixture.nonce)),
-                  last = true
-                )
+                private val challenge = WSFrame.Text(HeadFrame.encode(opening), last = true)
                 override def send(wsf: WSFrame): IO[Unit] = IO.unit
                 override def sendMany[G[_]: cats.Foldable, A <: WSFrame](wsfs: G[A]): IO[Unit] =
                     IO.unit
@@ -131,6 +132,39 @@ class HeadDialerBudgetTest extends AnyFunSuite {
           ) == (3, 2, 0, 0),
           "expected a redial per challenge budget, each announced, and no handshake stall; " +
               s"dialed $attempts times, traced $events"
+        )
+    }
+
+    test("a remote announcing another protocol version is refused before the dialer answers") {
+        // The link would hold if the dialer answered — `pinging` keeps it alive — so nothing but
+        // the version check can be what ends each attempt. The dialer decides for itself here
+        // rather than waiting for a `Refused` the remote may be too old to send.
+        val other =
+            HeadFrame.Challenge(HandshakeFixture.nonce, Some(ProtocolVersion.current + 1))
+        val (attempts, events) =
+            dial(Resource.eval(pinging(10.seconds, opening = other)), 5.seconds)
+        assert(
+          (
+            attempts > 1,
+            events.count(_.isInstanceOf[DialerRefusedChallenge]) == attempts,
+            events.count(_.isInstanceOf[DialerConnected]),
+            stalls(events)
+          ) == (true, true, 0, 0),
+          "every attempt must refuse the challenge and none may open a link; " +
+              s"dialed $attempts times, traced $events"
+        )
+    }
+
+    test("a remote announcing no protocol version is refused the same way a mismatch is") {
+        val silentVersion = HeadFrame.Challenge(HandshakeFixture.nonce, None)
+        val (_, events) =
+            dial(Resource.eval(pinging(10.seconds, opening = silentVersion)), 5.seconds)
+        val refusals = events.collect { case DialerRefusedChallenge(_, r) => r }
+        assert(
+          refusals.nonEmpty && refusals.forall(
+            _ == HandshakeRefusal.ProtocolVersionMismatch(None, ProtocolVersion.current)
+          ),
+          s"expected every refusal to name the absent version; traced $events"
         )
     }
 

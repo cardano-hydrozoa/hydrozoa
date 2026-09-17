@@ -79,6 +79,14 @@ object PeerTransportEvent:
       */
     final case class DialerLateChallenge(remote: HeadPeerId) extends PeerTransportEvent
 
+    /** This dialer refused the remote's [[HeadFrame.Challenge]] and dropped the socket without
+      * answering it. The mirror of [[DialerRefused]], which is the remote refusing this peer: here
+      * the verdict is this peer's own, so it holds even against a remote that would never have said
+      * why.
+      */
+    final case class DialerRefusedChallenge(remote: HeadPeerId, refusal: HandshakeRefusal)
+        extends PeerTransportEvent
+
     // ---- server (accept side) ----
 
     /** The server accepted an inbound connection whose `Handshake` proved its peer number. */
