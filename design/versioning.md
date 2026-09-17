@@ -18,8 +18,8 @@ because they touch the same values.
    and the store version beside the software version.
 5. **A store version or identity mismatch is a `StartupRefusal`** (exit 2).
 6. **Clean-up** of the contradictory text around `StoreVersion`, listed in *Present state*.
-7. **Golden fixtures** for every frame, payload codec, signing preimage and digest layout the
-   protocol version covers, so a wire change cannot land without showing up as one.
+7. **Golden fixtures** (GUM-348) for every frame, payload codec, signing preimage and digest
+   layout the protocol version covers, so a wire change cannot land without showing up as one.
 
 Deferred:
 
@@ -57,9 +57,9 @@ peers of the same head.
 | frame envelopes | `HeadFrame`, `CoilFrame` |
 | payload codecs | `transport/Codecs.scala`: `Mesh.Get` / `Mesh.New`, `Population.*`, `OwnHardAck.*`, `UserRequestWithId` |
 | message semantics | `docs/spec/fast-consensus.md`, `slow-consensus.md`, `coil-network.md` |
-| signing preimages | `BlockHeader.Section.signingBytes` for soft acks; effect transaction bodies for hard acks |
+| signing preimages | `blockHash.bytes` for soft acks (`PeerWallet.mkSoftAckSignature`); effect transaction bodies for hard acks; `HandshakeProof.preimage` for the handshake |
 | effect transaction construction | settlement, finalization, fallback, rollout and refund — each peer derives the body it signs, so peers that derive different bodies cannot combine signatures |
-| digest layouts | `"gummiworm-head-params-v1"`, `"gummiworm-evacuation-map-v1"`, `requestHash` and `blockHash` (`docs/spec/block-hash.md`) |
+| digest layouts | the six domain tags — `"gummiworm-block-v1"`, `"gummiworm-request-v1"`, `"gummiworm-head-params-v1"`, `"gummiworm-evacuation-map-v1"`, `"gummiworm-l2-params-cardano-eutxo-v1"`, `"gummiworm-l2-state-cardano-eutxo-v1"` |
 
 What it does not cover, and what pins each instead:
 
@@ -100,7 +100,8 @@ Two consequences:
 2. **Golden encodings make the wire half mechanical.** Once every frame, payload codec, signing
    preimage and digest layout has a golden fixture, a regenerated fixture is a bump. Today only
    the stored request record has one (`src/test/resources/golden/request-record/`); adding the
-   rest is scope item 7. Behaviour changes have no fixture and need judgment — open question 1.
+   rest is scope item 7 (GUM-348). Behaviour changes have no fixture and need judgment — open
+   question 1.
 
 The protobuf request form shows both. `Codecs.scala` already decodes either form ("Accept both
 forms. The two are told apart by JSON shape, not by a tag or a version field") while
@@ -151,16 +152,20 @@ talk halts the head, and restarting every peer at the same instant is not feasib
 moves the head instead — operators bring up a new set of peers on the new build beside the running
 head, and a transition transaction moves the head to them.
 
-Three properties versioning relies on:
+Four properties versioning relies on:
 
 1. **The `headId` is preserved.** A migrated head keeps its identity; the two generations are told
-   apart by `headParamsHash` in the multisig regime utxo's datum, not by a new head id.
+   apart by `headParamsHash` in the multisig regime utxo's datum, not by a new head id. The
+   transfer-transaction fixture on `ilia/membership-change` mints a new head id instead — take its
+   transaction shape as the model, not its identity handling.
 2. **Coils migrate with the head.** A coil peer speaks the same wire protocol and keeps the same
    store layout as a head peer, so it moves on the same schedule. That is what makes the hub↔coil
    version check an equality like the mesh's.
 3. **Old and new peers never share a mesh.** `headParamsHash` is in the signed handshake, so a
    peer of the old head is refused by the new head's mesh whatever version either one speaks, and
    `StoreIdentity` stamps it, so no store of the old head opens under the new head's config.
+4. **The new peers start from an empty store and a non-empty L2 state.** The transition
+   transaction carries the state, not the store — see *Store version*.
 
 **What rides a migration: any change to a format — store, wire or protocol.** A change that leaves
 all three alone deploys in place, peers restarting onto it one at a time.
@@ -199,11 +204,23 @@ both or neither. `StoreVersion` 1→2 moved the Request journal to the protobuf 
 v0.1.9, while the wire kept the JSON object form. What rule 4 settles is the deployment path, not
 the numbering.
 
-**Stores and head migration.** `StoreIdentity` stamps `headParamsHash`. A migration changes
-`headParamsHash`, so no store of the old head opens under the new head's config and every peer of
-the new head starts from a fresh store. A store bump shipped in a migration therefore needs no
-in-place store migration — what the new peers do need is the head's state, which is head
-migration's own problem (open question 2).
+**Stores and head migration: empty store, non-empty state.** `StoreIdentity` stamps
+`headParamsHash`. A migration changes `headParamsHash`, so no store of the old head opens under
+the new head's config and every peer of the new head starts from a fresh store. That is the
+intended shape, not a gap to close: a store bump shipped in a migration needs no in-place store
+migration, and no peer ever reads a store written under another schema.
+
+The new head's L2 state does not come from a store. It comes from the transition transaction, the
+way any head's opening state comes from its initialization transaction: a transfer transaction is
+a valid initialization transaction for the new head, so the old head's final L2 state arrives as
+the new head's `initialL2State`, projected into `initialEvacuationMap`, committed on-chain by the
+init tx's datum through `initialL2StateHash`, and checked at cold boot. The bootstrap author
+supplies the values; the migrated head verifies them exactly as a fresh head does.
+
+[Carrying the transient-token overlay (`EutxoL2Ledger.State.transientTokens`, branch
+`fund14/transient-l2-tokens`) through the same field looks possible and is not settled.
+`initialL2State` is `List[L2Output]` — main-compartment only — so the overlay would need its own
+declaration alongside it.]
 
 ## Software version
 
@@ -262,6 +279,8 @@ Text that contradicts the code, fixed in this work item:
    three versions, and no per-bump in-place store migration code.
 6. **The protocol version is a constant in the code.** It moves to the whitepaper when a second
    implementation needs to read it.
+7. **A migrated head starts from an empty store and a non-empty L2 state.** The transition
+   transaction carries the state, so a store-format bump rides a migration for free.
 
 ## Open questions
 
@@ -269,9 +288,5 @@ Text that contradicts the code, fixed in this work item:
    changes. A consensus fix that changes which blocks, briefs or effect bodies a peer produces has
    no fixture. Proposal: any behaviour change a peer on the earlier build would disagree with is a
    bump. Who signs off on "would not disagree"?
-2. **What carries the head's state into a migrated head.** Every new-head peer starts from a fresh
-   store (*Store version*), and a fresh store re-bootstraps stack 0 (GUM-312). Head migration has
-   to hand the new peers the old head's history; where that seam is decides whether a store-format
-   bump can ride a migration at all.
-3. **Version `1` = what the testnet head initializes with.** That makes every wire change ready
+2. **Version `1` = what the testnet head initializes with.** That makes every wire change ready
    before initialization free — the protobuf flip (GUM-315 C1) among them. Agreed?
