@@ -49,7 +49,7 @@ import scala.collection.immutable.SortedMap
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, PlutusScriptEvaluator, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, PlutusScriptEvaluator, ProtocolParams, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -349,7 +349,11 @@ object Bootstrap:
           settlementConfig = bhp.settlementConfig,
           blockConfig = bhp.blockConfig,
           coilQuorum = bhp.coilQuorum,
-          l2ParamsHash = sourceL2ParamsHash(l2Ledger),
+          // The L2 ledger's parameters are the network's, snapshotted here and then fixed for the
+          // head's life. L1's keep tracking the chain; this copy must not, because `l2ParamsHash`
+          // pins it in the regime datum (docs/spec/head-params-hash.md).
+          l2ProtocolParams = cardanoNetwork.cardanoProtocolParams,
+          l2ParamsHash = sourceL2ParamsHash(l2Ledger, cardanoNetwork.cardanoProtocolParams),
           l2Ledger = l2Ledger,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
           identityIsomorphism = false,
@@ -565,16 +569,20 @@ object Bootstrap:
       *
       * The head cannot compute this: only the ledger knows its own parameters, and bootstrap has no
       * ledger running to ask. So it is sourced per backend instead
-      * (`docs/spec/head-params-hash.md`) — the built-in ledger's is a code constant. The checks
-      * themselves never branch this way; obtaining the value is the one place that must.
+      * (`docs/spec/head-params-hash.md`) — the built-in ledger's is computed from the same L2
+      * parameter snapshot the ledger will validate against. The checks themselves never branch this
+      * way; obtaining the value is the one place that must.
       *
       * TODO: a remote ledger's digest has to come from the operator, printed out-of-band as the
       * initial evacuation map already is. Until that input exists a remote head carries a zero
       * hash, which the reported digest will not match — an `any-remote` head does not boot.
       * GUM-342.
       */
-    private def sourceL2ParamsHash(l2Ledger: L2LedgerKind): Hash32 = l2Ledger match {
-        case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.l2ParamsHash
+    private def sourceL2ParamsHash(
+        l2Ledger: L2LedgerKind,
+        l2ProtocolParams: ProtocolParams
+    ): Hash32 = l2Ledger match {
+        case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.l2ParamsHash(l2ProtocolParams)
         case L2LedgerKind.AnyRemote    => Hash32.fromByteString(zeroDigest)
     }
 

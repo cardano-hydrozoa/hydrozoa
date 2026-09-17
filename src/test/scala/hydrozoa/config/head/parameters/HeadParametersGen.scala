@@ -8,8 +8,7 @@ import hydrozoa.config.head.multisig.timing.{TxTiming, generateDefaultTxTiming}
 import hydrozoa.config.head.rulebased.dispute.{DisputeResolutionConfig, generateDisputeResolutionConfig}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import org.scalacheck.Gen
-import scalus.cardano.ledger.Hash32
-import test.{GenWithTestPeers, given}
+import test.{GenWithTestPeers, TestPeers, given}
 
 def generateHeadParameters(
     generateTxTiming: GenWithTestPeers[TxTiming] = generateDefaultTxTiming,
@@ -19,9 +18,6 @@ def generateHeadParameters(
         generateDisputeResolutionConfig,
     generateSettlementConfig: Gen[SettlementConfig] = generateSettlementConfig,
     generateBlockConfig: Gen[BlockConfig] = generateBlockConfig,
-    // The built-in ledger reports its own digest at every `restoreTo` anchor and JointLedger
-    // checks the config against it, so a random value here would fail every eutxo boot.
-    generateL2ParamsHash: Gen[Hash32] = Gen.const(EutxoL2Ledger.l2ParamsHash),
     generateL2Ledger: Gen[L2LedgerKind] = Gen.const(L2LedgerKind.CardanoEutxo),
     // Default identity-isomorphism ON (headId pin NOT enforced) so generated L2 txs, which carry no
     // headId metadatum, are accepted. Pin-enforcing suites override this to `false`.
@@ -33,7 +29,13 @@ def generateHeadParameters(
         disputeResolutionConfig <- generateDisputeResolutionConfig
         settlementConfig <- ReaderT.liftF(generateSettlementConfig)
         blockConfig <- ReaderT.liftF(generateBlockConfig)
-        l2ParamsHash <- ReaderT.liftF(generateL2ParamsHash)
+        // The L2 parameters are the test network's, as bootstrap snapshots them. Both fields come
+        // from the one value: the ledger reports a digest over what it validates against at every
+        // `restoreTo` anchor and JointLedger checks the config against it, so a mismatched pair
+        // here would fail every eutxo boot. Read from the environment rather than drawn — an extra
+        // Gen draw shifts every seeded fixture in unrelated suites.
+        testPeers <- ReaderT.ask[Gen, TestPeers]
+        l2ProtocolParams = testPeers.cardanoNetwork.cardanoProtocolParams
         l2Ledger <- ReaderT.liftF(generateL2Ledger)
         identityIsomorphism <- ReaderT.liftF(generateIdentityIsomorphism)
     } yield HeadParameters(
@@ -44,7 +46,8 @@ def generateHeadParameters(
       blockConfig = blockConfig,
       // TODO: Generate
       coilQuorum = 0,
-      l2ParamsHash = l2ParamsHash,
+      l2ProtocolParams = l2ProtocolParams,
+      l2ParamsHash = EutxoL2Ledger.l2ParamsHash(l2ProtocolParams),
       l2Ledger = l2Ledger,
       identityIsomorphism = identityIsomorphism
     )
