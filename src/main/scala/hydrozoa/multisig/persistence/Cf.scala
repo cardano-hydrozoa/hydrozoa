@@ -77,6 +77,10 @@ object Cf:
     case object Treasury extends Cf:
         def name = "Treasury"
 
+    /** Where a coil peer was seeded on joining — single keyed blob, absent on every other peer. */
+    case object StartPoint extends Cf:
+        def name = "StartPoint"
+
     /** SC cumulative evacuation map, keyed per committed `blockNum`. */
     case object EvacuationMap extends Cf:
         def name = "EvacuationMap"
@@ -156,6 +160,7 @@ object Cf:
       UnsignedStack,
       DepositMap,
       Treasury,
+      StartPoint,
       EvacuationMap,
       RequestBlockIndex,
       DepositDecisionIndex,

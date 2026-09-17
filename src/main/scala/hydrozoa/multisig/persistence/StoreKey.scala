@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber as LedgerL2CommandNumber
 import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec, UnsignedStackCodec}
+import hydrozoa.multisig.persistence.codec.{AdoptedStartPointCodec, BlockResultCodec, CoilStampMarkCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec, UnsignedStackCodec}
 import scalus.cardano.ledger.TransactionHash
 
 /** The typed key surface for the high-level persistence API.
@@ -200,6 +200,19 @@ object StoreKey:
         import TreasuryCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.Treasury
+        def encode: Array[Byte] = singletonKey
+
+    /** Key for [[Cf.StartPoint]] — where this coil peer was seeded when it joined, or absent.
+      *
+      * Present only on a coil peer that adopted a start point; a head peer and a coil peer that
+      * bootstrapped stack 0 both leave it empty. Value type =
+      * `hydrozoa.multisig.consensus.AdoptedStartPoint`.
+      */
+    case object StartPoint extends StoreKey:
+        type Value = AdoptedStartPoint
+        import AdoptedStartPointCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.StartPoint
         def encode: Array[Byte] = singletonKey
 
     /** Key for [[Cf.EvacuationMap]] — the cumulative evacuation map at each block, keyed by

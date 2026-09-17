@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
-import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, StoreKey, WriteBatch}
 
 /** A coil peer's single liaison toward its hub head peer (§5.5 of `docs/spec/coil-network.md`)
   * [doc-ref].
@@ -335,7 +335,13 @@ abstract class PeerLiaisonCoilToHub(
             // Restore only the own-hard-ack high-water; the lane serves older acks from the own
             // coil HardAck journal on demand (the Server half answers the hub's OwnHardAck.Get) and
             // replay re-appends the in-flight tail. An empty store leaves the lane cold.
-            highWater <- ownHardAckBacking.highWater
+            journalHighWater <- ownHardAckBacking.highWater
+            // ...unless this peer was seeded, in which case cold is fatal. Its hub pulls from the
+            // index the start point named, and a lane whose bound is below what the hub asks for
+            // reports out of bounds — which terminates the node. The start point's high-water is
+            // what makes that first pull the lane's NEXT number instead of one past its end.
+            startPoint <- persistence.get(StoreKey.StartPoint)
+            highWater = journalHighWater.orElse(startPoint.flatMap(_.ownHardAckHighWater))
             _ <- ownHardAckLane.seedHighWater(highWater)
             // Restore each inbound population cursor to next(max received), so on reconnect we pull
             // only NEW entries — verify rejects a stale re-serve, which would otherwise re-dispatch

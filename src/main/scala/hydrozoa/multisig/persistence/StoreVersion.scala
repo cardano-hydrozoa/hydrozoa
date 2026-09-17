@@ -33,7 +33,7 @@ object StoreVersion:
       *     deposits map at any retained block is recoverable and servable rather than only the one
       *     at the tip. The value codec is unchanged; only the key is.
       */
-    val current: Int = 6
+    val current: Int = 7
 
     /** The key under which the schema version is stored in [[Cf.Meta]]. */
     val key: Array[Byte] = "store_version".getBytes("UTF-8")
