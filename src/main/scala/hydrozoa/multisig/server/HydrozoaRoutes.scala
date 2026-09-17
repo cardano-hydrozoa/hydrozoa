@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.metrics.{PeerMetrics, PrometheusFormat}
-import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry}
+import hydrozoa.multisig.persistence.{ArchiveWatermarks, Cf, ConsensusStoreReader, RequestBlockEntry}
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.TapirJson.*
@@ -49,6 +49,14 @@ class HydrozoaRoutes(
     nodeStatus: IO[NodeStatus],
     consensusReader: ConsensusStoreReader[IO],
     l2QueryReader: Option[EutxoL2LedgerReader[IO]],
+    /** `None` when this node's private config declares no archiver, which removes the
+      * watermark-reporting route. Same idiom as [[requestSequencer]] and [[l2QueryReader]]: an
+      * absent capability removes its routes rather than mounting one that fails at request time.
+      *
+      * Gated on the declaration rather than on head-versus-coil: a coil peer has a store and may
+      * well have an archiver, and a head peer may have none.
+      */
+    archiveWatermarks: Option[ArchiveWatermarks],
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config,
     metrics: PeerMetrics,
@@ -574,6 +582,138 @@ class HydrozoaRoutes(
                     )
             )
 
+    /** This store's column families, by the name they are spelled with on disk.
+      *
+      * Derived from the head's own membership exactly as the store's own family set is
+      * (`Cf.mkAll`), so a name resolves only if this node actually has that family. An archiver
+      * pointed at the wrong node then gets a 400 naming the family, rather than a 200 and a
+      * watermark nobody will ever read.
+      */
+    private val familiesByName: Map[String, Cf] =
+        Cf.mkAll(
+          headPeers = headConfig.headPeerNums.toList,
+          coilPeers = headConfig.coilPeers.coilPeerNumbers,
+          hubs = headConfig.coilPeers.hubHeadPeerNumbers
+        ).map(cf => cf.name -> cf)
+            .toMap
+
+    /** Accept an attached archiver's report of how far it has durably copied each family.
+      *
+      * The node never dials the archiver, so this is the whole of what it hears from one, and the
+      * only reason it may delete anything. Recording is all that happens here: taking the minimum
+      * with what consensus still needs, and trimming on the result, is retention's job.
+      */
+    private def archiveWatermarkEndpoint(
+        watermarks: ArchiveWatermarks
+    ): ServerEndpoint[Any, IO] =
+        endpoint.post
+            // Optional credentials, as finalize does it, so the security logic runs (and logs) on
+            // a missing header rather than tapir short-circuiting it.
+            .securityIn(auth.basic[Option[UsernamePassword]](adminChallenge))
+            .in("api" / "admin" / "archive" / "watermark")
+            .name("postAdminArchiveWatermark")
+            .tag("Governance")
+            .in(jsonBody[ArchiveWatermarkRequest])
+            .out(jsonBody[ArchiveWatermarkResponse])
+            .errorOut(finalizeErrorOut)
+            .description("Report how far an attached archiver has durably copied (admin only).")
+            .serverSecurityLogic {
+                case Some(credentials)
+                    if credentials.username == serverConfig.adminUsername
+                        && credentials.password.contains(serverConfig.adminPassword) =>
+                    IO.pure(Right(()))
+                case _ =>
+                    tracer
+                        .traceWith(UnauthorizedAdmin("POST /api/admin/archive/watermark"))
+                        .as(
+                          Left(
+                            (
+                              StatusCode.Unauthorized,
+                              Some(adminChallenge.toString),
+                              ErrorResponse("Unauthorized")
+                            )
+                          )
+                        )
+            }
+            .serverLogic(_ =>
+                request =>
+                    val unknown = request.watermarks.keySet -- familiesByName.keySet
+                    if unknown.nonEmpty then
+                        tracer
+                            .traceWith(
+                              RequestRejected(
+                                "POST /api/admin/archive/watermark",
+                                s"unknown column families: ${unknown.toList.sorted.mkString(", ")}"
+                              )
+                            )
+                            .as(
+                              Left(
+                                (
+                                  StatusCode.BadRequest,
+                                  None,
+                                  ErrorResponse(
+                                    "This node has no column families named " +
+                                        unknown.toList.sorted.mkString(", ") +
+                                        " — the archiver may be reading a different node's store."
+                                  )
+                                )
+                              )
+                            )
+                    else
+                        (for {
+                            now <- IO.realTimeInstant
+                            reported = request.watermarks
+                                .map((name, index) => familiesByName(name) -> index)
+                            report = watermarks.record(reported, now)
+                            _ <- tracer.traceWith(
+                              ArchiveWatermarkRecorded(
+                                advanced = report.advanced.size,
+                                regressed = report.regressed.size
+                              )
+                            )
+                            // An archive reporting less than it once did has lost ground -- usually
+                            // rebuilt, now holding less than the node assumed when it last deleted.
+                            // The node cannot un-delete, so the earlier figure stands; saying so is
+                            // the only thing left to do about it.
+                            _ <- report.regressed.toList.sortBy(_._1.name).traverse {
+                                (cf, reportedIndex) =>
+                                    tracer.traceWith(
+                                      ArchiveWatermarkRegressed(
+                                        family = cf.name,
+                                        reported = reportedIndex,
+                                        held = report.accepted.getOrElse(cf, reportedIndex)
+                                      )
+                                    )
+                            }
+                            // Until retention exists there is nothing to take a minimum against, so
+                            // what the node will allow IS what it accepted. The field carries the
+                            // distinction from the start: adding it later would leave an archiver
+                            // unable to tell "I am ahead of the head" from "I am holding it back".
+                        } yield Right(
+                          ArchiveWatermarkResponse(
+                            effectiveFloor = report.accepted.map((cf, index) => cf.name -> index)
+                          )
+                        )).handleErrorWith(err =>
+                            tracer
+                                .traceWith(
+                                  RequestFailed("POST /api/admin/archive/watermark", err)
+                                )
+                                .as(
+                                  Left(
+                                    (
+                                      StatusCode.InternalServerError,
+                                      None,
+                                      ErrorResponse(err.getMessage)
+                                    )
+                                  )
+                                )
+                        )
+            )
+
+    /** Mounted only where an archiver is declared — on any node type. */
+    private val archiveWatermarkEndpoints: List[ServerEndpoint[Any, IO]] =
+        archiveWatermarks.fold(List.empty)(w => List(archiveWatermarkEndpoint(w)))
+
     /** The two mutating endpoints, mounted only on a node that accepts submissions.
       *
       * They stay at the head and tail of `coreEndpoints` below so that on a head node the endpoint
@@ -609,7 +749,7 @@ class HydrozoaRoutes(
           statsEndpoint,
           metricsEndpoint,
           versionEndpoint
-        ) ++ finalizeEndpoints ++ blockEffectKindEndpoints
+        ) ++ finalizeEndpoints ++ blockEffectKindEndpoints ++ archiveWatermarkEndpoints
 
     /** OpenAPI doc options:
       *   - drop the `View` suffix from every DTO's component-schema name (the Scala types keep it
@@ -977,6 +1117,7 @@ object HydrozoaRoutes {
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
+        archiveWatermarks: Option[ArchiveWatermarks],
         headConfig: HeadConfig,
         serverConfig: HydrozoaServer.Config,
         metrics: PeerMetrics,
@@ -989,6 +1130,7 @@ object HydrozoaRoutes {
             nodeStatus,
             consensusReader,
             l2QueryReader,
+            archiveWatermarks,
             headConfig,
             serverConfig,
             metrics,

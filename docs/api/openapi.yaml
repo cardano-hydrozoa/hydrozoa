@@ -500,6 +500,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/admin/archive/watermark:
+    post:
+      tags:
+      - Governance
+      description: Report how far an attached archiver has durably copied (admin only).
+      operationId: postAdminArchiveWatermark
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArchiveWatermarkRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArchiveWatermarkResponse'
+        default:
+          description: ''
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - {}
+      - httpAuth: []
 components:
   schemas:
     AbsorptionDecisionStatus:
@@ -592,6 +625,22 @@ components:
         type:
           type: string
           const: UNPROCESSED
+    ArchiveWatermarkRequest:
+      title: ArchiveWatermarkRequest
+      type: object
+      required:
+      - watermarks
+      properties:
+        watermarks:
+          $ref: '#/components/schemas/Map_Long'
+    ArchiveWatermarkResponse:
+      title: ArchiveWatermarkResponse
+      type: object
+      required:
+      - effectiveFloor
+      properties:
+        effectiveFloor:
+          $ref: '#/components/schemas/Map_Long'
     BlockBody:
       title: BlockBody
       type: object
@@ -1208,6 +1257,12 @@ components:
         type:
           type: string
           const: major
+    Map_Long:
+      title: Map_Long
+      type: object
+      additionalProperties:
+        type: integer
+        format: int64
     Minor:
       title: Minor
       type: object

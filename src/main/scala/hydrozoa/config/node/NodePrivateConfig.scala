@@ -21,6 +21,7 @@ final case class NodePrivateConfig(
     override val httpPort: String,
     override val peerBindHost: Option[String] = None,
     override val peerBindPort: Option[String] = None,
+    override val archiver: Option[ArchiverConfig] = None,
 ) extends NodePrivateConfig.Section {
     override transparent inline def nodePrivateConfig: NodePrivateConfig = this
 }
@@ -76,6 +77,12 @@ object NodePrivateConfig {
           * them can observe.
           */
         def peerBindHost: Option[String] = nodePrivateConfig.peerBindHost
+
+        /** Whether an archiver is attached to this node's store — see [[ArchiverConfig]] for why
+          * this has to be declared rather than observed. `None` means no archiver, and the node is
+          * free to delete as soon as consensus allows.
+          */
+        def archiver: Option[ArchiverConfig] = nodePrivateConfig.archiver
 
         /** Port counterpart to [[peerBindHost]]; see there. Settable independently, so a node can
           * keep the advertised port and move only the local one.

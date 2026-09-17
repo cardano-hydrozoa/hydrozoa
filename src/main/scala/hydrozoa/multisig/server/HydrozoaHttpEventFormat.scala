@@ -48,6 +48,16 @@ object HydrozoaHttpEventFormat:
                 warn(s"$path - Unauthorized attempt")
             case FinalizeTriggered =>
                 info("POST /api/admin/finalize - Triggering local head finalization")
+            case ArchiveWatermarkRecorded(advanced, regressed) =>
+                info(
+                  s"POST /api/admin/archive/watermark - $advanced families advanced, " +
+                      s"$regressed regressed"
+                )
+            case ArchiveWatermarkRegressed(family, reported, held) =>
+                warn(
+                  s"POST /api/admin/archive/watermark - $family reported $reported, " +
+                      s"below the $held already held; keeping $held"
+                )
             case FinalizeSignalSent =>
                 info("POST /api/admin/finalize - Finalization signal sent to BlockWeaver")
         }
