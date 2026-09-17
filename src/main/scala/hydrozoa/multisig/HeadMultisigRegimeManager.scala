@@ -179,7 +179,17 @@ trait HeadMultisigRegimeManager(
                         coilNum,
                         pendingConnections,
                         tracers.peerLiaison(PeerId.Coil(coilNum)),
-                        persistence
+                        persistence,
+                        // The start-point decision reads this hub's store AND its L2 ledger, so it
+                        // is closed over here rather than handed to the liaison as two more
+                        // dependencies it would otherwise have no use for.
+                        connected =>
+                            CoilStartPoint.decide(
+                              PeerId.Coil(coilNum),
+                              connected,
+                              persistence,
+                              l2Ledger
+                            )(using config)
                       )
                     )
                 )

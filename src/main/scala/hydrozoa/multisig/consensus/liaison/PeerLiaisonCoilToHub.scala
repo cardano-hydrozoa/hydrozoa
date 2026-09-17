@@ -11,7 +11,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, SlowConsensusActor, StackComposer, UserRequestWithId}
@@ -311,7 +311,21 @@ abstract class PeerLiaisonCoilToHub(
         case pop: Population.New => puller.handleReply(pop)
         case get: OwnHardAck.Get => server.handleGet(get)
         case ack: HardAck        => ownHardAckLane.append(ack) >> server.afterAppend
+        case offer: Join.Offer   => declineLateOffer(offer)
     }
+
+    /** An offer that arrives once this liaison is running is too late to act on, and saying so is
+      * the point of this arm.
+      *
+      * A start point is adopted **before** the node's actors exist, not while they run: the L2
+      * ledger accepts an imported state only into a ledger that has applied nothing
+      * (`L2Ledger.importState`), and `JointLedger` and `StackComposer` have already positioned
+      * themselves off this store by the time any liaison receives anything. So the join exchange
+      * that matters happens at boot, and this arm exists to keep a late offer from killing the
+      * actor with a `MatchError` — a hub that redecides mid-link is refused, not obeyed.
+      */
+    private def declineLateOffer(offer: Join.Offer): IO[Unit] =
+        tracer.traceWith(PeerLiaisonEvent.JoinOfferTooLate(offer.startStack))
 
     private def preStartLocal: IO[Unit] =
         for {

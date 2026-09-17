@@ -218,7 +218,17 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                                 PeerId.Coil(coilNum)
                                               )
                                         ),
-                                        persistence
+                                        persistence,
+                                        // This suite drives the pull chains, not the join
+                                        // exchange. Raise rather than answer, so a later change
+                                        // that does send `Join.Connected` here fails loudly
+                                        // instead of silently taking a stubbed decision.
+                                        connected =>
+                                            IO.raiseError(
+                                              RuntimeException(
+                                                s"no join exchange in this suite: $connected"
+                                              )
+                                            )
                                       )
                                     )
                                 } yield CoilParts(

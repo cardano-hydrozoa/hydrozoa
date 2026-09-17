@@ -314,9 +314,18 @@ object CoilStartPoint:
 
     /** The first own-hard-ack index the hub will ask this coil for.
       *
-      * ⛔ The hub moves its own inbound cursor **forward** to here and never back. The acks below it
-      * are never produced and never requested — which is exactly what lets a coil with no history
-      * connect at all, instead of being asked for acks it cannot reconstruct and must not re-sign.
+      * ⛔ Never below the start point. Everything under it is never produced and never requested —
+      * which is exactly what lets a coil with no history connect at all, instead of being asked for
+      * acks it cannot reconstruct.
+      *
+      * It is **not** simply the hub's next expected index, and the difference is deliberate. A hub
+      * can already hold acks this coil made for stacks past the start point — in flight when the
+      * link dropped, and still there when a wiped coil reconnects claiming nothing. Pointing the
+      * coil at the first of those re-establishes the numbering the hub already recorded: the coil
+      * learns those stacks over the population lane and re-derives the same acks at the same
+      * indices. Starting it past them instead would leave the coil numbering its ack for a stack
+      * the hub already has an ack for differently — two indices covering one stack from one peer,
+      * which no lane can reconcile.
       */
     private def ownHardAckStart(
         coil: PeerId.Coil,
