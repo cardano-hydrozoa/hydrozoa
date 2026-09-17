@@ -1,9 +1,11 @@
 package hydrozoa.multisig.ledger.eutxol2
 
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.crypto.Preimage
+import java.nio.charset.StandardCharsets.UTF_8
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Prop, Properties}
-import scalus.cardano.ledger.ProtocolParams
+import scalus.cardano.ledger.{Hash32, ProtocolParams}
 
 /** [[EutxoL2Ledger.l2ParamsHash]] must be stable for a given L2 parameter set and must move when
   * anything the ledger's behaviour depends on moves.
@@ -51,17 +53,17 @@ object L2ParamsHashTest extends Properties("l2ParamsHash") {
       "monetaryExpansion" -> (p => p.copy(monetaryExpansion = p.monetaryExpansion + 0.001))
     )
 
-    property("is deterministic") = Prop {
+    val _ = property("is deterministic") = Prop {
         EutxoL2Ledger.l2ParamsHash(params) == EutxoL2Ledger.l2ParamsHash(params)
     }
 
     parameterMutations.foreach { (label, mutate) =>
-        property(s"covers $label") = Prop {
+        val _ = property(s"covers $label") = Prop {
             EutxoL2Ledger.l2ParamsHash(mutate(params)) != EutxoL2Ledger.l2ParamsHash(params)
         }
     }
 
-    property("the rule list is what transit runs") = Prop {
+    val _ = property("the rule list is what transit runs") = Prop {
         val derived = HydrozoaTransactionMutator.upstreamValidators.map(v =>
             v.getClass.getSimpleName.stripSuffix("$")
         )
@@ -69,12 +71,12 @@ object L2ParamsHashTest extends Properties("l2ParamsHash") {
         derived.forall(HydrozoaTransactionMutator.ruleNames.contains)
     }
 
-    property("rule names are distinct") = Prop {
+    val _ = property("rule names are distinct") = Prop {
         val rules = HydrozoaTransactionMutator.ruleNames ++ EutxoDepositGates.ruleNames
         rules.distinct.size == rules.size
     } :| "a repeated name would let two rules swap without moving the digest"
 
-    property("dropping a rule moves the digest") = Prop {
+    val _ = property("dropping a rule moves the digest") = Prop {
         // The digest folds the rule list in as `u32(count) || framed(name)*`, so a shorter list
         // must produce a different value. Computed here rather than by mutating the ledger, which
         // reads its list from a `val`.
@@ -82,7 +84,7 @@ object L2ParamsHashTest extends Properties("l2ParamsHash") {
         digestOfRules(full) != digestOfRules(full.drop(1))
     }
 
-    property("reordering rules moves the digest") = {
+    val _ = property("reordering rules moves the digest") = {
         val full = HydrozoaTransactionMutator.ruleNames ++ EutxoDepositGates.ruleNames
         (full.size >= 2) ==> (digestOfRules(full) != digestOfRules(full.reverse))
     }
@@ -91,10 +93,10 @@ object L2ParamsHashTest extends Properties("l2ParamsHash") {
       * [[EutxoL2Ledger.l2ParamsHash]] writes, so a change to one that is not mirrored in the other
       * shows up as a failure here.
       */
-    private def digestOfRules(rules: Vector[String]): scalus.cardano.ledger.Hash32 = {
-        val out = hydrozoa.lib.crypto.Preimage()
+    private def digestOfRules(rules: Vector[String]): Hash32 = {
+        val out = Preimage()
         out.u32(rules.size)
-        rules.foreach(rule => out.framed(rule.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+        rules.foreach(rule => out.framed(rule.getBytes(UTF_8)))
         out.mkDigest
     }
 }
