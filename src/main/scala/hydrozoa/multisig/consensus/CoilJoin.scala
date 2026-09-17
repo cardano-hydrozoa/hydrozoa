@@ -58,7 +58,8 @@ object CoilJoin {
                       startStack = offer.startStack,
                       lastBlockNum = lastBlockNum,
                       commandNumber = offer.state.commandNumber,
-                      ownHardAckStart = offer.ownHardAck
+                      ownHardAckStart = offer.ownHardAck,
+                      cursors = offer.cursors
                     )
                   )
                   .put(StoreKey.Treasury)(offer.settlement.treasuryProduced)

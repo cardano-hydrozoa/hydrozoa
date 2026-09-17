@@ -1,6 +1,7 @@
 package hydrozoa.multisig.persistence
 
 import hydrozoa.multisig.consensus.ack.HardAckNumber
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Population
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.l2.L2CommandNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -27,12 +28,21 @@ import hydrozoa.multisig.ledger.stack.StackNumber
   * @param ownHardAckStart
   *   the first hard-ack index this coil will author. Its hub has already moved its own cursor here
   *   and never asks below it, which is what lets a coil with no ack history be pulled from at all.
+  * @param cursors
+  *   every inbound population lane's first index, as the hub sent them.
+  *
+  * These cannot be recomputed at home. A lane cursor is normally `max(journal) + 1`, and a seeded
+  * coil's journals are empty, so every one of them would restore cold and the coil would pull from
+  * the beginning of a history its hub has very likely pruned. Nor is arithmetic on the start point
+  * enough: a stack yields one hard-ack per peer when it is sole and two when it is 2-phase, so
+  * those indices are a lookup in the hub's journals and travel with the offer.
   */
 final case class AdoptedStartPoint(
     startStack: StackNumber,
     lastBlockNum: BlockNumber,
     commandNumber: L2CommandNumber,
-    ownHardAckStart: HardAckNumber
+    ownHardAckStart: HardAckNumber,
+    cursors: Population.Get
 ) {
 
     /** The high-water to seed the own-hard-ack outbound lane with, so the hub's first pull at

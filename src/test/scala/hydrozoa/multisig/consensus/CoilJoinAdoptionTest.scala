@@ -188,6 +188,17 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
         assert(done.map(_.previousBlockHeader.blockNum).contains(lastBlockNum))
     }
 
+    test("the offer's cursors are persisted, not recomputed at home") {
+        // The gap this test closes: a lane cursor is normally `max(journal) + 1`, and a seeded
+        // coil's journals are empty — so without carrying these the coil pulls from the beginning
+        // of a history its hub has very likely pruned. The hard-ack indices in particular cannot
+        // be derived from the start point at all.
+        val mark = adopted((p, _) => p.get(StoreKey.StartPoint))
+        val cursors = mark.map(_.cursors)
+        assert(cursors.map(_.block).contains(lastBlockNum.increment))
+        assert(cursors.map(_.stack).contains(startStack.increment))
+    }
+
     test("an offer whose settlement does not verify is refused and writes nothing") {
         val outcome = withStore(p =>
             for {

@@ -361,22 +361,63 @@ abstract class PeerLiaisonCoilToHub(
       */
     private def restoreInboundCursors: IO[Unit] =
         val backend = persistence.backend
-        for {
-            _ <- LaneIncomingCursors.block(backend).flatMap(blockLane.restoreCursor)
-            _ <- LaneIncomingCursors.stack(backend).flatMap(stackLane.restoreCursor)
-            _ <- requestLanes.toList.traverse_ { case (h, l) =>
-                LaneIncomingCursors.request(backend, h).flatMap(l.restoreCursor)
-            }
-            _ <- softAckLanes.toList.traverse_ { case (h, l) =>
-                LaneIncomingCursors.softAck(backend, h).flatMap(l.restoreCursor)
-            }
-            _ <- headHardAckLanes.toList.traverse_ { case (h, l) =>
-                LaneIncomingCursors.hardAck(backend, PeerId.Head(h)).flatMap(l.restoreCursor)
-            }
-            _ <- coilHardAckLanes.toList.traverse_ { case (h, l) =>
-                LaneIncomingCursors.hubHardAck(backend, h).flatMap(l.restoreCursor)
-            }
-        } yield ()
+        // A seeded coil starts where its hub put it, not at the cold head of each lane. The offer's
+        // cursor set is the only place those indices exist: the journals are empty, and the
+        // hard-ack ones are a lookup in the hub's journals rather than arithmetic on the start
+        // point. Absent a start point every lane falls back to its own cold cursor, as before.
+        persistence.get(StoreKey.StartPoint).flatMap { startPoint =>
+            val start = startPoint.map(_.cursors)
+            for {
+                _ <- LaneIncomingCursors
+                    .block(backend)
+                    .flatMap(blockLane.restoreCursor(_, start.fold(BlockNumber(1))(_.block)))
+                _ <- LaneIncomingCursors
+                    .stack(backend)
+                    .flatMap(stackLane.restoreCursor(_, start.fold(StackNumber(1))(_.stack)))
+                _ <- requestLanes.toList.traverse_ { case (h, l) =>
+                    LaneIncomingCursors
+                        .request(backend, h)
+                        .flatMap(
+                          l.restoreCursor(
+                            _,
+                            start.flatMap(_.requests.get(h)).getOrElse(RequestNumber.zero)
+                          )
+                        )
+                }
+                _ <- softAckLanes.toList.traverse_ { case (h, l) =>
+                    LaneIncomingCursors
+                        .softAck(backend, h)
+                        .flatMap(
+                          l.restoreCursor(
+                            _,
+                            start
+                                .flatMap(_.softAcks.get(h))
+                                .getOrElse(SoftAckNumber.zero.increment)
+                          )
+                        )
+                }
+                _ <- headHardAckLanes.toList.traverse_ { case (h, l) =>
+                    LaneIncomingCursors
+                        .hardAck(backend, PeerId.Head(h))
+                        .flatMap(
+                          l.restoreCursor(
+                            _,
+                            start.flatMap(_.headHardAcks.get(h)).getOrElse(HardAckNumber.zero)
+                          )
+                        )
+                }
+                _ <- coilHardAckLanes.toList.traverse_ { case (h, l) =>
+                    LaneIncomingCursors
+                        .hubHardAck(backend, h)
+                        .flatMap(
+                          l.restoreCursor(
+                            _,
+                            start.flatMap(_.coilHardAcks.get(h)).getOrElse(HubHardAckNumber.zero)
+                          )
+                        )
+                }
+            } yield ()
+        }
 
     private def startResendTimer: IO[Unit] =
         (IO.sleep(

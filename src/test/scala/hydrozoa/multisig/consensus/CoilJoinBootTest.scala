@@ -6,8 +6,8 @@ import cats.effect.unsafe.implicits.global
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, Population}
+import hydrozoa.multisig.consensus.liaison.{BatchNumber, LiaisonProtocol, PeerLiaisonCoilToHub}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.CoilTransport
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -78,7 +78,16 @@ class CoilJoinBootTest extends AnyFunSuite {
             startStack = StackNumber(7),
             lastBlockNum = BlockNumber(12),
             commandNumber = hydrozoa.multisig.ledger.l2.L2CommandNumber.zero,
-            ownHardAckStart = HardAckNumber(5)
+            ownHardAckStart = HardAckNumber(5),
+            cursors = Population.Get(
+              batchNum = BatchNumber.zero,
+              block = BlockNumber(13),
+              stack = StackNumber(8),
+              requests = Map.empty,
+              softAcks = Map.empty,
+              headHardAcks = Map.empty,
+              coilHardAcks = Map.empty
+            )
           )
         )
 
