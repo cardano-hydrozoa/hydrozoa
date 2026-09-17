@@ -54,17 +54,26 @@ object LiaisonProtocol {
     /** Hub → coil: serves the full population pull ([[BatchMessages.Population.Get]] →
       * [[BatchMessages.Population.New]]) and pulls the coil peer's own hard-ack
       * ([[BatchMessages.OwnHardAck]]). Accepts population artifacts (from `CoilRelay`) to append.
+      *
+      * [[BatchMessages.Join.Connected]] arrives from the transport, not the wire: the hub side of
+      * the link turns an accepted handshake into it so the start-point decision is made where the
+      * store is, not in the transport.
       */
     type HubToCoilRequest =
-        Control | BatchMessages.Population.Get | BatchMessages.OwnHardAck.New |
+        Control | BatchMessages.Join.Connected | BatchMessages.Population.Get |
+            BatchMessages.OwnHardAck.New |
             (BlockBrief.Next | StackBrief | UserRequestWithId | SoftAck | HardAck | HardAckWithId)
 
     /** Coil → hub: pulls the full population ([[BatchMessages.Population.New]]) and serves the
       * hub's pull of this coil peer's own hard-ack ([[BatchMessages.OwnHardAck.Get]]). Accepts only
       * its own `HardAck` to append.
+      *
+      * [[BatchMessages.Join.Offer]] is the hub's answer to this coil's handshake — one message,
+      * before the pull chain opens.
       */
     type CoilToHubRequest =
-        Control | BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck
+        Control | BatchMessages.Join.Offer | BatchMessages.Population.New |
+            BatchMessages.OwnHardAck.Get | HardAck
 
     type HeadToHeadHandle = ActorRef[IO, HeadToHeadRequest]
     type HubToCoilHandle = ActorRef[IO, HubToCoilRequest]

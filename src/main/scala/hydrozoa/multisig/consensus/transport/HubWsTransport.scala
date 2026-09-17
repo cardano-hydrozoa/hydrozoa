@@ -6,7 +6,7 @@ import cats.syntax.all.*
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 import hydrozoa.multisig.consensus.transport.HubWsTransportEvent.*
@@ -36,8 +36,8 @@ trait HubTransport {
   * coil's [[CoilPeerNumber]], routes inbound batches to that coil's [[PeerLiaisonHubToCoil]], and
   * drains that coil's outbox for outbound batches.
   *
-  * Outbound is the hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]); inbound is the
-  * coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]).
+  * Outbound is the hub-emitted subset ([[Join.Offer]], [[Population.New]], [[OwnHardAck.Get]]);
+  * inbound is the coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]).
   */
 final class HubWsTransport private (
     private val outboxes: Map[CoilPeerNumber, Queue[IO, String]],
@@ -68,15 +68,20 @@ final class HubWsTransport private (
     private def dispatchInbound(coil: CoilPeerNumber, payload: CoilFrame.Wire): IO[Unit] =
         payload match {
             // Only the coil-emitted subset is valid inbound here.
-            case p @ (_: Population.Get | _: OwnHardAck.New) =>
-                inboundRef.get.flatMap { m =>
-                    m.get(coil) match {
-                        case Some(liaison) => liaison ! p
-                        case None          => tracer.traceWith(NoLiaisonForInbound(coil))
-                    }
-                }
+            case p @ (_: Population.Get | _: OwnHardAck.New) => toLiaison(coil, p)
             case other =>
                 tracer.traceWith(UnexpectedInboundWire(coil, other))
+        }
+
+    private def toLiaison(
+        coil: CoilPeerNumber,
+        request: LiaisonProtocol.HubToCoilRequest
+    ): IO[Unit] =
+        inboundRef.get.flatMap { m =>
+            m.get(coil) match {
+                case Some(liaison) => liaison ! request
+                case None          => tracer.traceWith(NoLiaisonForInbound(coil))
+            }
         }
 
     private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] =
@@ -94,7 +99,7 @@ final class HubWsTransport private (
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     CoilFrame.parse(s) match {
-                        case Right(CoilFrame.Handshake(coilNum, protocolVersion, _)) =>
+                        case Right(CoilFrame.Handshake(coilNum, protocolVersion, _, marks)) =>
                             // Version before roster: a coil speaking another protocol may not even
                             // mean the same thing by its own number, so there is nothing to look up
                             // until the two ends agree on the vocabulary. `auth` is carried and not
@@ -107,8 +112,11 @@ final class HubWsTransport private (
                                 case ProtocolVersion.Check.Compatible =>
                                     val coil = CoilPeerNumber(coilNum)
                                     if outboxes.contains(coil) then
+                                        // Bind the socket BEFORE announcing the link, so the start
+                                        // point the liaison decides on has an outbox to leave by.
                                         tracer.traceWith(ServerAccepted(coilNum)) >>
-                                            coilD.complete(coil).void
+                                            coilD.complete(coil) >>
+                                            toLiaison(coil, marks)
                                     else tracer.traceWith(ServerRejectedHandshake(coilNum))
                             }
                         case Right(CoilFrame.Msg(payload)) =>

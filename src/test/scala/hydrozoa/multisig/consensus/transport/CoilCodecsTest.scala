@@ -2,7 +2,7 @@ package hydrozoa.multisig.consensus.transport
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckId, SoftAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.BatchNumber
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -50,17 +50,23 @@ class CoilCodecsTest extends AnyFunSuite {
     }
 
     test("CoilFrame.Handshake round-trips") {
-        val frame = CoilFrame.Handshake.own(coilNum = 3)
+        val frame = CoilFrame.Handshake.own(
+          coilNum = 3,
+          marks = Join.Connected(Some(BlockNumber(9)), Some(StackNumber(2)))
+        )
         assert(roundTrip(frame) == frame)
     }
 
     test("a Handshake with no protocol version decodes, so the version check can refuse it") {
+        // Nothing but `coilNum`: every other field absent, as a counterpart predating them sends
+        // it. The frame must still parse, so the refusal names the version rather than the syntax.
         val text = """{"t":"handshake","coilNum":3}"""
         CoilFrame.parse(text) match {
-            case Right(CoilFrame.Handshake(coilNum, protocolVersion, auth)) =>
+            case Right(CoilFrame.Handshake(coilNum, protocolVersion, auth, marks)) =>
                 assert(coilNum == 3)
                 assert(protocolVersion.isEmpty)
                 assert(auth == HandshakeAuth.Unauthenticated)
+                assert(marks == Join.Connected(None, None), "absent marks must claim nothing")
                 assert(
                   ProtocolVersion.check(protocolVersion) ==
                       ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)

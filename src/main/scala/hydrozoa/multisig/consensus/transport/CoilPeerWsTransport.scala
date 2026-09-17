@@ -6,7 +6,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub}
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 import hydrozoa.multisig.consensus.transport.CoilPeerWsTransportEvent.*
@@ -33,11 +33,12 @@ trait CoilTransport {
   * [[CoilFrame.Handshake]] so the hub binds the socket to this coil's [[CoilPeerNumber]].
   *
   * Outbound is the coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]); inbound is the
-  * hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]), routed to the local
+  * hub-emitted subset ([[Join.Offer]], [[Population.New]], [[OwnHardAck.Get]]), routed to the local
   * [[PeerLiaisonCoilToHub]].
   */
 final class CoilPeerWsTransport private (
     private val ownCoilNum: CoilPeerNumber,
+    private val ownMarks: IO[Join.Connected],
     private val outbox: Queue[IO, String],
     private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
     private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
@@ -56,7 +57,7 @@ final class CoilPeerWsTransport private (
     private def dispatchInbound(payload: CoilFrame.Wire): IO[Unit] =
         payload match {
             // Only the hub-emitted subset is valid inbound here.
-            case p @ (_: Population.New | _: OwnHardAck.Get) =>
+            case p @ (_: Join.Offer | _: Population.New | _: OwnHardAck.Get) =>
                 inboundRef.get.flatMap {
                     case Some(liaison) => liaison ! p
                     case None          => tracer.traceWith(NoLiaisonForInbound)
@@ -91,12 +92,19 @@ final class CoilPeerWsTransport private (
         // so a handshake landing on the deadline cannot leave both a live connection and a redial.
         def once(handshook: Deferred[IO, Unit]): IO[Unit] =
             QuietRelease(client.connect(request)).use { conn =>
-                val handshakeLine =
-                    CoilFrame.encode(CoilFrame.Handshake.own(ownCoilNum.convert))
                 handshook.complete(()).flatMap {
                     case true =>
+                        // Read the marks per dial, not once at construction: a redial after a long
+                        // drop must claim where the coil stands NOW, or the hub decides the start
+                        // point from a stale position.
                         tracer.traceWith(DialerConnected(hubUri)) >>
-                            conn.send(WSFrame.Text(handshakeLine)) >>
+                            ownMarks
+                                .map(marks =>
+                                    CoilFrame.encode(
+                                      CoilFrame.Handshake.own(ownCoilNum.convert, marks)
+                                    )
+                                )
+                                .flatMap(line => conn.send(WSFrame.Text(line))) >>
                             WsDuplex.run(conn, outbox, onLine)
                     // Lost the claim: the budget expired and the loop has already redialed. Return
                     // instead, so `use` closes this socket rather than leaving a second live
@@ -172,12 +180,16 @@ final class CoilPeerWsTransport private (
 
 object CoilPeerWsTransport {
 
+    /** @param ownMarks
+      *   where this coil stands, re-read on every dial. See [[CoilFrame.Handshake]].
+      */
     def create(
         ownCoilNum: CoilPeerNumber,
+        ownMarks: IO[Join.Connected],
         tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
             inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
-        } yield new CoilPeerWsTransport(ownCoilNum, outbox, inboundRef, tracer)
+        } yield new CoilPeerWsTransport(ownCoilNum, ownMarks, outbox, inboundRef, tracer)
 }

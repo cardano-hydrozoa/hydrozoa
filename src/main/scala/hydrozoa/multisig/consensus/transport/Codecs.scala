@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, SoftAck, SoftAckId, SoftAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{Mesh, OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, Mesh, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.BatchNumber.given
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -13,8 +13,11 @@ import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWit
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2StateExport}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.RequestRecordCodec
+import hydrozoa.multisig.persistence.codec.SecCodec.given
+import hydrozoa.multisig.persistence.codec.SettlementTxCodec.given
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -605,4 +608,35 @@ object Codecs {
     given ownHardAckGetCodec: Codec[OwnHardAck.Get] = deriveCodec[OwnHardAck.Get]
 
     given ownHardAckNewCodec: Codec[OwnHardAck.New] = deriveCodec[OwnHardAck.New]
+
+    // ---- Join: the once-per-connection start-point exchange (GUM-312) ----
+    //
+    // `Join.Connected` rides inside `CoilFrame.Handshake`; `Join.Offer` is a wire message of its
+    // own. The offer's two signed artifacts reuse the persistence codecs rather than getting
+    // transport-local ones: a coil writes the settlement it adopts straight to its own store, so a
+    // second shape here would mean two encodings of a value that already has a canonical form.
+
+    given joinConnectedCodec: Codec[Join.Connected] = deriveCodec[Join.Connected]
+
+    /** An export's bytes are opaque to the transport — hex, and nothing here reads them. */
+    given l2StateExportCodec: Codec[L2StateExport] =
+        io.circe.Codec.from(
+          Decoder.instance(c =>
+              for {
+                  commandNumber <- c.downField("commandNumber").as[L2CommandNumber]
+                  hex <- c.downField("bytes").as[String]
+                  bytes <- ByteVector
+                      .fromHex(hex)
+                      .toRight(DecodingFailure("Invalid hex for L2StateExport bytes", c.history))
+              } yield L2StateExport(commandNumber, IArray.from(bytes.toArray))
+          ),
+          Encoder.instance((e: L2StateExport) =>
+              Json.obj(
+                "commandNumber" -> e.commandNumber.asJson,
+                "bytes" -> ByteVector(IArray.genericWrapArray(e.bytes).toArray).toHex.asJson
+              )
+          )
+        )
+
+    given joinOfferCodec(using CardanoNetwork.Section): Codec[Join.Offer] = deriveCodec[Join.Offer]
 }

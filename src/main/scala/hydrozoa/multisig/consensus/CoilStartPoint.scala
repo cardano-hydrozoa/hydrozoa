@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{Cf, JournalKey, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{Cf, JournalKey, Markers, Persistence, StoreKey}
 import java.nio.ByteBuffer
 
 /** What a hub decides when a coil peer connects (GUM-312): where that coil should start, or that it
@@ -90,6 +90,18 @@ object CoilStartPoint:
             case Some(stack) =>
                 buildOffer(coil, stack, persistence, ledger)
         }
+
+    /** The marks a coil announces in its handshake: the highest block it durably finalized and the
+      * highest stack it hard-confirmed.
+      *
+      * Lives beside [[decide]] on purpose. `stack` is compared against the hub's own
+      * `lastKey(Cf.HardConfirmation)`, so the two sides must derive it the same way — split them
+      * across files and a change to one silently stops meaning the same thing as the other.
+      */
+    def ownMarks(persistence: Persistence[IO], own: PeerId): IO[Join.Connected] =
+        Markers
+            .derive(persistence, own)
+            .map(m => Join.Connected(block = m.fastBlockMark, stack = m.hardConfirmed))
 
     /** Everything the hub reads to assemble an offer, plus the catch-up threshold. */
     type Config = HeadPeers.Section & CardanoNetwork.Section & HeadConfig.Bootstrap.Section &

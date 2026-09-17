@@ -4,6 +4,7 @@ import cats.effect.testkit.TestControl
 import cats.effect.{IO, Ref, Resource}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 import hydrozoa.multisig.consensus.transport.CoilPeerWsTransportEvent.*
 import org.http4s.Uri
@@ -60,7 +61,11 @@ class CoilDialerBudgetTest extends AnyFunSuite {
             attempts <- Ref.of[IO, Int](0)
             seen <- Ref.of[IO, Vector[CoilPeerWsTransportEvent]](Vector.empty)
             tracer = ContraTracer[IO, CoilPeerWsTransportEvent](e => seen.update(_ :+ e))
-            transport <- CoilPeerWsTransport.create(CoilPeerNumber(0), tracer)
+            transport <- CoilPeerWsTransport.create(
+              CoilPeerNumber(0),
+              IO.pure(Join.Connected(None, None)),
+              tracer
+            )
             client = WSClient[IO](respondToPings = false) { (_: WSRequest) =>
                 Resource.eval(attempts.update(_ + 1)).flatMap(_ => connect)
             }

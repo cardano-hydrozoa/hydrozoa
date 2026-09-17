@@ -17,6 +17,7 @@ import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.StartupRefusal
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.CoilStartPoint
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
@@ -680,7 +681,13 @@ object Serve {
         val cpwtTracer =
             Slf4jTracer.sink.contramap(CoilPeerWsTransportEventFormat.humanFormat(ownCoilNum))
         for {
-            t <- Resource.eval(CoilPeerWsTransport.create(ownCoilNum, cpwtTracer))
+            t <- Resource.eval(
+              CoilPeerWsTransport.create(
+                ownCoilNum,
+                CoilStartPoint.ownMarks(persistence, PeerId.Coil(ownCoilNum)),
+                cpwtTracer
+              )
+            )
             _ <- t.startDialer(wsClient, hubUri)
             coilFactory: Resource[
               IO,

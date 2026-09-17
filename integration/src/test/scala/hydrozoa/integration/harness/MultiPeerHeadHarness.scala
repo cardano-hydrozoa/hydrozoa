@@ -25,6 +25,7 @@ import hydrozoa.integration.yaci.DevKit
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendBlockfrost, CardanoBackendEvent, CardanoBackendEventFormat, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.*
@@ -1316,7 +1317,12 @@ object MultiPeerHeadHarness:
                         )
                         Resource
                             .eval(
-                              CoilPeerWsTransport.create(coilNum, cpwtTracer)
+                              // Cold marks: the transports are built before the nodes, so no
+                              // coil store exists to read yet. Harmless while nothing consumes
+                              // `Join.Connected` — the coil adoption step must thread the real
+                              // `CoilStartPoint.ownMarks` through here instead.
+                              CoilPeerWsTransport
+                                  .create(coilNum, IO.pure(Join.Connected(None, None)), cpwtTracer)
                             )
                             .map(coilNum -> _)
                     }
