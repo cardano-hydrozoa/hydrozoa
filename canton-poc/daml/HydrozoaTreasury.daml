@@ -1,0 +1,189 @@
+-- HydrozoaTreasury — DRAFT (the head's on-ledger anchor for hydrozoa-on-canton). The design split:
+--
+--   * VALUE lives in CIP-0112 primitives, not in this contract. The treasury balance is an
+--     iterated, committed `Allocation` (the "quantity", owned natively by Canton). Deposits and
+--     withdrawals are `Allocation`s settled by `SettlementFactory_SettleBatch`. No custom escrow /
+--     payout / conservation logic on the happy path — the token standard does DvP.
+--
+--   * The head contract holds only what the token standard does NOT provide: the L2 commitment
+--     (`mrh`, the "quality" / who-owns-what), the enclave-signed monotonic ratchet (anti-replay),
+--     and the rules-based dispute regime.
+--
+-- FINALIZATION INVARIANT (see design/hydrozoa-on-canton.md §3): the L2 reflects a value movement
+-- IFF its Canton settlement commits. Absorption and the checkpoint advance are ONE transaction
+-- (`Treasury_SettleMajorBlock` = SettleBatch + MRH ratchet). Contrary to Cardano, a deposit is a
+-- live registry-adjudicated Allocation, not an inert UTxO — "requested" is not "final", so the L2 is
+-- never credited on the request. The proposer's off-ledger registry pre-flight (getSettlementFactory)
+-- is what guarantees this transaction will commit; it is a consensus input, not a client call.
+--
+-- Payouts are settlement legs, not a nullifier set — the happy path carries no nullifiers.
+--
+-- NB: a DRAFT for review. Assumes the splice token-standard DARs are added to daml.yaml
+-- (splice-api-token-{allocation,allocation-request,allocation-instruction,holding,metadata}-v2).
+-- Not yet compiled; names/shapes to be reconciled against the vendored interfaces.
+
+module HydrozoaTreasury where
+
+import DA.Crypto.Text (secp256k1)
+import Merkle (toHex)
+
+import qualified Splice.Api.Token.AllocationV2 as A
+import qualified Splice.Api.Token.AllocationRequestV2 as R
+import qualified Splice.Api.Token.HoldingV2 as H
+import Splice.Api.Token.MetadataV1 (ExtraArgs, emptyMetadata)
+
+-- The bytes the L2 enclave signs: every field is anti-replay — instanceId (cross-head), epoch
+-- (post key-rotation), seqNo (backward replay), mrh bound to the settlement.
+signedMessage : Text -> Int -> Int -> Text -> Text
+signedMessage instanceId epoch seqNo mrh =
+  toHex (instanceId <> "|" <> show epoch <> "|" <> show seqNo <> "|" <> mrh)
+
+-- | The head's on-ledger anchor. Holds the L2 commitment + a *reference* to the treasury's
+-- CIP-0112 allocation (the funds), not the funds themselves.
+template HydrozoaTreasury
+  with
+    custodian : Party
+      -- ^ The Canton threshold-hosted party of the head+coil quorum. A major block is just this
+      -- party authorizing a choice — Canton's topology enforces the m-of-n. (No custom multisig.)
+    enclaveKey : Text
+      -- ^ secp256k1 public key the TEE signs (mrh, seqNo) with.
+    instanceId : Text
+    epoch : Int
+    seqNo : Int
+    mrh : Text
+      -- ^ Merkle root of the L2 evacuation map (the "quality"). The only L2 state kept on-ledger.
+    treasuryAllocationCid : A.Allocation.ContractId
+      -- ^ The iterated, committed treasury `Allocation`: the pooled funds (the "quantity"). Rolled
+      -- forward by every `SettleMajorBlock` — Canton holds the balance natively; we hold the cid.
+    settlement : A.SettlementInfo
+      -- ^ The head's standing settlement (executors = [custodian]); every deposit/withdrawal/roll
+      -- rides one `SettleBatch` under it.
+    disputed : Bool
+      -- ^ False = multisig regime (custodian settles). True = rules-based dispute regime (below).
+  where
+    signatory custodian
+
+    -- HAPPY PATH -------------------------------------------------------------------------------
+
+    -- | Advertise a deposit window: publish a CIP-0112 `AllocationRequest` inviting `depositor` to
+    -- authorize a sender-side deposit `alloc` for the head's settlement. Standard wallets can then
+    -- create the allocation + accept it — no Hydrozoa-specific client needed.
+    nonconsuming choice Treasury_OpenDepositWindow : ContractId DepositRequest
+      with
+        depositor : Party
+        alloc : A.AllocationSpecification   -- authorizer = depositor's account, sender-side leg(s)
+        settleAt : Optional Time
+      controller custodian
+      do
+        assertMsg "regime: multisig (not disputed)" (not disputed)
+        create DepositRequest with
+          custodian; depositor
+          view = R.AllocationRequestView with
+            originalRequestCid = None
+            settlement
+            allocations = [alloc]
+            requestedAt = settlement.requestedAt     -- placeholder; use ledger time in impl
+            settleAt
+            availableActions = mempty
+            meta = emptyMetadata
+
+    -- | Mint a major block: settle the batch (rolled-forward treasury + `depositLegs`/`payoutLegs`
+    -- + the `finalized` deposit/withdrawal allocations) under the enclave-signed new MRH — ATOMIC
+    -- (the finalization invariant above). The factory + choice context are fetched off-ledger from
+    -- the registry by the Hydrozoa node and passed in — the standard CIP-0112 exercise pattern.
+    --
+    -- PRECONDITION (enforced off-ledger, in block-building — NOT here): the proposer has already
+    -- confirmed via the registry that every leg will settle (context assembled, allocations valid &
+    -- pre-`executeBefore`, payees can receive, conservation holds). Peers soft-confirm a block known
+    -- to settle; a leg that fails the pre-flight is dropped and the block re-proposed. On-ledger this
+    -- choice still fails atomically if a leg raced — keep the leg set small to bound that.
+    --
+    -- The seqNo/enclave-sig ratchet gates the choice; the value movement is `SettleBatch` (not a
+    -- raw balance field) and payouts are settlement legs (not nullifiers).
+    choice Treasury_SettleMajorBlock : ContractId HydrozoaTreasury
+      with
+        newSeqNo : Int
+        newMrh : Text
+        sig : Text
+        settlementFactoryCid : A.SettlementFactory.ContractId
+        depositLegs : [A.TransferLeg]      -- depositor -> treasury
+        payoutLegs : [A.TransferLeg]       -- treasury  -> withdrawer
+        finalized : [A.FinalizedAllocation]  -- incl. the iterated treasury with next-iteration funding
+        extraArgs : ExtraArgs
+      controller custodian
+      do
+        assertMsg "regime: multisig (not disputed)" (not disputed)
+        assertMsg "seqNo must strictly increase" (newSeqNo > seqNo)
+        assertMsg "enclave signature invalid"
+          (secp256k1 sig (signedMessage instanceId epoch newSeqNo newMrh) enclaveKey)
+        result <- exercise settlementFactoryCid A.SettlementFactory_SettleBatch with
+          settlement
+          transferLegs = depositLegs <> payoutLegs
+          allocations = finalized
+          extraArgs
+        -- The rolled-forward treasury allocation is the iterated pool's next iteration.
+        let newTreasuryCid = nextIterationTreasuryCid result   -- TODO: extract from SettleBatchResult
+        create this with
+          seqNo = newSeqNo; mrh = newMrh; treasuryAllocationCid = newTreasuryCid
+
+    -- FALLBACK / RULES-BASED REGIME ------------------------------------------------------------
+
+    -- | Any head peer trips the dispute regime (the head can no longer reach quorum). From here the
+    -- resolution is permissionless and rule-determined: no party arbitrates.
+    choice Treasury_InitiateDispute : ContractId HydrozoaTreasury
+      with initiator : Party
+      controller initiator            -- observer/peer; identity grants no power
+      do
+        assertMsg "already disputed" (not disputed)
+        -- Spawn one Vote contract per head peer (analogous to the Cardano vote UTxOs).
+        create this with disputed = True
+
+    -- | Permissionless monotonic ratchet to the freshest enclave-signed MRH: anyone may post a
+    -- fresher signed (seqNo, mrh); accepted iff the signature verifies and seqNo
+    -- strictly increases. Advance-to-freshest happens before any exit.
+    choice Treasury_ChallengeMrh : ContractId HydrozoaTreasury
+      with newSeqNo : Int; newMrh : Text; sig : Text
+      controller custodian            -- in dispute, reachable permissionlessly via disclosure
+      do
+        assertMsg "regime: disputed" disputed
+        assertMsg "seqNo must strictly increase" (newSeqNo > seqNo)
+        assertMsg "enclave signature invalid"
+          (secp256k1 sig (signedMessage instanceId epoch newSeqNo newMrh) enclaveKey)
+        create this with seqNo = newSeqNo; mrh = newMrh
+
+    -- | Rule-based resolution: once the vote/tally has fixed the final MRH, ANY single peer expands
+    -- it — deterministically, per the resolved rules — into the exit allocations and settles them
+    -- out of the treasury. No neutral enforcer; the enclave sig + monotonicity + conservation
+    -- constrain the driver. (Skeleton — the payout expansion + Merkle inclusion proofs go here.)
+    choice Treasury_ResolveDispute : ContractId HydrozoaTreasury
+      with driver : Party {- + settlement factory, exit legs, inclusion proofs, context -}
+      controller driver
+      do
+        assertMsg "regime: disputed" disputed
+        -- exercise SettleBatch with the rule-derived exit legs against the resolved MRH ...
+        create this with disputed = True
+
+-- | The published deposit request. Implements the CIP-0112 `AllocationRequest` interface so any
+-- standard wallet can accept it; on accept it just consumes itself (the depositor's allocation is
+-- created via the AllocationFactory in the same tx, as the interface intends).
+template DepositRequest
+  with
+    custodian : Party
+    depositor : Party
+    view : R.AllocationRequestView
+  where
+    signatory custodian
+    observer depositor
+
+    interface instance R.AllocationRequest for DepositRequest where
+      view = view
+      allocationRequest_acceptImpl self arg = do
+        -- The depositor creates the requested Allocation via the factory in the same tx; here we
+        -- just consume the request (the interface REQUIRES the body archive it).
+        archive self
+        pure R.AllocationRequest_AcceptResult with meta = emptyMetadata
+      -- reject / withdraw analogous.
+
+-- TODO: `nextIterationTreasuryCid : SettlementFactory_SettleBatchResult -> Allocation.ContractId`
+-- (the rolled-forward pool — same extraction the Scala TreasuryFlow does via
+-- `nextIterationAllocations`), and the Vote/Tally templates for the dispute regime.
