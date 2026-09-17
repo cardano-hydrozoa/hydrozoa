@@ -15,6 +15,7 @@ import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.{SettlementTx, TxSignature, genSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.l1.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2StateHash}
@@ -26,6 +27,7 @@ import org.scalacheck.rng.Seed
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.uplc.builtin.ByteString
+import test.MinorBlocks
 
 /** What a hub decides when a coil connects — [[CoilStartPoint.decide]].
   *
@@ -261,6 +263,11 @@ class CoilStartPointTest extends AnyFunSuite:
             _ <- p.put(JournalKey.Stack(StackNumber(stack)))(JournalValue(stamp, brief))
             _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(stack)))(L2CommandNumber(0L))
             _ <- p.put(StoreKey.RequestHighWater(BlockNumber(stack)))(Map.empty)
+            // The fast-side anchor the offer carries: the brief of the stack's last block and the
+            // deposit map at it. A hub that never wrote these cannot seed anyone.
+            block <- MinorBlocks.brief(nodeConfig.headConfig, stack)
+            _ <- p.put(JournalKey.Block(BlockNumber(stack)))(JournalValue(stamp, block))
+            _ <- p.put(StoreKey.DepositMap(BlockNumber(stack)))(DepositsMap.empty)
         } yield ()
 
     test("a major start point offers its own settlement and no SEC") {
@@ -273,6 +280,28 @@ class CoilStartPointTest extends AnyFunSuite:
                     assert(offer.startStack == StackNumber(1))
                     assert(offer.sec.isEmpty, "a major carries its own settlement; no SEC needed")
                     assert(offer.settlement.tx.id == signedSettlement.tx.id)
+                case other => fail(s"expected an Offer, got $other")
+            }
+        )
+    }
+
+    test("an offer carries the fast-side anchor one block below where the cursors open") {
+        // Without these the coil can read the population lane and still not build a block: block
+        // `n+1` is built on `n`'s header, and `n` is the one block the cursors skip.
+        withStore(p =>
+            for {
+                _ <- seedStack(p, stack = 1, majorEffects)
+                r <- decide(p, coilStack = None)
+            } yield r match {
+                case CoilStartPoint.Offer(offer) =>
+                    val _ = assert(
+                      offer.block.blockNum == BlockNumber(1),
+                      "the anchor block must be the stack's last, not the cursor's first"
+                    )
+                    assert(
+                      (offer.cursors.block: Int) == (offer.block.blockNum: Int) + 1,
+                      s"cursors open at ${offer.cursors.block}, anchor is ${offer.block.blockNum}"
+                    )
                 case other => fail(s"expected an Offer, got $other")
             }
         )

@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.transport
 
+import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.ack.HardAckNumber
@@ -9,6 +10,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.{SettlementTx, genSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2StateExport, L2StateHash}
 import hydrozoa.multisig.ledger.stack.{StackNumber, StandaloneEvacuationCommitment}
@@ -19,6 +21,7 @@ import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.uplc.builtin.ByteString
+import test.MinorBlocks
 
 /** The wire codec for [[Join.Offer]] — the one message that seats a joining coil peer.
   *
@@ -111,8 +114,12 @@ class JoinOfferCodecTest extends AnyFunSuite {
           ownHardAck = HardAckNumber(9),
           settlement = signedSettlement,
           sec = sec,
-          state = L2StateExport(L2CommandNumber(42L), IArray.from(exportBytes))
+          state = L2StateExport(L2CommandNumber(42L), IArray.from(exportBytes)),
+          block = lastBlock,
+          deposits = DepositsMap.empty
         )
+
+    private val lastBlock = MinorBlocks.brief(env.headConfig, 4).unsafeRunSync()
 
     private def roundTrip(o: Join.Offer): Join.Offer =
         CoilFrame.parse(CoilFrame.encode(CoilFrame.Msg(o))) match {
@@ -137,6 +144,16 @@ class JoinOfferCodecTest extends AnyFunSuite {
         assert(
           decoded.sec.map(_.commitment.kzgCommitment).contains(EvacuationMap.empty.kzgCommitment)
         )
+    }
+
+    test("the fast-side anchor survives the wire") {
+        val decoded = roundTrip(offer(Some(sec)))
+        val _ = assert(decoded.block.blockNum == lastBlock.blockNum)
+        val _ = assert(
+          decoded.block.header == lastBlock.header,
+          "the header is what the next block is built on; it must arrive intact"
+        )
+        assert(decoded.deposits == DepositsMap.empty)
     }
 
     test("an offer at a major start point carries no SEC") {

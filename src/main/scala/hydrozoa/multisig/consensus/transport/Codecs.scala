@@ -15,6 +15,7 @@ import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2StateExport}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.persistence.codec.DepositMapCodec.given
 import hydrozoa.multisig.persistence.codec.RequestRecordCodec
 import hydrozoa.multisig.persistence.codec.SecCodec.given
 import hydrozoa.multisig.persistence.codec.SettlementTxCodec.given

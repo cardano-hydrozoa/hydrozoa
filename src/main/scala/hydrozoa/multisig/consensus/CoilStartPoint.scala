@@ -144,6 +144,10 @@ object CoilStartPoint:
                         exported <- ledger.exportStateAt(commandNumber).value
                         cursors <- cursorsAt(stack, block, persistence)
                         ownHardAck <- ownHardAckStart(coil, stack, persistence)
+                        // The fast-side anchor. `cursors` opens at `block + 1`, so the coil never
+                        // pulls this block and cannot build the next one without its header.
+                        lastBlock <- persistence.getOrFail(JournalKey.Block(block)).map(_.payload)
+                        deposits <- persistence.getOrFail(StoreKey.DepositMap(block))
                         offer <- exported match {
                             case Left(e) => IO.raiseError(e)
                             case Right(state) =>
@@ -155,7 +159,9 @@ object CoilStartPoint:
                                       ownHardAck = ownHardAck,
                                       settlement = settlement,
                                       sec = sec,
-                                      state = state
+                                      state = state,
+                                      block = lastBlock,
+                                      deposits = deposits
                                     )
                                   )
                                 )

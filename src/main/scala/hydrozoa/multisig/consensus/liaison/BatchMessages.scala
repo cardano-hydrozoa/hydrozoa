@@ -5,6 +5,7 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, H
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.l2.L2StateExport
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber, StandaloneEvacuationCommitment}
@@ -147,6 +148,14 @@ object BatchMessages {
           *   carries both itself.
           * @param state
           *   the L2 state at the start point, opaque to everyone but the backend that made it.
+          * @param block
+          *   the brief of the start point's **last block**, one below where [[cursors]] opens. The
+          *   coil never pulls this one and cannot produce the next block without it: a block is
+          *   built on its predecessor's header.
+          * @param deposits
+          *   the deposit map as of that same block. Like [[block]] it is fast-side state the coil
+          *   carries rather than re-derives — the decisions behind it are spread over the whole
+          *   history below the start point.
           */
         final case class Offer(
             startStack: StackNumber,
@@ -154,7 +163,9 @@ object BatchMessages {
             ownHardAck: HardAckNumber,
             settlement: SettlementTx,
             sec: Option[StandaloneEvacuationCommitment.MultiSigned],
-            state: L2StateExport
+            state: L2StateExport,
+            block: BlockBrief.Next,
+            deposits: DepositsMap
         )
     }
 }

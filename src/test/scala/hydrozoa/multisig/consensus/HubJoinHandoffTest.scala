@@ -14,6 +14,7 @@ import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, Population}
 import hydrozoa.multisig.consensus.liaison.{BatchNumber, LiaisonProtocol, PeerLiaisonEventFormat, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.{SettlementTx, genSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2StateExport}
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -22,6 +23,7 @@ import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
+import test.MinorBlocks
 
 /** The hub's half of the join exchange: what [[PeerLiaisonHubToCoil]] does when a coil peer's link
   * comes up and announces where it stands.
@@ -72,7 +74,9 @@ class HubJoinHandoffTest extends AnyFunSuite {
       ownHardAck = offeredAck,
       settlement = settlement,
       sec = None,
-      state = L2StateExport(L2CommandNumber.zero, IArray.emptyByteIArray)
+      state = L2StateExport(L2CommandNumber.zero, IArray.emptyByteIArray),
+      block = MinorBlocks.brief(env.headConfig, 6).unsafeRunSync(),
+      deposits = DepositsMap.empty
     )
 
     /** Records everything the hub sends down the link. */
