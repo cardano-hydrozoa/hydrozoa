@@ -19,7 +19,7 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, ProtocolVersion, WsPeerTransport}
 import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
@@ -27,7 +27,7 @@ import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventForma
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Markers, Persistence, PersistenceEventFormat, StoreIdentity}
+import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Markers, Persistence, PersistenceEventFormat, StoreIdentity, StoreVersion}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
@@ -99,9 +99,13 @@ object Serve {
         backendOverride: Option[CardanoBackend[IO]] = None,
     ): IO[ExitCode] = {
         val setupIO = for {
+            // The protocol and store versions ride the boot line because they are what an
+            // operator reads back off a node that refuses to talk to a peer or to open its data
+            // directory — see design/versioning.md.
             _ <- log.info(
               s"Hydrozoa ${BuildInfo.version} " +
-                  s"(git ${BuildInfo.gitCommit}, built ${BuildInfo.builtAtString})"
+                  s"(git ${BuildInfo.gitCommit}, built ${BuildInfo.builtAtString}, " +
+                  s"protocol ${ProtocolVersion.current}, store ${StoreVersion.current})"
             )
             _ <- log.info("Starting Hydrozoa node...")
             _ <- log.info(s"Loading head config from $headConfigPath")
