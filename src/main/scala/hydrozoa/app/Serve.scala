@@ -17,10 +17,10 @@ import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.StartupRefusal
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.CoilStartPoint
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
+import hydrozoa.multisig.consensus.{CoilJoin, CoilJoinEventFormat, CoilStartPoint}
 import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
@@ -689,6 +689,17 @@ object Serve {
               )
             )
             _ <- t.startDialer(wsClient, hubUri)
+            // Settle where this coil starts BEFORE any actor exists. It cannot be done later: the
+            // ledger adopts a state only into one that has applied nothing, and `JointLedger` and
+            // `StackComposer` position themselves off this store the moment they start.
+            _ <- Resource.eval(
+              CoilJoin.settleStartPoint(
+                t,
+                persistence,
+                l2Ledger,
+                Slf4jTracer.sink.contramap(CoilJoinEventFormat.humanFormat(ownCoilNum))
+              )(using nodeConfig)
+            )
             coilFactory: Resource[
               IO,
               ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport

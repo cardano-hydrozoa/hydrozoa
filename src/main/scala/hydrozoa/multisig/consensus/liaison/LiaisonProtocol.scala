@@ -68,12 +68,13 @@ object LiaisonProtocol {
       * hub's pull of this coil peer's own hard-ack ([[BatchMessages.OwnHardAck.Get]]). Accepts only
       * its own `HardAck` to append.
       *
-      * [[BatchMessages.Join.Offer]] is the hub's answer to this coil's handshake — one message,
-      * before the pull chain opens.
+      * [[BatchMessages.Join.Offer]] or [[BatchMessages.Join.NoOffer]] is the hub's answer to this
+      * coil's handshake. Both normally reach the transport at boot rather than this actor; one
+      * arriving here is late, and declined.
       */
     type CoilToHubRequest =
-        Control | BatchMessages.Join.Offer | BatchMessages.Population.New |
-            BatchMessages.OwnHardAck.Get | HardAck
+        Control | BatchMessages.Join.Offer | BatchMessages.Join.NoOffer |
+            BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck
 
     type HeadToHeadHandle = ActorRef[IO, HeadToHeadRequest]
     type HubToCoilHandle = ActorRef[IO, HubToCoilRequest]

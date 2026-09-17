@@ -640,4 +640,6 @@ object Codecs {
         )
 
     given joinOfferCodec(using CardanoNetwork.Section): Codec[Join.Offer] = deriveCodec[Join.Offer]
+
+    given joinNoOfferCodec: Codec[Join.NoOffer] = deriveCodec[Join.NoOffer]
 }

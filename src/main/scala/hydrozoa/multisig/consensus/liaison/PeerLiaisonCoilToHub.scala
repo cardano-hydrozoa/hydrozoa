@@ -312,6 +312,9 @@ abstract class PeerLiaisonCoilToHub(
         case get: OwnHardAck.Get => server.handleGet(get)
         case ack: HardAck        => ownHardAckLane.append(ack) >> server.afterAppend
         case offer: Join.Offer   => declineLateOffer(offer)
+        // The ordinary answer, and by the time it reaches this actor the boot that wanted it has
+        // long since proceeded without it. Nothing to do and nothing wrong.
+        case _: Join.NoOffer => IO.unit
     }
 
     /** An offer that arrives once this liaison is running is too late to act on, and saying so is

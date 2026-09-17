@@ -368,10 +368,17 @@ abstract class PeerLiaisonHubToCoil(
                     // rather than broken.
                     puller.start
             case CoilStartPoint.CatchUp =>
-                tracer.traceWith(PeerLiaisonEvent.CoilCaughtUp)
+                tracer.traceWith(PeerLiaisonEvent.CoilCaughtUp) >> noOffer("within catch-up range")
             case CoilStartPoint.Unavailable(reason) =>
-                tracer.traceWith(PeerLiaisonEvent.CoilNotSeeded(reason.toString))
+                tracer.traceWith(PeerLiaisonEvent.CoilNotSeeded(reason.toString)) >>
+                    noOffer(reason.toString)
         }
+
+    /** Answer a handshake the hub has no start point for. Sent rather than left silent so the coil
+      * can tell this apart from an unreachable hub — see [[Join.NoOffer]].
+      */
+    private def noOffer(reason: String): IO[Unit] =
+        getConnections.flatMap(_.remote ! Join.NoOffer(reason))
 
     /** Restore each population outbox lane's high-water from its backing journal, leaving the
       * outboxes empty. The Server half answers the coil peer's `Population.Get` from the store

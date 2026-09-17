@@ -53,7 +53,8 @@ object CoilFrame {
 
     /** The wire-eligible hub↔coil messages. */
     type Wire =
-        Join.Offer | Population.Get | Population.New | OwnHardAck.Get | OwnHardAck.New
+        Join.Offer | Join.NoOffer | Population.Get | Population.New | OwnHardAck.Get |
+            OwnHardAck.New
 
     /** Project the wire-eligible subset out of either link direction's request (the appended
       * artifacts, control ticks, and the transport-local [[Join.Connected]] never cross the wire).
@@ -63,6 +64,7 @@ object CoilFrame {
     ): Option[Wire] =
         req match {
             case x: Join.Offer     => Some(x)
+            case x: Join.NoOffer   => Some(x)
             case x: Population.Get => Some(x)
             case x: Population.New => Some(x)
             case x: OwnHardAck.Get => Some(x)
@@ -83,6 +85,8 @@ object CoilFrame {
             payload match {
                 case x: Join.Offer =>
                     Json.obj("t" -> "msg".asJson, "kind" -> "JoinOffer".asJson, "v" -> x.asJson)
+                case x: Join.NoOffer =>
+                    Json.obj("t" -> "msg".asJson, "kind" -> "JoinNoOffer".asJson, "v" -> x.asJson)
                 case x: Population.Get =>
                     Json.obj("t" -> "msg".asJson, "kind" -> "PopGet".asJson, "v" -> x.asJson)
                 case x: Population.New =>
@@ -117,11 +121,12 @@ object CoilFrame {
                 )
             case "msg" =>
                 c.downField("kind").as[String].flatMap {
-                    case "JoinOffer" => c.downField("v").as[Join.Offer].map(Msg(_))
-                    case "PopGet"    => c.downField("v").as[Population.Get].map(Msg(_))
-                    case "PopNew"    => c.downField("v").as[Population.New].map(Msg(_))
-                    case "OwnGet"    => c.downField("v").as[OwnHardAck.Get].map(Msg(_))
-                    case "OwnNew"    => c.downField("v").as[OwnHardAck.New].map(Msg(_))
+                    case "JoinOffer"   => c.downField("v").as[Join.Offer].map(Msg(_))
+                    case "JoinNoOffer" => c.downField("v").as[Join.NoOffer].map(Msg(_))
+                    case "PopGet"      => c.downField("v").as[Population.Get].map(Msg(_))
+                    case "PopNew"      => c.downField("v").as[Population.New].map(Msg(_))
+                    case "OwnGet"      => c.downField("v").as[OwnHardAck.Get].map(Msg(_))
+                    case "OwnNew"      => c.downField("v").as[OwnHardAck.New].map(Msg(_))
                     case other =>
                         Left(DecodingFailure(s"Unknown coil msg kind: $other", c.history))
                 }

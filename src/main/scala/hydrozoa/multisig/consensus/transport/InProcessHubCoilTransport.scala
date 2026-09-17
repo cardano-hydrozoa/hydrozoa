@@ -1,6 +1,7 @@
 package hydrozoa.multisig.consensus.transport
 
 import cats.effect.{IO, Ref}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 
@@ -83,6 +84,16 @@ object InProcessHubCoilTransport {
                     case None          => IO.unit
                 }
             }
+
+        /** Answers immediately and always the same way: **this harness runs no join exchange.**
+          *
+          * There is no handshake on an in-process link — both ends are wired directly, so there is
+          * nothing to announce marks to. A coil boots here exactly as it did before the exchange
+          * existed. Standing an offer up in-process would mean a coil waiting at boot for a hub
+          * liaison that this harness may not have spawned yet, which is a deadlock, not a test.
+          */
+        override def joinAnswer: IO[Join.Answer] =
+            IO.pure(Join.NoOffer("in-process link: no join exchange"))
     }
 
     object Coil:

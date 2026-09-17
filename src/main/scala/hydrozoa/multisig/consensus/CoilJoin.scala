@@ -2,9 +2,13 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.IO
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.owninfo.OwnPeerPublic
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
+import hydrozoa.multisig.consensus.transport.CoilTransport
 import hydrozoa.multisig.ledger.l2.L2Ledger
-import hydrozoa.multisig.persistence.{AdoptedStartPoint, JournalKey, JournalValue, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{AdoptedStartPoint, JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 /** The coil peer's half of the join exchange: adopting the start point its hub offered.
   *
@@ -21,7 +25,7 @@ import hydrozoa.multisig.persistence.{AdoptedStartPoint, JournalKey, JournalValu
   */
 object CoilJoin {
 
-    type Config = JoinOfferVerifier.Config & CardanoNetwork.Section
+    type Config = JoinOfferVerifier.Config & CardanoNetwork.Section & OwnPeerPublic.Section
 
     /** Check an offer and, if it holds up, seed the store from it.
       *
@@ -73,4 +77,65 @@ object CoilJoin {
       */
     def adoptedStartPoint(persistence: Persistence[IO]): IO[Option[AdoptedStartPoint]] =
         persistence.get(StoreKey.StartPoint)
+
+    /** Settle where this coil peer starts, before any of its actors exist. Returns once the store
+      * is the one the node should boot from.
+      *
+      * **A cold store waits for its hub; a warm one does not.** Booting cold without an answer is
+      * the failure this ticket exists to fix: the coil re-derives stack 0 from config, the head is
+      * long past it, and nothing afterwards can reconcile the two — the node looks healthy and is
+      * permanently useless. Waiting is the honest alternative, and it clears the moment the hub
+      * answers. A coil with history has somewhere to walk forward from, so it proceeds on its own
+      * after [[warmJoinWait]] rather than blocking a working node on an unreachable hub.
+      *
+      * `NoOffer` is an answer, not a timeout: at a real bring-up every coil is cold and every hub
+      * says there is nothing to seed from, and all of them boot straight through this.
+      */
+    def settleStartPoint(
+        transport: CoilTransport,
+        persistence: Persistence[IO],
+        ledger: L2Ledger[IO],
+        tracer: ContraTracer[IO, CoilJoinEvent]
+    )(using config: Config): IO[Unit] =
+        for {
+            markers <- Markers.derive(persistence, config.ownPeerId)
+            startPoint <- adoptedStartPoint(persistence)
+            cold = markers.hardAckedStack.isEmpty && startPoint.isEmpty
+            answer <-
+                if cold then waitForAnswer(transport, tracer).map(Some(_))
+                else transport.joinAnswer.map(Some(_)).timeoutTo(warmJoinWait, IO.none)
+            _ <- answer match {
+                case Some(offer: Join.Offer) =>
+                    tracer.traceWith(CoilJoinEvent.Adopting(offer.startStack)) >>
+                        adopt(offer, persistence, ledger) >>
+                        tracer.traceWith(CoilJoinEvent.Adopted(offer.startStack))
+                case Some(no: Join.NoOffer) =>
+                    tracer.traceWith(CoilJoinEvent.NothingToAdopt(no.reason))
+                case None =>
+                    tracer.traceWith(CoilJoinEvent.HubSilent(warmJoinWait))
+            }
+        } yield ()
+
+    /** How long a coil peer that already has history waits for its hub before booting anyway. Not
+      * configurable: past it the node boots and catches up, so the only cost of the wait being
+      * wrong is a slower start or a missed seeding that the next reconnect offers again.
+      */
+    val warmJoinWait: FiniteDuration = 30.seconds
+
+    /** Wait as long as it takes, saying so periodically — a cold coil has nothing useful to do
+      * without an answer, and the log line is what tells an operator the hub is the problem.
+      */
+    private def waitForAnswer(
+        transport: CoilTransport,
+        tracer: ContraTracer[IO, CoilJoinEvent]
+    ): IO[Join.Answer] =
+        transport.joinAnswer
+            .race(
+              (IO.sleep(coldJoinReportEvery) >> tracer.traceWith(
+                CoilJoinEvent.StillWaiting
+              )).foreverM
+            )
+            .map(_.merge)
+
+    private val coldJoinReportEvery: FiniteDuration = 10.seconds
 }

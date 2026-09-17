@@ -167,5 +167,20 @@ object BatchMessages {
             block: BlockBrief.Next,
             deposits: DepositsMap
         )
+
+        /** Hub → coil: there is no start point to adopt, carry on.
+          *
+          * The hub answers every handshake, and this is the ordinary answer — a reconnecting coil
+          * is nearly always close enough to walk forward. Sending it rather than staying silent is
+          * what lets a coil tell "nothing to adopt" from "no hub", which are the same silence and
+          * very different situations: the first is a normal boot, the second is a coil about to
+          * bootstrap stack 0 into a head that is long past it.
+          *
+          * `reason` is for the log; the coil does the same thing whatever it says.
+          */
+        final case class NoOffer(reason: String)
+
+        /** What a hub sends back when a coil announces itself. */
+        type Answer = Offer | NoOffer
     }
 }
