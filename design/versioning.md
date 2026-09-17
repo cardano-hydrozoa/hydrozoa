@@ -111,28 +111,33 @@ the flip is free; see *Landing wire changes before initialization*.
 
 ## Carrying it in the handshake
 
-Both liaison links open `Challenge(nonce)` → `Handshake` → `Refused` (GUM-322,
-`docs/spec/coil-network.md` §4.3). The version rides in the `Handshake` under three rules.
+Both liaison links open `Challenge` → `Handshake` → `Refused` (GUM-322,
+`docs/spec/coil-network.md` §4.3). The version rides in both of the first two frames, under three
+rules.
 
-1. **The version is the one field every version can read.** `HeadFrame.Handshake` and
-   `CoilFrame.Handshake` carry a top-level `protocolVersion`, and `ProtocolVersion.check` runs on
-   it before the rest of the frame is used, because another version may lay out or sign the rest
-   differently. The field is `Option[Int]`, so a counterpart too old to announce one is refused
-   with a legible reason rather than failing to decode.
-2. **The dialer learns both versions too.** `Challenge` carries only the nonce, so the dialer
-   learns of a mismatch from the refusal rather than from the opening frame:
-   `Refused(ProtocolVersionMismatch(found, expected))`, rendered `protocol version <found>, this
-   node speaks <expected>`.
+1. **The version is the one field every version can read.** `Challenge` and `Handshake` carry a
+   top-level `protocolVersion` on both envelopes, and `ProtocolVersion.check` runs on it before the
+   rest of the frame is used, because another version may lay out or sign the rest differently. The
+   field is `Option[Int]`, so a counterpart too old to announce one is refused with a legible
+   reason rather than failing to decode.
+2. **Both sides announce, and each reaches its own verdict.** The server announces first, in the
+   `Challenge`, so the dialer refuses before signing a proof for a peer it cannot talk to — and,
+   the reason that matters, so it can name both versions against a server that never says why.
+   A server too old to send `Refused` is exactly that server, and it is exactly the population
+   this check exists to catch. Waiting to be told would make the diagnosis depend on the
+   counterpart having the very mechanism under test.
 3. **It is inside the signed bytes.** `HandshakeProof` signs a domain-tagged preimage of
-   `link || claimant || protocolVersion || headParamsHash || nonce`, so the announced version
-   cannot be edited in flight.
+   `link || claimant || protocolVersion || headParamsHash || nonce`, so the dialer's announced
+   version cannot be edited in flight. The `Challenge`'s is unsigned — the server has no identity
+   to prove yet — which costs nothing: a forged version can only cause a refusal, and an attacker
+   who can rewrite the frame can drop the socket anyway.
 
 On a mismatch:
 
 | side | does |
 |---|---|
 | server | sends `Refused`, traces `ServerRefusedHandshake`, and closes the socket with the same reason in the close frame |
-| dialer | traces `DialerRefused` and keeps redialing on its existing backoff |
+| dialer | traces `DialerRefusedChallenge` if it refused the `Challenge`, `DialerRefused` if the server refused its `Handshake`, and keeps redialing on its existing backoff either way |
 
 The dialer waits instead of exiting. `StartupRefusal` draws the line: a node whose peers are not
 ready "waits — indefinitely, visibly, and without exiting — because the world may yet become
