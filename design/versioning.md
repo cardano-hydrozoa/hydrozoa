@@ -1,17 +1,17 @@
 # Versioning
 
-For whoever implements the signed `Hello` (GUM-322), and for anyone changing a wire codec, a
-consensus rule or a store layout. This document defines the three versions a build carries —
-software, protocol and store — what each one covers, where it is checked, and when it moves.
+For anyone changing a wire codec, a consensus rule or a store layout. This document defines the
+three versions a build carries — software, protocol and store — what each one covers, where it is
+checked, when it moves, and what deploying a move costs.
 
 ## Scope
 
-The signed `Hello` needs items 1–3. The rest ride along because they touch the same values.
+GUM-322's signed handshake carries items 1–3, built in hydrozoa#744 and #749. The rest ride along
+because they touch the same values.
 
-1. **`ProtocolVersion.current`**: one integer. Version `1` is the protocol the public testnet head
-   initializes with (open question 2).
-2. **The version travels first.** Both sides put it in the first frame they send, at a position
-   every version can decode — see *Carrying it in `Hello`*.
+1. **`ProtocolVersion.current`**: one integer, `1`.
+2. **The version travels first.** It sits in the first frame the dialer sends, at a position every
+   version can decode — see *Carrying it in the handshake*.
 3. **Equality on both lanes.** A mismatch closes the link with a reason naming both versions. The
    node keeps running.
 4. **Reporting.** `hydrozoa version`, `GET /version` and the boot log report the protocol version
@@ -24,9 +24,8 @@ The signed `Hello` needs items 1–3. The rest ride along because they touch the
 Deferred:
 
 - **The L2 store's version.** GUM-324 item 3 owns it; *Store version* gives the shape it follows.
-- **Head migration.** This document states only the two properties versioning relies on; see
-  *Out of scope*.
-- **A store change on a live head** that does not ride a head migration — open question 4.
+- **Head migration's mechanism.** *Head migration* states what versioning relies on and what rides
+  one; the transition transaction itself is GUM-323's own sketch.
 
 ## Three versions
 
@@ -34,7 +33,7 @@ Deferred:
 |---|---|---|---|
 | owned by | each implementation | the Gummiworm protocol, shared by every implementation | each implementation, one per store |
 | answers | which build is this? | can this peer talk to that one? | can this binary read this directory? |
-| value today | `0.1.14` (`build.sbt`, via `BuildInfo`) | none | consensus store `4`; L2 store none |
+| value today | `0.1.14` (`build.sbt`, via `BuildInfo`) | `1` (`ProtocolVersion.current`) | consensus store `5`; L2 store none |
 | compared | never | equality, at connect | equality, at open |
 | on mismatch | — | the link is refused; the node waits | the node refuses to start |
 
@@ -79,8 +78,9 @@ its tag and the protocol version together. For `headParamsHash` this is already 
 compatibility* says "a running head cannot be upgraded across such a change". Head migration is
 the upgrade path for exactly that case.
 
-[Where the number is written down for other implementations is GUM-323 open question 4. The
-natural home is the whitepaper's *Wire format* section.]
+`ProtocolVersion.current` is where the number is written down — a constant in the code, and
+nothing else. It moves to the whitepaper's *Wire format* section when a second implementation
+needs to read it.
 
 ## When it moves
 
@@ -109,36 +109,67 @@ because a peer on a build before the tolerant decoder cannot read the new form. 
 testnet head initializes, it is part of version `1` and costs no migration; the tolerant branch
 then goes.
 
-## Carrying it in `Hello`
+## Carrying it in the handshake
 
-GUM-322 replaces `HeadFrame.Hello(peerNum: Int)` and `CoilFrame.Hello(coilNum: Int)` with a
-signed, nonce-bound frame. The version rides in it under three rules.
+Both liaison links open `Challenge(nonce)` → `Handshake` → `Refused` (GUM-322,
+`docs/spec/coil-network.md` §4.3). The version rides in the `Handshake` under three rules.
 
-1. **The version is the one field every version can read.** It sits at a fixed position in the
-   first frame each side sends, independent of everything else in that frame [a top-level
-   `protocolVersion` field, in whatever envelope GUM-322 settles]. A peer checks it **before**
-   parsing the rest, because another version may lay out or sign the rest differently.
-2. **Both sides send it.** GUM-322's server opens with a nonce frame. That frame carries the
-   server's version, so the dialer learns of a mismatch as well and can name it. sugar-rush's
-   user streaming API uses the same order: a `welcome` frame carrying `PROTOCOL_VERSION` before
-   the client's `Hello` (`sugar-rush-ledger/api/src/ws.rs`).
-3. **It is inside the signed bytes.** The whole `Hello` is signed, so this costs nothing.
+1. **The version is the one field every version can read.** `HeadFrame.Handshake` and
+   `CoilFrame.Handshake` carry a top-level `protocolVersion`, and `ProtocolVersion.check` runs on
+   it before the rest of the frame is used, because another version may lay out or sign the rest
+   differently. The field is `Option[Int]`, so a counterpart too old to announce one is refused
+   with a legible reason rather than failing to decode.
+2. **The dialer learns both versions too.** `Challenge` carries only the nonce, so the dialer
+   learns of a mismatch from the refusal rather than from the opening frame:
+   `Refused(ProtocolVersionMismatch(found, expected))`, rendered `protocol version <found>, this
+   node speaks <expected>`.
+3. **It is inside the signed bytes.** `HandshakeProof` signs a domain-tagged preimage of
+   `link || claimant || protocolVersion || headParamsHash || nonce`, so the announced version
+   cannot be edited in flight.
 
 On a mismatch:
 
 | side | does |
 |---|---|
-| server | closes the socket with a reason naming both versions (GUM-322 fix step 5), and traces a distinct event [name — e.g. `ServerRejectedProtocolVersion(theirs, ours)`] |
-| dialer | traces both versions and keeps redialing on its existing backoff |
+| server | sends `Refused`, traces `ServerRefusedHandshake`, and closes the socket with the same reason in the close frame |
+| dialer | traces `DialerRefused` and keeps redialing on its existing backoff |
 
 The dialer waits instead of exiting. `StartupRefusal` draws the line: a node whose peers are not
 ready "waits — indefinitely, visibly, and without exiting — because the world may yet become
 ready". A peer on another version is fixed by its operator upgrading, so a mismatch is that case.
 
-The rule is the same on both lanes. On the mesh a mismatch is a deployment error, since every head
-peer of one head runs one version by construction. On hub↔coil, a coil on another version is
-refused and told which version it needs; with coil quorum 1 on the testnet head, that costs the
-head nothing. The in-process transports have no `Hello` and no check: both ends are one build.
+The rule is the same on both lanes — `PeerTransport` on `/head`, `HubWsTransport` on `/hub`. On
+the mesh a mismatch is a deployment error, since every head peer of one head runs one version by
+construction. On hub↔coil it is the same by construction, because a migration moves the coils with
+the head (*Head migration*). The in-process transports have no handshake and no check: both ends
+are one build.
+
+## Head migration
+
+Upgrading a running mesh in place is an outage: head peers sign N-of-N, so one peer that cannot
+talk halts the head, and restarting every peer at the same instant is not feasible. Head migration
+moves the head instead — operators bring up a new set of peers on the new build beside the running
+head, and a transition transaction moves the head to them.
+
+Three properties versioning relies on:
+
+1. **The `headId` is preserved.** A migrated head keeps its identity; the two generations are told
+   apart by `headParamsHash` in the multisig regime utxo's datum, not by a new head id.
+2. **Coils migrate with the head.** A coil peer speaks the same wire protocol and keeps the same
+   store layout as a head peer, so it moves on the same schedule. That is what makes the hub↔coil
+   version check an equality like the mesh's.
+3. **Old and new peers never share a mesh.** `headParamsHash` is in the signed handshake, so a
+   peer of the old head is refused by the new head's mesh whatever version either one speaks, and
+   `StoreIdentity` stamps it, so no store of the old head opens under the new head's config.
+
+**What rides a migration: any change to a format — store, wire or protocol.** A change that leaves
+all three alone deploys in place, peers restarting onto it one at a time.
+
+That is deliberately broader than "every protocol bump". A store-only bump could in principle be
+deployed by migrating each store where it lies, but that needs in-place migration code per bump,
+and on a live head the cheap answer — rebuild the store — is not available, because a cold store
+re-bootstraps stack 0 and never rejoins (GUM-312). Routing store-format changes through a
+migration keeps one deployment path for all three versions.
 
 ## Store version
 
@@ -146,7 +177,7 @@ One integer per store, owned by the implementation.
 
 | store | version | checked |
 |---|---|---|
-| consensus store | `StoreVersion.current = 4` on main (v0.1.14 ships `2`); key `store_version` in `Cf.Meta` | `RocksDbBackendStore.versionCheck` at every open, then `identityCheck` |
+| consensus store | `StoreVersion.current = 5` on main (v0.1.14 ships `2`); key `store_version` in `Cf.Meta` | `RocksDbBackendStore.versionCheck` at every open, then `identityCheck` |
 | L2 store (`RocksDbL2Store`) | none | none — GUM-324 item 3 |
 
 Rules:
@@ -160,16 +191,19 @@ Rules:
 3. **A mismatch is a `StartupRefusal`.** Nothing about the world changes what is on disk, so a
    restart re-derives the same verdict. Today `Serve` converts only `RocksDBException` into a
    refusal; a version or identity mismatch exits 1, and `Restart=on-failure` restarts it forever.
-4. **The L2 store takes the same shape** (GUM-324).
+4. **A bump deploys by head migration**, like a protocol bump, and for the reason given there.
+5. **The L2 store takes the same shape** (GUM-324).
 
-The store version moves independently of the protocol version. `StoreVersion` 1→2 moved the
-Request journal to the protobuf record, shipped in v0.1.9, while the wire kept the JSON object
-form.
+The store version still moves independently of the protocol version — one release may move either,
+both or neither. `StoreVersion` 1→2 moved the Request journal to the protobuf record, shipped in
+v0.1.9, while the wire kept the JSON object form. What rule 4 settles is the deployment path, not
+the numbering.
 
-**Stores and head migration.** `StoreIdentity` stamps `headParamsHash`. If a migration changes
-`headParamsHash` (GUM-323), no store of the old head opens under the new head's config, so every
-peer of the new head starts from a fresh store. A store bump shipped in a migration therefore
-needs no store migration.
+**Stores and head migration.** `StoreIdentity` stamps `headParamsHash`. A migration changes
+`headParamsHash`, so no store of the old head opens under the new head's config and every peer of
+the new head starts from a fresh store. A store bump shipped in a migration therefore needs no
+in-place store migration — what the new peers do need is the head's state, which is head
+migration's own problem (open question 2).
 
 ## Software version
 
@@ -184,25 +218,28 @@ needs no store migration.
 
 ## Present state
 
-Nothing on the wire carries a version. `HeadFrame.Hello` and `CoilFrame.Hello` carry a
-self-asserted peer number, unsigned; a rejected `Hello` is traced and the socket stays open
-(GUM-322).
+The protocol version is defined, signed and checked on both lanes in hydrozoa#744 and #749; on main
+nothing on the wire carries a version. Scope items 4–7 are not built anywhere: `hydrozoa version`,
+`GET /version` and the boot log report only `BuildInfo`; a store version or identity mismatch
+raises `IllegalStateException` and exits 1; and only the stored request record has a golden
+fixture.
 
 Text that contradicts the code, fixed in this work item:
 
-1. `StoreVersion.scala` says "Current on-disk schema version — **2**"; `current` is `4`.
-2. The same scaladoc says bumps wait "until the layout stabilizes"; the file lists two bumps.
+1. `StoreVersion.scala` says bumps wait "until the layout stabilizes"; the file lists four bumps
+   and `current` is `5`.
+2. The same scaladoc says "a format change just rebuilds the store". That holds in development and
+   fails on a live head, where a cold store never rejoins (GUM-312) — see *Head migration*.
 3. The same scaladoc cites "CR6 / §7 versioning note"; CR6 in
    `persistence-and-crash-recovery.md` is write atomicity.
-4. `StoreVersion.Check` has no callers — `versionCheck` does not use it — while
-   `head-params-hash.md` says it "already has the right three-way shape". Use it or delete it.
-5. `persistence-and-crash-recovery.md` §7 says "the store version is **held at 1**".
+4. `StoreVersion.Check` has no callers — `versionCheck` open-codes the same three-way decision —
+   while `head-params-hash.md` says it "already has the right three-way shape". Use it or delete
+   it.
+5. `persistence-and-crash-recovery.md` §7 says "the store version is **held at 1**" and repeats
+   the rebuild answer.
 
 ## Out of scope
 
-- **Head migration.** GUM-323 holds the sketch. Versioning relies on two properties of it: peers
-  of the old and the new head never share a mesh, and the new head's peers start from fresh stores
-  when `headParamsHash` changes.
 - **The black-box L2 ledger socket.** `RemoteL2Ledger` and sugar-rush's `/ws` exchange no version
   and no handshake. It is a node-local link with its own contract
   (`docs/spec/l2-ledger-command-coordination.md`); L2 rule compatibility goes through
@@ -219,6 +256,12 @@ Text that contradicts the code, fixed in this work item:
    already on the new version, so no mesh ever mixes versions, and there is no window to prune and
    no mixed-version test matrix.
 3. **Equality on both lanes.** A stale coil costs the head nothing and gets a legible refusal.
+4. **A migration keeps the `headId` and moves the coils with the head.** One head keeps one
+   identity across an upgrade, and `headParamsHash` tells the generations apart.
+5. **Any store, wire or protocol format change rides a migration.** One deployment path for all
+   three versions, and no per-bump in-place store migration code.
+6. **The protocol version is a constant in the code.** It moves to the whitepaper when a second
+   implementation needs to read it.
 
 ## Open questions
 
@@ -226,10 +269,9 @@ Text that contradicts the code, fixed in this work item:
    changes. A consensus fix that changes which blocks, briefs or effect bodies a peer produces has
    no fixture. Proposal: any behaviour change a peer on the earlier build would disagree with is a
    bump. Who signs off on "would not disagree"?
-2. **Version `1` = what the testnet head initializes with.** That makes every wire change ready
+2. **What carries the head's state into a migrated head.** Every new-head peer starts from a fresh
+   store (*Store version*), and a fresh store re-bootstraps stack 0 (GUM-312). Head migration has
+   to hand the new peers the old head's history; where that seam is decides whether a store-format
+   bump can ride a migration at all.
+3. **Version `1` = what the testnet head initializes with.** That makes every wire change ready
    before initialization free — the protobuf flip (GUM-315 C1) among them. Agreed?
-3. **Coils in a migration** (GUM-323 open question 3). Equality on hub↔coil assumes the coils move
-   to the new version with the head.
-4. **A store change on a live head, outside a migration.** `StoreVersion`'s scaladoc answers with a
-   rebuild; on a live head a cold store is unrecoverable (GUM-312). In-place migration code,
-   re-join from snapshot, or always ride a head migration?
