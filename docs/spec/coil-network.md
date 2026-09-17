@@ -428,6 +428,86 @@ degenerate one. A coil peer's `Round2Payload.Initial.individualSig` is always
 `None`: only head peers fund the init tx from individual addresses.
 
 
+### 5.8 Joining from a start point
+
+A coil peer whose store is empty — or so far behind that replaying is not worth
+it — cannot reach the head by walking forward. §5.7's stack-0 bootstrap only
+works while the head is still near stack 0; past that, a coil that re-derives
+stack 0 from config can never reconcile with a head that has moved on, and the
+node reports healthy while being permanently useless. GUM-312 adds the other
+way in: the hub seats the coil at a **start point** it certifies.
+
+**The exchange.** One round trip per connection, before any pull chain opens.
+
+| step | message | who decides |
+|---|---|---|
+| 1 | `CoilFrame.Handshake` carries `Join.Connected` — the coil's block and stack marks | coil states, hub does not trust |
+| 2 | `CoilStartPoint.decide` picks `Offer`, `CatchUp` or `Unavailable` | hub |
+| 3 | `Join.Offer` or `Join.NoOffer` | hub answers every handshake |
+
+The marks are a **claim, not a credential**. They select between "seed this coil"
+and "let it walk forward"; everything the coil then adopts the hub computes
+itself, so a coil that overstates where it stands is offered a catch-up and then
+stalls on acks it cannot produce. What it can never do is make the hub hand back
+a cursor below one the hub already holds.
+
+`Join.NoOffer` exists so the coil can tell "nothing to adopt" from "no hub".
+Both are silence on the wire and they call for opposite behaviour.
+
+**What an offer carries.** Effects are never wire-broadcast — every peer derives
+them from its own `BlockResult` stream, which is what makes them byte-identical
+without being sent. A joining coil has no such stream below its start point, so
+the offer carries the narrowest set that still lets it check what it adopts:
+
+- `settlement` — a multisigned `SettlementTx`, the source of the treasury. From
+  the start point's own partition when that is a major, otherwise from the latest
+  major at or below it: a minor touches no L1 and rotates no treasury.
+- `sec` — the start point's own SEC, present exactly when it is a minor. It
+  carries the `l2StateHash` and evacuation commitment the older settlement does
+  not.
+- `state` — an `L2StateExport`, opaque to everyone but the backend that made it.
+- `block` + `deposits` — the fast-side anchor at the start point's **last** block,
+  one below where the cursors open. A block is built on its predecessor's header,
+  and the deposit map's decisions are spread over the whole history below the
+  start point; neither is derivable from what the coil pulls.
+- `cursors` + `ownHardAck` — every lane's first index, to adopt exactly as sent.
+
+**Nothing is trusted because it arrived.** `CoilJoin.adopt` imports the state
+first so the ledger reports what it actually reached, and checks *those* digests
+— never the ones travelling with the bytes — against the certificate the head
+peers signed (`JoinOfferVerifier`). A refusal leaves the store untouched and
+fails the boot. The treasury/evacuation-map balance identity comes for free:
+`StackComposer.State.recover` checks it on whatever pair it boots from.
+
+**Adoption happens before the actors exist, and can only happen there.**
+`L2Ledger.importState` accepts a state only into a ledger that has applied
+nothing, and `JointLedger` and `StackComposer` position themselves off the store
+the moment they start. So `Serve.buildCoilNode` settles the start point first;
+an offer reaching a running liaison is declined.
+
+**A seeded store is not a recovered store.** A seeded coil authored no hard-ack,
+so it has no `hardAckedStack`, and no `BlockResult`, so it has no
+`fastBlockMark`. Writing an ack it never signed into the one journal its hub
+pulls from would be a row that exists only to be misread, so the anchor is
+recorded for what it is — `StoreKey.StartPoint` — and three seams ask for it by
+name:
+
+| seam | what it takes from the start point |
+|---|---|
+| `StackComposer.State.recover` | the stack and block to open at, and the next own-ack number |
+| `JointLedger.State.recover` | the block to resume at, instead of rewinding to genesis |
+| `PeerLiaisonCoilToHub` lane seeding | the own-hard-ack high-water |
+
+The third is fatal rather than merely wrong: a lane whose bound is below what the
+hub asks for reports out of bounds, which terminates the node.
+
+**Booting.** A cold store waits for its hub indefinitely, logging under
+`CoilJoin` while it does — blocking is the honest alternative to bootstrapping
+into a state nothing can recover. A coil with history (including one already
+seeded, which has a start point but still no own ack) waits
+`CoilJoin.warmJoinWait` and then boots and catches up.
+
+
 ## 6. Scope
 
 ### 6.1 Deferred work
