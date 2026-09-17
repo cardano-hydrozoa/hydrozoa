@@ -307,6 +307,16 @@ trait L2Ledger[F[_]] extends L2StateReader[F] {
       */
     def importState(exported: L2StateExport): EitherT[F, RestoreError, L2Ledger.Digests]
 
+    /** Drop everything this ledger holds and return it to genesis.
+      *
+      * **Deliberately destructive, and only for a coil peer being seeded.** Such a peer's ledger
+      * state is unusable by construction — it is too far behind for its hub to serve it forward —
+      * so there is nothing to preserve, and [[importState]] adopts only into a ledger that has
+      * applied nothing. Separate from [[importState]] rather than folded into it so that the
+      * destruction is something a caller asks for by name.
+      */
+    def wipe: EitherT[F, RestoreError, Unit]
+
     /** The evacuation map as of `commandNumber` — the map itself, not a digest of it.
       *
       * The map is a projection of the ledger's main compartment, so the ledger is the only thing

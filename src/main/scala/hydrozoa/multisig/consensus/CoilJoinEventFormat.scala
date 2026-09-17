@@ -13,7 +13,10 @@ object CoilJoinEventFormat:
         import ev.*
         e match {
             case Adopting(startStack) =>
-                info(s"adopting a start point at stack=$startStack")
+                warn(
+                  s"adopting a start point at stack=$startStack — discarding this peer's own " +
+                      "ledger and store, which are too far behind to be served forward"
+                )
             case Adopted(startStack) =>
                 info(s"start point at stack=$startStack verified and stored")
             case NothingToAdopt(reason) =>

@@ -242,6 +242,12 @@ class RemoteL2Ledger private (
     ): EitherT[IO, RestoreError, EvacuationMap] =
         EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
 
+    /** **Not implemented.** A remote black box owns its own state; wiping it is not this head's
+      * call to make, and the seeding path that would need it is refused anyway.
+      */
+    override def wipe: EitherT[IO, RestoreError, Unit] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
     /** Send a [[Request.StateAt]] and return the remote's [[StateAtResponse]]. Mirrors
       * [[sendRestoreRequest]]: transport failure is retried through by [[exchange]], and an
       * undecodable frame or a mismatched echoed command number is a protocol violation that

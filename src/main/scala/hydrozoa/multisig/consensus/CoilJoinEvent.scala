@@ -13,7 +13,11 @@ sealed trait CoilJoinEvent
 
 object CoilJoinEvent:
 
-    /** An offer arrived and is about to be checked and written. */
+    /** An offer arrived and is about to be checked and adopted.
+      *
+      * Adopting **discards this peer's ledger and store** — see `CoilJoin.adopt` for why there is
+      * nothing to preserve. Worth seeing in a log before it happens, not only after.
+      */
     final case class Adopting(startStack: StackNumber) extends CoilJoinEvent
 
     /** The offer verified and the store is seeded; the node boots from it. */

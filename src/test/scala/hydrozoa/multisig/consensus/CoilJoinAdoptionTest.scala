@@ -5,7 +5,7 @@ import cats.effect.unsafe.implicits.global
 import cats.syntax.contravariant.*
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.logging.Slf4jTracer
-import hydrozoa.multisig.consensus.ack.HardAckNumber
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, Population}
 import hydrozoa.multisig.consensus.liaison.BatchNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -13,11 +13,11 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
-import hydrozoa.multisig.ledger.l1.tx.{SettlementTx, genSettlementTxSeqBuilder}
+import hydrozoa.multisig.ledger.l1.tx.{SettlementTx, TxSignature, genSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand}
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Markers, Persistence, PersistenceEventFormat, StoreKey}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
@@ -199,10 +199,87 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
         assert(cursors.map(_.stack).contains(startStack.increment))
     }
 
-    test("an offer whose settlement does not verify is refused and writes nothing") {
+    test("adopting into a warm store discards what was there") {
+        // The case the exchange exists for: a stale coil, too far behind for its hub to walk it
+        // forward. Its ledger cannot take an import while it holds anything, and its old journals
+        // would anchor recovery below the start point — on history the hub no longer has. So the
+        // old data goes, and the assertion is that it is actually gone rather than merged with.
         val outcome = withStore(p =>
             for {
                 ledger <- freshLedger
+                // A previous life: an own hard-ack and a block spine far below the start point.
+                stamp <- p.arrivalStamp
+                _ <- p.put(JournalKey.HardAck(nodeConfig.ownPeerId, HardAckNumber(0)))(
+                  JournalValue(
+                    stamp,
+                    HardAck(
+                      ackId = HardAckId(nodeConfig.ownPeerId, HardAckNumber(0)),
+                      stackNum = StackNumber(1),
+                      payload = HardAck.Round2Payload
+                          .Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
+                    )
+                  )
+                )
+                before <- Markers.derive(p, nodeConfig.ownPeerId)
+                o <- offer()
+                _ <- CoilJoin.adopt(o, p, ledger)
+                after <- Markers.derive(p, nodeConfig.ownPeerId)
+                mark <- p.get(StoreKey.StartPoint)
+            } yield (before, after, mark)
+        )
+        val (before, after, mark) = outcome
+        val _ = assert(before.hardAckedStack.contains(StackNumber(1)), "fixture was not warm")
+        val _ = assert(
+          after.hardAckedStack.isEmpty,
+          "the old own-ack survived the wipe and would anchor recovery below the start point"
+        )
+        assert(mark.map(_.startStack).contains(startStack))
+    }
+
+    test("a ledger that has already applied commands can still adopt") {
+        // `importState` adopts only into a ledger that has applied nothing, so without the wipe a
+        // stale coil — the case the exchange exists for — could never be seeded at all.
+        val outcome = withStore(p =>
+            for {
+                ledger <- freshLedger
+                _ <- ledger.applyDepositDecisions(
+                  L2CommandNumber(1L),
+                  L2LedgerCommand.ApplyDepositDecisions(
+                    blockNumber = BlockNumber(1),
+                    blockCreationEndTime = BigInt(1),
+                    absorbedDeposits = Nil,
+                    rejectedDeposits = Nil
+                  )
+                )
+                o <- offer()
+                result <- CoilJoin.adopt(o, p, ledger).attempt
+                mark <- p.get(StoreKey.StartPoint)
+            } yield (result, mark)
+        )
+        val (result, mark) = outcome
+        val _ = assert(result.isRight, s"a ledger with history could not be seeded: $result")
+        assert(mark.map(_.startStack).contains(startStack))
+    }
+
+    test("an offer that does not verify is refused before anything is destroyed") {
+        // The property the adoption order exists for. Adopting wipes, so an offer anyone could
+        // forge must be refused while the coil still has everything — otherwise a bad actor that
+        // cannot seed a coil can still empty it.
+        val outcome = withStore(p =>
+            for {
+                ledger <- freshLedger
+                stamp <- p.arrivalStamp
+                _ <- p.put(JournalKey.HardAck(nodeConfig.ownPeerId, HardAckNumber(0)))(
+                  JournalValue(
+                    stamp,
+                    HardAck(
+                      ackId = HardAckId(nodeConfig.ownPeerId, HardAckNumber(0)),
+                      stackNum = StackNumber(1),
+                      payload = HardAck.Round2Payload
+                          .Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
+                    )
+                  )
+                )
                 o <- offer()
                 // No head-peer witness at all, so the settlement does not satisfy the head's
                 // native script and `checkSettlementValid` refuses it.
@@ -210,12 +287,15 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
                     .adopt(o.copy(settlement = unsignedSettlement), p, ledger)
                     .attempt
                 mark <- p.get(StoreKey.StartPoint)
-                treasury <- p.get(StoreKey.Treasury)
-            } yield (result, mark, treasury)
+                after <- Markers.derive(p, nodeConfig.ownPeerId)
+            } yield (result, mark, after)
         )
-        val (result, mark, treasury) = outcome
-        assert(result.isLeft, "a settlement that does not verify must fail the boot")
-        assert(mark.isEmpty, "a refused offer must leave no start point behind")
-        assert(treasury.isEmpty, "nor a treasury")
+        val (result, mark, after) = outcome
+        val _ = assert(result.isLeft, "a settlement that does not verify must fail the boot")
+        val _ = assert(mark.isEmpty, "a refused offer must leave no start point behind")
+        assert(
+          after.hardAckedStack.contains(StackNumber(1)),
+          "a refused offer wiped the store it was refused by"
+        )
     }
 }

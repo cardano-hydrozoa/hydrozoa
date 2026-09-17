@@ -29,15 +29,21 @@ object CoilJoin {
 
     /** Check an offer and, if it holds up, seed the store from it.
       *
-      * **Nothing is trusted because it arrived.** The state is imported first so the ledger can
-      * report what it actually reached, and those digests — never the ones travelling with the
-      * bytes — are what [[JoinOfferVerifier]] checks against the head peers' signed certificate. A
-      * refusal leaves the store untouched and fails the boot: a coil that cannot verify where it is
-      * being put must not start there.
+      * **Nothing is trusted because it arrived.** The digests this checks are the ones the coil's
+      * own ledger reports after adopting, never the ones travelling with the bytes — a hash beside
+      * the thing it describes attests to nothing.
       *
-      * ⚠️ The import lands before the store write, because the check needs the imported ledger's
-      * digests. A crash between the two leaves a ledger holding state that no start point points
-      * at; the next boot finds no start point, so it rejoins from scratch and re-imports.
+      * **Adopting destroys what was there.** A peer being seeded holds nothing worth keeping: its
+      * ledger is too far behind for its hub to serve it forward, and its stale journals would
+      * anchor recovery below the start point on history the hub no longer has. So both stores are
+      * wiped rather than merged into.
+      *
+      * The order is what makes that safe. Everything checkable without the ledger — the settlement
+      * is a transaction this head could have produced, it belongs to this head, the signatures hold
+      * — is checked **before** anything is destroyed, so a forged offer costs the coil nothing. An
+      * offer that clears those and then fails on digests took N-of-N head signatures to build.
+      *
+      * A crash anywhere after the wipe leaves a cold store, which rejoins cleanly on the next boot.
       */
     def adopt(
         offer: Join.Offer,
@@ -45,9 +51,14 @@ object CoilJoin {
         ledger: L2Ledger[IO]
     )(using config: Config): IO[Unit] =
         for {
+            certificate <- JoinOfferVerifier.verifyCertificate(offer.settlement, offer.sec)
+            _ <- IO.fromEither(certificate)
+            _ <- ledger.wipe.value.flatMap(IO.fromEither)
+            _ <- persistence.backend.wipeData
             digests <- ledger.importState(offer.state).value.flatMap(IO.fromEither)
-            verdict <- JoinOfferVerifier.verify(offer.settlement, offer.sec, digests)
-            _ <- IO.fromEither(verdict)
+            _ <- IO.fromEither(
+              JoinOfferVerifier.verifyAdoptedState(offer.settlement, offer.sec, digests)
+            )
             map <- ledger.evacuationMapAt(offer.state.commandNumber).value.flatMap(IO.fromEither)
             stamp <- persistence.arrivalStamp
             lastBlockNum = offer.block.blockNum
@@ -91,6 +102,11 @@ object CoilJoin {
       *
       * `NoOffer` is an answer, not a timeout: at a real bring-up every coil is cold and every hub
       * says there is nothing to seed from, and all of them boot straight through this.
+      *
+      * **An offer is adopted whether the store is cold or warm**, and adopting discards whatever
+      * was there. A stale coil is the case the whole exchange is for — the empty store is its
+      * degenerate form — and a hub only offers when the coil is too far behind to be walked
+      * forward, so there is nothing left to preserve. See [[adopt]].
       */
     def settleStartPoint(
         transport: CoilTransport,

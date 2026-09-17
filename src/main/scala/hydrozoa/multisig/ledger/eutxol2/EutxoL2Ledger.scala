@@ -591,6 +591,9 @@ case class EutxoL2Ledger private (
     /** The three digests this ledger reports about a state: the evacuation map's, the L2 state's,
       * and this backend's fixed parameter digest.
       */
+    override def wipe: EitherT[IO, RestoreError, Unit] =
+        EitherT.right(store.wipe >> state.set(EutxoL2Ledger.State.genesis(config)))
+
     override def evacuationMapAt(
         commandNumber: L2CommandNumber
     ): EitherT[IO, RestoreError, EvacuationMap] =

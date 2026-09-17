@@ -480,12 +480,25 @@ the offer carries the narrowest set that still lets it check what it adopts:
   start point; neither is derivable from what the coil pulls.
 - `cursors` + `ownHardAck` — every lane's first index, to adopt exactly as sent.
 
-**Nothing is trusted because it arrived.** `CoilJoin.adopt` imports the state
-first so the ledger reports what it actually reached, and checks *those* digests
-— never the ones travelling with the bytes — against the certificate the head
-peers signed (`JoinOfferVerifier`). A refusal leaves the store untouched and
-fails the boot. The treasury/evacuation-map balance identity comes for free:
+**Nothing is trusted because it arrived.** `CoilJoin.adopt` checks the digests
+the coil's **own** ledger reports after adopting, never the ones travelling with
+the bytes, against the certificate the head peers signed (`JoinOfferVerifier`).
+The treasury/evacuation-map balance identity comes for free:
 `StackComposer.State.recover` checks it on whatever pair it boots from.
+
+**Adopting destroys what was there.** Both the L2 ledger and the consensus store
+are wiped first. A peer being seeded holds nothing worth keeping — it is too far
+behind for its hub to serve it forward — and keeping it is actively wrong: stale
+journals make the store read as warm and anchor recovery below the start point,
+on history the hub no longer has. `Cf.Meta` survives, because it binds the store
+to this peer and this head.
+
+The order is what makes that safe. Everything checkable without the ledger — the
+settlement is a transaction this head could have produced, it belongs to this
+head, the signatures hold — is checked **before** anything is destroyed, so an
+offer anyone could forge costs the coil nothing. An offer that clears those and
+then fails on digests took N-of-N head signatures to build. A crash after the
+wipe leaves a cold store, which rejoins cleanly on the next boot.
 
 **Adoption happens before the actors exist, and can only happen there.**
 `L2Ledger.importState` accepts a state only into a ledger that has applied

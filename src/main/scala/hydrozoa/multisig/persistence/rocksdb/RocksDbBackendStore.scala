@@ -32,6 +32,26 @@ final class RocksDbBackendStore private (
     readOptions: ReadOptions
 ) extends BackendStore[IO]:
 
+    def wipeData: IO[Unit] =
+        handles.keys.toList.filterNot(_ == Cf.Meta).traverse_ { cf =>
+            // Collect then delete: RocksDB forbids mutating a CF through an open iterator, and a
+            // `deleteRange` would need an upper bound above every possible key, which variable-
+            // length keys do not have.
+            IO.blocking {
+                val it = db.newIterator(handles(cf), readOptions)
+                try
+                    val wb = new RWriteBatch()
+                    try
+                        it.seekToFirst()
+                        while it.isValid do
+                            wb.delete(handles(cf), it.key())
+                            it.next()
+                        db.write(writeOptions, wb)
+                    finally wb.close()
+                finally it.close()
+            }
+        }
+
     def get(cf: Cf, key: Array[Byte]): IO[Option[Array[Byte]]] =
         IO.blocking(Option(db.get(handles(cf), readOptions, key)))
 

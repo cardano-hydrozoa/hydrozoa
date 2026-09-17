@@ -23,6 +23,15 @@ import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
   */
 trait L2Store[F[_]]:
     /** Append `command` to the log at `commandNumber`. Called once per committed real command. */
+    /** Drop every log entry, snapshot and tip, leaving the store as a fresh one.
+      *
+      * For a coil peer being seeded: its ledger state is unusable — that is why it is being seeded
+      * — and [[L2Ledger.importState]] adopts only into a ledger that has applied nothing. Keeping
+      * the old record would also leave log entries above the adopted tip, which nothing reads today
+      * and nothing should have to reason about tomorrow.
+      */
+    def wipe: F[Unit]
+
     def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand): F[Unit]
 
     /** Write a full-state snapshot at `commandNumber`. Called every `SnapshotInterval` commits. */

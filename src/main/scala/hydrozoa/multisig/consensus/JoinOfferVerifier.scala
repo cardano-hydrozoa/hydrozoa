@@ -157,13 +157,44 @@ object JoinOfferVerifier:
         adopted: L2Ledger.Digests
     )(using config: Config): IO[Either[JoinRefusal, Unit]] =
         (for {
+            _ <- EitherT(verifyCertificate(settlement, sec))
+            _ <- EitherT.fromEither[IO](verifyAdoptedState(settlement, sec, adopted))
+        } yield ()).value
+
+    /** Everything checkable **before** the offered state is anywhere near this node's ledger: that
+      * the settlement is a transaction this head could have produced, that it belongs to this head,
+      * and that the signatures on both artifacts hold.
+      *
+      * Split out because adopting a start point **destroys what the coil already had** — its ledger
+      * and its store are wiped, since a peer being seeded holds nothing worth keeping and stale
+      * journals would anchor recovery below the start point. So everything that can be refused
+      * without touching the ledger is refused first, and a forged offer costs the coil nothing. An
+      * offer that clears this and then fails on digests took N-of-N head signatures to construct,
+      * which is the head itself lying.
+      */
+    def verifyCertificate(
+        settlement: SettlementTx,
+        sec: Option[StandaloneEvacuationCommitment.MultiSigned]
+    )(using config: Config): IO[Either[JoinRefusal, Unit]] =
+        (for {
             _ <- EitherT.fromEither[IO](checkSettlementValid(settlement))
             _ <- EitherT.fromEither[IO](checkBoundToThisHead(settlement))
-            _ <- EitherT.fromEither[IO](checkLedgerParams(adopted))
             _ <- EitherT.fromEither[IO](checkCertificateSelfConsistent(settlement, sec))
-            _ <- EitherT.fromEither[IO](checkStateAndMap(settlement, sec, adopted))
             _ <- EitherT(verifySecSignatures(sec))
         } yield ()).value
+
+    /** The half that needs the import to have happened: what this coil's **own** ledger reports,
+      * against what the certificate commits to.
+      */
+    def verifyAdoptedState(
+        settlement: SettlementTx,
+        sec: Option[StandaloneEvacuationCommitment.MultiSigned],
+        adopted: L2Ledger.Digests
+    )(using config: Config): Either[JoinRefusal, Unit] =
+        for {
+            _ <- checkLedgerParams(adopted)
+            _ <- checkStateAndMap(settlement, sec, adopted)
+        } yield ()
 
     /** Public alongside [[verifySecSignatures]], and for the same reason: "would the chain have
       * accepted this transaction, ignoring that its inputs are long spent" is a question worth
