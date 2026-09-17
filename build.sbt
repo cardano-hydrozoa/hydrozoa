@@ -417,16 +417,20 @@ lazy val examples: Project = (project in file("examples"))
 
 // PoC: consume the canton-reference-registry library's fast engine reference tier (the in-process
 // Daml interpreter, no Docker) and run a treasury-style deposit flow where alice + bob deposit via
-// the AllocationInstruction two-step (request -> provider accept). A source dependency via
-// ProjectRef on a sibling checkout of that repo (../daml-scratch/scala) on its current branch; the
-// engine module bundles the vendored DARs, but a source build still needs them present there (its
-// daml devShell). sbt 2 + Scala 3.3.7 on both sides.
+// the AllocationInstruction two-step (request -> provider accept). Pulled from JitPack (which builds
+// cardano-hydrozoa/canton-reference-registry from its git tag and bundles the vendored DARs inside
+// the jar), so no sibling checkout is needed. The multi-module JitPack coordinate is
+// `com.github.<user>.<repo> %% <moduleArtifactId>`; `registry-engine` pulls `registry-api`/`registry-impl`
+// transitively. sbt 2 + Scala 3.3.7 on both sides.
 lazy val cantonReferencePoc: Project = (project in file("canton-reference-poc"))
-    .dependsOn(ProjectRef(file("../daml-scratch/scala"), "engine"))
     .settings(
       name := "hydrozoa-canton-reference-poc",
       publish / skip := true,
-      libraryDependencies += "org.scalatest" %% "scalatest" % "3.2.19" % Test,
+      resolvers += "jitpack" at "https://jitpack.io",
+      libraryDependencies ++= Seq(
+        "com.github.cardano-hydrozoa.canton-reference-registry" %% "registry-engine" % "0.1.3",
+        "org.scalatest" %% "scalatest" % "3.2.19" % Test,
+      ),
     )
 
 // Latest Scala 3 LTS version
