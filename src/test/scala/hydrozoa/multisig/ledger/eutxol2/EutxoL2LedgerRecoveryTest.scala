@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.store.{InMemoryL2Store, L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
+import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse, RestoreError}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.Assertion
@@ -408,6 +408,75 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 _ <- store.appendLog(L2CommandNumber(1L), noop(1))
                 restored <- restoreFresh(store, L2CommandNumber(1L))
             yield assert(restored.commandNumber == L2CommandNumber(1L))
+        }
+    }
+
+    // --- stateAt (the read-only sibling; docs/spec/l2-state-certificate.md) ------
+
+    test("stateAt at the tip reports the live state and leaves the ledger where it was") {
+        run {
+            val total = L2Store.SnapshotInterval.toInt + 3
+            for
+                run <- runCommits(total)
+                tip = L2CommandNumber(total.toLong)
+                digests <- run.ledger.stateAt(tip).value.flatMap(IO.fromEither)
+                after <- run.ledger.peekState
+            yield assert(
+              digests.l2StateHash == L2Snapshot.fromState(run.finalState).stateHash
+                  && after.commandNumber == tip
+                  && after == run.finalState
+            )
+        }
+    }
+
+    test("stateAt below the tip reports that past state without moving the ledger") {
+        run {
+            val total = L2Store.SnapshotInterval.toInt + 5
+            val target = L2Store.SnapshotInterval.toInt + 1
+            for
+                run <- runCommits(total)
+                past <- replayLiveTo(target)
+                digests <- run.ledger
+                    .stateAt(L2CommandNumber(target.toLong))
+                    .value
+                    .flatMap(IO.fromEither)
+                after <- run.ledger.peekState
+            yield assert(
+              digests.l2StateHash == L2Snapshot.fromState(past).stateHash
+                  && after.commandNumber == L2CommandNumber(total.toLong)
+                  && after == run.finalState
+            )
+        }
+    }
+
+    test("stateAt agrees with restoreTo at the same commandNumber") {
+        run {
+            val total = L2Store.SnapshotInterval.toInt + 4
+            val target = L2Store.SnapshotInterval.toInt + 2
+            for
+                run <- runCommits(total)
+                queried <- run.ledger
+                    .stateAt(L2CommandNumber(target.toLong))
+                    .value
+                    .flatMap(IO.fromEither)
+                // A separate ledger over the same store, so restoring does not disturb the first.
+                fresh <- EutxoL2Ledger(config, run.store)
+                restored <- fresh
+                    .restoreTo(L2CommandNumber(target.toLong))
+                    .value
+                    .flatMap(IO.fromEither)
+            yield assert(queried == restored)
+        }
+    }
+
+    test("stateAt beyond the tip fails rather than reporting a state that does not exist") {
+        run {
+            for
+                run <- runCommits(3)
+                outcome <- run.ledger.stateAt(L2CommandNumber(9L)).value
+            yield assert(
+              outcome.left.exists(_.isInstanceOf[RestoreError.CommandNumberTooHigh])
+            )
         }
     }
 

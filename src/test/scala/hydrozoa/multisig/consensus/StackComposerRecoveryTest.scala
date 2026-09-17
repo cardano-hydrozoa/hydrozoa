@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import cats.data.NonEmptyList
+import cats.data.{EitherT, NonEmptyList}
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO}
 import cats.syntax.contravariant.*
@@ -17,6 +17,7 @@ import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.l2.{L2StateReader, RestoreError}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
@@ -26,6 +27,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.Value
 import scalus.uplc.builtin.ByteString
+import test.Generators.Hydrozoa.testL2StateHash
 
 /** Records the stack-0 [[SlowConsensusActor.StackHandoff]] a bootstrapping [[StackComposer]] emits,
   * completing `gotHandoff` so the test can await it (cold) or assert its absence (recovered).
@@ -55,6 +57,13 @@ class StackComposerRecoveryTest extends AnyFunSuite:
             .map(_.nodeConfigs(HeadPeerNumber.zero))
             .pureApply(Gen.Parameters.default, org.scalacheck.rng.Seed(0L))
     private val headConfig: HeadConfig = config.headConfig
+
+    /** The composer.s read-only ledger slice. These tests exercise the recovery seam only — no
+      * stack is ever composed — so nothing asks for a digest; the stub fails loudly if that
+      * changes.
+      */
+    private val l2StateReader: L2StateReader[IO] = _ =>
+        EitherT.leftT(RestoreError.OtherError("the recovery test composes no stack"))
     private given HeadConfig.Bootstrap.Section = config
     private val stamp: ArrivalStamp = ArrivalStamp(generation = 0, monotonicNanos = 1L)
 
@@ -189,6 +198,7 @@ class StackComposerRecoveryTest extends AnyFunSuite:
                             ),
                             ContraTracer.nullTracer[IO, StackComposerEvent],
                             persistence,
+                            l2StateReader,
                             PeerMetrics.create(0L, Vector.empty),
                             markers
                           )
@@ -227,6 +237,7 @@ class StackComposerRecoveryTest extends AnyFunSuite:
               blockNum = BlockNumber(lastBlock),
               blockVersion = BlockVersion.Full(0, 0),
               kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              l2StateHash = testL2StateHash,
               header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
                 Array.fill[Byte](32)(7)
               )

@@ -219,6 +219,9 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 pendingConnections,
                 tracers.stackComposer,
                 persistence,
+                // Narrowed to the read-only slice: the composer certifies L2 state, it never
+                // drives the ledger. JointLedger stays the sole driver of the mutation path.
+                l2Ledger,
                 metrics,
                 markers
               )

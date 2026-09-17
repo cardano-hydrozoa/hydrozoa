@@ -30,6 +30,7 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import io.circe.syntax.*
 import io.circe.{Encoder, *}
 import scala.collection.immutable.SortedSet
@@ -45,6 +46,7 @@ final case class HeadConfig private (
     override val headPeers: HeadPeers,
     override val coilPeers: CoilPeers,
     _initialEvacuationMap: EvacuationMap,
+    _initialL2StateHash: L2StateHash,
     _initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     override val scriptReferenceUtxos: ScriptReferenceUtxos,
     override val initialBlockSection: InitialBlock,
@@ -60,6 +62,7 @@ final case class HeadConfig private (
         // The head id is presented explicitly; recover it from the parsed init tx's token names.
         val initializationParameters: InitializationParameters = InitializationParameters(
           initialEvacuationMap = _initialEvacuationMap,
+          initialL2StateHash = _initialL2StateHash,
           initialEquityContributions = _initialEquityContributions,
           headId = InitializationParameters.HeadId(initTx.headTokenNames.treasuryTokenName)
         )
@@ -118,6 +121,7 @@ object HeadConfig {
               "headPeers" -> hc.headPeers.asJson,
               "coilPeers" -> hc.coilPeers.asJson,
               "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
+              "initialL2StateHash" -> hc.initialL2StateHash.asJson,
               "initialEquityContributions" -> hc._initialEquityContributions.asJson,
               "headId" -> hc.headId.asJson,
               "scriptReferenceUtxos" -> hc.scriptReferenceUtxos.unresolved.asJson,
@@ -222,6 +226,7 @@ object HeadConfig {
             headPeers = headConfigBootstrap.headPeers,
             coilPeers = headConfigBootstrap.coilPeers,
             _initialEvacuationMap = headConfigBootstrap.initialEvacuationMap,
+            _initialL2StateHash = headConfigBootstrap.initialL2StateHash,
             _initialEquityContributions = headConfigBootstrap.initialEquityContributions,
             scriptReferenceUtxos = headConfigBootstrap.scriptReferenceUtxos,
             initialBlock
@@ -402,6 +407,7 @@ object HeadConfig {
                   "headPeers" -> hc.headPeers.asJson,
                   "coilPeers" -> hc.coilPeers.asJson,
                   "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
+                  "initialL2StateHash" -> hc.initialL2StateHash.asJson,
                   "initialEquityContributions" -> hc.initialEquityContributions.toSortedMap.asJson,
                   "headId" -> hc.headId.asJson,
                   "scriptReferenceUtxos" -> hc.scriptReferenceUtxos.scriptReferenceUtxosUnresolved.asJson

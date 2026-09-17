@@ -6,10 +6,10 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardA
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.{BatchNumber, LiaisonProtocol}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.ledger.stack.{StackNumber, StandaloneEvacuationCommitment}
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Round-trip tests for the wire codecs used by [[PeerTransport]] — the head ↔ head mesh batch
@@ -110,7 +110,7 @@ class CodecsTest extends AnyFunSuite {
         val ack = SoftAck(
           ackId = SoftAckId(HeadPeerNumber(2), SoftAckNumber(5)),
           blockNum = BlockNumber(11),
-          headerSignature = BlockHeader.Minor.HeaderSignature(
+          signature = SoftAck.Signature(
             IArray[Byte](1.toByte, 2.toByte, 3.toByte, 4.toByte, 5.toByte)
           ),
           finalizationRequested = true,
@@ -125,8 +125,8 @@ class CodecsTest extends AnyFunSuite {
                         val _ = assert(decodedAck.ackId == ack.ackId)
                         val _ = assert(decodedAck.blockNum == ack.blockNum)
                         val _ = assert(
-                          (decodedAck.headerSignature: IArray[Byte]).toList ==
-                              (ack.headerSignature: IArray[Byte]).toList
+                          (decodedAck.signature: IArray[Byte]).toList ==
+                              (ack.signature: IArray[Byte]).toList
                         )
                         assert(decodedAck.finalizationRequested == ack.finalizationRequested)
                     case other => fail(s"Expected Some(SoftAck), got: $other")
@@ -181,7 +181,7 @@ class CodecsTest extends AnyFunSuite {
                 rollouts = List(sig(6, 7, 8)),
                 refunds = List(sig(9), sig(10, 11)),
                 sec = Some(
-                  BlockHeader.Minor.HeaderSignature(IArray[Byte](12.toByte, 13.toByte))
+                  StandaloneEvacuationCommitment.Signature(IArray[Byte](12.toByte, 13.toByte))
                 )
               ),
               completes = NonEmptyList.of(
@@ -200,7 +200,7 @@ class CodecsTest extends AnyFunSuite {
           hardAckFrame(
             HardAck.Round1Payload.Regular.MinorThenPartial(
               minor = HardAck.Round1Payload.PartitionSigs.Minor(
-                sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](14.toByte)),
+                sec = StandaloneEvacuationCommitment.Signature(IArray[Byte](14.toByte)),
                 refunds = List(sig(15, 16))
               ),
               partial = HardAck.Round1Payload.PartitionSigs.MajorPartial(
@@ -222,14 +222,14 @@ class CodecsTest extends AnyFunSuite {
           hardAckFrame(
             HardAck.Round1Payload.Regular.MinorThenPartialThenCompletes(
               minor = HardAck.Round1Payload.PartitionSigs.Minor(
-                sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](60.toByte)),
+                sec = StandaloneEvacuationCommitment.Signature(IArray[Byte](60.toByte)),
                 refunds = Nil
               ),
               partial = HardAck.Round1Payload.PartitionSigs.MajorPartial(
                 fallback = sig(61),
                 rollouts = Nil,
                 refunds = Nil,
-                sec = Some(BlockHeader.Minor.HeaderSignature(IArray[Byte](62.toByte)))
+                sec = Some(StandaloneEvacuationCommitment.Signature(IArray[Byte](62.toByte)))
               ),
               completes = NonEmptyList.of(
                 HardAck.Round1Payload.PartitionSigs.FinalComplete(
@@ -254,7 +254,7 @@ class CodecsTest extends AnyFunSuite {
         assertJsonStable(
           hardAckFrame(
             HardAck.SolePayload(
-              sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](42.toByte)),
+              sec = StandaloneEvacuationCommitment.Signature(IArray[Byte](42.toByte)),
               refunds = List(sig(40, 41))
             )
           )

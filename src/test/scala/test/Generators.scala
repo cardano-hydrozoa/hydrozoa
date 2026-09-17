@@ -17,6 +17,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationK
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genShelleyAddress
 import monocle.*
@@ -61,6 +62,13 @@ object Generators {
       */
     object Hydrozoa {
 
+        /** A stand-in [[hydrozoa.multisig.ledger.l2.L2StateHash]] for fixtures whose subject is not
+          * the state certificate — a settlement datum built to exercise balancing, a SEC built to
+          * exercise persistence. Where the digest itself is under test, compute a real one.
+          */
+        val testL2StateHash: L2StateHash =
+            L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte)))
+
         // ===================================
         // Generators
         // ===================================
@@ -92,10 +100,12 @@ object Generators {
                 mv <- Gen.posNum[BigInt]
                 // Verify that this is the correct length!
                 kzg <- genByteStringOfN(32)
+                l2StateHash <- genByteStringOfN(32)
 
             } yield MultisigTreasuryUtxo.Datum(
               commit = kzg,
-              versionMajor = mv
+              versionMajor = mv,
+              l2StateHash = l2StateHash
             )
         }
 

@@ -16,12 +16,13 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, Persistence, PersistenceEventFormat, StoreKey, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{genCollateralUtxo, testL2StateHash}
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryUtxo}
 import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEvent, RuleBasedActorEventFormat}
 import org.scalacheck.{Arbitrary, Gen, Properties}
@@ -156,7 +157,8 @@ object DisputeActorTestHelpers {
               headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
               versionMajor = versionMajor,
               versionMinor = versionMinor,
-              commitment = initialCommitment
+              commitment = initialCommitment,
+              l2StateHash = testL2StateHash
             )
 
             // The regime utxo (HRWT beacon + head-identity datum) that the dispute-flow txs
@@ -268,7 +270,7 @@ object DisputeActorTestHelpers {
       * find the SEC there, returning
       * `Vote(sec = blockHeader, signatures = ..., coilSignatures = ...)`.
       *
-      * `headerMultiSigned` is the sparse, peer-position-aligned signature list (see
+      * `signatures` is the sparse, peer-position-aligned signature list (see
       * [[MultiNodeConfig.multisignHeaderSparse]]) — the signing coils are a non-prefix subset, so
       * this exercises the alignment the on-chain coil-signature check requires; `loadAction` splits
       * it at `nHeadPeers` into the head `signatures` and the sparse coil `coilSignatures`.
@@ -287,12 +289,13 @@ object DisputeActorTestHelpers {
               blockNum = BlockNumber(1),
               blockVersion = BlockVersion.Full(versionMajor.toInt, versionMinor.toInt),
               kzgCommitment = kzgCommitment,
+              l2StateHash = L2StateHash(testL2StateHash),
               header = serialized,
             )
         val multiSigned: StandaloneEvacuationCommitment.MultiSigned =
             StandaloneEvacuationCommitment.MultiSigned(
               commitment = offchainSec,
-              headerMultiSigned = env.multisignHeaderSparse(blockHeader),
+              signatures = env.multisignHeaderSparse(blockHeader),
             )
         val partition: PartitionEffects[StandaloneEvacuationCommitment.MultiSigned] =
             PartitionEffects.Minor(sec = multiSigned, refunds = List.empty)

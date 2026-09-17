@@ -10,6 +10,7 @@ import hydrozoa.multisig.ledger.l1.tx
 import hydrozoa.multisig.ledger.l1.tx.*
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import scalus.cardano.txbuilder.SomeBuildError.{BalancingError, SomeRedeemerIndexingError, SomeStepError, ValidationError}
 import scalus.cardano.txbuilder.{SomeBuildError, TxBalancingError}
 
@@ -169,6 +170,10 @@ private object SettlementTxSeqOps {
 
     final case class Build(config: Config)(
         override val kzgCommitment: KzgCommitment,
+        /** The L2 state digest the settlement certifies — see
+          * [[hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo.Datum.l2StateHash]].
+          */
+        l2StateHash: L2StateHash,
         override val majorVersionProduced: BlockVersion.Major,
         override val treasuryToSpend: MultisigTreasuryUtxo,
         override val depositsToSpend: List[DepositUtxo],
@@ -197,6 +202,7 @@ private object SettlementTxSeqOps {
                             SettlementTx.Build
                                 .NoPayouts(config)(
                                   kzgCommitment,
+                                  l2StateHash,
                                   majorVersionProduced,
                                   treasuryToSpend,
                                   depositsToSpend,
@@ -235,6 +241,7 @@ private object SettlementTxSeqOps {
                             SettlementTx.Build
                                 .WithPayouts(config)(
                                   kzgCommitment,
+                                  l2StateHash,
                                   majorVersionProduced,
                                   treasuryToSpend,
                                   depositsToSpend,

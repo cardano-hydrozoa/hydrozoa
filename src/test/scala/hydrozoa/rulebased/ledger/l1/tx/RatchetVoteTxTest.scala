@@ -130,7 +130,8 @@ def genStaleRatchetBuilder(using
               headId = config.headTokenNames.treasuryTokenName.bytes,
               versionMajor = versionMajor,
               versionMinor = secMinor,
-              commitment = secCommitment
+              commitment = secCommitment,
+              l2StateHash = testL2StateHash
             )
         voteDatum = VoteDatum(
           key = 0,

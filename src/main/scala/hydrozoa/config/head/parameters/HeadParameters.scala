@@ -11,8 +11,8 @@ import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
 import scalus.cardano.ledger.Hash32
 
-/** The parameters that peers agree upon to run the protocol. These parameters get hashed into the
-  * treasury datum.
+/** The parameters that peers agree upon to run the protocol. They feed `headParamsHash`, which the
+  * multisig regime datum carries.
   */
 final case class HeadParameters(
     override val txTiming: TxTiming,

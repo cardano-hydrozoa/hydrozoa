@@ -29,6 +29,12 @@ import test.*
 /** Common test generators for rule-based transaction tests */
 object CommonGenerators {
 
+    /** A stand-in [[hydrozoa.multisig.ledger.l2.L2StateHash]] for the SEC field of the same name.
+      * The dispute-resolution path does not read it — it only signs over the whole record — so
+      * these tests need a fixed 32 bytes, not a meaningful digest.
+      */
+    val testL2StateHash: ByteString = ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))
+
     // TODO: remove, looks redundant
     def genHeadParams: Gen[
       (
@@ -128,11 +134,13 @@ object CommonGenerators {
         for {
             versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
             commitment <- genByteStringOfN(48) // KZG commitment (G1 compressed point)
+            l2StateHash <- genByteStringOfN(32)
         } yield StandaloneEvacuationCommitmentOnchain(
           headId = config.headTokenNames.treasuryTokenName.bytes,
           versionMajor = versionMajor,
           versionMinor = versionMinor,
-          commitment = commitment
+          commitment = commitment,
+          l2StateHash = l2StateHash
         )
 
     /** Generator for Shelley address */

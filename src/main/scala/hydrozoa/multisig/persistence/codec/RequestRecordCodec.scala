@@ -3,8 +3,9 @@ package hydrozoa.multisig.persistence.codec
 import com.google.protobuf.{ByteString as ProtoBytes, InvalidProtocolBufferException}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWithId}
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import hydrozoa.request.request_record as proto
+import scalus.cardano.ledger.{Blake2b_256, Hash}
 import scalus.uplc.builtin.ByteString
 
 /** Byte codec for the Request lane's durable record — the protobuf encoding declared in
@@ -41,7 +42,8 @@ object RequestRecordCodec:
             .RequestRecord(
               headPeerNumber = id.peerNum,
               requestNumber = id.requestNum,
-              body = body
+              body = body,
+              requestHash = protoBytes(ByteString.fromArray(request.request.requestHash.bytes))
             )
             .toByteArray
 
@@ -58,17 +60,22 @@ object RequestRecordCodec:
                       s"Request record is malformed: ${e.getMessage}",
                       e
                     )
+        // Lazy so a record with no body is reported as such, rather than as whatever its (also
+        // absent) digest looks like.
+        lazy val hash = requestHash(message.requestHash)
         val request = message.body match
             case proto.RequestRecord.Body.Deposit(deposit) =>
                 UserRequest.DepositRequest(
                   UserRequestBody.DepositRequestBody(
                     byteString(deposit.l1Payload),
                     byteString(deposit.l2Payload)
-                  )
+                  ),
+                  hash
                 )
             case proto.RequestRecord.Body.Transaction(transaction) =>
                 UserRequest.TransactionRequest(
-                  UserRequestBody.TransactionRequestBody(byteString(transaction.l2Payload))
+                  UserRequestBody.TransactionRequestBody(byteString(transaction.l2Payload)),
+                  hash
                 )
             case proto.RequestRecord.Body.Empty =>
                 throw new IllegalArgumentException("Request record is missing its body")
@@ -83,3 +90,14 @@ object RequestRecordCodec:
     private def protoBytes(value: ByteString): ProtoBytes = ProtoBytes.copyFrom(value.bytes)
 
     private def byteString(value: ProtoBytes): ByteString = ByteString.fromArray(value.toByteArray)
+
+    /** A record's 32-byte content digest. A wrong width is corruption, not a value to carry: it
+      * would compare unequal against every digest this node derives and surface later as a
+      * consensus panic instead of here, where the bad record is still in hand.
+      */
+    private def requestHash(value: ProtoBytes): RequestHash =
+        if value.size != 32 then
+            throw new IllegalArgumentException(
+              s"Request record's requestHash must be 32 bytes, got ${value.size}"
+            )
+        else RequestHash.fromHash(Hash[Blake2b_256, Any](byteString(value)))

@@ -23,12 +23,14 @@ paths:
                 summary: Submit an L2 transaction
                 value:
                   l2Payload: 84a400d9010281825820…
+                  requestHash: 58828159…
                   type: transaction
               deposit:
                 summary: Register an L1 deposit
                 value:
                   l1Payload: 84a400d9010281825820…
                   l2Payload: a1024568656164…
+                  requestHash: ac596c7f…
                   type: deposit
         required: true
       responses:
@@ -396,7 +398,8 @@ paths:
     get:
       tags:
       - Blocks
-      description: The block's settlement effect in full, or 404 if it has none.
+      description: The block's settlement effect in full, with the L2 state digest
+        its treasury datum certifies, or 404 if it has none.
       operationId: getHeadBlockEffect_settlement
       parameters:
       - name: block-number
@@ -411,7 +414,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TxEffect'
+                $ref: '#/components/schemas/SettlementEffect'
         default:
           description: ''
           content:
@@ -810,11 +813,14 @@ components:
       type: object
       required:
       - requestId
+      - requestHash
       - validity
       properties:
         requestId:
           type: integer
           format: int64
+        requestHash:
+          type: string
         validity:
           type: string
           enum:
@@ -1539,12 +1545,18 @@ components:
       required:
       - blockNumber
       - secOnchainSerialized
+      - kzgCommitment
+      - l2StateHash
       - type
       properties:
         blockNumber:
           type: integer
           format: int32
         secOnchainSerialized:
+          type: string
+        kzgCommitment:
+          type: string
+        l2StateHash:
           type: string
         headSignatures:
           type: array
@@ -1564,6 +1576,8 @@ components:
       - l1TxId
       - blockNumber
       - secOnchainSerialized
+      - kzgCommitment
+      - l2StateHash
       properties:
         l1TxId:
           type: string
@@ -1571,6 +1585,10 @@ components:
           type: integer
           format: int32
         secOnchainSerialized:
+          type: string
+        kzgCommitment:
+          type: string
+        l2StateHash:
           type: string
         headSignatures:
           type: array
@@ -1586,6 +1604,7 @@ components:
       required:
       - blockNumber
       - txCbor
+      - l2StateHash
       - type
       properties:
         blockNumber:
@@ -1593,9 +1612,29 @@ components:
           format: int32
         txCbor:
           type: string
+        l2StateHash:
+          type: string
         type:
           type: string
           const: settlement
+    SettlementEffect:
+      title: SettlementEffect
+      type: object
+      required:
+      - l1TxId
+      - blockNumber
+      - txCbor
+      - l2StateHash
+      properties:
+        l1TxId:
+          type: string
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
+        l2StateHash:
+          type: string
     StackStats:
       title: StackStats
       type: object
@@ -1631,11 +1670,14 @@ components:
       required:
       - l1Payload
       - l2Payload
+      - requestHash
       - type
       properties:
         l1Payload:
           type: string
         l2Payload:
+          type: string
+        requestHash:
           type: string
         type:
           type: string
@@ -1655,9 +1697,12 @@ components:
       type: object
       required:
       - l2Payload
+      - requestHash
       - type
       properties:
         l2Payload:
+          type: string
+        requestHash:
           type: string
         type:
           type: string

@@ -13,7 +13,6 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
@@ -65,10 +64,10 @@ case class MultiNodeConfig private (
 
     def multisignHeader(
         blockHeader: StandaloneEvacuationCommitment.Onchain
-    ): NonEmptyList[BlockHeader.Minor.HeaderSignature] =
+    ): NonEmptyList[StandaloneEvacuationCommitment.Signature] =
         val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
         NonEmptyList.fromListUnsafe(
-          nodePrivateConfigs.map(_._2.ownWallet.mkHeaderSignature(serialized)).toList
+          nodePrivateConfigs.map(_._2.ownWallet.mkSecSignature(serialized)).toList
         )
 
     /** Signs `blockHeader` with the first `coilQuorum` coil wallets and returns `None` for the
@@ -76,11 +75,11 @@ case class MultiNodeConfig private (
       */
     def multisignHeaderCoil(
         blockHeader: StandaloneEvacuationCommitment.Onchain
-    ): List[Option[BlockHeader.Minor.HeaderSignature]] =
+    ): List[Option[StandaloneEvacuationCommitment.Signature]] =
         val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
         val quorum = headConfig.coilQuorum
         coilWallets.zipWithIndex.map { (w, i) =>
-            if i < quorum then Some(w.mkHeaderSignature(serialized)) else None
+            if i < quorum then Some(w.mkSecSignature(serialized)) else None
         }
 
     /** The sparse, peer-position-aligned header-signature list persisted for a hard-confirmed SEC:
@@ -95,13 +94,13 @@ case class MultiNodeConfig private (
       */
     def multisignHeaderSparse(
         blockHeader: StandaloneEvacuationCommitment.Onchain
-    ): List[Option[BlockHeader.Minor.HeaderSignature]] =
+    ): List[Option[StandaloneEvacuationCommitment.Signature]] =
         val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
         val headSigs =
-            nodePrivateConfigs.map(_._2.ownWallet.mkHeaderSignature(serialized)).toList.map(Some(_))
+            nodePrivateConfigs.map(_._2.ownWallet.mkSecSignature(serialized)).toList.map(Some(_))
         val firstSigner = coilWallets.size - headConfig.coilQuorum
         val coilSlots = coilWallets.zipWithIndex.map { (w, i) =>
-            if i >= firstSigner then Some(w.mkHeaderSignature(serialized)) else None
+            if i >= firstSigner then Some(w.mkSecSignature(serialized)) else None
         }
         headSigs ++ coilSlots
 

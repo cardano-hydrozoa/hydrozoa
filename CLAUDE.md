@@ -105,7 +105,7 @@ Working design and reference docs (`docs/spec/`):
 - [`init-tx-parsing.md`](docs/spec/init-tx-parsing.md) — the head parses its init tx from config
   instead of rebuilding it; the builder lives in the `hydrozoa.bootstrap` submodule.
 - [`head-params-hash.md`](docs/spec/head-params-hash.md) — one digest over the whole head config,
-  pinned in the multisig treasury datum: the preimage layout, exclusions, and the five checks.
+  pinned in the multisig regime datum: the preimage layout, exclusions, and the checks.
 
 **API**
 - [`l2-query-endpoints.md`](docs/spec/l2-query-endpoints.md) — the user-facing server's read-only L2

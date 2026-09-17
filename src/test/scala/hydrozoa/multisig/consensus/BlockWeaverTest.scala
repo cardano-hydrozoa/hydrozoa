@@ -21,8 +21,8 @@ import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.metrics.PeerMetrics
@@ -173,7 +173,7 @@ object BlockWeaverTestHelpers {
         })
             .map(brief =>
                 Block.SoftConfirmed
-                    .Minor(brief, headerMultiSigned = List.empty, finalizationRequested = false)
+                    .Minor(brief, softAckSignatures = List.empty, finalizationRequested = false)
             )
 
     def mkBlockWeaverActor(peerNumber: HeadPeerNumber): BWTest[BlockWeaver.Handle] =
@@ -250,7 +250,7 @@ object BlockWeaverTestHelpers {
     def mkMinorBriefWith(
         blockNum: BlockNumber,
         config: HeadConfig,
-        requests: List[(RequestId, ValidityFlag)]
+        requests: List[(RequestId, RequestHash, ValidityFlag)]
     ): BWTest[BlockBrief.Minor] =
         lift(for {
             now <- realTimeQuantizedInstant(config.slotConfig)
@@ -487,7 +487,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- lift(
             weaver ! Block.SoftConfirmed.Minor(
               brief,
-              headerMultiSigned = List.empty,
+              softAckSignatures = List.empty,
               finalizationRequested = false
             )
           )
@@ -579,7 +579,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- lift(
             (weaver ! Block.SoftConfirmed.Minor(
               brief1,
-              headerMultiSigned = List.empty,
+              softAckSignatures = List.empty,
               finalizationRequested = false
             )) >> env.system.waitForIdle()
           )
@@ -588,7 +588,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           brief3 <- mkMinorBriefWith(
             BlockNumber(3),
             config.headConfig,
-            overflowExpected.map(r => (r.requestId, ValidityFlag.Valid))
+            overflowExpected.map(r => (r.requestId, r.request.body.mkHash, ValidityFlag.Valid))
           )
           _ <- lift((weaver ! brief3) >> env.system.waitForIdle())
           _ <- settle(env.jointLedgerMock.events.get == ordered)
@@ -717,7 +717,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               ()
           })
           _ <- lift(
-            (weaver ! Block.SoftConfirmed.Final(finalBrief, headerMultiSigned = List.empty)) >>
+            (weaver ! Block.SoftConfirmed.Final(finalBrief, softAckSignatures = List.empty)) >>
                 env.system.waitForIdle()
           )
           // Give the event-stream drainer a beat to observe a panic before reading.

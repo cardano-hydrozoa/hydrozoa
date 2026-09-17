@@ -29,8 +29,18 @@ message RequestRecord {
     TransactionBody transaction = 4;
   }
 
-  // Field 5 is unused. It carried a content hash of the body, which is being taken up
-  // separately alongside pinning request hashes in block bodies; it will come back here.
+  // The request's content digest: 32 bytes, blake2b-256 over a domain-tagged, variant-tagged
+  // preimage of the body above, as the submitter computed it. Only the assigning peer verifies
+  // it against the body, before writing its own record; every other peer stores it as it arrived
+  // and recomputes it from the body before relying on it, refusing to build a block on a request
+  // whose digest does not describe its body. So in a peer's store only the records under that
+  // peer's own author number carry a digest it verified before writing; for any other author's, a
+  // reader that needs the digest to match the body recomputes it.
+  //
+  // It is stored rather than derived because it is what a block body names a request by: the
+  // block commits to which payload sits at each position without carrying any payload. The
+  // construction is specified in `docs/user-guide/REQUEST-HASH.md`.
+  bytes request_hash = 5;
 }
 
 // A deposit: the CBOR-encoded L1 deposit transaction, and the opaque L2 payload it pins.

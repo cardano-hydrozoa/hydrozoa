@@ -12,7 +12,7 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHash, BlockNumber}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{Persistence, StoreKey, Timestamped, WriteBatch}
@@ -25,8 +25,8 @@ import scalus.uplc.builtin.{ByteString, platform}
   * ==Overview==
   *
   * Coordinates the soft-confirmation of block briefs among head peers via a single round of Ed25519
-  * signatures over the brief's [[BlockHeader.Section.signingBytes]] (see `consensus/fast-consensus`
-  * in the whitepaper).
+  * signatures over the brief's [[BlockBrief.Section.blockHash]] (see `consensus/fast-consensus` in
+  * the whitepaper).
   *
   * This actor produces soft-confirmations only. L1 effect signatures (settlement, fallback,
   * rollouts, refunds, finalization) are handled by [[SlowConsensusActor]], not here.
@@ -147,7 +147,7 @@ object FastConsensusActor:
             case UnexpectedPostponedAck => "Unexpected postponed ack"
 
     enum CompletionError extends RuntimeException:
-        case WrongHeaderSignature(vkey: ByteString)
+        case WrongSignature(vkey: ByteString)
 
 end FastConsensusActor
 
@@ -281,9 +281,11 @@ class FastConsensusActor(
         brief <- cell.brief.liftTo[IO](
           new IllegalStateException(s"Saturated cell ${cell.blockNum} without a brief")
         )
-        // Verify every ack's signature against the brief's signingBytes.
-        msg = brief.header.signingBytes
-        _ <- cell.acks.toList.traverse_((vk, ack) => verifyHeaderSig(vk, ack.headerSignature, msg))
+        // Verify every ack's signature against the brief's blockHash — the block's content digest,
+        // so a peer that derived a different block cannot have signed these.
+        _ <- cell.acks.toList.traverse_((vk, ack) =>
+            verifySignature(vk, ack.signature, brief.blockHash)
+        )
 
         finalizationRequested = cell.acks.values.exists(_.finalizationRequested)
         confirmed = mkSoftConfirmed(brief, cell.acks, finalizationRequested)
@@ -347,15 +349,15 @@ class FastConsensusActor(
         _ <- stateRef.update(s => s.copy(cells = s.cells - cell.blockNum))
     } yield ()
 
-    private def verifyHeaderSig(
+    private def verifySignature(
         vk: VerificationKey,
-        sig: BlockHeader.HeaderSignature,
-        msg: ByteString
+        sig: SoftAck.Signature,
+        blockHash: BlockHash
     ): IO[Unit] =
-        IO.delay(platform.verifyEd25519Signature(vk, msg, sig))
+        IO.delay(platform.verifyEd25519Signature(vk, ByteString.fromArray(blockHash.bytes), sig))
             .handleErrorWith {
                 case NonFatal(_) =>
-                    IO.raiseError(CompletionError.WrongHeaderSignature(vk))
+                    IO.raiseError(CompletionError.WrongSignature(vk))
                 case e => IO.raiseError(e)
             }
             .void
@@ -372,11 +374,11 @@ class FastConsensusActor(
         acks: Map[VerificationKey, SoftAck],
         finalizationRequested: Boolean
     ): Block.SoftConfirmed.Next = {
-        // Build the ordered list of header signatures keyed by peer-number order so each peer
+        // Build the ordered list of soft-ack signatures keyed by peer-number order so each peer
         // arrives at the same canonical sequence.
-        val sigsByPeer: List[BlockHeader.HeaderSignature] = acks.toList
+        val sigsByPeer: List[SoftAck.Signature] = acks.toList
             .sortBy((_, ack) => ack.peerNum: Int)
-            .map((_, ack) => ack.headerSignature)
+            .map((_, ack) => ack.signature)
 
         brief match {
             case b: BlockBrief.Minor =>

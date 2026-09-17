@@ -5,8 +5,8 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import hydrozoa.multisig.metrics.{PeerStats, RateView, TimingStats}
 import hydrozoa.multisig.persistence.DepositDecision
@@ -17,7 +17,7 @@ import io.circe.{Codec, Decoder, Encoder}
 import java.time.Instant
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.{DatumOption, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.ledger.{Blake2b_256, DatumOption, Hash, TransactionInput, TransactionOutput, Value}
 import scalus.uplc.builtin.ByteString
 import sttp.tapir.generic.Configuration as TapirConfig
 import sttp.tapir.{Schema, SchemaType, Validator}
@@ -395,6 +395,12 @@ object ApiDto {
 
     /** A deposit submission: the unsigned deposit-tx CBOR (`l1Payload`) and the serialized L2
       * outputs it spawns on absorption (`l2Payload`), both lowercase hex.
+      *
+      * Every variant also carries `requestHash`, the digest the **submitter** computed over the
+      * payloads it is sending. The head re-derives it and refuses the request if the two differ,
+      * which is an end-to-end check that the request the head holds is the request the client built
+      * — the failure a truncated payload or a client-side encoding change produces silently
+      * otherwise. `docs/user-guide/REQUEST-HASH.md` specifies the construction.
       */
     sealed trait SubmitRequestView
     object SubmitRequestView:
@@ -406,27 +412,45 @@ object ApiDto {
         private given CirceConfig = circeTag(submitTag)
         private given TapirConfig = tapirTag(submitTag)
 
-        final case class SubmitDepositView(l1Payload: String, l2Payload: String)
+        final case class SubmitDepositView(
+            l1Payload: String,
+            l2Payload: String,
+            requestHash: String
+        ) extends SubmitRequestView
+        final case class SubmitTransactionView(l2Payload: String, requestHash: String)
             extends SubmitRequestView
-        final case class SubmitTransactionView(l2Payload: String) extends SubmitRequestView
         given Codec[SubmitRequestView] = ConfiguredCodec.derived
         given Schema[SubmitRequestView] = Schema.derived
 
     /** Decode a submit body into a domain `UserRequest` (hex payloads to bytes), or a client-facing
       * error message when a payload is not lowercase hex.
+      *
+      * The submitted `requestHash` is carried through as given, not recomputed: whether it matches
+      * the payloads is the question [[hydrozoa.multisig.consensus.RequestSequencer]] answers, and
+      * deriving it here would answer it by construction.
       */
     def toUserRequest(view: SubmitRequestView): Either[String, UserRequest] =
         def hex(field: String, value: String): Either[String, ByteString] =
             Try(ByteString.fromHex(value)).toEither.left.map(_ => s"$field must be lowercase hex")
+        def digest(value: String): Either[String, RequestHash] =
+            hex("requestHash", value).flatMap(bytes =>
+                if bytes.size == 32 then Right(RequestHash.fromHash(Hash[Blake2b_256, Any](bytes)))
+                else Left(s"requestHash must be 32 bytes, got ${bytes.size}")
+            )
         view match
-            case SubmitRequestView.SubmitDepositView(l1Payload, l2Payload) =>
+            case SubmitRequestView.SubmitDepositView(l1Payload, l2Payload, requestHash) =>
                 for {
                     l1 <- hex("l1Payload", l1Payload)
                     l2 <- hex("l2Payload", l2Payload)
-                } yield UserRequest.DepositRequest(UserRequestBody.DepositRequestBody(l1, l2))
-            case SubmitRequestView.SubmitTransactionView(l2Payload) =>
-                hex("l2Payload", l2Payload).map(l2 =>
-                    UserRequest.TransactionRequest(UserRequestBody.TransactionRequestBody(l2))
+                    hash <- digest(requestHash)
+                } yield UserRequest.DepositRequest(UserRequestBody.DepositRequestBody(l1, l2), hash)
+            case SubmitRequestView.SubmitTransactionView(l2Payload, requestHash) =>
+                for {
+                    l2 <- hex("l2Payload", l2Payload)
+                    hash <- digest(requestHash)
+                } yield UserRequest.TransactionRequest(
+                  UserRequestBody.TransactionRequestBody(l2),
+                  hash
                 )
 
     /** `{ "error": ... }` — the error body used across the API. */
@@ -569,10 +593,14 @@ object ApiDto {
     )
     given Codec[BlockDetailsView] = deriveCodec
 
-    /** One of a block's transactions: the opaque request id woven into the block and the validity
-      * verdict it received there.
+    /** One of a block's transactions: the opaque request id woven into the block, the digest of the
+      * request body that id names (hex), and the validity verdict it received there.
+      *
+      * `requestHash` is what lets a submitter recognize their own request in a block: it is the
+      * same value they computed over the body they sent, so matching it needs neither the id nor
+      * anyone's arithmetic. See `docs/user-guide/REQUEST-HASH.md`.
       */
-    final case class BlockRequestView(requestId: Long, validity: ValidityView)
+    final case class BlockRequestView(requestId: Long, requestHash: String, validity: ValidityView)
     given Codec[BlockRequestView] = deriveCodec
 
     /** The block-body body — the block's content: its transactions (the requests woven into it,
@@ -593,7 +621,9 @@ object ApiDto {
         BlockBodyView(
           number = brief.blockNum.convert,
           blockType = blockTypeView(brief),
-          transactions = brief.requests.map((id, v) => BlockRequestView(id.asI64, validityView(v))),
+          transactions = brief.requests.map((id, requestHash, validity) =>
+              BlockRequestView(id.asI64, requestHash.toHex, validityView(validity))
+          ),
           depositsAbsorbed = brief.depositsAbsorbed.map(_.asI64),
           depositsRejected = brief.depositsRejected.map(_.asI64)
         )
@@ -961,7 +991,8 @@ object ApiDto {
         private given TapirConfig = tapirTag(kindTag)
 
         final case class InitializationView(blockNumber: Int, txCbor: String) extends EffectView
-        final case class SettlementView(blockNumber: Int, txCbor: String) extends EffectView
+        final case class SettlementView(blockNumber: Int, txCbor: String, l2StateHash: String)
+            extends EffectView
         final case class FallbackView(blockNumber: Int, txCbor: String) extends EffectView
         final case class RolloutView(blockNumber: Int, txCbor: String) extends EffectView
         final case class FinalizationView(blockNumber: Int, txCbor: String) extends EffectView
@@ -969,6 +1000,8 @@ object ApiDto {
         final case class SecView(
             blockNumber: Int,
             secOnchainSerialized: String,
+            kzgCommitment: String,
+            l2StateHash: String,
             headSignatures: List[String],
             coilSignatures: List[String]
         ) extends EffectView
@@ -981,14 +1014,36 @@ object ApiDto {
     final case class TxEffectView(l1TxId: String, blockNumber: Int, txCbor: String)
     given Codec[TxEffectView] = deriveCodec
 
+    /** A settlement effect — the block-scoped `settlement` endpoint's response. Carries its
+      * `l1TxId`, `txCbor` (hex), and `l2StateHash`: the L2 state digest its treasury datum
+      * certifies (`docs/spec/l2-state-certificate.md`), surfaced so a reader need not decode the
+      * datum out of `txCbor` to see it. The settlement is the head's L1-anchored certificate, where
+      * an SEC's is peer-signed only.
+      */
+    final case class SettlementEffectView(
+        l1TxId: String,
+        blockNumber: Int,
+        txCbor: String,
+        l2StateHash: String
+    )
+    given Codec[SettlementEffectView] = deriveCodec
+
     /** A standalone evacuation commitment (SEC) effect — the block-scoped `sec` endpoint's
       * response. Carries its `l1TxId` (the synthetic hash), on-chain bytes, and split hard-ack
       * signatures.
+      *
+      * Those bytes plus those signatures are the block's **L2 state certificate**
+      * (`docs/spec/l2-state-certificate.md`): a signed statement of the state at that block,
+      * checkable against the head peer verification keys a reader already holds from config.
+      * `kzgCommitment` and `l2StateHash` are the two commitments it carries, decoded out of the
+      * on-chain bytes so a reader needs no Plutus decoder to see them.
       */
     final case class SecEffectView(
         l1TxId: String,
         blockNumber: Int,
         secOnchainSerialized: String,
+        kzgCommitment: String,
+        l2StateHash: String,
         headSignatures: List[String],
         coilSignatures: List[String]
     )
@@ -1053,11 +1108,12 @@ object ApiDto {
             val cbor = txCborHex(tx)
             tx.kind match
                 case EffectKind.Initialization => EffectView.InitializationView(blockNumber, cbor)
-                case EffectKind.Settlement     => EffectView.SettlementView(blockNumber, cbor)
-                case EffectKind.Fallback       => EffectView.FallbackView(blockNumber, cbor)
-                case EffectKind.Rollout        => EffectView.RolloutView(blockNumber, cbor)
-                case EffectKind.Finalization   => EffectView.FinalizationView(blockNumber, cbor)
-                case EffectKind.Refund         => EffectView.RefundView(blockNumber, cbor)
+                case EffectKind.Settlement =>
+                    EffectView.SettlementView(blockNumber, cbor, settlementL2StateHashHex(tx))
+                case EffectKind.Fallback     => EffectView.FallbackView(blockNumber, cbor)
+                case EffectKind.Rollout      => EffectView.RolloutView(blockNumber, cbor)
+                case EffectKind.Finalization => EffectView.FinalizationView(blockNumber, cbor)
+                case EffectKind.Refund       => EffectView.RefundView(blockNumber, cbor)
                 case EffectKind.Sec =>
                     throw new IllegalStateException(s"tx effect ${tx.l1TxId.toHex} tagged Sec")
         case sec: ResolvedEffect.Sec =>
@@ -1065,6 +1121,8 @@ object ApiDto {
             EffectView.SecView(
               sec.blockNumber.convert,
               secOnchainHex(sec),
+              sec.commitment.commitment.kzgCommitment.toHex,
+              sec.commitment.commitment.l2StateHash.toHex,
               headSignatures,
               coilSignatures
             )
@@ -1073,6 +1131,27 @@ object ApiDto {
     def mkTxEffectView(tx: ResolvedEffect.Tx): TxEffectView =
         TxEffectView(tx.l1TxId.toHex, tx.blockNumber.convert, txCborHex(tx))
 
+    /** Map a settlement to the block-scoped `settlement` view (carries `l1TxId`). */
+    def mkSettlementEffectView(tx: ResolvedEffect.Tx): SettlementEffectView =
+        SettlementEffectView(
+          tx.l1TxId.toHex,
+          tx.blockNumber.convert,
+          txCborHex(tx),
+          settlementL2StateHashHex(tx)
+        )
+
+    /** A settlement's certified L2 state digest (hex). Every settlement carries one on its treasury
+      * datum, and `EffectsResolver` reads it off there, so an absence is a resolver bug.
+      */
+    private def settlementL2StateHashHex(tx: ResolvedEffect.Tx): String =
+        tx.l2StateHash
+            .getOrElse(
+              throw new IllegalStateException(
+                s"settlement effect ${tx.l1TxId.toHex} resolved without its l2StateHash"
+              )
+            )
+            .toHex
+
     /** Map an SEC effect to the block-scoped `sec` view (carries `l1TxId`). */
     def mkSecEffectView(sec: ResolvedEffect.Sec, nHeadPeers: Int): SecEffectView =
         val (headSignatures, coilSignatures) = secSignatures(sec, nHeadPeers)
@@ -1080,6 +1159,8 @@ object ApiDto {
           sec.l1TxId.toHex,
           sec.blockNumber.convert,
           secOnchainHex(sec),
+          sec.commitment.commitment.kzgCommitment.toHex,
+          sec.commitment.commitment.l2StateHash.toHex,
           headSignatures,
           coilSignatures
         )
@@ -1098,7 +1179,7 @@ object ApiDto {
         sec: ResolvedEffect.Sec,
         nHeadPeers: Int
     ): (List[String], List[String]) =
-        val sigsHex = sec.commitment.headerMultiSigned.map {
+        val sigsHex = sec.commitment.signatures.map {
             case Some(sig) =>
                 val bytes: Array[Byte] = sig
                 ByteString.fromArray(bytes).toHex

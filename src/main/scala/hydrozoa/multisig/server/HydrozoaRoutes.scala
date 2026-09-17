@@ -95,12 +95,16 @@ class HydrozoaRoutes(
               jsonBody[SubmitRequestView].examples(
                 List(
                   EndpointIO.Example.of(
-                    SubmitRequestView.SubmitTransactionView("84a400d9010281825820…"),
+                    SubmitRequestView.SubmitTransactionView("84a400d9010281825820…", "58828159…"),
                     name = Some("transaction"),
                     summary = Some("Submit an L2 transaction")
                   ),
                   EndpointIO.Example.of(
-                    SubmitRequestView.SubmitDepositView("84a400d9010281825820…", "a1024568656164…"),
+                    SubmitRequestView.SubmitDepositView(
+                      "84a400d9010281825820…",
+                      "a1024568656164…",
+                      "ac596c7f…"
+                    ),
                     name = Some("deposit"),
                     summary = Some("Register an L1 deposit")
                   )
@@ -244,6 +248,25 @@ class HydrozoaRoutes(
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
+    /** `GET /head/blocks/<n>/effects/settlement` — the block's settlement in full, with the L2
+      * state digest it certifies, or a 404.
+      */
+    private val blockSettlementEffectEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects" / "settlement")
+            .name("getHeadBlockEffect_settlement")
+            .tag("Blocks")
+            .out(jsonBody[SettlementEffectView])
+            .errorOut(errorOut)
+            .description(
+              "The block's settlement effect in full, with the L2 state digest its treasury " +
+                  "datum certifies, or 404 if it has none."
+            )
+            .serverLogic(num =>
+                blockSettlementEffect(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
     /** `GET /head/blocks/<n>/effects/sec` — the block's SEC in full, or a 404. */
     private val blockSecEffectEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -292,11 +315,13 @@ class HydrozoaRoutes(
     /** The per-kind effect sub-resources, one endpoint each. */
     private val blockEffectKindEndpoints: List[ServerEndpoint[Any, IO]] =
         List(
-          "initialization" -> EffectKind.Initialization,
-          "settlement" -> EffectKind.Settlement,
-          "fallback" -> EffectKind.Fallback,
-          "finalization" -> EffectKind.Finalization
-        ).map(blockTxEffectEndpoint) :+ blockSecEffectEndpoint
+          blockTxEffectEndpoint("initialization", EffectKind.Initialization),
+          // The settlement has its own view: it also carries the L2 state digest it certifies.
+          blockSettlementEffectEndpoint,
+          blockTxEffectEndpoint("fallback", EffectKind.Fallback),
+          blockTxEffectEndpoint("finalization", EffectKind.Finalization),
+          blockSecEffectEndpoint
+        )
 
     private val transactionDetailExample: RequestDetailsView =
         RequestDetailsView.TransactionView(
@@ -765,6 +790,26 @@ class HydrozoaRoutes(
                         Left(fail(StatusCode.NotFound, s"Block ${num.convert} has no $kind effect"))
         }
 
+    /** The block's settlement in full, or a 404 (block missing, or no settlement on this block). */
+    private def blockSettlementEffect(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), SettlementEffectView]] =
+        effectsResolver.blockEffects(num).map {
+            case None => Left(blockNotFound(num))
+            case Some(effects) =>
+                effects.collectFirst {
+                    case e: ResolvedEffect.Tx if e.kind == EffectKind.Settlement => e
+                } match
+                    case Some(e) => Right(ApiDto.mkSettlementEffectView(e))
+                    case None =>
+                        Left(
+                          fail(
+                            StatusCode.NotFound,
+                            s"Block ${num.convert} has no settlement effect"
+                          )
+                        )
+        }
+
     /** The block's SEC in full, or a 404 (block missing, or no SEC on this block). */
     private def blockSecEffect(
         num: BlockNumber
@@ -917,9 +962,9 @@ object HydrozoaRoutes {
       */
     private[server] def decodedEvent(path: String, request: UserRequest): RequestDecoded =
         request match
-            case UserRequest.DepositRequest(body) =>
+            case UserRequest.DepositRequest(body, _) =>
                 RequestDecoded(path, "Deposit", body.l1Payload.size + body.l2Payload.size)
-            case UserRequest.TransactionRequest(body) =>
+            case UserRequest.TransactionRequest(body, _) =>
                 RequestDecoded(path, "Transaction", body.l2Payload.size)
 
     val apiTitle: String = "Hydrozoa node API"

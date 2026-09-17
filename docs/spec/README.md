@@ -10,6 +10,7 @@ graduate here once built). For project-wide conventions, start with the style gu
 
 | Doc | Summary |
 |---|---|
+| [block-hash.md](block-hash.md) | `requestHash` over a user request and `blockHash` over the block that carries it: what each preimage covers, when each is taken, who re-derives and compares them, and why the preimage does not chain to the previous block. |
 | [codecs.md](codecs.md) | Conventions for wire/storage codecs (working notes). |
 | [coil-network.md](coil-network.md) | Coil-ready peers: the follower-only node type, the hub fan-out actors (`CoilRelay`, `CoilAckSequencer`), the threshold multisig, and the head↔coil liaison lanes. |
 | [crash-recovery-testing.md](crash-recovery-testing.md) | How recovery is exercised: the single `Persistence` decorator seam, the three decorators over it (`CrashingPersistence`, `DurabilityOrderOracle`, `SlowPersistence`), the restart primitives and what survives them, and what the link-recovery paths still do not cover. |
@@ -21,6 +22,7 @@ graduate here once built). For project-wide conventions, start with the style gu
 | [integration-stages.md](integration-stages.md) | The two integration test stages under `integration/`: which stage tests what, where to add a test, what each property checks. |
 | [l2-isomorphism.md](l2-isomorphism.md) | L2 isomorphism: driving the EUTXO ledger with native Cardano txs — the headId pin, mandatory tx metadata, screening vs submission, how deposits pin their L2 payload, and the `cardano-eutxo` / `any-remote` backend selection. |
 | [l2-query-endpoints.md](l2-query-endpoints.md) | The user-facing server's read-only L2 queries: `GET /l2/cardano-eutxo/utxos/{address}` (CIP-0116 utxos) and `GET /l2/cardano-eutxo/transactions` (recent activity); EUTXO-only, empty on a remote-ledger node. |
+| [l2-state-certificate.md](l2-state-certificate.md) | `l2StateHash`: how the head certifies its L2 state, on the effects a stack already produces — the settlement's treasury datum and the SEC. Why a certificate rather than a detector, which blocks carry one, what the digest ranges over per backend, and why no stack hash is needed. |
 | [logging-tracing.md](logging-tracing.md) | Contextual logging and tracing: Tracer, IOLocal-carried context, routing keys, migration off SLF4J MDC. |
 | [observability-endpoints.md](observability-endpoints.md) | The user-facing server's `/health` (liveness) and `/ready` (readiness) endpoints: semantics, status mapping, how `NodeStatus` is maintained. |
 | [persistence-and-crash-recovery.md](persistence-and-crash-recovery.md) | Durable consensus data and crash recovery for head and coil peers: what each actor persists, equivocation avoidance, the RocksDB CFs/journals, and snapshot + log-replay recovery. |
