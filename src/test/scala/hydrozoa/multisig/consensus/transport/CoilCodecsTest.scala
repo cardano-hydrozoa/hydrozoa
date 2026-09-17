@@ -20,6 +20,17 @@ class CoilCodecsTest extends AnyFunSuite {
 
     given CardanoNetwork.Section = CardanoNetwork.Preprod
 
+    /** A head identity for the fixtures; these suites are not about which head a peer is in. */
+    private val ownHead: HeadIdentity =
+        HeadIdentity(
+          hydrozoa.config.head.initialization.InitializationParameters.HeadId(
+            scalus.cardano.ledger.AssetName(scalus.uplc.builtin.ByteString.fromString("testhead"))
+          ),
+          scalus.cardano.ledger.Hash32.fromByteString(
+            scalus.uplc.builtin.ByteString.fromArray(Array.fill[Byte](32)(0x11))
+          )
+        )
+
     private def sig(bs: Int*): TxSignature = TxSignature(IArray.from(bs.map(_.toByte)))
 
     private val h0 = HeadPeerNumber(0)
@@ -51,6 +62,7 @@ class CoilCodecsTest extends AnyFunSuite {
 
     test("CoilFrame.Handshake round-trips") {
         val frame = CoilFrame.Handshake.own(
+          head = ownHead,
           coilNum = 3,
           marks = Join.Connected(Some(BlockNumber(9)), Some(StackNumber(2)))
         )
@@ -62,7 +74,7 @@ class CoilCodecsTest extends AnyFunSuite {
         // it. The frame must still parse, so the refusal names the version rather than the syntax.
         val text = """{"t":"handshake","coilNum":3}"""
         CoilFrame.parse(text) match {
-            case Right(CoilFrame.Handshake(coilNum, protocolVersion, auth, marks)) =>
+            case Right(CoilFrame.Handshake(coilNum, protocolVersion, auth, marks, head)) =>
                 assert(coilNum == 3)
                 assert(protocolVersion.isEmpty)
                 assert(auth == HandshakeAuth.Unauthenticated)

@@ -50,6 +50,7 @@ trait PeerTransport {
   */
 final class WsPeerTransport private (
     val ownPeerId: HeadPeerId,
+    private val ownHead: HeadIdentity,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
     private val keepAlivePing: FiniteDuration,
@@ -119,7 +120,8 @@ final class WsPeerTransport private (
         // in `CoilPeerWsTransport` for the full rationale; the shape here is identical.
         def once(handshook: Deferred[IO, Unit]): IO[Unit] =
             QuietRelease(client.connect(request)).use { conn =>
-                val handshakeLine = HeadFrame.encode(HeadFrame.Handshake.own(ownPeerId.peerNum))
+                val handshakeLine =
+                    HeadFrame.encode(HeadFrame.Handshake.own(ownPeerId.peerNum, ownHead))
                 handshook.complete(()).flatMap {
                     case true =>
                         tracer.traceWith(DialerConnected(remote, uri)) >>
@@ -186,7 +188,7 @@ final class WsPeerTransport private (
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     HeadFrame.parse(s) match {
-                        case Right(HeadFrame.Handshake(peerNum, protocolVersion, _)) =>
+                        case Right(HeadFrame.Handshake(peerNum, protocolVersion, _, head)) =>
                             val pn: Int = peerNum
                             val ownPn: Int = ownPeerId.peerNum
                             // Version before topology: a peer speaking another protocol may not even
@@ -197,6 +199,18 @@ final class WsPeerTransport private (
                                 case ProtocolVersion.Check.Incompatible(found, expected) =>
                                     tracer.traceWith(
                                       ServerRejectedProtocolVersion(pn, found, expected)
+                                    )
+                                // Head identity after version, before topology: the version is
+                                // what makes these fields comparable at all, and a peer in another
+                                // head has no business being placed in this one's topology.
+                                case ProtocolVersion.Check.Compatible
+                                    if HeadIdentity.check(head, ownHead) !=
+                                        HeadIdentity.Check.Compatible =>
+                                    tracer.traceWith(
+                                      ServerRejectedHeadIdentity(
+                                        pn,
+                                        HeadIdentity.describe(HeadIdentity.check(head, ownHead))
+                                      )
                                     )
                                 // Topology: the server only accepts inbound from lower-numbered
                                 // peers.
@@ -275,6 +289,7 @@ object WsPeerTransport {
       */
     def create(
         ownPeerId: HeadPeerId,
+        ownHead: HeadIdentity,
         remoteIds: List[HeadPeerId],
         tracer: ContraTracer[IO, PeerTransportEvent],
         keepAlivePing: FiniteDuration = NodeWsServer.defaultKeepAlivePing,
@@ -284,5 +299,5 @@ object WsPeerTransport {
                 .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
-        } yield new WsPeerTransport(ownPeerId, outboxes, inboundRef, keepAlivePing, tracer)
+        } yield new WsPeerTransport(ownPeerId, ownHead, outboxes, inboundRef, keepAlivePing, tracer)
 }

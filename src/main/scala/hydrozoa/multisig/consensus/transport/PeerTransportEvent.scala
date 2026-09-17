@@ -79,6 +79,12 @@ object PeerTransportEvent:
         expected: Int
     ) extends PeerTransportEvent
 
+    /** The server refused a `Handshake` from a peer that is not in this head. `detail` names which
+      * half disagreed and both values, so the log points at the config to fix.
+      */
+    final case class ServerRejectedHeadIdentity(remotePeerNum: Int, detail: String)
+        extends PeerTransportEvent
+
     /** A `Msg` frame arrived on the server side before the peer sent its `Handshake`. */
     case object ServerMsgBeforeHandshake extends PeerTransportEvent
 

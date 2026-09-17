@@ -42,6 +42,7 @@ trait HubTransport {
 final class HubWsTransport private (
     private val outboxes: Map[CoilPeerNumber, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[CoilPeerNumber, PeerLiaisonHubToCoil.Handle]],
+    private val ownHead: HeadIdentity,
     private val keepAlivePing: FiniteDuration,
     private val tracer: ContraTracer[IO, HubWsTransportEvent],
 )(using CardanoNetwork.Section)
@@ -99,7 +100,9 @@ final class HubWsTransport private (
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     CoilFrame.parse(s) match {
-                        case Right(CoilFrame.Handshake(coilNum, protocolVersion, _, marks)) =>
+                        case Right(
+                              CoilFrame.Handshake(coilNum, protocolVersion, _, marks, head)
+                            ) =>
                             // Version before roster: a coil speaking another protocol may not even
                             // mean the same thing by its own number, so there is nothing to look up
                             // until the two ends agree on the vocabulary. `auth` is carried and not
@@ -108,6 +111,18 @@ final class HubWsTransport private (
                                 case ProtocolVersion.Check.Incompatible(found, expected) =>
                                     tracer.traceWith(
                                       ServerRejectedProtocolVersion(coilNum, found, expected)
+                                    )
+                                // Head identity after version, before roster: the version makes
+                                // these fields comparable at all, and a peer pointed at another
+                                // head has no business being placed in this one's topology.
+                                case ProtocolVersion.Check.Compatible
+                                    if HeadIdentity.check(head, ownHead) !=
+                                        HeadIdentity.Check.Compatible =>
+                                    tracer.traceWith(
+                                      ServerRejectedHeadIdentity(
+                                        coilNum,
+                                        HeadIdentity.describe(HeadIdentity.check(head, ownHead))
+                                      )
                                     )
                                 case ProtocolVersion.Check.Compatible =>
                                     val coil = CoilPeerNumber(coilNum)
@@ -147,6 +162,7 @@ object HubWsTransport {
       */
     def create(
         coils: List[CoilPeerNumber],
+        ownHead: HeadIdentity,
         tracer: ContraTracer[IO, HubWsTransportEvent],
         keepAlivePing: FiniteDuration = NodeWsServer.defaultKeepAlivePing,
     )(using CardanoNetwork.Section): IO[HubWsTransport] =
@@ -155,5 +171,5 @@ object HubWsTransport {
                 .traverse(c => Queue.unbounded[IO, String].map(c -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[CoilPeerNumber, PeerLiaisonHubToCoil.Handle])
-        } yield new HubWsTransport(outboxes, inboundRef, keepAlivePing, tracer)
+        } yield new HubWsTransport(outboxes, inboundRef, ownHead, keepAlivePing, tracer)
 }

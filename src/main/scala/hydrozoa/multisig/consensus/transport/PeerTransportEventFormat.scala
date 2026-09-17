@@ -53,6 +53,8 @@ object PeerTransportEventFormat:
                   s"server: rejecting handshake from peerNum=$remotePeerNum " +
                       s"(own=$ownPeerNum, must be lower)"
                 )
+            case ServerRejectedHeadIdentity(remotePeerNum, detail) =>
+                warn(s"server: rejecting peerNum=$remotePeerNum — $detail")
             case ServerRejectedProtocolVersion(remotePeerNum, found, expected) =>
                 warn(
                   s"server: rejecting peerNum=$remotePeerNum — protocol version " +

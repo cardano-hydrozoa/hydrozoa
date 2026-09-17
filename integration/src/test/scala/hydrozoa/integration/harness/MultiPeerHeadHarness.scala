@@ -1322,7 +1322,12 @@ object MultiPeerHeadHarness:
                               // `Join.Connected` — the coil adoption step must thread the real
                               // `CoilStartPoint.ownMarks` through here instead.
                               CoilPeerWsTransport
-                                  .create(coilNum, IO.pure(Join.Connected(None, None)), cpwtTracer)
+                                  .create(
+                                    coilNum,
+                                    IO.pure(Join.Connected(None, None)),
+                                    HeadIdentity.own(using multiNodeConfig.headConfig),
+                                    cpwtTracer
+                                  )
                             )
                             .map(coilNum -> _)
                     }
@@ -1422,6 +1427,8 @@ object MultiPeerHeadHarness:
             hubCoilRegistry: Option[InProcessHubCoilTransport.Registry],
         ): Resource[IO, HeadNetwork] =
             val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
+            // Every peer in the harness is in the same head, so they all announce the same thing.
+            val ownHead = HeadIdentity.own(using multiNodeConfig.headConfig)
             val hubbedCoils = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
             for
                 peerT <- Resource.eval(
@@ -1455,6 +1462,7 @@ object MultiPeerHeadHarness:
             peers: Seq[HeadPeerNumber],
         )(using CardanoNetwork.Section): Resource[IO, WsHeadParts] =
             val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
+            val ownHead = HeadIdentity.own(using multiNodeConfig.headConfig)
             val hubbedCoils = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
             val remoteIds: List[HeadPeerId] =
                 peers.filterNot(_ == peerNum).map(headPeerId(multiNodeConfig, _)).toList
@@ -1466,13 +1474,13 @@ object MultiPeerHeadHarness:
                 Slf4jTracer.sink.contramap(HubWsTransportEventFormat.humanFormat(peerNum))
             for
                 peerT <- Resource.eval(
-                  WsPeerTransport.create(ownHeadPeerId, remoteIds, ptTracer)
+                  WsPeerTransport.create(ownHeadPeerId, ownHead, remoteIds, ptTracer)
                 )
                 hubTConcrete: Option[HubWsTransport] <-
                     if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
                     else
                         Resource
-                            .eval(HubWsTransport.create(hubbedCoils, hubTracer))
+                            .eval(HubWsTransport.create(hubbedCoils, ownHead, hubTracer))
                             .map(Some(_))
                 meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
                 hubRoutes = hubTConcrete.toList.map(h =>

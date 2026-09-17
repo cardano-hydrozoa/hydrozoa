@@ -47,6 +47,7 @@ trait CoilTransport {
 final class CoilPeerWsTransport private (
     private val ownCoilNum: CoilPeerNumber,
     private val ownMarks: IO[Join.Connected],
+    private val ownHead: HeadIdentity,
     private val answer: Deferred[IO, Join.Answer],
     private val outbox: Queue[IO, String],
     private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
@@ -118,7 +119,7 @@ final class CoilPeerWsTransport private (
                             ownMarks
                                 .map(marks =>
                                     CoilFrame.encode(
-                                      CoilFrame.Handshake.own(ownCoilNum.convert, marks)
+                                      CoilFrame.Handshake.own(ownCoilNum.convert, marks, ownHead)
                                     )
                                 )
                                 .flatMap(line => conn.send(WSFrame.Text(line))) >>
@@ -203,11 +204,20 @@ object CoilPeerWsTransport {
     def create(
         ownCoilNum: CoilPeerNumber,
         ownMarks: IO[Join.Connected],
+        ownHead: HeadIdentity,
         tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
             answer <- Deferred[IO, Join.Answer]
             inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
-        } yield new CoilPeerWsTransport(ownCoilNum, ownMarks, answer, outbox, inboundRef, tracer)
+        } yield new CoilPeerWsTransport(
+          ownCoilNum,
+          ownMarks,
+          ownHead,
+          answer,
+          outbox,
+          inboundRef,
+          tracer
+        )
 }

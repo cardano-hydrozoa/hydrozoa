@@ -31,7 +31,8 @@ object HeadFrame {
     final case class Handshake(
         peerNum: Int,
         protocolVersion: Option[Int],
-        auth: HandshakeAuth
+        auth: HandshakeAuth,
+        head: Option[HeadIdentity]
     ) extends HeadFrame
 
     object Handshake {
@@ -39,8 +40,13 @@ object HeadFrame {
         /** This node's own handshake: its peer number, the version it speaks, and — until GUM-322 —
           * no proof of either.
           */
-        def own(peerNum: Int): Handshake =
-            Handshake(peerNum, Some(ProtocolVersion.current), HandshakeAuth.Unauthenticated)
+        def own(peerNum: Int, head: HeadIdentity): Handshake =
+            Handshake(
+              peerNum,
+              Some(ProtocolVersion.current),
+              HandshakeAuth.Unauthenticated,
+              Some(head)
+            )
     }
 
     final case class Msg(payload: LiaisonProtocol.HeadToHeadRequest) extends HeadFrame
@@ -58,12 +64,13 @@ object HeadFrame {
         }
 
     given (using CardanoNetwork.Section): Encoder[HeadFrame] = Encoder.instance {
-        case Handshake(peerNum, protocolVersion, auth) =>
+        case Handshake(peerNum, protocolVersion, auth, head) =>
             Json.obj(
               "t" -> "handshake".asJson,
               "peerNum" -> peerNum.asJson,
               "protocolVersion" -> protocolVersion.asJson,
-              "auth" -> auth.asJson
+              "auth" -> auth.asJson,
+              "head" -> head.asJson
             )
         case Msg(payload) =>
             payload match {
@@ -91,10 +98,15 @@ object HeadFrame {
                     // that reads as a malformed frame.
                     protocolVersion <- c.downField("protocolVersion").as[Option[Int]]
                     auth <- c.downField("auth").as[Option[HandshakeAuth]]
+                    // Optional for the same reason as `protocolVersion`: a counterpart that
+                    // announces no head is refused by a check that says so, not by a decode
+                    // failure that reads as a malformed frame.
+                    head <- c.downField("head").as[Option[HeadIdentity]]
                 } yield Handshake(
                   peerNum,
                   protocolVersion,
-                  auth.getOrElse(HandshakeAuth.Unauthenticated)
+                  auth.getOrElse(HandshakeAuth.Unauthenticated),
+                  head
                 )
             case "msg" =>
                 c.downField("kind").as[String].flatMap {

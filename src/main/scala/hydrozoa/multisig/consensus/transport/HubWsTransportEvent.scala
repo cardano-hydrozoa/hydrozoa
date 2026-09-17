@@ -46,6 +46,12 @@ object HubWsTransportEvent:
         expected: Int
     ) extends HubWsTransportEvent
 
+    /** The server refused a `Handshake` from a peer that is not in this head. `detail` names which
+      * half disagreed and both values, so the log points at the config to fix.
+      */
+    final case class ServerRejectedHeadIdentity(coilNum: Int, detail: String)
+        extends HubWsTransportEvent
+
     /** A `Msg` frame arrived on the server side before the coil peer sent its `Handshake`. */
     case object ServerMsgBeforeHandshake extends HubWsTransportEvent
 

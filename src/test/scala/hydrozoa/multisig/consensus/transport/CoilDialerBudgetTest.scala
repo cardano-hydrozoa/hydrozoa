@@ -25,6 +25,17 @@ class CoilDialerBudgetTest extends AnyFunSuite {
 
     private given CardanoNetwork.Section = CardanoNetwork.Preview
 
+    /** A head identity for the fixtures; these suites are not about which head a peer is in. */
+    private val ownHead: HeadIdentity =
+        HeadIdentity(
+          hydrozoa.config.head.initialization.InitializationParameters.HeadId(
+            scalus.cardano.ledger.AssetName(scalus.uplc.builtin.ByteString.fromString("testhead"))
+          ),
+          scalus.cardano.ledger.Hash32.fromByteString(
+            scalus.uplc.builtin.ByteString.fromArray(Array.fill[Byte](32)(0x11))
+          )
+        )
+
     private val hubUri = Uri.unsafeFromString("ws://hub.invalid:3001/ws")
 
     /** A quiet-but-live link: a keep-alive Ping every `pingEvery`, which is what holds `WsDuplex`'s
@@ -64,6 +75,7 @@ class CoilDialerBudgetTest extends AnyFunSuite {
             transport <- CoilPeerWsTransport.create(
               CoilPeerNumber(0),
               IO.pure(Join.Connected(None, None)),
+              ownHead,
               tracer
             )
             client = WSClient[IO](respondToPings = false) { (_: WSRequest) =>

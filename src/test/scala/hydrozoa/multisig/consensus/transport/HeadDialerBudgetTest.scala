@@ -25,6 +25,17 @@ class HeadDialerBudgetTest extends AnyFunSuite {
 
     private given CardanoNetwork.Section = CardanoNetwork.Preview
 
+    /** A head identity for the fixtures; these suites are not about which head a peer is in. */
+    private val ownHead: HeadIdentity =
+        HeadIdentity(
+          hydrozoa.config.head.initialization.InitializationParameters.HeadId(
+            scalus.cardano.ledger.AssetName(scalus.uplc.builtin.ByteString.fromString("testhead"))
+          ),
+          scalus.cardano.ledger.Hash32.fromByteString(
+            scalus.uplc.builtin.ByteString.fromArray(Array.fill[Byte](32)(0x11))
+          )
+        )
+
     private val nPeers = PositiveInt.unsafeApply(2)
     private val ownId = HeadPeerId(HeadPeerNumber(0), nPeers)
     // Lower peerNum dials higher, so peer 0 is the dialer and peer 1 the remote.
@@ -58,7 +69,7 @@ class HeadDialerBudgetTest extends AnyFunSuite {
             attempts <- Ref.of[IO, Int](0)
             seen <- Ref.of[IO, Vector[PeerTransportEvent]](Vector.empty)
             tracer = ContraTracer[IO, PeerTransportEvent](e => seen.update(_ :+ e))
-            transport <- WsPeerTransport.create(ownId, List(remoteId), tracer)
+            transport <- WsPeerTransport.create(ownId, ownHead, List(remoteId), tracer)
             client = WSClient[IO](respondToPings = false) { (_: WSRequest) =>
                 Resource.eval(attempts.update(_ + 1)).flatMap(_ => connect)
             }

@@ -36,6 +36,17 @@ class CodecsTest extends AnyFunSuite {
       hubHardAck = HubHardAckNumber.zero
     )
 
+    /** A head identity for the fixtures; these suites are not about which head a peer is in. */
+    private val ownHead: HeadIdentity =
+        HeadIdentity(
+          hydrozoa.config.head.initialization.InitializationParameters.HeadId(
+            scalus.cardano.ledger.AssetName(scalus.uplc.builtin.ByteString.fromString("testhead"))
+          ),
+          scalus.cardano.ledger.Hash32.fromByteString(
+            scalus.uplc.builtin.ByteString.fromArray(Array.fill[Byte](32)(0x11))
+          )
+        )
+
     private def emptyNew(batchNum: BatchNumber): Mesh.New = Mesh.New(
       batchNum = batchNum,
       block = None,
@@ -55,14 +66,14 @@ class CodecsTest extends AnyFunSuite {
     }
 
     test("Handshake frame round-trips") {
-        val frame = HeadFrame.Handshake.own(peerNum = 7)
+        val frame = HeadFrame.Handshake.own(peerNum = 7, head = ownHead)
         assert(roundTrip(frame) == frame)
     }
 
     test("a Handshake with no protocol version decodes, so the version check can refuse it") {
         val text = """{"t":"handshake","peerNum":7}"""
         HeadFrame.parse(text) match {
-            case Right(HeadFrame.Handshake(peerNum, protocolVersion, auth)) =>
+            case Right(HeadFrame.Handshake(peerNum, protocolVersion, auth, head)) =>
                 assert(peerNum == 7)
                 assert(protocolVersion.isEmpty)
                 assert(auth == HandshakeAuth.Unauthenticated)

@@ -19,7 +19,7 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HeadIdentity, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
 import hydrozoa.multisig.consensus.{CoilJoin, CoilJoinEventFormat, CoilStartPoint}
 import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
@@ -591,10 +591,14 @@ object Serve {
             .toMap
         val hubbedCoils = nodeConfig.hubbedCoilPeerNums(ownHeadNum)
         val tracers = MrmTracers.fromRoot(mrmTracer)
+        // What every link announces and checks: two peers can speak the same protocol version and
+        // still not belong to the same head.
+        val ownHead = HeadIdentity.own(using nodeConfig.headConfig)
         for {
             peerT <- Resource.eval(
               WsPeerTransport.create(
                 ownHeadPeerId,
+                ownHead,
                 remoteHeadUris.keys.toList,
                 tracers.peerTransport
               )
@@ -603,7 +607,7 @@ object Serve {
                 if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
                 else
                     Resource
-                        .eval(HubWsTransport.create(hubbedCoils, tracers.hubWsTransport))
+                        .eval(HubWsTransport.create(hubbedCoils, ownHead, tracers.hubWsTransport))
                         .map(Some(_))
             meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
             hubRoutes =
@@ -685,6 +689,7 @@ object Serve {
               CoilPeerWsTransport.create(
                 ownCoilNum,
                 CoilStartPoint.ownMarks(persistence, PeerId.Coil(ownCoilNum)),
+                HeadIdentity.own(using nodeConfig.headConfig),
                 cpwtTracer
               )
             )

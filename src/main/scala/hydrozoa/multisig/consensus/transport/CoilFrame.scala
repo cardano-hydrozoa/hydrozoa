@@ -37,7 +37,8 @@ object CoilFrame {
         coilNum: Int,
         protocolVersion: Option[Int],
         auth: HandshakeAuth,
-        marks: Join.Connected
+        marks: Join.Connected,
+        head: Option[HeadIdentity]
     ) extends CoilFrame
 
     object Handshake {
@@ -45,8 +46,14 @@ object CoilFrame {
         /** This node's own handshake: its coil number, the version it speaks, where it stands, and
           * — until GUM-322 — no proof of any of it.
           */
-        def own(coilNum: Int, marks: Join.Connected): Handshake =
-            Handshake(coilNum, Some(ProtocolVersion.current), HandshakeAuth.Unauthenticated, marks)
+        def own(coilNum: Int, marks: Join.Connected, head: HeadIdentity): Handshake =
+            Handshake(
+              coilNum,
+              Some(ProtocolVersion.current),
+              HandshakeAuth.Unauthenticated,
+              marks,
+              Some(head)
+            )
     }
 
     final case class Msg(payload: Wire) extends CoilFrame
@@ -73,13 +80,14 @@ object CoilFrame {
         }
 
     given (using CardanoNetwork.Section): Encoder[CoilFrame] = Encoder.instance {
-        case Handshake(coilNum, protocolVersion, auth, marks) =>
+        case Handshake(coilNum, protocolVersion, auth, marks, head) =>
             Json.obj(
               "t" -> "handshake".asJson,
               "coilNum" -> coilNum.asJson,
               "protocolVersion" -> protocolVersion.asJson,
               "auth" -> auth.asJson,
-              "marks" -> marks.asJson
+              "marks" -> marks.asJson,
+              "head" -> head.asJson
             )
         case Msg(payload) =>
             payload match {
@@ -113,11 +121,15 @@ object CoilFrame {
                     // that reads as a malformed frame. Absent means "I claim nothing", which is
                     // the safe reading — a coil claiming nothing gets seeded, never catch-up.
                     marks <- c.downField("marks").as[Option[Join.Connected]]
+                    // Optional for the same reason as the two above: a counterpart that announces
+                    // no head is refused by a check that says so, not by a decode failure.
+                    head <- c.downField("head").as[Option[HeadIdentity]]
                 } yield Handshake(
                   coilNum,
                   protocolVersion,
                   auth.getOrElse(HandshakeAuth.Unauthenticated),
-                  marks.getOrElse(Join.Connected(None, None))
+                  marks.getOrElse(Join.Connected(None, None)),
+                  head
                 )
             case "msg" =>
                 c.downField("kind").as[String].flatMap {

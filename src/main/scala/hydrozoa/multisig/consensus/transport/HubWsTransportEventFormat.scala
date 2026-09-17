@@ -25,6 +25,8 @@ object HubWsTransportEventFormat:
                 info(s"coil server: accepted inbound from coil=$coilNum")
             case ServerRejectedHandshake(coilNum) =>
                 warn(s"coil server: rejecting handshake from unknown coil=$coilNum")
+            case ServerRejectedHeadIdentity(coilNum, detail) =>
+                warn(s"coil server: rejecting coil=$coilNum — $detail")
             case ServerRejectedProtocolVersion(coilNum, found, expected) =>
                 warn(
                   s"coil server: rejecting coil=$coilNum — protocol version " +

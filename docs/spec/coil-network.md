@@ -445,6 +445,14 @@ way in: the hub seats the coil at a **start point** it certifies.
 | 2 | `CoilStartPoint.decide` picks `Offer`, `CatchUp` or `Unavailable` | hub |
 | 3 | `Join.Offer` or `Join.NoOffer` | hub answers every handshake |
 
+**Every handshake also announces which head it is in** — `headId` and the head-params hash, as
+`HeadIdentity` — and the receiving end refuses the link on a mismatch. This is not coil-specific:
+the head mesh checks the same thing. Two peers can speak the same protocol version and still not
+belong together, and a peer pointed at the wrong head otherwise links up, starts pulling, and
+diverges on content that is structurally fine. The store's own copy of both is already checked at
+open (`StoreIdentity`), so store-against-config is enforced locally and config-against-counterpart
+here.
+
 The marks are a **claim, not a credential**. They select between "seed this coil"
 and "let it walk forward"; everything the coil then adopts the hub computes
 itself, so a coil that overstates where it stands is offered a catch-up and then
