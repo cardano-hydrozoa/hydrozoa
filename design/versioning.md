@@ -9,7 +9,8 @@ checked, when it moves, and what deploying a move costs.
 GUM-322's signed handshake carries items 1–3, built in hydrozoa#744 and #749. The rest ride along
 because they touch the same values.
 
-1. **`ProtocolVersion.current`**: one integer, `1`.
+1. **`ProtocolVersion.current`**: one integer, `1` — what the public testnet head initializes
+   with.
 2. **The version travels first.** It sits in the first frame the dialer sends, at a position every
    version can decode — see *Carrying it in the handshake*.
 3. **Equality on both lanes.** A mismatch closes the link with a reason naming both versions. The
@@ -103,12 +104,10 @@ Two consequences:
    rest is scope item 7 (GUM-348). Behaviour changes have no fixture and need judgment — open
    question 1.
 
-The protobuf request form shows both. `Codecs.scala` already decodes either form ("Accept both
-forms. The two are told apart by JSON shape, not by a tag or a version field") while
-`userRequestWithIdCodec` still emits the JSON object. Flipping the encoder (GUM-315 C1) is a bump,
-because a peer on a build before the tolerant decoder cannot read the new form. Flipped before the
-testnet head initializes, it is part of version `1` and costs no migration; the tolerant branch
-then goes.
+The protobuf request form shows both consequences. Flipping `userRequestWithIdCodec`'s encoder
+(GUM-315 C1) is a bump, because a peer on a build before the tolerant decoder cannot read the new
+form — and the tolerant branch is what goes out with the bump. Until the testnet head initializes
+the flip is free; see *Landing wire changes before initialization*.
 
 ## Carrying it in the handshake
 
@@ -281,6 +280,30 @@ Text that contradicts the code, fixed in this work item:
    implementation needs to read it.
 7. **A migrated head starts from an empty store and a non-empty L2 state.** The transition
    transaction carries the state, so a store-format bump rides a migration for free.
+8. **Version `1` is what the public testnet head initializes with.** See *Landing wire changes
+   before initialization*.
+
+## Landing wire changes before initialization
+
+**Every wire change that lands before the public testnet head initializes is part of version `1`
+and costs nothing.** The first head to initialize is the first counterpart that can disagree, so
+until then the version number is free to mean whatever the fleet currently does. After it, the
+same change is a bump, and a bump is a head migration.
+
+That turns initialization into a deadline for one item already on the list:
+
+| item | do it before initialization | or else |
+| -- | -- | -- |
+| the protobuf request form (GUM-315 C1) | flip `userRequestWithIdCodec`'s encoder to the protobuf record and delete the tolerant decoder branch at `Codecs.scala:550` | the flip is a protocol bump, and the tolerant branch stays for the head's life |
+
+`Codecs.scala` decodes either form today ("Accept both forms. The two are told apart by JSON
+shape, not by a tag or a version field") while the encoder still emits the JSON object. The
+tolerance exists so that builds at one version can meet during a rolling restart. Once the fleet is
+on the new form and no head predates it, nothing emits the old form and the branch is dead code —
+so it goes out with the flip, not later.
+
+Anything else carrying a "flip it in a later release" note belongs in this table. It is worth one
+sweep for them before the head initializes.
 
 ## Open questions
 
@@ -288,5 +311,3 @@ Text that contradicts the code, fixed in this work item:
    changes. A consensus fix that changes which blocks, briefs or effect bodies a peer produces has
    no fixture. Proposal: any behaviour change a peer on the earlier build would disagree with is a
    bump. Who signs off on "would not disagree"?
-2. **Version `1` = what the testnet head initializes with.** That makes every wire change ready
-   before initialization free — the protobuf flip (GUM-315 C1) among them. Agreed?
