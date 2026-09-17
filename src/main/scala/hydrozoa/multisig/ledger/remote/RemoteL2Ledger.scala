@@ -10,7 +10,7 @@ import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.joint.EvacuationMapHash
+import hydrozoa.multisig.ledger.joint.{EvacuationMap, EvacuationMapHash}
 import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, L2StateExport, L2StateHash, RegisterDepositResponse, RestoreError}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse, StateAtResponse}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
@@ -230,6 +230,16 @@ class RemoteL2Ledger private (
     override def importState(
         exported: L2StateExport
     ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** **Not implemented.** The coordination protocol reports digests, not the map behind them
+      * (`docs/spec/l2-ledger-command-coordination.md`), so there is no frame to ask on. It is only
+      * reachable through the same coil-peer join path [[importState]] already refuses, so adding a
+      * frame for it before that path works on a remote would be building to nothing.
+      */
+    override def evacuationMapAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, EvacuationMap] =
         EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
 
     /** Send a [[Request.StateAt]] and return the remote's [[StateAtResponse]]. Mirrors

@@ -197,3 +197,45 @@ class EutxoL2LedgerStateTransferTest extends AnyFunSuite:
         )
         io.unsafeRunSync()
     }
+
+    test("the map the ledger hands out is the one its digests describe") {
+        // A coil adopting a start point keeps the map as live slow-side state, and separately
+        // checks the digests against a signed certificate. If those two came from different
+        // derivations, the coil could pass verification and then run on a different map.
+        val io = for {
+            donorLedger <- donorAt5
+            digests <- donorLedger.stateAt(tip).value
+            map <- donorLedger.evacuationMapAt(tip).value
+        } yield {
+            val d = digests.toOption.get
+            val m = map.toOption.get
+            val _ = assert(m.digest == d.evacuationMapHash, "map digest disagrees with the report")
+            assert(m.kzgCommitment == d.evacuationMapKzg, "map commitment disagrees")
+        }
+        io.unsafeRunSync()
+    }
+
+    test("a past boundary's map is that boundary's, not the tip's") {
+        val past = L2CommandNumber(3L)
+        val io = for {
+            donorLedger <- donorAt5
+            atPast <- donorLedger.evacuationMapAt(past).value
+            atTip <- donorLedger.evacuationMapAt(tip).value
+        } yield assert(
+          atPast.toOption.get.digest != atTip.toOption.get.digest,
+          "the deposit absorbed at 4 must make 3 and 5 project different maps"
+        )
+        io.unsafeRunSync()
+    }
+
+    test("a joiner's adopted map matches the donor's at the same boundary") {
+        val io = for {
+            donorLedger <- donorAt5
+            donorMap <- donorLedger.evacuationMapAt(tip).value
+            exported <- donorLedger.exportStateAt(tip).value
+            joiner <- freshLedger
+            _ <- joiner.importState(exported.toOption.get).value
+            joinerMap <- joiner.evacuationMapAt(tip).value
+        } yield assert(joinerMap.toOption.get.digest == donorMap.toOption.get.digest)
+        io.unsafeRunSync()
+    }
