@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, Remot
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2Screener}
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{Markers, Persistence}
+import hydrozoa.multisig.persistence.{AckRetention, Markers, Persistence}
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
 trait HeadMultisigRegimeManager(
@@ -32,6 +32,7 @@ trait HeadMultisigRegimeManager(
     l2Screener: L2Screener[IO],
     persistence: Persistence[IO],
     override protected val metrics: PeerMetrics,
+    override protected val ackRetention: AckRetention,
     override protected val tracer: ContraTracer[IO, HeadRegimeManagerEvent],
     peerTransport: ActorContext[IO, Request, Any] => PeerTransport,
     /** Hub-side coil transport, populated iff this peer hubs any coil peers; required when
@@ -231,6 +232,7 @@ trait HeadMultisigRegimeManager(
               stackComposer = core.stackComposer,
               stackComposerLimiter = stackComposerLimiter,
               slowConsensusActor = core.slowConsensusActor,
+              storeCleanup = Some(core.storeCleanupActor),
               headPeerLiaisons = headPeerLiaisons,
               coilRelay = coilRelay,
               coilAckSequencer = coilAckSequencer,
@@ -346,6 +348,10 @@ object HeadMultisigRegimeManager {
           */
         blockRateGate: Option[ActorRef[IO, LimiterControl]] = None,
         slowConsensusActor: SlowConsensusActor.Handle,
+        /** Told when a stack hard-confirms, so it can delete what that confirmation made redundant.
+          * `None` where no cleanup actor runs.
+          */
+        storeCleanup: Option[StoreCleanupActor.Handle] = None,
         // ---- Producer broadcast targets (§5.2) [doc-ref] ----
         /** Head-peer-mesh liaisons (one per other head peer); empty on a coil peer. Producers
           * broadcast their own artifacts here. `ActorRef` is contravariant in its message type, so
@@ -384,6 +390,7 @@ object HeadMultisigRegimeManager {
         l2Screener: L2Screener[IO],
         persistence: Persistence[IO],
         metrics: PeerMetrics,
+        ackRetention: AckRetention,
         tracer: ContraTracer[IO, HeadRegimeManagerEvent],
         peerTransport: Resource[IO, ActorContext[IO, Request, Any] => PeerTransport],
         hubCoilTransport: Option[Resource[IO, ActorContext[IO, Request, Any] => HubTransport]] =
@@ -402,6 +409,7 @@ object HeadMultisigRegimeManager {
                   l2Screener,
                   persistence,
                   metrics,
+                  ackRetention,
                   tracer,
                   peerFactory,
                   hubFactory,

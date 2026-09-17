@@ -168,6 +168,34 @@ object Markers:
     def recoverHardConfirmed(backend: BackendStore[IO]): IO[Option[StackNumber]] =
         backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum))
 
+    /** The families whose **highest key is itself a marker**, and which retention must therefore
+      * never empty.
+      *
+      * Each marker above derives as `lastKey(cf)`, an `Option` whose `None` means "cold store" — so
+      * deleting the last row of one of these does not lose history, it makes the node boot as if it
+      * had none. `Request(own)` is the sharpest: `nextRequestNumber` is `max(key) + 1`, so an empty
+      * journal re-issues request numbers this peer has already handed out, which is the CR1
+      * violation the mark exists to prevent.
+      *
+      * Deliberately kept beside the derivations rather than in the cleanup code: anyone adding a
+      * marker is editing this file, and will see that retention has to be told about it.
+      *
+      * Note what is **absent**. `SoftAck` is not here — no marker reads it, so soft-acks prune
+      * freely. Nor is another peer's `HardAck`: only the *own* author's last key is a mark.
+      */
+    def markerFamilies(own: PeerId): Set[Cf] =
+        Set(
+          Cf.SoftConfirmation,
+          Cf.HardConfirmation,
+          Cf.HardAck(own),
+          Cf.BlockResult,
+          Cf.EvacuationMap
+        ) ++ (own match {
+            // A coil peer assigns no request numbers, so it has no own Request journal to protect.
+            case PeerId.Head(n) => Set(Cf.Request(n))
+            case PeerId.Coil(_) => Set.empty
+        })
+
     /** Decode a 4-byte big-endian `Int` from a spine-shaped key as `BlockNumber`. */
     private def decodeBlockNum(bytes: Array[Byte]): BlockNumber =
         requireWidth(bytes, 4, "BlockNumber")

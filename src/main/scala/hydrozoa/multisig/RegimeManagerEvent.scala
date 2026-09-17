@@ -5,7 +5,7 @@ import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
 import hydrozoa.multisig.consensus.limiter.LimiterEvent
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransportEvent, HubWsTransportEvent, NodeWsServerEvent, PeerTransportEvent}
-import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, CoilAckSequencerEvent, EventSequencerEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
+import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, CoilAckSequencerEvent, EventSequencerEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent, StoreCleanupActorEvent}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 import hydrozoa.rulebased.RuleBasedActorEvent
 
@@ -53,6 +53,7 @@ object CommonChildEvent:
     final case class FastConsensusActor(event: FastConsensusActorEvent) extends CommonChildEvent
     final case class StackComposer(event: StackComposerEvent) extends CommonChildEvent
     final case class SlowConsensusActor(event: SlowConsensusActorEvent) extends CommonChildEvent
+    final case class StoreCleanupActor(event: StoreCleanupActorEvent) extends CommonChildEvent
 
     /** Peer-to-peer liaison; tagged by remote peer (head or coil). Same case carries both head-mesh
       * liaisons on a head peer and the single coil-to-hub uplink on a coil.

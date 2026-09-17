@@ -7,7 +7,7 @@ import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
 import hydrozoa.multisig.consensus.limiter.LimiterEvent
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.transport.{HubWsTransportEvent, NodeWsServerEvent, PeerTransportEvent}
-import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, CoilAckSequencerEvent, EventSequencerEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
+import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, CoilAckSequencerEvent, EventSequencerEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent, StoreCleanupActorEvent}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 import hydrozoa.rulebased.RuleBasedActorEvent
 
@@ -40,6 +40,7 @@ trait HasCoreTracers:
     def jointLedger: ContraTracer[IO, JointLedgerEvent]
     def stackComposer: ContraTracer[IO, StackComposerEvent]
     def slowConsensusActor: ContraTracer[IO, SlowConsensusActorEvent]
+    def storeCleanupActor: ContraTracer[IO, StoreCleanupActorEvent]
     def peerLiaison: PeerId => ContraTracer[IO, PeerLiaisonEvent]
 
 /** Per-producer projections for the (head, multisig) cell. Holds the core set ([[HasCoreTracers]])
@@ -52,6 +53,7 @@ final case class MrmTracers(
     cardanoLiaison: ContraTracer[IO, CardanoLiaisonEvent],
     stackComposer: ContraTracer[IO, StackComposerEvent],
     slowConsensusActor: ContraTracer[IO, SlowConsensusActorEvent],
+    storeCleanupActor: ContraTracer[IO, StoreCleanupActorEvent],
     eventSequencer: ContraTracer[IO, EventSequencerEvent],
     blockWeaverLimiter: ContraTracer[IO, LimiterEvent],
     stackComposerLimiter: ContraTracer[IO, LimiterEvent],
@@ -77,6 +79,7 @@ object MrmTracers:
           cardanoLiaison = tracer.contramap(CommonChildEvent.CardanoLiaison.apply),
           stackComposer = tracer.contramap(CommonChildEvent.StackComposer.apply),
           slowConsensusActor = tracer.contramap(CommonChildEvent.SlowConsensusActor.apply),
+          storeCleanupActor = tracer.contramap(CommonChildEvent.StoreCleanupActor.apply),
           eventSequencer = tracer.contramap(HeadOnlyChildEvent.EventSequencer.apply),
           blockWeaverLimiter = tracer.contramap(MultisigOnlyChildEvent.BlockWeaverLimiter.apply),
           stackComposerLimiter =

@@ -5,7 +5,7 @@ import hydrozoa.multisig.consensus.liaison.PeerLiaisonEventFormat
 import hydrozoa.multisig.consensus.limiter.LimiterEventFormat
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{HubWsTransportEventFormat, NodeWsServerEventFormat, PeerTransportEventFormat}
-import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, CoilAckSequencerEventFormat, EventSequencerEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
+import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, CoilAckSequencerEventFormat, EventSequencerEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat, StoreCleanupActorEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 import hydrozoa.rulebased.RuleBasedActorEventFormat
 
@@ -41,6 +41,8 @@ object HeadMultisigRegimeManagerEventFormat:
                 StackComposerEventFormat.humanFormat(peerNum)(sc)
             case CommonChildEvent.SlowConsensusActor(sca) =>
                 SlowConsensusActorEventFormat.humanFormat(peerNum)(sca)
+            case CommonChildEvent.StoreCleanupActor(sc) =>
+                StoreCleanupActorEventFormat.humanFormat(peerNum)(sc)
             case HeadOnlyChildEvent.EventSequencer(es) =>
                 EventSequencerEventFormat.humanFormat(peerNum)(es)
             case CommonChildEvent.PeerLiaison(remotePeerId, pl) =>
