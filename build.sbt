@@ -415,6 +415,20 @@ lazy val examples: Project = (project in file("examples"))
       )
     )
 
+// PoC: consume the canton-reference-registry library's fast engine reference tier (the in-process
+// Daml interpreter, no Docker) and run a treasury-style deposit flow where alice + bob deposit via
+// the AllocationInstruction two-step (request -> provider accept). A source dependency via
+// ProjectRef on a sibling checkout of that repo (../daml-scratch/scala) on its current branch; the
+// engine module bundles the vendored DARs, but a source build still needs them present there (its
+// daml devShell). sbt 2 + Scala 3.3.7 on both sides.
+lazy val cantonReferencePoc: Project = (project in file("canton-reference-poc"))
+    .dependsOn(ProjectRef(file("../daml-scratch/scala"), "engine"))
+    .settings(
+      name := "hydrozoa-canton-reference-poc",
+      publish / skip := true,
+      libraryDependencies += "org.scalatest" %% "scalatest" % "3.2.19" % Test,
+    )
+
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.7"
 
