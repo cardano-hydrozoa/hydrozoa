@@ -400,7 +400,7 @@ object Serve {
         nodeConfig: NodeConfig,
         dataDir: Path,
     ): Resource[IO, (L2Ledger[IO], L2Screener[IO], Option[EutxoL2LedgerReader[IO]], IO[Unit])] =
-        nodeConfig.headConfig.l2Ledger match {
+        nodeConfig.headConfig.l2Ledger.kind match {
             case L2LedgerKind.CardanoEutxo =>
                 for {
                     _ <- Resource.eval(log.info("L2 ledger: built-in cardano-eutxo"))
@@ -408,7 +408,12 @@ object Serve {
                       dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/l2-rocksdb")
                     )
                     ledger <- Resource.eval(EutxoL2Ledger(nodeConfig, store))
-                } yield (ledger, EutxoL2Screener(nodeConfig), Some(ledger), IO.unit)
+                } yield (
+                  ledger,
+                  EutxoL2Screener(nodeConfig, ledger.protocolParams),
+                  Some(ledger),
+                  IO.unit
+                )
             case L2LedgerKind.AnyRemote =>
                 val tracer = Slf4jTracer.sink.contramap(RemoteL2LedgerEventFormat.humanFormat)
                 val wsUri = nodeConfig.remoteLedgerUri.getOrElse(

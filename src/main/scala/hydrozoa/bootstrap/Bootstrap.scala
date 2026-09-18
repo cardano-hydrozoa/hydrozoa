@@ -15,7 +15,7 @@ import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
+import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerConfig, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.{HeadConfig, HeadParamsHash}
@@ -342,6 +342,16 @@ object Bootstrap:
         totalEquity = initialEquityContributions.toSortedMap.values.foldLeft(Coin.zero)(_ + _)
 
         bhp = bootstrapConfig.headParams
+        // The agreed L2 ledger, with whatever that ledger's peers agreed about it. The built-in
+        // EUTXO ledger's parameters are the network's, snapshotted here and then fixed for the
+        // head's life: L1's keep tracking the chain, this copy must not, because `l2ParamsHash`
+        // pins it in the regime datum (docs/spec/head-params-hash.md). A remote ledger's
+        // parameters are its own and never reach the head config.
+        l2LedgerConfig = l2Ledger match {
+            case L2LedgerKind.CardanoEutxo =>
+                L2LedgerConfig.CardanoEutxo(cardanoNetwork.cardanoProtocolParams)
+            case L2LedgerKind.AnyRemote => L2LedgerConfig.AnyRemote
+        }
         headParams = HeadParameters(
           txTiming = bhp.txTiming,
           fallbackContingency = bhp.fallbackContingency,
@@ -349,8 +359,8 @@ object Bootstrap:
           settlementConfig = bhp.settlementConfig,
           blockConfig = bhp.blockConfig,
           coilQuorum = bhp.coilQuorum,
-          l2ParamsHash = sourceL2ParamsHash(l2Ledger),
-          l2Ledger = l2Ledger,
+          l2ParamsHash = sourceL2ParamsHash(l2LedgerConfig),
+          l2Ledger = l2LedgerConfig,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
           identityIsomorphism = false,
         )
@@ -565,17 +575,19 @@ object Bootstrap:
       *
       * The head cannot compute this: only the ledger knows its own parameters, and bootstrap has no
       * ledger running to ask. So it is sourced per backend instead
-      * (`docs/spec/head-params-hash.md`) — the built-in ledger's is a code constant. The checks
-      * themselves never branch this way; obtaining the value is the one place that must.
+      * (`docs/spec/head-params-hash.md`) — the built-in ledger's is computed from the same L2
+      * parameter snapshot the ledger will validate against. The checks themselves never branch this
+      * way; obtaining the value is the one place that must.
       *
       * TODO: a remote ledger's digest has to come from the operator, printed out-of-band as the
       * initial evacuation map already is. Until that input exists a remote head carries a zero
       * hash, which the reported digest will not match — an `any-remote` head does not boot.
       * GUM-342.
       */
-    private def sourceL2ParamsHash(l2Ledger: L2LedgerKind): Hash32 = l2Ledger match {
-        case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.l2ParamsHash
-        case L2LedgerKind.AnyRemote    => Hash32.fromByteString(zeroDigest)
+    private def sourceL2ParamsHash(l2Ledger: L2LedgerConfig): Hash32 = l2Ledger match {
+        case L2LedgerConfig.CardanoEutxo(protocolParams) =>
+            EutxoL2Ledger.mkL2ParamsHash(protocolParams)
+        case L2LedgerConfig.AnyRemote => Hash32.fromByteString(zeroDigest)
     }
 
     /** The digest of the state the L2 ledger opens the head in, which the initialization

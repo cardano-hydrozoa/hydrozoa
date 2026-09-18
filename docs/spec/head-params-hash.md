@@ -307,13 +307,41 @@ ledger's own at a cold anchor. A fourth commitment — a blake2b digest folded i
 of the very datum whose neighbouring field is already the KZG of the same object — would be
 redundant with something sitting inches away.
 
-The built-in EUTXO ledger has no negotiable parameters yet: its rules are the hydrozoa code, and
-its only agreed knobs — `identityIsomorphism` and the `headId` pin — already sit in
-`HeadParameters`, so folding them in here would hash the configuration against itself. It
-therefore reports a digest over an empty parameter set, which following `EvacuationMap.digest`'s
-precedent hashes its domain tag to a **defined value rather than an absence**. That keeps
-`l2ParamsHash` a plain `Hash32` — no `Option`, no special case in the layout or the checks — and
-the constant becomes a real digest as soon as the ledger grows parameters worth agreeing on.
+### What the built-in EUTXO ledger puts in it
+
+```
+l2ParamsHash = blake2b_256(
+     "gummiworm-l2-params-cardano-eutxo-v1"
+  || framed(scalusVersion) || framed(upickleVersion)
+  || framed(<l2ProtocolParams, as blockfrost JSON>)
+  || u32(ruleCount) || framed(ruleName)*
+)
+```
+
+**The L2 protocol parameters, whole.** Not the subset the rules happen to read: which parameters
+a rule consults is a property of Scalus's implementation of that rule, so a hand-maintained
+subset would be a standing guess about Scalus internals that goes stale silently — the exact
+drift this digest exists to catch. They are serialized with Scalus's own
+`ProtocolParams.blockfrostParamsReadWriter`, the writer `Codecs.protocolParamsEncoder` already
+uses to put a `custom` network's parameters into a head config.
+
+**The rules that decide what the ledger accepts**, named, in application order:
+`HydrozoaTransactionMutator.ruleNames` plus `EutxoDepositGates.ruleNames`. The upstream names are
+read off the same `Vector` that `transit` folds over, so the hashed list cannot disagree with what
+runs.
+
+**Both library versions, because names say which rules run, not what they do.** A Scalus upgrade
+can change a validator's behaviour without changing its name, so `scalusVersion` goes in beside
+the list. `upickleVersion` goes in because hydrozoa pins upickle directly and its formatting
+decides the parameter bytes. Those two are also what makes borrowing an encoder safe here rather
+than writing all 33 fields out by hand: a codec change cannot arrive without a version change that
+already moves the digest.
+
+**Hydrozoa's own rules are covered by neither.** `L2ConformanceValidator`, `HeadIdPinValidator`,
+the main-projection conservation run, `EvacuatingMutator` and the deposit gates are this repo's
+code and can change while both dependency versions stand still. The domain tag's version is the
+signal for those, and nothing enforces the bump — it is a deliberate act. GUM-323's protocol
+version is the better hook once its bump line is settled.
 
 ### What this does and does not prove
 
@@ -375,8 +403,15 @@ are fixed for its life, which is what makes them hashable at all. Whatever a led
 reaches `headParamsHash` through `l2ParamsHash` and nowhere else, so the head still does not
 interpret them — which of its parameters a ledger agrees on stays the ledger's business.
 
-The two are the same value at initialization on `cardano-eutxo`, because that ledger validates
-against the network's parameters. They are still two things, with two lifecycles.
+On `cardano-eutxo` the L2 set **is** the L1 set, snapshotted: `build-head-config` copies
+`cardanoProtocolParams` onto the `L2LedgerConfig.CardanoEutxo` branch of `headParams.l2Ledger`,
+and the ledger validates against that copy rather than against the live network section. It rides
+the ledger's own branch rather than sitting on `HeadParameters` because there is no bound on how
+many remote L2 ledgers exist: the shared head parameters stay ledger-agnostic, and each kind
+carries whatever its peers agreed about it. The two are equal at initialization and
+diverge at the first hard fork, after which the operator moves L1's forward and the head goes on
+validating L2 against the snapshot it was built with. The snapshot is never compared against the
+chain — deliberately. Changing it is a head migration, not an edit.
 
 ## The checks
 
