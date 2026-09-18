@@ -175,6 +175,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                           IO.pure(NodeStatus.Active),
                           stubReader(brief),
                           None,
+                          None,
                           headConfig,
                           HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
                           PeerMetrics.create(0L, Vector.empty),

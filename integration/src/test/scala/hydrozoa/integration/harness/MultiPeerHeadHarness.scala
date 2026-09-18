@@ -1763,6 +1763,7 @@ object MultiPeerHeadHarness:
               ConsensusStoreReader.empty,
               // No EUTXO L2-query reader in the harness — the SubmissionClient uses the write path.
               None,
+              None,
               nodeConfig.headConfig,
               serverConfig,
               metrics,

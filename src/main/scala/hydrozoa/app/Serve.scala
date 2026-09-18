@@ -26,7 +26,7 @@ import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener, RemoteL2ScreenerEventFormat}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat, StoreIdentity, StoreVersion}
+import hydrozoa.multisig.persistence.{ArchiveWatermarks, Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat, StoreIdentity, StoreVersion}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
@@ -773,6 +773,11 @@ object Serve {
             connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
             _ <- log.info("Starting HTTP server...")
 
+            // One per process, and only where this node's private config declares an archiver:
+            // its absence is what removes the watermark route, and the node then deletes as soon
+            // as consensus allows rather than waiting on a report that will never come.
+            archiveWatermarks = nodeConfig.archiver.map(_ => ArchiveWatermarks.empty())
+
             // `surround`, not `start.void`: the server is bound for exactly as long as the node
             // waits, and its finalizer runs when the actor system terminates. `runCoilNode` has
             // the same shape and spells out what the old one leaked.
@@ -790,6 +795,7 @@ object Serve {
                   // Some(reader) for a cardano-eutxo node (mounts GET /l2/cardano-eutxo/...); None for
                   // a remote-ledger node, which serves no L2-query endpoints.
                   l2QueryReader,
+                  archiveWatermarks,
                   nodeConfig.headConfig,
                   httpServerConfig(nodeConfig),
                   metrics,
@@ -824,6 +830,11 @@ object Serve {
             connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
             _ <- log.info("Starting HTTP server (coil: read-only surface)...")
 
+            // One per process, and only where this node's private config declares an archiver:
+            // its absence is what removes the watermark route, and the node then deletes as soon
+            // as consensus allows rather than waiting on a report that will never come.
+            archiveWatermarks = nodeConfig.archiver.map(_ => ArchiveWatermarks.empty())
+
             // `surround` binds the server for the node's lifetime and releases it when the actor
             // system terminates. `use(_ => IO.never).start.void` -- what this was, on both roles --
             // dropped the fiber handle, so nothing could cancel it and the finalizer never ran: the
@@ -838,6 +849,7 @@ object Serve {
                   consensusReader,
                   // A coil always runs a remote ledger, so no L2-query endpoints.
                   None,
+                  archiveWatermarks,
                   nodeConfig.headConfig,
                   httpServerConfig(nodeConfig),
                   metrics,

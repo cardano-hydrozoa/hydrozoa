@@ -58,3 +58,16 @@ object HydrozoaHttpEvent:
 
     /** Admin finalize: finalization signal forwarded to BlockWeaver. */
     case object FinalizeSignalSent extends HydrozoaHttpEvent
+
+    /** An attached archiver reported how far it has durably copied. */
+    final case class ArchiveWatermarkRecorded(advanced: Int, regressed: Int)
+        extends HydrozoaHttpEvent
+
+    /** An archiver reported a watermark below one already held, and the held figure stands.
+      *
+      * Normally means the archive was rebuilt and now holds less than the node assumed when it last
+      * deleted on the strength of the earlier report. The node cannot un-delete, so saying so is
+      * all that is left to do about it.
+      */
+    final case class ArchiveWatermarkRegressed(family: String, reported: Long, held: Long)
+        extends HydrozoaHttpEvent
