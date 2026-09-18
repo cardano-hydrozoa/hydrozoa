@@ -2,19 +2,29 @@ package hydrozoa.multisig.persistence
 
 import java.nio.ByteBuffer
 
-/** The persistence-layer schema version.
+/** The persistence-layer schema version: can this binary read this directory?
   *
   * The store rejects opens that find a version it does not understand — better fail-safe than
-  * silently misread (CR6 / §7 versioning note). The mechanism is in place from day one; bumping it
-  * on backward-incompatible format changes (CF set, key layout, codecs) waits until the layout
-  * stabilizes — see [[current]].
+  * silently misread. A mismatch is a [[hydrozoa.lib.StartupRefusal]]: nothing about the world
+  * changes what is on disk, so a restart re-derives the same verdict.
+  *
+  * One of the three versions a build carries, and the two beside it fail differently — see
+  * `design/versioning.md`:
+  *
+  *   - [[hydrozoa.multisig.consensus.transport.ProtocolVersion]] is compared against a counterpart
+  *     at every handshake; this one is compared against a local directory at every open.
+  *   - The software version is compared against nothing at all.
   */
 object StoreVersion:
     /** Current on-disk schema version — **5**.
       *
-      * The format still churns freely during development, so we do **not** track
-      * backward-incompatible bumps as migrations: a format change just rebuilds the store, and the
-      * bump is what makes an old store refuse to open rather than be misread.
+      * **Bump on any change to the column-family set, the key layout or a value codec.** A bump is
+      * not a migration: no store of an earlier version is ever read, because a bump deploys by head
+      * migration (`design/versioning.md`) and every peer of the new head starts from a fresh store.
+      *
+      * ⛔ A bump therefore cannot be answered by rebuilding the store of a running peer. A cold
+      * store re-bootstraps stack 0 and never rejoins its head (GUM-312), so the rebuild that
+      * settles a format change in development is not available on a live head.
       *
       *   - 2: the Request journals' values changed from the circe wire form to the canonical
       *     protobuf record (`proto/request_record.proto`).
@@ -60,3 +70,13 @@ object StoreVersion:
 
         /** The store's version is something else — refuse to open. */
         case Incompatible(found: Int, expected: Int)
+
+    /** Compare a store's stamped version against [[current]]. `None` is a store with no version key
+      * at all, which a writable open stamps and a read-only open refuses.
+      */
+    def check(stamped: Option[Int]): Check =
+        stamped match {
+            case None                    => Check.Fresh
+            case Some(v) if v == current => Check.Compatible
+            case Some(v)                 => Check.Incompatible(v, current)
+        }

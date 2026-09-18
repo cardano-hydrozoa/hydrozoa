@@ -4,11 +4,13 @@ import cats.*
 import cats.data.*
 import cats.effect.{Async, IO, Ref}
 import cats.syntax.all.*
+import hydrozoa.BuildInfo
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.crypto.Preimage
 import hydrozoa.multisig.ledger.eutxol2.store.{L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -26,7 +28,8 @@ import scala.collection.immutable.TreeMap
 import scala.util.Try
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
-import scalus.uplc.builtin.{ByteString, platform}
+import scalus.uplc.builtin.ByteString
+import upickle.default as upickle
 
 extension (ti: TransactionInput) {
     // Technically, this is partial -- but with the current cbor codec of TransactionInput
@@ -68,25 +71,68 @@ extension (em: EvacuationMap) {
 object EutxoL2Ledger {
     type Config = CardanoNetwork.Section & InitializationParameters.Section & HeadParameters.Section
 
-    /** This ledger's agreed-parameters digest, reported at every `restoreTo` anchor and pinned in
-      * the head config as `l2ParamsHash` (docs/spec/head-params-hash.md).
+    /** Mixed in first so this digest can never collide with a hash of the same bytes taken for
+      * another purpose.
       *
-      * A digest over the domain tag alone, because the built-in ledger has no negotiable
-      * parameters: its rules are the hydrozoa code, and its only agreed knobs —
-      * `identityIsomorphism` and the `headId` pin — already sit in [[HeadParameters]], so folding
-      * them in here would hash the configuration against itself. Following `EvacuationMap.digest`'s
-      * precedent for an empty input, an empty parameter set hashes to a defined value rather than
-      * an absence.
-      *
-      * The tag carries a version so it can move when this ledger's rules do: bumping it stops two
-      * peers on builds with divergent L2 semantics from booting against the same head. Nothing
-      * enforces the bump — it is a deliberate act.
+      * The tag carries a version so it can move when **this repo's** L2 rules do —
+      * `L2ConformanceValidator`, `HeadIdPinValidator`, the main-projection conservation run,
+      * `EvacuatingMutator` and [[EutxoDepositGates]]. No dependency version covers those: they are
+      * hydrozoa code and can change while `scalusVersion` stands still. Nothing enforces the bump;
+      * it is a deliberate act. (GUM-323's protocol version is the better hook once its bump line is
+      * settled.)
       */
-    val l2ParamsHash: Hash32 = Hash32.fromByteString(
-      platform.blake2b_256(
-        ByteString.fromArray("gummiworm-l2-params-cardano-eutxo-v1".getBytes(UTF_8))
-      )
-    )
+    private val domainTag: Array[Byte] = "gummiworm-l2-params-cardano-eutxo-v1".getBytes(UTF_8)
+
+    /** This ledger's agreed-parameters digest, reported at every `restoreTo` anchor and pinned in
+      * the head config as `l2ParamsHash` (`docs/spec/head-params-hash.md`).
+      *
+      * ```
+      * blake2b_256(
+      *      domainTag
+      *   || framed(scalusVersion) || framed(upickleVersion)
+      *   || framed(<l2ProtocolParams, as blockfrost JSON>)
+      *   || u32(ruleCount) || framed(ruleName)*
+      * )
+      * ```
+      *
+      * **The parameters go in whole**, not the subset the rules happen to read: which parameters a
+      * rule consults is a property of Scalus's implementation of that rule, so a hand-maintained
+      * subset would be a standing guess about Scalus internals that goes stale silently — the exact
+      * drift this digest exists to catch.
+      *
+      * **The rule names say which rules run, not what they do**, so the two library versions go in
+      * beside them. `scalusVersion` covers the upstream validators, whose behaviour can change
+      * without their names changing. `upickleVersion` covers the parameter encoding: hydrozoa pins
+      * upickle directly, so its formatting can move while Scalus stands still. Those two versions
+      * are also what makes borrowing `blockfrostParamsReadWriter` safe here rather than writing all
+      * 33 fields out by hand — an encoder change cannot arrive without a version change that
+      * already moves the digest.
+      *
+      * Hydrozoa's own rules are covered by neither; see [[domainTag]].
+      *
+      * **Not to be confused with `HeadParameters.l2ParamsHash`**, which is the value the peers
+      * agreed and the regime datum pins. This one is what the parameters in hand actually hash to,
+      * and reporting it is the whole of check 4: answering with the config's stored value instead
+      * would compare the config against itself and pass unconditionally. The digest is computed
+      * from the parameters rather than read off a `Config` so that the two can never be swapped by
+      * accident, and so bootstrap can call it while still building the `HeadParameters` that will
+      * carry both.
+      */
+    def mkL2ParamsHash(l2ProtocolParams: ProtocolParams): Hash32 = {
+        val out = Preimage()
+        out.raw(domainTag)
+        out.framed(BuildInfo.scalusVersion.getBytes(UTF_8))
+        out.framed(BuildInfo.upickleVersion.getBytes(UTF_8))
+        out.framed(
+          upickle
+              .write(l2ProtocolParams)(using ProtocolParams.blockfrostParamsReadWriter)
+              .getBytes(UTF_8)
+        )
+        val rules = HydrozoaTransactionMutator.ruleNames ++ EutxoDepositGates.ruleNames
+        out.u32(rules.size)
+        rules.foreach(rule => out.framed(rule.getBytes(UTF_8)))
+        out.mkDigest
+    }
 
     /** The [[hydrozoa.multisig.ledger.l2.L2StateHash]] of the state this ledger opens a head in:
       * `initialEvacuationMap` as its utxo set, both other compartments empty.
@@ -148,12 +194,31 @@ object EutxoL2Ledger {
       * any past commandNumber.
       */
     def apply(config: EutxoL2Ledger.Config, store: L2Store[IO]): IO[EutxoL2Ledger] =
-        for ref <- Ref[IO].of(State.genesis(config))
-        yield new EutxoL2Ledger(config, ref, store)
+        for {
+            protocolParams <- IO.fromEither(
+              protocolParamsOf(config).left.map(RuntimeException(_))
+            )
+            ref <- Ref[IO].of(State.genesis(config))
+        } yield new EutxoL2Ledger(config, protocolParams, ref, store)
+
+    /** The protocol parameters this ledger validates against, read off the head config's agreed
+      * [[hydrozoa.config.head.parameters.L2LedgerConfig]].
+      *
+      * A head configured for another backend cannot run this ledger, and says so here rather than
+      * failing somewhere downstream.
+      */
+    def protocolParamsOf(config: Config): Either[String, ProtocolParams] =
+        config.cardanoEutxoProtocolParams.toRight(
+          "the built-in EUTXO ledger needs l2Ledger = " +
+              " in the head config, but it is " +
+              ""
+        )
 }
 
 case class EutxoL2Ledger private (
     config: EutxoL2Ledger.Config,
+    /** The L2 protocol parameters this ledger validates against, fixed for the head's life. */
+    protocolParams: ProtocolParams,
     // Note: For now, I'm going to leave this as a `Ref`. Now that we have an `Initialize` command, it would
     // _probably_ make more sense to have this be an `Option[Ref[...]]`. But the initialize command will
     // go away in the future, so...
@@ -206,6 +271,7 @@ case class EutxoL2Ledger private (
                 compartments <- HydrozoaTransactionMutator
                     .transit(
                       config = config,
+                      protocolParams = protocolParams,
                       time = QuantizedInstant
                           .fromPlutusPosixTime(config.slotConfig, req.blockCreationStartTime),
                       state = Compartments(s.activeUtxos, s.transientTokens),
@@ -557,7 +623,7 @@ case class EutxoL2Ledger private (
                     evacuationMapHash = map.digest,
                     evacuationMapKzg = map.kzgCommitment,
                     l2StateHash = L2Snapshot.fromState(s).stateHash,
-                    l2ParamsHash = EutxoL2Ledger.l2ParamsHash
+                    l2ParamsHash = EutxoL2Ledger.mkL2ParamsHash(protocolParams)
                   )
               )
         )

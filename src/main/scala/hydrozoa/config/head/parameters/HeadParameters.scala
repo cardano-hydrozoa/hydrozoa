@@ -9,7 +9,7 @@ import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
-import scalus.cardano.ledger.Hash32
+import scalus.cardano.ledger.{Hash32, ProtocolParams}
 
 /** The parameters that peers agree upon to run the protocol. They feed `headParamsHash`, which the
   * multisig regime datum carries.
@@ -24,7 +24,7 @@ final case class HeadParameters(
     //   It will be in the multisig native script; the hash will change if the peers don't agree.
     override val coilQuorum: Int,
     override val l2ParamsHash: Hash32,
-    override val l2Ledger: L2LedgerKind,
+    override val l2Ledger: L2LedgerConfig,
     override val identityIsomorphism: Boolean
 ) extends HeadParameters.Section {
     override transparent inline def headParameters: HeadParameters = this
@@ -50,9 +50,18 @@ object HeadParameters {
           */
         def l2ParamsHash: Hash32 = headParameters.l2ParamsHash
 
-        /** Which L2 ledger this head runs — `cardano-eutxo` or `any-remote` (agreed by all peers).
+        /** Which L2 ledger this head runs, and what its peers agreed about it. Agnostic by
+          * construction: the head holds this and does not look inside — see [[L2LedgerConfig]].
           */
-        def l2Ledger: L2LedgerKind = headParameters.l2Ledger
+        def l2Ledger: L2LedgerConfig = headParameters.l2Ledger
+
+        /** The `cardano-eutxo` ledger's agreed protocol parameters, when that is the backend this
+          * head runs. `None` on any other, whose parameters are its own and never reach the head.
+          */
+        def cardanoEutxoProtocolParams: Option[ProtocolParams] = l2Ledger match {
+            case L2LedgerConfig.CardanoEutxo(protocolParams) => Some(protocolParams)
+            case L2LedgerConfig.AnyRemote                    => None
+        }
 
         /** Identity isomorphism: when `true`, the exact L1 tx runs on L2 unchanged — the ledger
           * does NOT enforce the `headId` pin, which reopens cross-head replay

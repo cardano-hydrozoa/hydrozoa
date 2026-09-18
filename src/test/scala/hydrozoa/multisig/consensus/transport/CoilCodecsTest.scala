@@ -49,18 +49,74 @@ class CoilCodecsTest extends AnyFunSuite {
         }
     }
 
-    test("CoilFrame.Handshake round-trips") {
-        val frame = CoilFrame.Handshake.own(coilNum = 3)
+    test("CoilFrame.Challenge round-trips, announcing this build's protocol version") {
+        val frame = CoilFrame.Challenge.own(HandshakeFixture.nonce)
+        val _ = assert(frame.protocolVersion.contains(ProtocolVersion.current))
+        assert(roundTrip(frame) == frame)
+    }
+
+    test("a Challenge announcing no protocol version decodes to None, not a decode failure") {
+        // The hub announces its version so the coil reaches its own verdict; a hub that announces
+        // none must still parse, so the refusal names the real problem.
+        val text = s"""{"t":"challenge","nonce":${HandshakeFixture.nonceJson}}"""
+        CoilFrame.parse(text) match {
+            case Right(CoilFrame.Challenge(_, protocolVersion)) =>
+                val _ = assert(protocolVersion.isEmpty)
+                assert(
+                  ProtocolVersion.check(protocolVersion) ==
+                      ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
+                )
+            case other => fail(s"expected a Challenge, got $other")
+        }
+    }
+
+    test("a signed CoilFrame.Handshake round-trips, proof intact") {
+        val frame = CoilFrame.Handshake.own(
+          coilNum = 1,
+          HandshakeFixture.coilWallet(1),
+          HandshakeFixture.headParamsHash,
+          HandshakeFixture.nonce
+        )
+        // The signature is an opaque IArray, so structural equality would compare array identities;
+        // JSON stability is the round-trip property that holds. Same as [[CodecsTest]].
+        assertJsonStable(frame)
+        roundTrip(frame) match {
+            case CoilFrame.Handshake(coilNum, protocolVersion, auth) =>
+                val _ = assert(coilNum == 1)
+                val _ = assert(protocolVersion.contains(ProtocolVersion.current))
+                assert(
+                  HandshakeProof.verify(
+                    HandshakeFixture.coilPeers.verificationKey(CoilPeerNumber(1)).get,
+                    HandshakeProof.Link.CoilToHub,
+                    claimant = 1,
+                    ProtocolVersion.current,
+                    HandshakeFixture.headParamsHash,
+                    HandshakeFixture.nonce,
+                    auth
+                  ) == Right(())
+                )
+            case other => fail(s"expected a Handshake, got: $other")
+        }
+    }
+
+    test("a CoilFrame.Refused round-trips") {
+        val frame = CoilFrame.Refused(HandshakeRefusal.NotHubbed(3))
         assert(roundTrip(frame) == frame)
     }
 
     test("a Handshake with no protocol version decodes, so the version check can refuse it") {
-        val text = """{"t":"handshake","coilNum":3}"""
+        // Proof and all, only the version missing — see the mirror of this in [[CodecsTest]].
+        val auth =
+            HandshakeFixture.authJson(
+              HandshakeProof.Link.CoilToHub,
+              HandshakeFixture.coilWallet(0),
+              claimant = 3
+            )
+        val text = s"""{"t":"handshake","coilNum":3,"auth":$auth}"""
         CoilFrame.parse(text) match {
-            case Right(CoilFrame.Handshake(coilNum, protocolVersion, auth)) =>
+            case Right(CoilFrame.Handshake(coilNum, protocolVersion, _)) =>
                 val _ = assert(coilNum == 3)
                 val _ = assert(protocolVersion.isEmpty)
-                val _ = assert(auth == HandshakeAuth.Unauthenticated)
                 assert(
                   ProtocolVersion.check(protocolVersion) ==
                       ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)

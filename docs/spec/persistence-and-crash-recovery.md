@@ -1589,12 +1589,12 @@ Notes / decisions:
   like `CardanoBackend` — `HeadMultisigRegimeManager` already reserves a
   `Dependencies.Persistence` enum case and termination handler, so the seam exists.
 - **Layout:** one store per head instance, keyed by head ID, path from `NodeConfig`.
-- **Versioning:** the store version is **held at 1** (`StoreVersion.current`, in `Cf.Meta`),
-  and recovery refuses to load an incompatible version. While the layout is unstable a format
-  change rebuilds the store rather than bumping the version; backward-incompatible bumps get
-  tracked once the layout stabilizes. (The layout unifies the head and coil own-hard-ack CFs
-  into one `PeerId`-keyed `HardAck` journal — one CF per peer, a coil author's named
-  `HardAck:<peerWireInt>`.)
+- **Versioning:** the store version is `StoreVersion.current`, stamped in `Cf.Meta`, and an open
+  that finds any other value refuses to start (`design/versioning.md`). Any change to the
+  column-family set, the key layout or a value codec bumps it, and a bump deploys by head
+  migration — no store of an earlier version is ever read. (The layout unifies the head and coil
+  own-hard-ack CFs into one `PeerId`-keyed `HardAck` journal — one CF per peer, a coil author's
+  named `HardAck:<peerWireInt>`.)
 
 ### 7.1 Key layout — journal IDs
 

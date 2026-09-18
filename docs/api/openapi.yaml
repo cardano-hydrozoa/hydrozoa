@@ -331,8 +331,10 @@ paths:
                 type: string
   /version:
     get:
-      description: The build identity (version, git commit, build time) baked in at
-        compile.
+      description: 'The three versions this build carries: the build identity (version,
+        git commit, build time) baked in at compile, the protocol version its peers
+        must match at the handshake, and the schema version its store must match at
+        every open.'
       operationId: getVersion
       responses:
         '200':
@@ -1785,6 +1787,8 @@ components:
       - version
       - gitCommit
       - buildTime
+      - protocolVersion
+      - storeVersion
       properties:
         version:
           type: string
@@ -1792,6 +1796,12 @@ components:
           type: string
         buildTime:
           type: string
+        protocolVersion:
+          type: integer
+          format: int32
+        storeVersion:
+          type: integer
+          format: int32
   securitySchemes:
     httpAuth:
       type: http
