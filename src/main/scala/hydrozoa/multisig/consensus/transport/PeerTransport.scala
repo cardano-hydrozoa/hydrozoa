@@ -96,8 +96,8 @@ final class WsPeerTransport private (
     private def onLine(remote: HeadPeerId)(s: String): IO[Unit] =
         HeadFrame.parse(s) match {
             case Right(HeadFrame.Msg(payload)) => dispatchInbound(remote, payload)
-            case Right(HeadFrame.Hello(_))     =>
-                // Hello is only valid on the first frame; subsequent ones ignored.
+            case Right(_: HeadFrame.Handshake) =>
+                // A handshake is only valid as the first frame; subsequent ones are ignored.
                 IO.unit
             case Left(err) =>
                 tracer.traceWith(ClientDecodeError(remote, err))
@@ -119,11 +119,11 @@ final class WsPeerTransport private (
         // in `CoilPeerWsTransport` for the full rationale; the shape here is identical.
         def once(handshook: Deferred[IO, Unit]): IO[Unit] =
             QuietRelease(client.connect(request)).use { conn =>
-                val helloLine = HeadFrame.encode(HeadFrame.Hello(ownPeerId.peerNum))
+                val handshakeLine = HeadFrame.encode(HeadFrame.Handshake.own(ownPeerId.peerNum))
                 handshook.complete(()).flatMap {
                     case true =>
                         tracer.traceWith(DialerConnected(remote, uri)) >>
-                            conn.send(WSFrame.Text(helloLine)) >>
+                            conn.send(WSFrame.Text(handshakeLine)) >>
                             WsDuplex.run(conn, outboxes(remote), onLine(remote))
                     // Lost the claim: the budget expired and the loop has already redialed. Return
                     // instead, so `use` closes this socket rather than leaving a second live
@@ -168,8 +168,8 @@ final class WsPeerTransport private (
     }
 
     /** Server-side handler for an incoming WS connection. The first frame must be
-      * [[HeadFrame.Hello]] carrying the connecting peer's number; subsequent frames are dispatched
-      * as [[HeadFrame.Msg]].
+      * [[HeadFrame.Handshake]] carrying the connecting peer's number and protocol version;
+      * subsequent frames are dispatched as [[HeadFrame.Msg]].
       */
     private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] =
         for {
@@ -186,21 +186,33 @@ final class WsPeerTransport private (
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     HeadFrame.parse(s) match {
-                        case Right(HeadFrame.Hello(peerNum)) =>
-                            // Topology: the server only accepts inbound from lower-numbered peers.
+                        case Right(HeadFrame.Handshake(peerNum, protocolVersion, _)) =>
                             val pn: Int = peerNum
                             val ownPn: Int = ownPeerId.peerNum
-                            if pn < ownPn && pn >= 0 then {
-                                val remote = HeadPeerId(pn, ownPeerId.nHeadPeers)
-                                tracer.traceWith(ServerAccepted(remote)) >>
-                                    peerD.complete(remote).void
-                            } else {
-                                tracer.traceWith(ServerRejectedHello(pn, ownPn))
+                            // Version before topology: a peer speaking another protocol may not even
+                            // mean the same thing by its own number, so there is nothing to place in
+                            // the topology until the two ends agree on the vocabulary. `auth` is
+                            // carried and not checked — asserted, never proven (GUM-322).
+                            ProtocolVersion.check(protocolVersion) match {
+                                case ProtocolVersion.Check.Incompatible(found, expected) =>
+                                    tracer.traceWith(
+                                      ServerRejectedProtocolVersion(pn, found, expected)
+                                    )
+                                // Topology: the server only accepts inbound from lower-numbered
+                                // peers.
+                                case ProtocolVersion.Check.Compatible =>
+                                    if pn < ownPn && pn >= 0 then {
+                                        val remote = HeadPeerId(pn, ownPeerId.nHeadPeers)
+                                        tracer.traceWith(ServerAccepted(remote)) >>
+                                            peerD.complete(remote).void
+                                    } else {
+                                        tracer.traceWith(ServerRejectedHandshake(pn, ownPn))
+                                    }
                             }
                         case Right(HeadFrame.Msg(payload)) =>
                             peerD.tryGet.flatMap {
                                 case Some(remote) => dispatchInbound(remote, payload)
-                                case None         => tracer.traceWith(ServerMsgBeforeHello)
+                                case None         => tracer.traceWith(ServerMsgBeforeHandshake)
                             }
                         case Left(err) =>
                             tracer.traceWith(ServerDecodeError(err))

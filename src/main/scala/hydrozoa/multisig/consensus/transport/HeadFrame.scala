@@ -10,16 +10,39 @@ import io.circe.syntax.*
 
 /** Wire envelope for the head-peer-mesh WebSocket transport.
   *
-  *   - [[Hello]] is sent as the first frame on a fresh connection so the recipient knows which peer
-  *     is on the other end.
+  *   - [[Handshake]] is sent as the first frame on a fresh connection so the recipient knows which
+  *     peer is on the other end, which protocol version it speaks, and what it offers as proof of
+  *     identity.
   *   - [[Msg]] carries a wire-eligible head↔head batch message ([[Mesh.Get]] or [[Mesh.New]]).
   *
   * This is the `/head` (head-mesh) envelope only. The hub↔coil link has its own envelope
   * ([[CoilFrame]], on the `/hub` route), so `Population` / `OwnHardAck` batches never reach here.
+  *
+  * **The head-mesh handshake carries no start point**, unlike the coil→hub one: a head peer holds
+  * the full roster from config and always catches up from its own store, so there is nothing to
+  * negotiate beyond who it is and whether the two ends speak the same protocol.
   */
 sealed trait HeadFrame
 object HeadFrame {
-    final case class Hello(peerNum: Int) extends HeadFrame
+
+    /** The dialing peer's opening frame. `protocolVersion` is `None` from a counterpart too old to
+      * announce one, which is refused the same way a mismatch is ([[ProtocolVersion.check]]).
+      */
+    final case class Handshake(
+        peerNum: Int,
+        protocolVersion: Option[Int],
+        auth: HandshakeAuth
+    ) extends HeadFrame
+
+    object Handshake {
+
+        /** This node's own handshake: its peer number, the version it speaks, and — until GUM-322 —
+          * no proof of either.
+          */
+        def own(peerNum: Int): Handshake =
+            Handshake(peerNum, Some(ProtocolVersion.current), HandshakeAuth.Unauthenticated)
+    }
+
     final case class Msg(payload: LiaisonProtocol.HeadToHeadRequest) extends HeadFrame
 
     /** The wire-eligible subset of a head↔head liaison's `Request`. The proxy actor only forwards
@@ -35,8 +58,13 @@ object HeadFrame {
         }
 
     given (using CardanoNetwork.Section): Encoder[HeadFrame] = Encoder.instance {
-        case Hello(peerNum) =>
-            Json.obj("t" -> "hello".asJson, "peerNum" -> peerNum.asJson)
+        case Handshake(peerNum, protocolVersion, auth) =>
+            Json.obj(
+              "t" -> "handshake".asJson,
+              "peerNum" -> peerNum.asJson,
+              "protocolVersion" -> protocolVersion.asJson,
+              "auth" -> auth.asJson
+            )
         case Msg(payload) =>
             payload match {
                 case x: Mesh.Get =>
@@ -55,8 +83,19 @@ object HeadFrame {
 
     given (using CardanoNetwork.Section): Decoder[HeadFrame] = Decoder.instance(c =>
         c.downField("t").as[String].flatMap {
-            case "hello" =>
-                c.downField("peerNum").as[Int].map(Hello(_))
+            case "handshake" =>
+                for {
+                    peerNum <- c.downField("peerNum").as[Int]
+                    // Absent rather than required: a counterpart that announces no version is
+                    // refused by the version check with a legible reason, not by a decode failure
+                    // that reads as a malformed frame.
+                    protocolVersion <- c.downField("protocolVersion").as[Option[Int]]
+                    auth <- c.downField("auth").as[Option[HandshakeAuth]]
+                } yield Handshake(
+                  peerNum,
+                  protocolVersion,
+                  auth.getOrElse(HandshakeAuth.Unauthenticated)
+                )
             case "msg" =>
                 c.downField("kind").as[String].flatMap {
                     case "MeshGet" =>

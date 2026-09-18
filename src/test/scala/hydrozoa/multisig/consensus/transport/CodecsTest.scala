@@ -54,9 +54,24 @@ class CodecsTest extends AnyFunSuite {
         }
     }
 
-    test("Hello frame round-trips") {
-        val frame = HeadFrame.Hello(peerNum = 7)
+    test("Handshake frame round-trips") {
+        val frame = HeadFrame.Handshake.own(peerNum = 7)
         assert(roundTrip(frame) == frame)
+    }
+
+    test("a Handshake with no protocol version decodes, so the version check can refuse it") {
+        val text = """{"t":"handshake","peerNum":7}"""
+        HeadFrame.parse(text) match {
+            case Right(HeadFrame.Handshake(peerNum, protocolVersion, auth)) =>
+                val _ = assert(peerNum == 7)
+                val _ = assert(protocolVersion.isEmpty)
+                val _ = assert(auth == HandshakeAuth.Unauthenticated)
+                assert(
+                  ProtocolVersion.check(protocolVersion) ==
+                      ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
+                )
+            case other => fail(s"expected a Handshake, got: $other")
+        }
     }
 
     test("HeadFrame.Msg(Mesh.Get initial cursors) round-trips") {

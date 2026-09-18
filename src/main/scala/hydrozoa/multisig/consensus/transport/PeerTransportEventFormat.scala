@@ -48,13 +48,18 @@ object PeerTransportEventFormat:
                 )
             case ServerAccepted(remote) =>
                 info(s"server: accepted inbound from remote=${remote.peerNum: Int}")
-            case ServerRejectedHello(remotePeerNum, ownPeerNum) =>
+            case ServerRejectedHandshake(remotePeerNum, ownPeerNum) =>
                 warn(
-                  s"server: rejecting hello from peerNum=$remotePeerNum " +
+                  s"server: rejecting handshake from peerNum=$remotePeerNum " +
                       s"(own=$ownPeerNum, must be lower)"
                 )
-            case ServerMsgBeforeHello =>
-                warn("server: msg before hello, dropping")
+            case ServerRejectedProtocolVersion(remotePeerNum, found, expected) =>
+                warn(
+                  s"server: rejecting peerNum=$remotePeerNum — protocol version " +
+                      s"${ProtocolVersion.describe(found)}, this node speaks $expected"
+                )
+            case ServerMsgBeforeHandshake =>
+                warn("server: msg before handshake, dropping")
             case ServerDecodeError(cause) =>
                 warn(s"server: failed to decode frame: ${cause.getMessage}")
         }
