@@ -5,10 +5,11 @@ import cats.effect.{Deferred, FiberIO, IO, Ref, Resource}
 import cats.syntax.all.*
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHeadToHead}
-import hydrozoa.multisig.consensus.peer.HeadPeerId
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.consensus.transport.PeerTransportEvent.*
 import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
 import org.http4s.dsl.io.*
@@ -16,6 +17,7 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import org.http4s.{HttpRoutes, Uri}
 import scala.concurrent.duration.*
+import scalus.cardano.ledger.Hash32
 
 /** The head-peer mesh transport one peer uses to talk to the others. */
 trait PeerTransport {
@@ -44,12 +46,22 @@ trait PeerTransport {
   * Connection topology: lower-numbered peer dials higher-numbered peer. Exactly one logical link
   * per (own, remote) pair — full-duplex over a single WS connection.
   *
+  * **The socket's identity is proven, not asserted.** The accepting peer opens with a
+  * [[HeadFrame.Challenge]], the dialer answers with a [[HeadFrame.Handshake]] signed over that
+  * nonce, and the accepting peer checks the signature against the `headPeers` key for the claimed
+  * number. A socket whose handshake does not check out is told why ([[HeadFrame.Refused]]) and
+  * closed. The dial topology is a separate rule from identity and both are enforced: it is what
+  * keeps the mesh at one link per pair, not what says who is on it.
+  *
   * Outbound queues are unbounded and retained across reconnects. The protocol on top
   * ([[PeerLiaisonHeadToHead]]) is idempotent (GetMsgBatch/NewMsgBatch with explicit numbering), so
   * a brief window where the same message is delivered twice during a reconnect is harmless.
   */
 final class WsPeerTransport private (
     val ownPeerId: HeadPeerId,
+    private val ownWallet: PeerWallet,
+    private val headPeers: HeadPeers.Section,
+    private val headParamsHash: Hash32,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
     private val keepAlivePing: FiniteDuration,
@@ -96,12 +108,24 @@ final class WsPeerTransport private (
     private def onLine(remote: HeadPeerId)(s: String): IO[Unit] =
         HeadFrame.parse(s) match {
             case Right(HeadFrame.Msg(payload)) => dispatchInbound(remote, payload)
+            // The remote's verdict on the handshake this attempt just sent: it refused, and the
+            // socket is about to close. The dialer redials regardless — a refusal describes this
+            // attempt, not the remote — so the trace is what tells an operator to go fix a config.
+            case Right(HeadFrame.Refused(refusal)) =>
+                tracer.traceWith(DialerRefused(remote, refusal))
+            // A challenge is answered before the duplex starts, and a remote sends exactly one; a
+            // second is the remote misbehaving, not a renegotiation.
+            case Right(_: HeadFrame.Challenge) => tracer.traceWith(DialerLateChallenge(remote))
             case Right(_: HeadFrame.Handshake) =>
                 // A handshake is only valid as the first frame; subsequent ones are ignored.
                 IO.unit
             case Left(err) =>
                 tracer.traceWith(ClientDecodeError(remote, err))
         }
+
+    /** A remote's opening challenge, or `None` if it opened with something else. */
+    private def challenge(line: String): Option[HeadFrame.Challenge] =
+        HeadFrame.parse(line).toOption.collect { case c: HeadFrame.Challenge => c }
 
     /** Long-running dialer for a single remote. Attempts to reconnect forever with a 1-second
       * delay. Outbox is preserved across reconnects.
@@ -115,20 +139,45 @@ final class WsPeerTransport private (
 
         // Low-level `connect`, not `connectHighLevel`: the dialer needs to see the remote's
         // keep-alive Ping to know the link is alive (see WsDuplex).
-        // `handshook` arbitrates between this attempt and the loop's budget — see the coil dialer
-        // in `CoilPeerWsTransport` for the full rationale; the shape here is identical.
+        // `handshook` arbitrates between this attempt and the loop's budget, and the remote speaks
+        // first: its challenge is what this attempt's proof is signed over, so the socket is
+        // claimed only once there is a nonce to answer. Same shape as the coil dialer in
+        // `CoilPeerWsTransport`, including why an attempt without a challenge must end itself.
         def once(handshook: Deferred[IO, Unit]): IO[Unit] =
             QuietRelease(client.connect(request)).use { conn =>
-                val handshakeLine = HeadFrame.encode(HeadFrame.Handshake.own(ownPeerId.peerNum))
-                handshook.complete(()).flatMap {
-                    case true =>
-                        tracer.traceWith(DialerConnected(remote, uri)) >>
-                            conn.send(WSFrame.Text(handshakeLine)) >>
-                            WsDuplex.run(conn, outboxes(remote), onLine(remote))
-                    // Lost the claim: the budget expired and the loop has already redialed. Return
-                    // instead, so `use` closes this socket rather than leaving a second live
-                    // connection draining this remote's outbox.
-                    case false => tracer.traceWith(DialerHandshakeLate(remote, uri))
+                WsDuplex.firstLine(conn, challengeBudget).map(_.flatMap(challenge)).flatMap {
+                    case None => tracer.traceWith(DialerNoChallenge(remote, uri, challengeBudget))
+                    case Some(HeadFrame.Challenge(nonce, protocolVersion)) =>
+                        ProtocolVersion.check(protocolVersion) match {
+                            // Refuse before answering. Signing a proof for a peer this node cannot
+                            // talk to is wasted work, and deciding here is what lets the dialer
+                            // name both versions against a remote that never says why — which is
+                            // what a remote too old to send `Refused` does.
+                            case ProtocolVersion.Check.Incompatible(found, expected) =>
+                                tracer.traceWith(
+                                  DialerRefusedChallenge(
+                                    remote,
+                                    HandshakeRefusal.ProtocolVersionMismatch(found, expected)
+                                  )
+                                )
+                            case ProtocolVersion.Check.Compatible =>
+                                val handshakeLine = HeadFrame.encode(
+                                  HeadFrame.Handshake
+                                      .own(ownPeerId.peerNum, ownWallet, headParamsHash, nonce)
+                                )
+                                handshook.complete(()).flatMap {
+                                    case true =>
+                                        tracer.traceWith(DialerConnected(remote, uri)) >>
+                                            conn.send(WSFrame.Text(handshakeLine)) >>
+                                            WsDuplex.run(conn, outboxes(remote), onLine(remote))
+                                    // Lost the claim: the budget expired and the loop has already
+                                    // redialed. Return instead, so `use` closes this socket rather
+                                    // than leaving a second live connection draining this remote's
+                                    // outbox.
+                                    case false =>
+                                        tracer.traceWith(DialerHandshakeLate(remote, uri))
+                                }
+                        }
                 }
             }
 
@@ -167,53 +216,107 @@ final class WsPeerTransport private (
         (bounded >> IO.sleep(1.second)).foreverM
     }
 
-    /** Server-side handler for an incoming WS connection. The first frame must be
-      * [[HeadFrame.Handshake]] carrying the connecting peer's number and protocol version;
-      * subsequent frames are dispatched as [[HeadFrame.Msg]].
+    /** The ordered verdict on one inbound handshake.
+      *
+      * Version first: a peer speaking another protocol may not even mean the same thing by its own
+      * number, so there is nothing to place in the topology until the two ends agree on the
+      * vocabulary. The dial topology next, because the claimed number is what resolves the key the
+      * proof is checked against. Only then the proof itself.
+      */
+    private def admit(
+        peerNum: Int,
+        protocolVersion: Option[Int],
+        auth: HandshakeAuth,
+        nonce: HandshakeNonce
+    ): Either[HandshakeRefusal, HeadPeerId] = {
+        val ownPn: Int = ownPeerId.peerNum
+        ProtocolVersion.check(protocolVersion) match {
+            case ProtocolVersion.Check.Incompatible(found, expected) =>
+                Left(HandshakeRefusal.ProtocolVersionMismatch(found, expected))
+            // Topology: the server only accepts inbound from lower-numbered peers. It was never
+            // authentication — it is the dial rule, and it stays because two peers dialing each
+            // other would build two links where the mesh has one.
+            case ProtocolVersion.Check.Compatible =>
+                if peerNum >= ownPn || peerNum < 0 then
+                    Left(HandshakeRefusal.WrongDialDirection(peerNum, ownPn))
+                else
+                    val remote = HeadPeerId(HeadPeerNumber(peerNum), ownPeerId.nHeadPeers)
+                    headPeers
+                        .headPeerVKey(HeadPeerNumber(peerNum))
+                        .toRight(HandshakeRefusal.NotInRoster(peerNum))
+                        .flatMap { vkey =>
+                            HandshakeProof
+                                .verify(
+                                  vkey,
+                                  HandshakeProof.Link.HeadToHead,
+                                  peerNum,
+                                  ProtocolVersion.current,
+                                  headParamsHash,
+                                  nonce,
+                                  auth
+                                )
+                                .map(_ => remote)
+                        }
+        }
+    }
+
+    /** Server-side handler for an incoming WS connection. The server opens with a
+      * [[HeadFrame.Challenge]]; the dialer's first frame must be a [[HeadFrame.Handshake]] proving
+      * its peer number over that nonce, and subsequent frames are dispatched as [[HeadFrame.Msg]].
       */
     private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] =
         for {
-            peerD <- cats.effect.Deferred[IO, HeadPeerId]
-            sendStream: Stream[IO, WebSocketFrame] = NodeWsServer.withKeepAlive(keepAlivePing)(
-              Stream
-                  .eval(peerD.get)
-                  .flatMap { remote =>
-                      Stream
-                          .fromQueueUnterminated(outboxes(remote))
-                          .map(line => WebSocketFrame.Text(line))
-                  }
-            )
+            nonce <- HandshakeNonce.random
+            // Right: bound to a remote, drain its outbox. Left: refused, say why and close. Nothing
+            // else ever reaches the send stream, so a socket that is neither simply carries the
+            // challenge and dies on the server's idle timeout.
+            verdictD <- Deferred[IO, Either[HandshakeRefusal, HeadPeerId]]
+            sendStream: Stream[IO, WebSocketFrame] =
+                Stream.emit(
+                  WebSocketFrame.Text(HeadFrame.encode(HeadFrame.Challenge.own(nonce)))
+                ) ++
+                    Stream.eval(verdictD.get).flatMap {
+                        case Right(remote) =>
+                            NodeWsServer.withKeepAlive(keepAlivePing)(
+                              Stream
+                                  .fromQueueUnterminated(outboxes(remote))
+                                  .map(line => WebSocketFrame.Text(line))
+                            )
+                        // Ending the stream is what closes the socket; the frames before it are
+                        // what stop the dialer reading that close as a network fault.
+                        case Left(refusal) =>
+                            Stream(
+                              WebSocketFrame.Text(HeadFrame.encode(HeadFrame.Refused(refusal))),
+                              NodeWsServer.closeFrame(HandshakeRefusal.describe(refusal))
+                            )
+                    }
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     HeadFrame.parse(s) match {
-                        case Right(HeadFrame.Handshake(peerNum, protocolVersion, _)) =>
-                            val pn: Int = peerNum
-                            val ownPn: Int = ownPeerId.peerNum
-                            // Version before topology: a peer speaking another protocol may not even
-                            // mean the same thing by its own number, so there is nothing to place in
-                            // the topology until the two ends agree on the vocabulary. `auth` is
-                            // carried and not checked — asserted, never proven (GUM-322).
-                            ProtocolVersion.check(protocolVersion) match {
-                                case ProtocolVersion.Check.Incompatible(found, expected) =>
-                                    tracer.traceWith(
-                                      ServerRejectedProtocolVersion(pn, found, expected)
-                                    )
-                                // Topology: the server only accepts inbound from lower-numbered
-                                // peers.
-                                case ProtocolVersion.Check.Compatible =>
-                                    if pn < ownPn && pn >= 0 then {
-                                        val remote = HeadPeerId(pn, ownPeerId.nHeadPeers)
-                                        tracer.traceWith(ServerAccepted(remote)) >>
-                                            peerD.complete(remote).void
-                                    } else {
-                                        tracer.traceWith(ServerRejectedHandshake(pn, ownPn))
+                        case Right(HeadFrame.Handshake(peerNum, protocolVersion, auth)) =>
+                            val verdict = admit(peerNum, protocolVersion, auth, nonce)
+                            // One nonce, one handshake: a socket that already has a verdict keeps
+                            // it, so a replayed handshake cannot re-bind an established session.
+                            verdictD.complete(verdict).flatMap {
+                                case false => tracer.traceWith(ServerRepeatHandshake(peerNum))
+                                case true =>
+                                    verdict match {
+                                        case Right(remote) =>
+                                            tracer.traceWith(ServerAccepted(remote))
+                                        case Left(refusal) =>
+                                            tracer.traceWith(
+                                              ServerRefusedHandshake(peerNum, refusal)
+                                            )
                                     }
                             }
                         case Right(HeadFrame.Msg(payload)) =>
-                            peerD.tryGet.flatMap {
-                                case Some(remote) => dispatchInbound(remote, payload)
-                                case None         => tracer.traceWith(ServerMsgBeforeHandshake)
+                            verdictD.tryGet.flatMap {
+                                case Some(Right(remote)) => dispatchInbound(remote, payload)
+                                case _ => tracer.traceWith(ServerMsgBeforeHandshake)
                             }
+                        case Right(_: HeadFrame.Challenge | _: HeadFrame.Refused) =>
+                            // Both are accept-side frames; a dialer sending one is misbehaving.
+                            tracer.traceWith(ServerUnexpectedFrame)
                         case Left(err) =>
                             tracer.traceWith(ServerDecodeError(err))
                     }
@@ -230,6 +333,12 @@ final class WsPeerTransport private (
 
     /** How long one dial attempt may sit in the WebSocket handshake before it is abandoned. */
     private val handshakeBudget: FiniteDuration = 30.seconds
+
+    /** How long one dial attempt waits for the remote's [[HeadFrame.Challenge]] once the WebSocket
+      * handshake has completed. Sized and bounded exactly as the coil dialer's is — see
+      * [[CoilPeerWsTransport]].
+      */
+    private val challengeBudget: FiniteDuration = 10.seconds
 
     /** How long teardown waits for a dialer to acknowledge cancellation before proceeding. */
     private val dialerCancelBudget: FiniteDuration = 5.seconds
@@ -275,6 +384,9 @@ object WsPeerTransport {
       */
     def create(
         ownPeerId: HeadPeerId,
+        ownWallet: PeerWallet,
+        headPeers: HeadPeers.Section,
+        headParamsHash: Hash32,
         remoteIds: List[HeadPeerId],
         tracer: ContraTracer[IO, PeerTransportEvent],
         keepAlivePing: FiniteDuration = NodeWsServer.defaultKeepAlivePing,
@@ -284,5 +396,14 @@ object WsPeerTransport {
                 .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
-        } yield new WsPeerTransport(ownPeerId, outboxes, inboundRef, keepAlivePing, tracer)
+        } yield new WsPeerTransport(
+          ownPeerId,
+          ownWallet,
+          headPeers,
+          headParamsHash,
+          outboxes,
+          inboundRef,
+          keepAlivePing,
+          tracer
+        )
 }

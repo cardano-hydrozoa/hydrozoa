@@ -7,6 +7,8 @@ import com.monovore.decline.{Command, Opts}
 import hydrozoa.BuildInfo
 import hydrozoa.app.cli.{Scaffold, SubmitDeposit, SubmitL2Transaction}
 import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles, KeygenFleet, Migrate, PrintHeadZeroAddress}
+import hydrozoa.multisig.consensus.transport.ProtocolVersion
+import hydrozoa.multisig.persistence.StoreVersion
 import scala.concurrent.duration.DurationInt
 
 /** The `hydrozoa` command-line entry point: a single dispatcher over every deployment and runtime
@@ -22,7 +24,7 @@ import scala.concurrent.duration.DurationInt
   *     [[SubmitL2Transaction]])
   *   - `migrate` — sweep a wallet ([[Migrate]])
   *   - `scaffold` — write the Docker workspace files for a repo-less user ([[Scaffold]])
-  *   - `version` — print the baked build identity (also available as `--version`)
+  *   - `version` — print the three versions this build carries (also available as `--version`)
   *
   * This is the single main class packaged by native-packager and the Docker image entrypoint, so
   * `hydrozoa <subcommand> …` and `docker run hydrozoa <subcommand> …` share one vocabulary.
@@ -50,13 +52,13 @@ object Main
     override protected def runtimeConfig: IORuntimeConfig =
         super.runtimeConfig.copy(shutdownHookTimeout = 30.seconds)
 
-    /** The `version` subcommand: print the version, git revision, and build time baked in at
-      * compile time (see [[BuildInfo]]).
+    /** The `version` subcommand: print the build identity baked in at compile time (see
+      * [[BuildInfo]]) plus the protocol and store versions this build speaks.
       */
     private lazy val versionCommand: Command[IO[ExitCode]] =
         Command(
           name = "version",
-          header = "Print the version, git commit, and build time"
+          header = "Print the build identity plus the protocol and store versions"
         )(Opts.unit.map(_ => printVersion))
 
     override def main: Opts[IO[ExitCode]] =
@@ -76,11 +78,18 @@ object Main
           versionCommand
         )
 
+    /** The three versions this build carries (`design/versioning.md`). The protocol and store
+      * versions are what an operator needs before an upgrade: they say which peers this build can
+      * talk to and which data directories it can open, neither of which follows from the release
+      * number.
+      */
     private def printVersion: IO[ExitCode] =
         IO.println(
           s"hydrozoa ${BuildInfo.version}\n" +
-              s"git:   ${BuildInfo.gitCommit}\n" +
-              s"built: ${BuildInfo.builtAtString}"
+              s"git:      ${BuildInfo.gitCommit}\n" +
+              s"built:    ${BuildInfo.builtAtString}\n" +
+              s"protocol: ${ProtocolVersion.current}\n" +
+              s"store:    ${StoreVersion.current}"
         ).as(ExitCode.Success)
 
 end Main

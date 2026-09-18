@@ -75,7 +75,7 @@ sbt "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
 
 `design/` (a top-level directory) is a scratchpad for **in-flight** feature design: a spec lives
 there while its feature is being built, then graduates into `docs/spec/` as an as-built reference
-once it lands. It is currently empty (a `.gitkeep` holds the directory).
+once it lands.
 
 ## Documentation
 

@@ -873,7 +873,7 @@ differing only in which lanes each serves.
   - **Queue stays empty.** No payloads are eagerly seeded; it fills only as live
     production appends new items, and `reply` serves anything else from the journal.
     That is not a recovery-only mode — it is what the cap makes routine for any remote
-    lagging more than `peerLiaisonOutboxCap` behind.
+    lagging more than `peerLiaisonOutboxDepth` replies behind.
   - **One scalar is restored** — the high-water number (`lastAppended = max(journal
     key)`, payload-free — `LaneOutgoingBacking.highWater`). It is not state to serve; it
     exists so (a) the first post-crash `append` is legal — live production resumes at
@@ -912,8 +912,9 @@ differing only in which lanes each serves.
   bounds an outbox only as well as its remote pulls, though: a configured peer that
   never connects never advances a cursor, so its lanes retain everything the process
   has relayed. `LaneOutbound` therefore also caps each outbox at
-  `peerLiaisonOutboxCap` items (floored at that lane's `maxPerReply`) and evicts the
-  oldest past it. Eviction costs only a store read: everything on a lane is durable
+  `peerLiaisonOutboxDepth * maxPerReply` items — that many replies' worth, so one
+  setting means the same slack on a lane serving one item as on one serving a full
+  request batch — and evicts the oldest past it. Eviction costs only a store read: everything on a lane is durable
   before it is appended (CR4), so an evicted item is still servable — the same path
   every lane uses from a cold start.
 - **Inputs:** remote lane entries — **cursor-gated (CR8)**.
@@ -1589,12 +1590,12 @@ Notes / decisions:
   like `CardanoBackend` — `HeadMultisigRegimeManager` already reserves a
   `Dependencies.Persistence` enum case and termination handler, so the seam exists.
 - **Layout:** one store per head instance, keyed by head ID, path from `NodeConfig`.
-- **Versioning:** the store version is **held at 1** (`StoreVersion.current`, in `Cf.Meta`),
-  and recovery refuses to load an incompatible version. While the layout is unstable a format
-  change rebuilds the store rather than bumping the version; backward-incompatible bumps get
-  tracked once the layout stabilizes. (The layout unifies the head and coil own-hard-ack CFs
-  into one `PeerId`-keyed `HardAck` journal — one CF per peer, a coil author's named
-  `HardAck:<peerWireInt>`.)
+- **Versioning:** the store version is `StoreVersion.current`, stamped in `Cf.Meta`, and an open
+  that finds any other value refuses to start (`design/versioning.md`). Any change to the
+  column-family set, the key layout or a value codec bumps it, and a bump deploys by head
+  migration — no store of an earlier version is ever read. (The layout unifies the head and coil
+  own-hard-ack CFs into one `PeerId`-keyed `HardAck` journal — one CF per peer, a coil author's
+  named `HardAck:<peerWireInt>`.)
 
 ### 7.1 Key layout — journal IDs
 

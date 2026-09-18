@@ -504,7 +504,9 @@ class RecoverSeamsTest extends AnyFunSuite:
             yield assert(
               r.swap.toOption.exists {
                   case RestoreError.L2ParamsMismatch(expected, actual) =>
-                      expected == foreign && actual == EutxoL2Ledger.l2ParamsHash
+                      expected == foreign && actual == EutxoL2Ledger.mkL2ParamsHash(
+                        EutxoL2Ledger.protocolParamsOf(config).toOption.get
+                      )
                   case _ => false
               },
               s"expected an L2ParamsMismatch, got $r"

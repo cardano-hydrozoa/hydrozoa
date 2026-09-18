@@ -19,14 +19,14 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, ProtocolVersion, WsPeerTransport}
 import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener, RemoteL2ScreenerEventFormat}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat, StoreIdentity}
+import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat, StoreIdentity, StoreVersion}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
@@ -98,9 +98,13 @@ object Serve {
         backendOverride: Option[CardanoBackend[IO]] = None,
     ): IO[ExitCode] = {
         val setupIO = for {
+            // The protocol and store versions ride the boot line because they are what an
+            // operator reads back off a node that refuses to talk to a peer or to open its data
+            // directory — see design/versioning.md.
             _ <- log.info(
               s"Hydrozoa ${BuildInfo.version} " +
-                  s"(git ${BuildInfo.gitCommit}, built ${BuildInfo.builtAtString})"
+                  s"(git ${BuildInfo.gitCommit}, built ${BuildInfo.builtAtString}, " +
+                  s"protocol ${ProtocolVersion.current}, store ${StoreVersion.current})"
             )
             _ <- log.info("Starting Hydrozoa node...")
             _ <- log.info(s"Loading head config from $headConfigPath")
@@ -358,7 +362,7 @@ object Serve {
         nodeConfig: NodeConfig,
         dataDir: Path,
     ): Resource[IO, (L2Ledger[IO], L2Screener[IO], Option[EutxoL2LedgerReader[IO]], IO[Unit])] =
-        nodeConfig.headConfig.l2Ledger match {
+        nodeConfig.headConfig.l2Ledger.kind match {
             case L2LedgerKind.CardanoEutxo =>
                 for {
                     _ <- Resource.eval(log.info("L2 ledger: built-in cardano-eutxo"))
@@ -366,7 +370,12 @@ object Serve {
                       dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/l2-rocksdb")
                     )
                     ledger <- Resource.eval(EutxoL2Ledger(nodeConfig, store))
-                } yield (ledger, EutxoL2Screener(nodeConfig), Some(ledger), IO.unit)
+                } yield (
+                  ledger,
+                  EutxoL2Screener(nodeConfig, ledger.protocolParams),
+                  Some(ledger),
+                  IO.unit
+                )
             case L2LedgerKind.AnyRemote =>
                 val tracer = Slf4jTracer.sink.contramap(RemoteL2LedgerEventFormat.humanFormat)
                 val wsUri = nodeConfig.remoteLedgerUri.getOrElse(
@@ -594,6 +603,9 @@ object Serve {
             peerT <- Resource.eval(
               WsPeerTransport.create(
                 ownHeadPeerId,
+                nodeConfig.ownWallet,
+                nodeConfig.headConfig,
+                nodeConfig.headParamsHash,
                 remoteHeadUris.keys.toList,
                 tracers.peerTransport
               )
@@ -602,7 +614,14 @@ object Serve {
                 if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
                 else
                     Resource
-                        .eval(HubWsTransport.create(hubbedCoils, tracers.hubWsTransport))
+                        .eval(
+                          HubWsTransport.create(
+                            hubbedCoils,
+                            nodeConfig.headConfig.coilPeers,
+                            nodeConfig.headParamsHash,
+                            tracers.hubWsTransport
+                          )
+                        )
                         .map(Some(_))
             meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
             hubRoutes =
@@ -680,7 +699,14 @@ object Serve {
         val cpwtTracer =
             Slf4jTracer.sink.contramap(CoilPeerWsTransportEventFormat.humanFormat(ownCoilNum))
         for {
-            t <- Resource.eval(CoilPeerWsTransport.create(ownCoilNum, cpwtTracer))
+            t <- Resource.eval(
+              CoilPeerWsTransport.create(
+                ownCoilNum,
+                nodeConfig.ownWallet,
+                nodeConfig.headParamsHash,
+                cpwtTracer
+              )
+            )
             _ <- t.startDialer(wsClient, hubUri)
             coilFactory: Resource[
               IO,

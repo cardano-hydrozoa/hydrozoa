@@ -6,12 +6,13 @@ import hydrozoa.BuildInfo
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
+import hydrozoa.multisig.consensus.transport.ProtocolVersion
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.metrics.{PeerMetrics, PrometheusFormat}
-import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry}
+import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry, StoreVersion}
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.TapirJson.*
@@ -463,11 +464,19 @@ class HydrozoaRoutes(
             .name("getVersion")
             .out(jsonBody[VersionResponse])
             .description(
-              "The build identity (version, git commit, build time) baked in at compile."
+              "The three versions this build carries: the build identity (version, git commit, " +
+                  "build time) baked in at compile, the protocol version its peers must match at " +
+                  "the handshake, and the schema version its store must match at every open."
             )
             .serverLogicSuccess(_ =>
                 IO.pure(
-                  VersionResponse(BuildInfo.version, BuildInfo.gitCommit, BuildInfo.builtAtString)
+                  VersionResponse(
+                    BuildInfo.version,
+                    BuildInfo.gitCommit,
+                    BuildInfo.builtAtString,
+                    ProtocolVersion.current,
+                    StoreVersion.current
+                  )
                 )
             )
 
