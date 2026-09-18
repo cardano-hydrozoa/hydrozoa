@@ -76,13 +76,6 @@ class CoilStartPointTest extends AnyFunSuite:
           payload = HardAck.Round2Payload.Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
         )
 
-    private def hardAck(ackNum: Int, stack: Int): HardAck =
-        HardAck(
-          ackId = HardAckId(PeerId.Head(HeadPeerNumber(0)), HardAckNumber(ackNum)),
-          stackNum = StackNumber(stack),
-          payload = HardAck.Round2Payload.Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
-        )
-
     /** Seed a store with hard-confirmations for stacks `1..upTo`, each `Initial`-shaped (no
       * settlement anywhere), plus their briefs. Enough for every decision that does not reach the
       * certificate.

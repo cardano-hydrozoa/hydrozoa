@@ -16,7 +16,7 @@ import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.{SettlementTx, TxSignature, genSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
@@ -60,14 +60,6 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
             case Left(e)  => throw RuntimeException(s"settlement build failed: $e")
             case Right(s) => s.settlementTx
         }
-
-    /** What the joining ledger will report after importing a genesis export. */
-    private val genesisDigests: L2Ledger.Digests =
-        freshLedger
-            .flatMap(_.stateAt(L2CommandNumber.zero).value)
-            .unsafeRunSync()
-            .toOption
-            .get
 
     private def withTreasury(s: SettlementTx, t: MultisigTreasuryUtxo): SettlementTx = s match {
         case x: SettlementTx.NoPayouts             => x.copy(treasuryProduced = t)
