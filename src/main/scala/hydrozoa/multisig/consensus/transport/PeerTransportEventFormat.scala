@@ -46,15 +46,42 @@ object PeerTransportEventFormat:
                 warn(
                   s"failed to decode frame from remote=${remote.peerNum: Int}: ${cause.getMessage}"
                 )
+            case DialerRefused(remote, refusal) =>
+                warn(
+                  s"remote=${remote.peerNum: Int} refused this peer's handshake: " +
+                      s"${HandshakeRefusal.describe(refusal)} — redialing"
+                )
+            case DialerNoChallenge(remote, uri, after) =>
+                warn(
+                  s"dialer: remote=${remote.peerNum: Int} at $uri issued no challenge within " +
+                      s"$after; dropping the socket and redialing"
+                )
+            case DialerLateChallenge(remote) =>
+                warn(
+                  s"a challenge arrived from remote=${remote.peerNum: Int} on an established " +
+                      "link; ignoring"
+                )
+            case DialerRefusedChallenge(remote, refusal) =>
+                warn(
+                  s"dialer: refusing remote=${remote.peerNum: Int}'s challenge — " +
+                      s"${HandshakeRefusal.describe(refusal)}; dropping the socket and redialing"
+                )
             case ServerAccepted(remote) =>
                 info(s"server: accepted inbound from remote=${remote.peerNum: Int}")
-            case ServerRejectedHello(remotePeerNum, ownPeerNum) =>
+            case ServerRefusedHandshake(remotePeerNum, refusal) =>
                 warn(
-                  s"server: rejecting hello from peerNum=$remotePeerNum " +
-                      s"(own=$ownPeerNum, must be lower)"
+                  s"server: refusing peerNum=$remotePeerNum and closing the socket — " +
+                      HandshakeRefusal.describe(refusal)
                 )
-            case ServerMsgBeforeHello =>
-                warn("server: msg before hello, dropping")
+            case ServerRepeatHandshake(remotePeerNum) =>
+                warn(
+                  s"server: a second handshake from peerNum=$remotePeerNum on a socket that " +
+                      "already has a verdict; keeping the verdict"
+                )
+            case ServerMsgBeforeHandshake =>
+                warn("server: msg before an accepted handshake, dropping")
+            case ServerUnexpectedFrame =>
+                warn("server: a dialer sent an accept-side frame, dropping")
             case ServerDecodeError(cause) =>
                 warn(s"server: failed to decode frame: ${cause.getMessage}")
         }

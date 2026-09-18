@@ -69,7 +69,7 @@ object Cf:
     case object UnsignedStack extends Cf:
         def name = "UnsignedStack"
 
-    /** JL fast-side deposits snapshot — single keyed blob. */
+    /** JL fast-side deposits snapshot, keyed per committed `blockNum`. */
     case object DepositMap extends Cf:
         def name = "DepositMap"
 

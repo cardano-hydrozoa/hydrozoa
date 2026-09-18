@@ -1,34 +1,90 @@
 package hydrozoa.multisig.ledger.eutxol2
 
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger.Config
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
 import scala.annotation.unused
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{State as L1State, *}
-import scalus.cardano.ledger.{CertState, Coin, TransactionException, Utxos}
+import scalus.cardano.ledger.{CertState, Coin, ProtocolParams, TransactionException, Utxos}
 
 object HydrozoaTransactionMutator {
+
+    /** The upstream Scalus validators [[transit]] applies, in application order (alphabetical, for
+      * ease of comparison in a file browser).
+      *
+      * One iterated list rather than a run of calls, because [[ruleNames]] derives the rule-list
+      * element of `l2ParamsHash` from it (`docs/spec/head-params-hash.md`). Hashing the list this
+      * runs is what keeps the digest and the ledger from drifting apart: dropping a validator here
+      * moves the digest, so two peers on divergent builds cannot boot against the same head.
+      *
+      * FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is
+      * exhaustive, but I've removed the rules that I'm certain won't apply.
+      */
+    private[eutxol2] val upstreamValidators: Vector[Validator] = Vector(
+      AllInputsMustBeInUtxoValidator,
+      EmptyInputsValidator,
+      InputsAndReferenceInputsDisjointValidator,
+      MissingKeyHashesValidator,
+      MissingOrExtraScriptHashesValidator,
+      NativeScriptsValidator,
+      OutputsHaveNotEnoughCoinsValidator,
+      OutputsHaveTooBigValueStorageSizeValidator,
+      OutsideValidityIntervalValidator,
+      TransactionSizeValidator,
+      ValueNotConservedUTxOValidator,
+      VerifiedSignaturesInWitnessesValidator,
+      ExactSetOfRedeemersValidator,
+      ScriptsWellFormedValidator,
+      ProtocolParamsViewHashesMatchValidator,
+      WrongNetworkValidator,
+      WrongNetworkInTxBodyValidator
+    )
+
+    /** Every rule [[transit]] applies, named, in application order — the rule-list element of
+      * `l2ParamsHash`'s preimage (`docs/spec/head-params-hash.md`).
+      *
+      * The [[upstreamValidators]] names are read off that list, so they cannot disagree with what
+      * runs. The rest are hydrozoa's own and are named by hand: they are not `Validator`s, so there
+      * is nothing to read them from, and an edit here is only as reliable as the editor. That is
+      * acceptable because their *semantics* are covered by the domain tag's version rather than by
+      * their names — an upstream version pins upstream behaviour, and nothing but a deliberate bump
+      * pins ours.
+      */
+    private[eutxol2] def ruleNames: Vector[String] =
+        Vector("L2ConformanceValidator", "HeadIdPinValidator")
+            ++ upstreamValidators.map(v => v.getClass.getSimpleName.stripSuffix("$"))
+            ++ Vector(
+              "ValueNotConservedUTxOValidator:main-projection",
+              "PlutusScriptsTransactionMutator",
+              "EvacuatingMutator"
+            )
+
     private[eutxol2] object CardanoLedgerContext {
 
-        /** Turn into an L1 context with zero fee and an empty CertState
+        /** Turn into an L1 context with zero fee and an empty CertState.
+          *
+          * The protocol parameters come from the head config's **L2** snapshot, not from the live
+          * `CardanoNetwork` section the L1 transaction builders use. The two are the same value at
+          * head initialization and diverge at the first hard fork: L1's must track the chain, and
+          * this one must never move, because `l2ParamsHash` pins it for the head's life
+          * (`docs/spec/head-params-hash.md`).
           */
-        def fromCardanoNetwork(
-            cardanoNetwork: CardanoNetwork.Section,
+        def fromConfig(
+            config: Config,
+            protocolParams: ProtocolParams,
             time: QuantizedInstant
         ): Context = {
-            import cardanoNetwork.*
-            require(time.slotConfig == slotConfig)
+            require(time.slotConfig == config.slotConfig)
             Context(
               fee = Coin(0),
               env = UtxoEnv(
                 time.toSlot.slot,
-                cardanoProtocolParams,
+                protocolParams,
                 CertState.empty,
-                network
+                config.network
               ),
-              slotConfig = slotConfig
+              slotConfig = config.slotConfig
             )
         }
 
@@ -58,12 +114,13 @@ object HydrozoaTransactionMutator {
       */
     def transit(
         config: Config,
+        protocolParams: ProtocolParams,
         time: QuantizedInstant,
         state: Compartments,
         l2Tx: L2Tx
     ): Either[String | TransactionException, Compartments] = {
 
-        val context = CardanoLedgerContext.fromCardanoNetwork(config, time)
+        val context = CardanoLedgerContext.fromConfig(config, protocolParams, time)
         val combined = TransientTokens.mkCombinedUtxos(state.main, state.transientTokens)
 
         // A helper for mapping the error type and applying arguments
@@ -78,26 +135,11 @@ object HydrozoaTransactionMutator {
             // Cross-head-replay pin: the L2 tx must carry this head's headId (unless identity
             // isomorphism is on). Stateless — reclassified into screening in a later phase.
             _ <- HeadIdPinValidator.validate(config, l2Tx.headId)
-            // Upstream validators (applied alphabetically for ease of comparison in a file browser
-            // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
-            // but I've removed the rules that I'm certain won't apply
-            _ <- helper(AllInputsMustBeInUtxoValidator)
-            _ <- helper(EmptyInputsValidator)
-            _ <- helper(InputsAndReferenceInputsDisjointValidator)
-            _ <- helper(MissingKeyHashesValidator)
-            _ <- helper(MissingOrExtraScriptHashesValidator)
-            _ <- helper(NativeScriptsValidator)
-            _ <- helper(OutputsHaveNotEnoughCoinsValidator)
-            _ <- helper(OutputsHaveTooBigValueStorageSizeValidator)
-            _ <- helper(OutsideValidityIntervalValidator)
-            _ <- helper(TransactionSizeValidator)
-            _ <- helper(ValueNotConservedUTxOValidator)
-            _ <- helper(VerifiedSignaturesInWitnessesValidator)
-            _ <- helper(ExactSetOfRedeemersValidator)
-            _ <- helper(ScriptsWellFormedValidator)
-            _ <- helper(ProtocolParamsViewHashesMatchValidator)
-            _ <- helper(WrongNetworkValidator)
-            _ <- helper(WrongNetworkInTxBodyValidator)
+            // The upstream validators, in the order [[upstreamValidators]] lists them. `flatMap`
+            // short-circuits, so the first failure wins exactly as the call chain did.
+            _ <- upstreamValidators.foldLeft[Either[String | TransactionException, Unit]](
+              Right(())
+            )((acc, validator) => acc.flatMap(_ => helper(validator)))
             // The projection to the main compartment must balance against it alone
             _ <- ValueNotConservedUTxOValidator
                 .validate(context, L1State(utxos = state.main), l2Tx.projectMain)
@@ -127,11 +169,12 @@ object HydrozoaTransactionMutator {
       */
     def screenSignatures(
         config: Config,
+        protocolParams: ProtocolParams,
         l2Tx: L2Tx
     ): Either[String | TransactionException, Unit] =
         VerifiedSignaturesInWitnessesValidator.validate(
           CardanoLedgerContext
-              .fromCardanoNetwork(config, QuantizedInstant.fromSlot(config.slotConfig, 0L)),
+              .fromConfig(config, protocolParams, QuantizedInstant.fromSlot(config.slotConfig, 0L)),
           L1State(utxos = Map.empty),
           l2Tx.tx
         )

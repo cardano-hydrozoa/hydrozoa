@@ -150,10 +150,23 @@ object ApiDto {
     final case class HealthResponse(status: String)
     given Codec[HealthResponse] = deriveCodec
 
-    /** `{ "version": ..., "gitCommit": ..., "buildTime": ... }` — the build identity baked in at
-      * compile time ([[hydrozoa.BuildInfo]]), served from `GET /version`.
+    /** `{ "version": ..., "gitCommit": ..., "buildTime": ..., "protocolVersion": ...,
+      * "storeVersion": ... }` — served from `GET /version`.
+      *
+      * The three versions a build carries (`design/versioning.md`). `version`, `gitCommit` and
+      * `buildTime` are the build identity baked in at compile time ([[hydrozoa.BuildInfo]]) and are
+      * compared against nothing. `protocolVersion` is what this node's peers must match at the
+      * handshake, and `storeVersion` what its data directory must match at every open — so an
+      * operator can read off which peers can talk to this one, and which stores it can open,
+      * without decoding a release number.
       */
-    final case class VersionResponse(version: String, gitCommit: String, buildTime: String)
+    final case class VersionResponse(
+        version: String,
+        gitCommit: String,
+        buildTime: String,
+        protocolVersion: Int,
+        storeVersion: Int
+    )
     given Codec[VersionResponse] = deriveCodec
 
     /** `{ "status": "<lifecycle>" }` — the readiness diagnostic body for `GET /ready`. The verdict
