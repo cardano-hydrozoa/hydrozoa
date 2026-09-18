@@ -140,7 +140,7 @@ object StoreDump:
                 else hex(key)
             case Cf.EffectStackIndex =>
                 s"EffectStackIndex(${hex(key)})"
-            case Cf.Treasury | Cf.CoilStampMark =>
+            case Cf.Treasury | Cf.CoilStampMark | Cf.StartPoint =>
                 if key.isEmpty then "(singleton)" else hex(key)
             case Cf.Meta =>
                 try s"Meta(${new String(key, "UTF-8")})"
