@@ -197,3 +197,46 @@ class EutxoL2LedgerStateTransferTest extends AnyFunSuite:
         )
         io.unsafeRunSync()
     }
+
+    /** A transaction the ledger rejects: an unparseable L2 payload. It advances the command number
+      * without being logged, which is the whole point.
+      */
+    private def rejectedTx(n: Int): L2LedgerCommand.ApplyTransaction =
+        L2LedgerCommand.ApplyTransaction(
+          requestId =
+              RequestId(HeadPeerNumber.zero, hydrozoa.multisig.ledger.event.RequestNumber(n)),
+          blockNumber = BlockNumber(n),
+          blockCreationStartTime = BigInt(n),
+          l2Payload = ByteString.fromString("not a transaction")
+        )
+
+    test("an export is labelled with the boundary it was asked for, not the last applied command") {
+        // ⚠️ The gap every test above left open: they drive a history of **applied** commands, so
+        // the reconstructed state's command number happens to match the boundary. A REJECTED
+        // command advances the ledger without being logged, so reconstruction lands on the last
+        // applied number instead — the state is right (a rejection changes nothing) but the label
+        // is stale, and `importState` checks the label. A head whose L2 traffic is mostly invalid
+        // transactions — which is what a quiet head looks like — could seed no one.
+        val io = for {
+            ledger <- freshLedger
+            // One applied command, then rejections on top of it.
+            _ <- ledger.applyDepositDecisions(L2CommandNumber(1L), noop(1))
+            _ <- ledger.applyTransaction(L2CommandNumber(2L), rejectedTx(2))
+            _ <- ledger.applyTransaction(L2CommandNumber(3L), rejectedTx(3))
+            // Move the live position PAST the boundary we export, so the export goes through
+            // reconstruction rather than reading the live state — the live state carries the right
+            // number for free, which is what hid this.
+            _ <- ledger.applyTransaction(L2CommandNumber(4L), rejectedTx(4))
+            _ <- ledger.applyTransaction(L2CommandNumber(5L), rejectedTx(5))
+            exported <- ledger.exportStateAt(L2CommandNumber(3L)).value
+            joiner <- freshLedger
+            adopted <- joiner.importState(exported.toOption.get).value
+        } yield {
+            val _ = assert(
+              exported.toOption.get.commandNumber == L2CommandNumber(3L),
+              "the export names the wrong boundary"
+            )
+            assert(adopted.isRight, s"an export over rejected commands would not import: $adopted")
+        }
+        io.unsafeRunSync()
+    }
