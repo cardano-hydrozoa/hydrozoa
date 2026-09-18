@@ -20,6 +20,7 @@ def generateScriptReferenceUtxos: GenWithTestPeers[ScriptReferenceUtxos] =
         network = testPeers.cardanoNetwork.network
         treasuryId <- ReaderT.liftF(Arbitrary.arbitrary[TransactionInput])
         disputeId <- ReaderT.liftF(Arbitrary.arbitrary[TransactionInput])
+        regimeId <- ReaderT.liftF(Arbitrary.arbitrary[TransactionInput])
         // The rungs must be outputs 0..6 of a single deployment tx (the on-chain ladder anchor).
         ladderTxId <- ReaderT.liftF(Arbitrary.arbitrary[TransactionHash])
         ladderIds = List.tabulate(SetupLadder.rungCount)(i => TransactionInput(ladderTxId, i))
@@ -50,6 +51,12 @@ def generateScriptReferenceUtxos: GenWithTestPeers[ScriptReferenceUtxos] =
               mkUtxo(disputeId, HydrozoaBlueprint.disputeScript)
             ): @unchecked
 
+        Right(regime) =
+            ScriptReferenceUtxos.RegimeScriptUtxo(
+              testPeers,
+              mkUtxo(regimeId, HydrozoaBlueprint.regimeScript)
+            ): @unchecked
+
         mkRungUtxo = (id: TransactionInput, i: Int) =>
             Utxo(
               id,
@@ -66,5 +73,6 @@ def generateScriptReferenceUtxos: GenWithTestPeers[ScriptReferenceUtxos] =
     } yield ScriptReferenceUtxos(
       treasury,
       dispute,
+      regime,
       ladder
     )
