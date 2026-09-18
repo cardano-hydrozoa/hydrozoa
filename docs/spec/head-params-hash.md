@@ -280,8 +280,14 @@ the remaining rungs to be outputs `0..rungCount-1` of that one transaction.
 
 The digest an L2 ledger reports over its own agreed parameters. 32 bytes, opaque to the head,
 and **the same contract for every backend** — the built-in EUTXO ledger meets it exactly as a
-remote sidecar does, through the same `L2Ledger` method, and nothing in the head branches on
-`l2Ledger` to obtain or check it.
+remote sidecar does, through the same `L2Ledger` method, and none of the four checks branches on
+`l2Ledger`.
+
+**Obtaining the value at bootstrap does branch, and must.** The head cannot compute it — only
+the ledger knows its own parameters — so `build-head-config` sources it per `L2LedgerKind`: from
+the built-in ledger's own code under `cardano-eutxo`, and from the operator under `any-remote`,
+who copies it out of whichever ledger this head will drive. Those are different sources, not two
+spellings of one, and no single expression covers both.
 
 There is no head-side layout, deliberately: the L2 ledger is a black box, and the head's only
 interest is that every peer runs a ledger reporting the same value. What goes into it is the
@@ -318,9 +324,11 @@ the head is topological: every node runs its **own private** ledger instance
 between peers rather than as a silent loss. This digest catches misconfiguration, which is the
 failure mode that actually occurs.
 
-Operators get the two sides to agree by generating the config from the ledger rather than by
-hand, exactly as with the initial evacuation map: the ledger prints its `l2ParamsHash`
-out-of-band and the bootstrap copies it in.
+On `any-remote`, operators get the two sides to agree by generating the config from the ledger
+rather than by hand, exactly as with the initial evacuation map: the ledger prints its
+`l2ParamsHash` out-of-band and the bootstrap copies it in. Under `cardano-eutxo` the question
+does not arise — the ledger is the head's own code, so bootstrap reads the value rather than
+being handed it.
 
 ## What is deliberately excluded
 
@@ -332,7 +340,7 @@ out-of-band and the bootstrap copies it in.
 | `initialEvacuationMap` | already committed on-chain twice in the same transaction — as the treasury value it backs, and as the KZG `commit` in the same datum — and checked by check 1 |
 | head and coil peer verification keys, and their numbering | pinned by the native script's ordered `IndexedSeq` → policy id → beacon token name → treasury address |
 | `headPeers[*].webSocketAddress` | see below |
-| `cardanoProtocolParams` | fetched from the chain, moves with hard forks |
+| `cardanoProtocolParams` | the **L1** set: tracks the chain, moves with hard forks — see below |
 | `rateLimits` | node-local; nothing a follower validates depends on it — see *Notes on individual fields* |
 
 ### Why `webSocketAddress` is not in the hash
@@ -354,6 +362,22 @@ does not have is connection authentication — `CoilFrame.Hello` carries a bare 
 `HubWsTransport` accepts it on nothing more than "is this a coil peer I hub". Closing that is a
 signed handshake over the already-pinned verification keys, tracked in GUM-322.
 
+### Why `cardanoProtocolParams` is not in the hash, and what is
+
+The excluded value is the **L1** set — what the head builds L1 transactions against. It tracks
+the chain, so it moves with every hard fork, and a moving value has no business inside a digest
+the regime datum pins forever. `Serve.verifyProtocolParams` guards it instead, comparing the
+configured set against the chain at start-up and refusing to start on drift.
+
+What the **L2** ledger validates against is a separate question with the opposite answer. L2 has
+no governance and no hard fork, so nothing can change those parameters while a head runs: they
+are fixed for its life, which is what makes them hashable at all. Whatever a ledger commits to
+reaches `headParamsHash` through `l2ParamsHash` and nowhere else, so the head still does not
+interpret them — which of its parameters a ledger agrees on stays the ledger's business.
+
+The two are the same value at initialization on `cardano-eutxo`, because that ledger validates
+against the network's parameters. They are still two things, with two lifecycles.
+
 ## The checks
 
 Four checks, at three moments. Every one reuses a comparison point the code already has, and
@@ -369,13 +393,14 @@ Four checks, at three moments. Every one reuses a comparison point the code alre
 The three sites that implement them are `InitializationTx.Parse` (1), `StoreIdentity` (2), and
 `JointLedger.State.recover` (3, 4).
 
-**Check 4 has a gap on `any-remote`.** A remote ledger that reports no `l2ParamsHash` is let
-through with a warning (`JointLedgerEvent.L2ParamsHashUnreported`), because a remote that does
-not carry the field is indistinguishable from one carrying a wrong value, and failing closed
-would refuse every deployed sidecar. So check 4 is enforced against the built-in EUTXO ledger
-and advisory against a remote one, and `L2Ledger.Restored.l2ParamsHash` is an `Option` to say
-so. Closing the gap needs the remote side to report the value and the bootstrap to obtain it;
-GUM-327 carries both questions.
+**Check 4 fails closed on both backends.** `L2Ledger.Digests.l2ParamsHash` is a plain `Hash32`
+and a mismatch raises `RestoreError.L2ParamsMismatch`, so a ledger that does not report the
+field cannot complete a `restoreTo` at all: the coordination protocol marks all three digests
+REQUIRED (`docs/spec/l2-ledger-command-coordination.md`).
+
+What `any-remote` is missing is not the check but a value to give it. `build-head-config` has no
+operator-supplied field to read, so it writes a zero hash; GUM-342 carries both that and the
+remote side reporting its own.
 
 ### 1. The initialization transaction matches the hash
 
