@@ -7,7 +7,8 @@ where it is checked.
 ## What it is for
 
 Head peers never exchange their configuration. Each node loads its own `head-config.json`
-and starts; there is no handshake and no runtime key exchange. Some disagreements are caught
+and starts; a liaison link exchanges this digest and never the configuration behind it, and
+there is no runtime key exchange at all. Some disagreements are caught
 today as a side effect of construction — peer verification keys, their numbering, and
 `coilQuorum` all feed `HeadMultisigScript`, so a peer with a different roster derives a
 different policy id, a different head address, and rejects the initialization transaction.
@@ -383,13 +384,12 @@ mutable infrastructure by design — see `peerBindHost` on `NodePrivateConfig`, 
 precisely because the address the head is dialed at and the address a node binds are different
 things.
 
-What the head does have is payload authentication: consensus messages carry `HeaderSignature`
-and `TxSignature`, verified against the statically configured verification keys, so a stranger
-at the wrong address cannot forge a hard acknowledgement or a settlement signature. What it
-does not have is connection authentication — `CoilFrame.Handshake` carries a bare `coilNum` and
-an `auth` that is always `Unauthenticated`, so `HubWsTransport` accepts it on nothing more than a
-matching protocol version and "is this a coil peer I hub". Closing that is a signed handshake over
-the already-pinned verification keys, tracked in GUM-322.
+What the head has instead is authentication at two layers, neither of which needs the address to
+be pinned. Consensus messages carry `HeaderSignature` and `TxSignature`, verified against the
+statically configured verification keys, so a stranger at the wrong address cannot forge a hard
+acknowledgement or a settlement signature. And every liaison link opens with a signed handshake
+over the same keys (check 5 below), so a stranger cannot even hold the connection — whoever
+answers at that address has to prove which peer it is before the link carries anything.
 
 ### Why `cardanoProtocolParams` is not in the hash, and what is
 
@@ -416,7 +416,7 @@ chain — deliberately. Changing it is a head migration, not an edit.
 
 ## The checks
 
-Four checks, at three moments. Every one reuses a comparison point the code already has, and
+Five checks, at four moments. Every one reuses a comparison point the code already has, and
 **none of them branches on the backend.**
 
 | # | when | who | compares | on mismatch |
@@ -425,9 +425,19 @@ Four checks, at three moments. Every one reuses a comparison point the code alre
 | 2 | store open, every boot | every head and coil peer | the store's `Cf.Meta` identity stamp against `headParamsHash`, `headId`, and own `PeerId` | refuse to open the store |
 | 3 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `evacuationMapHash` against the head's map at that anchor | refuse to boot |
 | 4 | every `restoreTo` anchor | `JointLedger` | the ledger's reported `l2ParamsHash` against the config's | refuse to boot |
+| 5 | every liaison link opened | `HubWsTransport`, `WsPeerTransport` | the counterpart's signed handshake against this node's `headParamsHash` | refuse the link with `HeadParamsMismatch` and close the socket |
 
-The three sites that implement them are `InitializationTx.Parse` (1), `StoreIdentity` (2), and
-`JointLedger.State.recover` (3, 4).
+The four sites that implement them are `InitializationTx.Parse` (1), `StoreIdentity` (2),
+`JointLedger.State.recover` (3, 4), and `HandshakeProof.verify` (5).
+
+**Check 5 is the only one that compares against another node rather than against a value this
+node already holds.** The counterpart signs the digest into its handshake proof
+(`docs/spec/coil-network.md` §4.3), so "same head" and "same config" are one field and one
+comparison. It catches the same divergence check 1 does, at a different moment and for a
+different reason: check 1 catches a config that disagrees with the initialization transaction at
+boot, check 5 catches a peer that got past its own check 1 on a *different* initialization
+transaction — a peer of the old head after a head migration, say — and would otherwise be
+refused only once the two ledgers diverged.
 
 **Check 4 fails closed on both backends.** `L2Ledger.Digests.l2ParamsHash` is a plain `Hash32`
 and a mismatch raises `RestoreError.L2ParamsMismatch`, so a ledger that does not report the
@@ -479,8 +489,9 @@ Two properties fall out of where this check sits, and both are worth relying on 
   next restart rather than at the next divergence.
 - **It is the cross-peer check, and one instance of it suffices.** Peers never compare configs
   with each other, and do not need to: every peer compares against the *same* transaction, so
-  agreeing with the transaction implies agreeing with each other. No handshake, no gossip, no
-  quorum on config.
+  agreeing with the transaction implies agreeing with each other. No gossip and no quorum on
+  config — the liaison handshake (check 5) exchanges the digest, never the configuration behind
+  it.
 
 ### 2. The store belongs to this config, and to this peer
 
