@@ -194,12 +194,31 @@ object EutxoL2Ledger {
       * any past commandNumber.
       */
     def apply(config: EutxoL2Ledger.Config, store: L2Store[IO]): IO[EutxoL2Ledger] =
-        for ref <- Ref[IO].of(State.genesis(config))
-        yield new EutxoL2Ledger(config, ref, store)
+        for {
+            protocolParams <- IO.fromEither(
+              protocolParamsOf(config).left.map(RuntimeException(_))
+            )
+            ref <- Ref[IO].of(State.genesis(config))
+        } yield new EutxoL2Ledger(config, protocolParams, ref, store)
+
+    /** The protocol parameters this ledger validates against, read off the head config's agreed
+      * [[hydrozoa.config.head.parameters.L2LedgerConfig]].
+      *
+      * A head configured for another backend cannot run this ledger, and says so here rather than
+      * failing somewhere downstream.
+      */
+    def protocolParamsOf(config: Config): Either[String, ProtocolParams] =
+        config.cardanoEutxoProtocolParams.toRight(
+          "the built-in EUTXO ledger needs l2Ledger = " +
+              " in the head config, but it is " +
+              ""
+        )
 }
 
 case class EutxoL2Ledger private (
     config: EutxoL2Ledger.Config,
+    /** The L2 protocol parameters this ledger validates against, fixed for the head's life. */
+    protocolParams: ProtocolParams,
     // Note: For now, I'm going to leave this as a `Ref`. Now that we have an `Initialize` command, it would
     // _probably_ make more sense to have this be an `Option[Ref[...]]`. But the initialize command will
     // go away in the future, so...
@@ -252,6 +271,7 @@ case class EutxoL2Ledger private (
                 compartments <- HydrozoaTransactionMutator
                     .transit(
                       config = config,
+                      protocolParams = protocolParams,
                       time = QuantizedInstant
                           .fromPlutusPosixTime(config.slotConfig, req.blockCreationStartTime),
                       state = Compartments(s.activeUtxos, s.transientTokens),
@@ -557,7 +577,7 @@ case class EutxoL2Ledger private (
                   L2Ledger.Digests(
                     evacuationMapHash = map.digest,
                     l2StateHash = L2Snapshot.fromState(s).stateHash,
-                    l2ParamsHash = EutxoL2Ledger.mkL2ParamsHash(config.l2ProtocolParams)
+                    l2ParamsHash = EutxoL2Ledger.mkL2ParamsHash(protocolParams)
                   )
               )
         )

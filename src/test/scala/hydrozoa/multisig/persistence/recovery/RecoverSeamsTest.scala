@@ -505,7 +505,7 @@ class RecoverSeamsTest extends AnyFunSuite:
               r.swap.toOption.exists {
                   case RestoreError.L2ParamsMismatch(expected, actual) =>
                       expected == foreign && actual == EutxoL2Ledger.mkL2ParamsHash(
-                        config.l2ProtocolParams
+                        EutxoL2Ledger.protocolParamsOf(config).toOption.get
                       )
                   case _ => false
               },

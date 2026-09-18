@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
 import scala.annotation.unused
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{State as L1State, *}
-import scalus.cardano.ledger.{CertState, Coin, TransactionException, Utxos}
+import scalus.cardano.ledger.{CertState, Coin, ProtocolParams, TransactionException, Utxos}
 
 object HydrozoaTransactionMutator {
 
@@ -72,6 +72,7 @@ object HydrozoaTransactionMutator {
           */
         def fromConfig(
             config: Config,
+            protocolParams: ProtocolParams,
             time: QuantizedInstant
         ): Context = {
             require(time.slotConfig == config.slotConfig)
@@ -79,7 +80,7 @@ object HydrozoaTransactionMutator {
               fee = Coin(0),
               env = UtxoEnv(
                 time.toSlot.slot,
-                config.l2ProtocolParams,
+                protocolParams,
                 CertState.empty,
                 config.network
               ),
@@ -113,12 +114,13 @@ object HydrozoaTransactionMutator {
       */
     def transit(
         config: Config,
+        protocolParams: ProtocolParams,
         time: QuantizedInstant,
         state: Compartments,
         l2Tx: L2Tx
     ): Either[String | TransactionException, Compartments] = {
 
-        val context = CardanoLedgerContext.fromConfig(config, time)
+        val context = CardanoLedgerContext.fromConfig(config, protocolParams, time)
         val combined = TransientTokens.mkCombinedUtxos(state.main, state.transientTokens)
 
         // A helper for mapping the error type and applying arguments
@@ -167,11 +169,12 @@ object HydrozoaTransactionMutator {
       */
     def screenSignatures(
         config: Config,
+        protocolParams: ProtocolParams,
         l2Tx: L2Tx
     ): Either[String | TransactionException, Unit] =
         VerifiedSignaturesInWitnessesValidator.validate(
           CardanoLedgerContext
-              .fromConfig(config, QuantizedInstant.fromSlot(config.slotConfig, 0L)),
+              .fromConfig(config, protocolParams, QuantizedInstant.fromSlot(config.slotConfig, 0L)),
           L1State(utxos = Map.empty),
           l2Tx.tx
         )

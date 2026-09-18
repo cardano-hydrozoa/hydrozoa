@@ -21,7 +21,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
-import hydrozoa.multisig.ledger.eutxol2.{Compartments, HydrozoaTransactionMutator, TransientTokens}
+import hydrozoa.multisig.ledger.eutxol2.{Compartments, EutxoL2Ledger, HydrozoaTransactionMutator, TransientTokens}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
@@ -706,6 +706,11 @@ object Model:
                     // transient outputs, so the overlay stays empty throughout.
                     ret = HydrozoaTransactionMutator.transit(
                       config = state.multiNodeConfig.headConfig,
+                      protocolParams = EutxoL2Ledger
+                          .protocolParamsOf(state.multiNodeConfig.headConfig)
+                          .getOrElse(
+                            throw RuntimeException("stage1 model needs a cardano-eutxo head")
+                          ),
                       time = state.getCurrentTime.instant,
                       state = Compartments(state.utxosL2Active, TransientTokens.empty),
                       l2Tx = l2Tx

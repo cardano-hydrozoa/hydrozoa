@@ -404,8 +404,11 @@ reaches `headParamsHash` through `l2ParamsHash` and nowhere else, so the head st
 interpret them — which of its parameters a ledger agrees on stays the ledger's business.
 
 On `cardano-eutxo` the L2 set **is** the L1 set, snapshotted: `build-head-config` copies
-`cardanoProtocolParams` into `HeadParameters.l2ProtocolParams`, and the ledger validates against
-that copy rather than against the live network section. The two are equal at initialization and
+`cardanoProtocolParams` onto the `L2LedgerConfig.CardanoEutxo` branch of `headParams.l2Ledger`,
+and the ledger validates against that copy rather than against the live network section. It rides
+the ledger's own branch rather than sitting on `HeadParameters` because there is no bound on how
+many remote L2 ledgers exist: the shared head parameters stay ledger-agnostic, and each kind
+carries whatever its peers agreed about it. The two are equal at initialization and
 diverge at the first hard fork, after which the operator moves L1's forward and the head goes on
 validating L2 against the snapshot it was built with. The snapshot is never compared against the
 chain — deliberately. Changing it is a head migration, not an edit.

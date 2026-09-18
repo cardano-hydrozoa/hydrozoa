@@ -7,7 +7,6 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{protocolParamsDecoder, protocolParamsEncoder}
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
 import scalus.cardano.ledger.{Hash32, ProtocolParams}
@@ -24,9 +23,8 @@ final case class HeadParameters(
     // QUESTION: (from Peter to Ilia): I don't think we need to pin the coil quorum here, do we?
     //   It will be in the multisig native script; the hash will change if the peers don't agree.
     override val coilQuorum: Int,
-    override val l2ProtocolParams: ProtocolParams,
     override val l2ParamsHash: Hash32,
-    override val l2Ledger: L2LedgerKind,
+    override val l2Ledger: L2LedgerConfig,
     override val identityIsomorphism: Boolean
 ) extends HeadParameters.Section {
     override transparent inline def headParameters: HeadParameters = this
@@ -47,28 +45,23 @@ object HeadParameters {
           BlockConfig.Section {
         def headParameters: HeadParameters
 
-        /** The protocol parameters the **L2** ledger validates against, snapshotted from the
-          * network at `build-head-config` and fixed for the head's life.
-          *
-          * Not [[CardanoNetwork.Section.cardanoProtocolParams]], which is the L1 set: that one
-          * tracks the chain and moves with every hard fork, and `Serve.verifyProtocolParams`
-          * refuses to start when it drifts. This one must never move, because `l2ParamsHash`
-          * commits to it in the multisig regime datum. The two are equal at head initialization and
-          * diverge at the first fork, after which the head goes on validating L2 against the
-          * snapshot it was built with. Changing it is a head migration, not an edit.
-          *
-          * See `docs/spec/head-params-hash.md`.
-          */
-        def l2ProtocolParams: ProtocolParams = headParameters.l2ProtocolParams
-
         /** A black-box, L2-specific blake2b-256 hash of the L2 parameters that the peers agree upon
           * during the negotiation phase.
           */
         def l2ParamsHash: Hash32 = headParameters.l2ParamsHash
 
-        /** Which L2 ledger this head runs — `cardano-eutxo` or `any-remote` (agreed by all peers).
+        /** Which L2 ledger this head runs, and what its peers agreed about it. Agnostic by
+          * construction: the head holds this and does not look inside — see [[L2LedgerConfig]].
           */
-        def l2Ledger: L2LedgerKind = headParameters.l2Ledger
+        def l2Ledger: L2LedgerConfig = headParameters.l2Ledger
+
+        /** The `cardano-eutxo` ledger's agreed protocol parameters, when that is the backend this
+          * head runs. `None` on any other, whose parameters are its own and never reach the head.
+          */
+        def cardanoEutxoProtocolParams: Option[ProtocolParams] = l2Ledger match {
+            case L2LedgerConfig.CardanoEutxo(protocolParams) => Some(protocolParams)
+            case L2LedgerConfig.AnyRemote                    => None
+        }
 
         /** Identity isomorphism: when `true`, the exact L1 tx runs on L2 unchanged — the ledger
           * does NOT enforce the `headId` pin, which reopens cross-head replay

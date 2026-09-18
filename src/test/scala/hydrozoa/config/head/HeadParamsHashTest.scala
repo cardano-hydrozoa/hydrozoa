@@ -5,7 +5,8 @@ import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerConfig, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.number.PositiveInt
@@ -67,8 +68,8 @@ object HeadParamsHashTest extends Properties("HeadParamsHash") {
       ),
       "l2Ledger" -> (p =>
           p.copy(l2Ledger =
-              if p.l2Ledger == L2LedgerKind.CardanoEutxo then L2LedgerKind.AnyRemote
-              else L2LedgerKind.CardanoEutxo
+              if p.l2Ledger.kind == L2LedgerKind.CardanoEutxo then L2LedgerConfig.AnyRemote
+              else L2LedgerConfig.CardanoEutxo(CardanoNetwork.Preview.cardanoProtocolParams)
           )
       ),
       "identityIsomorphism" -> (p => p.copy(identityIsomorphism = !p.identityIsomorphism)),
