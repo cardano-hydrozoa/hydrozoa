@@ -109,8 +109,16 @@ object EutxoL2Ledger {
       * already moves the digest.
       *
       * Hydrozoa's own rules are covered by neither; see [[domainTag]].
+      *
+      * **Not to be confused with `HeadParameters.l2ParamsHash`**, which is the value the peers
+      * agreed and the regime datum pins. This one is what the parameters in hand actually hash to,
+      * and reporting it is the whole of check 4: answering with the config's stored value instead
+      * would compare the config against itself and pass unconditionally. The digest is computed
+      * from the parameters rather than read off a `Config` so that the two can never be swapped by
+      * accident, and so bootstrap can call it while still building the `HeadParameters` that will
+      * carry both.
       */
-    def l2ParamsHash(l2ProtocolParams: ProtocolParams): Hash32 = {
+    def mkL2ParamsHash(l2ProtocolParams: ProtocolParams): Hash32 = {
         val out = Preimage()
         out.raw(domainTag)
         out.framed(BuildInfo.scalusVersion.getBytes(UTF_8))
@@ -549,7 +557,7 @@ case class EutxoL2Ledger private (
                   L2Ledger.Digests(
                     evacuationMapHash = map.digest,
                     l2StateHash = L2Snapshot.fromState(s).stateHash,
-                    l2ParamsHash = EutxoL2Ledger.l2ParamsHash(config.l2ProtocolParams)
+                    l2ParamsHash = EutxoL2Ledger.mkL2ParamsHash(config.l2ProtocolParams)
                   )
               )
         )

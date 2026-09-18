@@ -582,7 +582,7 @@ object Bootstrap:
         l2Ledger: L2LedgerKind,
         l2ProtocolParams: ProtocolParams
     ): Hash32 = l2Ledger match {
-        case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.l2ParamsHash(l2ProtocolParams)
+        case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.mkL2ParamsHash(l2ProtocolParams)
         case L2LedgerKind.AnyRemote    => Hash32.fromByteString(zeroDigest)
     }
 

@@ -7,7 +7,7 @@ import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Prop, Properties}
 import scalus.cardano.ledger.{Hash32, ProtocolParams}
 
-/** [[EutxoL2Ledger.l2ParamsHash]] must be stable for a given L2 parameter set and must move when
+/** [[EutxoL2Ledger.mkL2ParamsHash]] must be stable for a given L2 parameter set and must move when
   * anything the ledger's behaviour depends on moves.
   *
   * A preimage element that silently falls out is invisible in production: every peer agrees on a
@@ -54,12 +54,12 @@ object L2ParamsHashTest extends Properties("l2ParamsHash") {
     )
 
     val _ = property("is deterministic") = Prop {
-        EutxoL2Ledger.l2ParamsHash(params) == EutxoL2Ledger.l2ParamsHash(params)
+        EutxoL2Ledger.mkL2ParamsHash(params) == EutxoL2Ledger.mkL2ParamsHash(params)
     }
 
     parameterMutations.foreach { (label, mutate) =>
         val _ = property(s"covers $label") = Prop {
-            EutxoL2Ledger.l2ParamsHash(mutate(params)) != EutxoL2Ledger.l2ParamsHash(params)
+            EutxoL2Ledger.mkL2ParamsHash(mutate(params)) != EutxoL2Ledger.mkL2ParamsHash(params)
         }
     }
 
@@ -90,8 +90,8 @@ object L2ParamsHashTest extends Properties("l2ParamsHash") {
     }
 
     /** The rule-list half of the preimage, in isolation — the same layout
-      * [[EutxoL2Ledger.l2ParamsHash]] writes, so a change to one that is not mirrored in the other
-      * shows up as a failure here.
+      * [[EutxoL2Ledger.mkL2ParamsHash]] writes, so a change to one that is not mirrored in the
+      * other shows up as a failure here.
       */
     private def digestOfRules(rules: Vector[String]): Hash32 = {
         val out = Preimage()

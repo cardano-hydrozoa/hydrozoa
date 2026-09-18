@@ -47,7 +47,7 @@ def generateHeadParameters(
       // TODO: Generate
       coilQuorum = 0,
       l2ProtocolParams = l2ProtocolParams,
-      l2ParamsHash = EutxoL2Ledger.l2ParamsHash(l2ProtocolParams),
+      l2ParamsHash = EutxoL2Ledger.mkL2ParamsHash(l2ProtocolParams),
       l2Ledger = l2Ledger,
       identityIsomorphism = identityIsomorphism
     )
