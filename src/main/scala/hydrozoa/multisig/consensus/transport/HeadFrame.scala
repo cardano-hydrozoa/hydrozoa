@@ -3,23 +3,96 @@ package hydrozoa.multisig.consensus.transport
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
+import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.consensus.transport.Codecs.given
 import io.circe.*
 import io.circe.parser.decode
 import io.circe.syntax.*
+import scalus.cardano.ledger.Hash32
 
 /** Wire envelope for the head-peer-mesh WebSocket transport.
   *
-  *   - [[Hello]] is sent as the first frame on a fresh connection so the recipient knows which peer
-  *     is on the other end.
-  *   - [[Msg]] carries a wire-eligible head↔head batch message ([[Mesh.Get]] or [[Mesh.New]]).
+  * The link opens with a three-frame exchange, in this order:
+  *
+  *   1. [[Challenge]] — the accepting peer's first frame, carrying the nonce that binds the
+  *      dialer's proof to this socket.
+  *   2. [[Handshake]] — the dialer's answer, naming which peer is on the other end, which protocol
+  *      version it speaks, and its proof of the claim.
+  *   3. [[Refused]] — sent instead of accepting, naming why, immediately before the socket closes.
+  *
+  * Then [[Msg]] carries a wire-eligible head↔head batch message ([[Mesh.Get]] or [[Mesh.New]]).
   *
   * This is the `/head` (head-mesh) envelope only. The hub↔coil link has its own envelope
   * ([[CoilFrame]], on the `/hub` route), so `Population` / `OwnHardAck` batches never reach here.
+  *
+  * **The head-mesh handshake carries no start point**, unlike the coil→hub one: a head peer holds
+  * the full roster from config and always catches up from its own store, so there is nothing to
+  * negotiate beyond who it is and whether the two ends speak the same protocol.
   */
 sealed trait HeadFrame
 object HeadFrame {
-    final case class Hello(peerNum: Int) extends HeadFrame
+
+    /** The accepting peer's opening frame: a nonce drawn fresh for this socket, which the dialer's
+      * [[Handshake]] signs over. See [[HandshakeNonce]] for why the server issues it.
+      *
+      * It announces `protocolVersion` too, so the dialer reaches its own verdict instead of waiting
+      * to be told. A dialer that checks here refuses before signing a proof for a peer it cannot
+      * talk to, and — the reason that matters — it can name both versions even when the server says
+      * nothing, which is exactly what a server too old to send [[Refused]] does. `None` from a
+      * counterpart too old to announce one, refused the same way a mismatch is
+      * ([[ProtocolVersion.check]]).
+      */
+    final case class Challenge(nonce: HandshakeNonce, protocolVersion: Option[Int])
+        extends HeadFrame
+
+    object Challenge {
+
+        /** This node's own challenge: a fresh nonce and the version it speaks. */
+        def own(nonce: HandshakeNonce): Challenge =
+            Challenge(nonce, Some(ProtocolVersion.current))
+    }
+
+    /** The dialing peer's answer to a [[Challenge]]. `protocolVersion` is `None` from a counterpart
+      * too old to announce one, which is refused the same way a mismatch is
+      * ([[ProtocolVersion.check]]).
+      */
+    final case class Handshake(
+        peerNum: Int,
+        protocolVersion: Option[Int],
+        auth: HandshakeAuth
+    ) extends HeadFrame
+
+    object Handshake {
+
+        /** This node's own handshake: its peer number, the version it speaks, and a proof of both
+          * against the remote's `nonce`, signed with this head peer's own key.
+          */
+        def own(
+            peerNum: Int,
+            wallet: PeerWallet,
+            headParamsHash: Hash32,
+            nonce: HandshakeNonce
+        ): Handshake =
+            Handshake(
+              peerNum,
+              Some(ProtocolVersion.current),
+              HandshakeProof.sign(
+                wallet,
+                HandshakeProof.Link.HeadToHead,
+                peerNum,
+                ProtocolVersion.current,
+                headParamsHash,
+                nonce
+              )
+            )
+    }
+
+    /** The accepting peer's refusal, sent immediately before it closes the socket, so a refused
+      * dialer is told why rather than watching a connection that opens and then drops on the
+      * server's idle timeout.
+      */
+    final case class Refused(refusal: HandshakeRefusal) extends HeadFrame
+
     final case class Msg(payload: LiaisonProtocol.HeadToHeadRequest) extends HeadFrame
 
     /** The wire-eligible subset of a head↔head liaison's `Request`. The proxy actor only forwards
@@ -35,8 +108,21 @@ object HeadFrame {
         }
 
     given (using CardanoNetwork.Section): Encoder[HeadFrame] = Encoder.instance {
-        case Hello(peerNum) =>
-            Json.obj("t" -> "hello".asJson, "peerNum" -> peerNum.asJson)
+        case Challenge(nonce, protocolVersion) =>
+            Json.obj(
+              "t" -> "challenge".asJson,
+              "nonce" -> nonce.asJson,
+              "protocolVersion" -> protocolVersion.asJson
+            )
+        case Refused(refusal) =>
+            Json.obj("t" -> "refused".asJson, "refusal" -> refusal.asJson)
+        case Handshake(peerNum, protocolVersion, auth) =>
+            Json.obj(
+              "t" -> "handshake".asJson,
+              "peerNum" -> peerNum.asJson,
+              "protocolVersion" -> protocolVersion.asJson,
+              "auth" -> auth.asJson
+            )
         case Msg(payload) =>
             payload match {
                 case x: Mesh.Get =>
@@ -55,8 +141,24 @@ object HeadFrame {
 
     given (using CardanoNetwork.Section): Decoder[HeadFrame] = Decoder.instance(c =>
         c.downField("t").as[String].flatMap {
-            case "hello" =>
-                c.downField("peerNum").as[Int].map(Hello(_))
+            case "challenge" =>
+                for {
+                    nonce <- c.downField("nonce").as[HandshakeNonce]
+                    // Optional for the same reason the handshake's is: a counterpart announcing
+                    // no version gets a legible refusal, not a decode failure.
+                    protocolVersion <- c.downField("protocolVersion").as[Option[Int]]
+                } yield Challenge(nonce, protocolVersion)
+            case "refused" =>
+                c.downField("refusal").as[HandshakeRefusal].map(Refused(_))
+            case "handshake" =>
+                for {
+                    peerNum <- c.downField("peerNum").as[Int]
+                    // Absent rather than required: a counterpart that announces no version is
+                    // refused by the version check with a legible reason, not by a decode failure
+                    // that reads as a malformed frame.
+                    protocolVersion <- c.downField("protocolVersion").as[Option[Int]]
+                    auth <- c.downField("auth").as[HandshakeAuth]
+                } yield Handshake(peerNum, protocolVersion, auth)
             case "msg" =>
                 c.downField("kind").as[String].flatMap {
                     case "MeshGet" =>

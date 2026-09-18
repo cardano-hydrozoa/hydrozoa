@@ -59,19 +59,57 @@ object PeerTransportEvent:
     final case class ClientDecodeError(remote: HeadPeerId, cause: Throwable)
         extends PeerTransportEvent
 
-    // ---- server (accept side) ----
+    // ---- handshake ----
 
-    /** The server accepted an inbound connection after receiving a valid `Hello`. */
-    final case class ServerAccepted(remote: HeadPeerId) extends PeerTransportEvent
-
-    /** The server rejected a `Hello` because the peer number violates the topology constraint (only
-      * lower-numbered peers dial higher-numbered peers).
+    /** The remote refused this peer's handshake and is closing the socket. `refusal` is the
+      * operator's instruction: which of the two configs to go and fix. The dialer keeps redialing.
       */
-    final case class ServerRejectedHello(remotePeerNum: Int, ownPeerNum: Int)
+    final case class DialerRefused(remote: HeadPeerId, refusal: HandshakeRefusal)
         extends PeerTransportEvent
 
-    /** A `Msg` frame arrived on the server side before the peer sent its `Hello`. */
-    case object ServerMsgBeforeHello extends PeerTransportEvent
+    /** The remote sent no [[HeadFrame.Challenge]] within the budget, so this attempt was dropped. A
+      * peer issues one as the first frame of an accepted socket, so this means it accepted the
+      * connection and then said nothing.
+      */
+    final case class DialerNoChallenge(remote: HeadPeerId, uri: Uri, after: FiniteDuration)
+        extends PeerTransportEvent
+
+    /** A [[HeadFrame.Challenge]] arrived on an already-established link. One socket carries one
+      * challenge, answered before the link opens; a second one is the remote misbehaving.
+      */
+    final case class DialerLateChallenge(remote: HeadPeerId) extends PeerTransportEvent
+
+    /** This dialer refused the remote's [[HeadFrame.Challenge]] and dropped the socket without
+      * answering it. The mirror of [[DialerRefused]], which is the remote refusing this peer: here
+      * the verdict is this peer's own, so it holds even against a remote that would never have said
+      * why.
+      */
+    final case class DialerRefusedChallenge(remote: HeadPeerId, refusal: HandshakeRefusal)
+        extends PeerTransportEvent
+
+    // ---- server (accept side) ----
+
+    /** The server accepted an inbound connection whose `Handshake` proved its peer number. */
+    final case class ServerAccepted(remote: HeadPeerId) extends PeerTransportEvent
+
+    /** The server refused a `Handshake` and closed the socket. `refusal` says which of version,
+      * dial topology, roster, head params, or proof did not hold — each a different thing for an
+      * operator to fix.
+      */
+    final case class ServerRefusedHandshake(remotePeerNum: Int, refusal: HandshakeRefusal)
+        extends PeerTransportEvent
+
+    /** A second `Handshake` arrived on a socket that already has a verdict. One socket carries one
+      * challenge and one handshake, so this is a peer misbehaving or a replay attempt; the socket
+      * keeps the verdict it has.
+      */
+    final case class ServerRepeatHandshake(remotePeerNum: Int) extends PeerTransportEvent
+
+    /** A `Msg` frame arrived on the server side before the peer's `Handshake` was accepted. */
+    case object ServerMsgBeforeHandshake extends PeerTransportEvent
+
+    /** A dialer sent a frame only the accept side ever sends — a `Challenge` or a `Refused`. */
+    case object ServerUnexpectedFrame extends PeerTransportEvent
 
     /** A frame on the server side could not be decoded. */
     final case class ServerDecodeError(cause: Throwable) extends PeerTransportEvent

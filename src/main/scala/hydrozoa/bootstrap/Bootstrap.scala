@@ -15,7 +15,7 @@ import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
+import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerConfig, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.{HeadConfig, HeadParamsHash}
@@ -342,6 +342,16 @@ object Bootstrap:
         totalEquity = initialEquityContributions.toSortedMap.values.foldLeft(Coin.zero)(_ + _)
 
         bhp = bootstrapConfig.headParams
+        // The agreed L2 ledger, with whatever that ledger's peers agreed about it. The built-in
+        // EUTXO ledger's parameters are the network's, snapshotted here and then fixed for the
+        // head's life: L1's keep tracking the chain, this copy must not, because `l2ParamsHash`
+        // pins it in the regime datum (docs/spec/head-params-hash.md). A remote ledger's
+        // parameters are its own and never reach the head config.
+        l2LedgerConfig = l2Ledger match {
+            case L2LedgerKind.CardanoEutxo =>
+                L2LedgerConfig.CardanoEutxo(cardanoNetwork.cardanoProtocolParams)
+            case L2LedgerKind.AnyRemote => L2LedgerConfig.AnyRemote
+        }
         headParams = HeadParameters(
           txTiming = bhp.txTiming,
           fallbackContingency = bhp.fallbackContingency,
@@ -349,20 +359,8 @@ object Bootstrap:
           settlementConfig = bhp.settlementConfig,
           blockConfig = bhp.blockConfig,
           coilQuorum = bhp.coilQuorum,
-          // The L2 ledger reports this at every `restoreTo` anchor and JointLedger checks it
-          // against this value (docs/spec/head-params-hash.md). Bootstrap has no ledger running, so
-          // it sources the value rather than asking: the built-in ledger's digest is a code
-          // constant.
-          // TODO: a remote ledger's digest has to come from the operator (the ledger prints it
-          //  out-of-band, as it already does for the initial evacuation map). Until that config
-          //  field exists, a remote head carries a zero hash, which the reported digest will not
-          //  match — an any-remote head does not boot. GUM-327.
-          l2ParamsHash = l2Ledger match {
-              case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.l2ParamsHash
-              case L2LedgerKind.AnyRemote =>
-                  Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32)))
-          },
-          l2Ledger = l2Ledger,
+          l2ParamsHash = sourceL2ParamsHash(l2LedgerConfig),
+          l2Ledger = l2LedgerConfig,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
           identityIsomorphism = false,
         )
@@ -500,18 +498,7 @@ object Bootstrap:
           )
         )(IO.pure)
 
-        // The opening L2 state's own digest, which the init tx's treasury datum certifies
-        // (docs/spec/l2-state-certificate.md). Its construction is the backend's, so bootstrap sources
-        // it the same way it sources `l2ParamsHash`: the built-in ledger's is derivable from the
-        // opening evacuation map without a ledger running.
-        // TODO: a remote ledger's has to come from the operator, printed out-of-band beside the
-        //  initial evacuation map. Until that config field exists, a remote head would certify a
-        //  zero hash on its init tx and then refuse to boot against the real digest. GUM-327.
-        initialL2StateHash = l2Ledger match {
-            case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.initialStateHash(evacMap)
-            case L2LedgerKind.AnyRemote =>
-                L2StateHash(ByteString.fromArray(new Array[Byte](32)))
-        }
+        initialL2StateHash = sourceInitialL2StateHash(l2Ledger, evacMap)
 
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
@@ -583,6 +570,50 @@ object Bootstrap:
                 )
         }
     } yield headConfig
+
+    /** The L2 ledger's agreed-parameters digest, for the head config's `l2ParamsHash`.
+      *
+      * The head cannot compute this: only the ledger knows its own parameters, and bootstrap has no
+      * ledger running to ask. So it is sourced per backend instead
+      * (`docs/spec/head-params-hash.md`) — the built-in ledger's is computed from the same L2
+      * parameter snapshot the ledger will validate against. The checks themselves never branch this
+      * way; obtaining the value is the one place that must.
+      *
+      * TODO: a remote ledger's digest has to come from the operator, printed out-of-band as the
+      * initial evacuation map already is. Until that input exists a remote head carries a zero
+      * hash, which the reported digest will not match — an `any-remote` head does not boot.
+      * GUM-342.
+      */
+    private def sourceL2ParamsHash(l2Ledger: L2LedgerConfig): Hash32 = l2Ledger match {
+        case L2LedgerConfig.CardanoEutxo(protocolParams) =>
+            EutxoL2Ledger.mkL2ParamsHash(protocolParams)
+        case L2LedgerConfig.AnyRemote => Hash32.fromByteString(zeroDigest)
+    }
+
+    /** The digest of the state the L2 ledger opens the head in, which the initialization
+      * transaction's treasury datum certifies (`docs/spec/l2-state-certificate.md`).
+      *
+      * Sourced per backend for the same reason as [[sourceL2ParamsHash]], and from the same place —
+      * the ledger's construction is its own. The built-in ledger's is derivable from the opening
+      * evacuation map with no ledger running, because that map *is* its opening state (as the utxo
+      * set, both other compartments empty). A remote ledger's is not derivable at all: the map is
+      * only a projection of whatever state sits behind it.
+      *
+      * TODO: a remote ledger's has to come from the operator, beside the initial evacuation map.
+      * Until that input exists a remote head certifies a zero hash on its initialization
+      * transaction and then refuses to boot against the real digest. GUM-342.
+      */
+    private def sourceInitialL2StateHash(
+        l2Ledger: L2LedgerKind,
+        initialEvacuationMap: EvacuationMap
+    ): L2StateHash = l2Ledger match {
+        case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.initialStateHash(initialEvacuationMap)
+        case L2LedgerKind.AnyRemote    => L2StateHash(zeroDigest)
+    }
+
+    /** The 32 zero bytes both `any-remote` placeholders above stand on until GUM-342 replaces them.
+      */
+    private def zeroDigest: ByteString = ByteString.fromArray(new Array[Byte](32))
 
 end Bootstrap
 

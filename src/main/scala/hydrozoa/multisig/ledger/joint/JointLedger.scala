@@ -774,7 +774,8 @@ final case class JointLedger(
       * atomic `WriteBatch` (CR4/CR6/CR8):
       *   - the per-block `BlockResult` → `BlockResult` CF (also the coil fast-side anchor —
       *     `coilBlockMark = max(BlockResult)`);
-      *   - the current deposits snapshot → `DepositMap` CF;
+      *   - the deposits map as of this block → `DepositMap[blockNum]` (per-block, so any retained
+      *     block is recoverable and servable, not just the tip);
       *   - the cumulative per-peer request high-water at this block → `RequestHighWater[blockNum]`
       *     (the previous block's high-water with this block's included request ids merged in; the
       *     `ReplayActor` reads the fast-anchor entry to seed each peer's RequestLane resume cursor,
@@ -811,7 +812,7 @@ final case class JointLedger(
         } yield {
             val bundle = WriteBatch.start
                 .put(StoreKey.BlockResult(brief.blockNum))(blockResult.persisted)
-                .put(StoreKey.DepositMap)(deposits)
+                .put(StoreKey.DepositMap(brief.blockNum))(deposits)
                 .put(StoreKey.RequestHighWater(brief.blockNum))(highWater)
                 .put(StoreKey.L2CommandNumber(brief.blockNum))(commandNumber)
             // One reverse-index row per event, in the same atomic bundle: the request's id maps
@@ -1303,7 +1304,7 @@ object JointLedger {
         ): IO[Done] =
             for {
                 brief <- persistence.getOrFail(JournalKey.Block(blockNum))
-                deposits <- persistence.getOrFail(StoreKey.DepositMap)
+                deposits <- persistence.getOrFail(StoreKey.DepositMap(blockNum))
                 commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
             } yield Done(brief.payload.header, deposits, commandNumber)
     }

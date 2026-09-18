@@ -1,7 +1,6 @@
 package hydrozoa.config.node.operation.multisig
 
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalacheck.Gen
 import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 
@@ -22,12 +21,10 @@ def generateNodeOperationMultisigConfig(
         outboxDepth <- Gen.choose(1, 8)
         millis <- Gen.choose(1L, maxPollingPeriod.toMillis)
         // Present and absent, so a codec round-trip covers both shapes of the field.
-        transplantStack <- Gen.option(Gen.choose(0, 100000).map(StackNumber.apply))
     } yield NodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = millis.millis,
       peerLiaisonMaxRequestsPerBatch = PositiveInt(maxRequestsPerBatch).get,
       peerLiaisonOutboxDepth = PositiveInt(outboxDepth).get,
       peerLiaisonResendInterval = 5.seconds,
-      transplantStackNumber = transplantStack,
       rateLimits = rateLimits
     )

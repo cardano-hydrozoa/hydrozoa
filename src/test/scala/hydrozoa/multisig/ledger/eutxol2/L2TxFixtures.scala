@@ -43,6 +43,13 @@ object L2TxFixtures {
     val ledgerConfig: EutxoL2Ledger.Config =
         multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
+    /** The L2 protocol parameters [[ledgerConfig]] agreed to, for the mutator entry points that
+      * take them explicitly. Total here because the generator always builds a `cardano-eutxo` head.
+      */
+    val l2ProtocolParams: ProtocolParams = EutxoL2Ledger
+        .protocolParamsOf(ledgerConfig)
+        .getOrElse(throw RuntimeException("L2TxFixtures needs a cardano-eutxo ledgerConfig"))
+
     val peerAddress: ShelleyAddress = multiNodeConfig.addressOf(HeadPeerNumber.zero)
 
     /** A single-key native minting policy: any tx minting under it needs peer 0's signature. */

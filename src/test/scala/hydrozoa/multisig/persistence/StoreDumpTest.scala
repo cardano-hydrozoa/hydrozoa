@@ -57,7 +57,7 @@ class StoreDumpTest extends AnyFunSuite:
                       )
                       .put(
                         Cf.DepositMap,
-                        StoreKey.DepositMap.encode,
+                        StoreKey.DepositMap(BlockNumber(9)).encode,
                         Array.fill[Byte](32)(0xab.toByte)
                       )
                       .put(
@@ -128,7 +128,12 @@ class StoreDumpTest extends AnyFunSuite:
                             StoreKey.HardConfirmation(StackNumber(0)).encode,
                             Array[Byte](1)
                           )
-                          .put(Cf.DepositMap, StoreKey.DepositMap.encode, Array[Byte](1, 2, 3))
+                          .put(
+                            Cf.DepositMap,
+                            StoreKey.DepositMap(BlockNumber(9)).encode,
+                            Array[Byte](1, 2, 3)
+                          )
+                          .put(Cf.Treasury, StoreKey.Treasury.encode, Array[Byte](4, 5, 6))
                     ) *> StoreDump.dump(b, testCfs)
                 }
                 .unsafeRunSync()
@@ -139,6 +144,9 @@ class StoreDumpTest extends AnyFunSuite:
                   rendered.contains("SoftAck(3,2)") &&
                   rendered.contains("SoftConfirmation(7)") &&
                   rendered.contains("HardConfirmation(0)") &&
+                  // Block-keyed, so it decodes to its block number — `Cf.Treasury` is what still
+                  // covers the singleton rendering.
+                  rendered.contains("DepositMap(9)") &&
                   rendered.contains("(singleton)") &&
                   rendered.contains("Meta("),
               rendered

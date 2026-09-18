@@ -316,7 +316,7 @@ Structural facts:
 | **Hard confirmation** (`HardConfirmation` CF)                                     | `SlowConsensusActor` → `CardanoLiaison` | multisigned effects / SECs / fallbacks **in full**, written at confirmation time, keyed by `stackNum`. The value is `Timestamped` with the node-local confirmation moment as an **arrival stamp** (not a wall clock — diagnostic, never consensus state; converted to wall-clock time on read via the per-generation zero-time anchor). `hardConfirmed` **derives** as `max(HardConfirmation.key)` — no marker key. `CardanoLiaison` submits; evacuation reads. Prunes hard-acks. **R10 evacuation floor.** |
 | **Request → block index** (`RequestBlockIndex` CF)                                | `JointLedger` | reverse index, keyed by the opaque request id (its packed i64): the block that locally processed the request plus its validity verdict. Written in the same atomic bundle as the block. Never read by recovery — query support only. |
 | **Block → stack index** (`BlockStackIndex` CF)                                    | `SlowConsensusActor` | reverse index, keyed by `blockNum`: the stack that hard-confirmed the block, one row per block in the stack's range, written in the same atomic batch as the stack's `HardConfirmation`. Never read by recovery — query support only. |
-| Deposits map (`DepositMap` CF)                                                    | `JointLedger` | **snapshotted** (one keyed blob, rewritten on every own soft ack — out-of-order subset, [§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-journal-cursors)) |
+| Deposits map (`DepositMap` CF)                                                    | `JointLedger` | **per-block** — keyed by `blockNum`, the registered-but-undecided L1 deposits as of that block. One entry per own soft-ack, bundled with that block. Block-keyed (not a singleton) so the map at any retained block is recoverable, and servable to a joining coil, rather than only the one at the tip — out-of-order subset, [§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-journal-cursors) |
 | Request high-water (`RequestHighWater` CF)                                        | `JointLedger` | **per-block** — keyed by `blockNum`, a `Map[HeadPeerNumber, RequestNumber]` giving the highest request from each peer included in any block `≤ blockNum` (cumulative, monotone in `blockNum`). One entry per own soft-ack, bundled with that block. The Request journal recovery cursor is `RequestHighWater[fastBlockMark] + 1` per peer. Persisted (not derived) because retention ([§5.1](#51-the-markers--all-derived-none-stored)) prunes the old briefs a brief-fold would need ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-journal-cursors)); block-keyed (not a singleton) so the high-water at any committed block is recoverable. |
 | L2 command number (`L2CommandNumber` CF)                                          | `JointLedger` | **per-block** — keyed by `blockNum`, a single `Long`: the L2 ledger's commit counter reached after that block's L2 commits. One entry per own soft-ack, bundled with that block. On recover `JointLedger` reads `L2CommandNumber[fastBlockMark]` and calls `l2Ledger.restoreTo` to co-anchor the committed L2 state ([§6](#6-per-actor-recovery-contracts)). |
 | Treasury (`Treasury` CF)                                                          | `StackComposer` | **snapshotted** (one keyed blob, rewritten on every own hard-ack stack-close — rotates per settlement / finalization) |
@@ -489,7 +489,7 @@ marker key is stored:
 
 | Marker | Anchors | What that actor reads at boot |
 |---|---|---|
-| `fastBlockMark` | **`JointLedger*`* | the **`DepositMap`** CF (one keyed blob — the deposits map as of our last own soft ack). `previousBlockHeader` is reloaded from `BlockSpine[fastBlockMark].brief`. JL is at `Done(fastBlockMark)`; SC's `pending` rebuild is **not** JL's burden — SC loads `BlockResult`s directly (next row). |
+| `fastBlockMark` | **`JointLedger*`* | the **`DepositMap[fastBlockMark]`** entry (the deposits map as of our last own soft ack). `previousBlockHeader` is reloaded from `BlockSpine[fastBlockMark].brief`. JL is at `Done(fastBlockMark)`; SC's `pending` rebuild is **not** JL's burden — SC loads `BlockResult`s directly (next row). |
 | `hardAcked` | **`StackComposer*`* | **`Treasury`** (one blob — cumulative treasury UTXO ref) + **`EvacuationMap`** (keyed by `blockNum`, written only at committed blocks — major / SEC minor; load `EvacuationMap[StackSpine[hardAcked].lastBlockNum]` for the current map — that last block is always a committed one for a non-final stack, [§5.2](#52-state-recovery-the-base-snapshots)). Counters like `lastClosedStackNum` (the closing stack, its number unpacked from the last own `HardAck(own)` value), `lastClosedBlockNum` (from `UnsignedStack[lastClosedStackNum].brief.lastBlockNum` — every peer writes it on every close, so this also works for a follower), and `nextOwnHardAckNum` (= `max(own HardAck journal) + 1`) are derived. SC additionally reads `BlockResult` for `(StackSpine[hardAcked].lastBlockNum, head]` to rebuild `pending`. |
 | `softConfirmed` | **`FastConsensusActor*`* | **Nothing of its own.** Cells `≤ softConfirmed` were dropped the moment they produced their `SoftConfirmation` record; cells `> softConfirmed` are in-flight and rebuilt by replay. |
 | `hardConfirmed` | **`SlowConsensusActor*`* | **Nothing of its own.** Same shape: cells dropped at confirmation; in-flight tail rebuilds from replay. |
@@ -550,7 +550,7 @@ below.
 ### 5.2 State recovery: the base snapshots
 
 Replay starts from **per-side passive state at the ack mark**: the fast side
-persists `DepositMap` (singleton snapshot) + `RequestHighWater` (per-block), the
+persists `DepositMap` + `RequestHighWater` (both per-block), the
 slow `Treasury` (singleton) + `EvacuationMap` (per committed block). Each is
 written in the same atomic `WriteBatch` as its side's own ack write (deposits +
 request high-water per own soft ack, treasury + evac per own hard-ack
@@ -560,7 +560,7 @@ with it and can never be torn from it.
 These carry **only the non-derivable** passive state on each side:
 
 - fast — **`DepositMap`** + **`RequestHighWater`** CFs (`JointLedger`):
-    - `DepositMap` — one keyed blob, the deposits map at `fastBlockMark`. JL is at
+    - `DepositMap` — keyed by `blockNum`; recovery reads the entry at `fastBlockMark`. JL is at
       `Done(fastBlockMark)` after restore — `previousBlockHeader` reloads from
       `BlockSpine[fastBlockMark].brief`, deposits come from `DepositMap`, nothing else
       needed for JL's own state.
@@ -1045,8 +1045,8 @@ Owns only the fast-side state; the treasury lives in `StackComposer`.
       `StackComposer` can rebuild its `pending` map from disk on restart by loading
       `(StackSpine[hardAcked].lastBlockNum, head]` directly, instead of relying on
       `JointLedger` to re-emit results below the fast anchor,
-    - the current **deposits snapshot** → **`DepositMap`** CF (single keyed blob;
-      overwrites the previous snapshot),
+    - the **deposits map as of this block** → **`DepositMap`** CF (keyed by
+      `blockNum`, one entry per block),
     - the cumulative **request high-water** → **`RequestHighWater`** CF (keyed by
       `blockNum`, a `Map[HeadPeerNumber, RequestNumber]`). Feeds the Request-journal
       recovery cursors ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-journal-cursors)) — recovery reads the entry at the fast anchor,
@@ -1508,8 +1508,8 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   working / confirmation CFs (`BlockResult`, `SoftConfirmation`, `HardConfirmation`,
   `RequestHighWater`, `L2CommandNumber`, `UnsignedStack` — the last the
   `Stack.Unsigned` `StackComposer` persists before each handoff, keyed by `stackNum`);
-  three snapshot CFs (`DepositMap` + `Treasury` single keyed blobs; `EvacuationMap`
-  keyed per committed block); one metadata (`Meta`, store version + the
+  three snapshot CFs (`Treasury` a single keyed blob; `DepositMap` keyed per block,
+  `EvacuationMap` per committed block); one metadata (`Meta`, store version + the
   arrival-stamp generation counter, [§5.4](#54-total-order-of-the-replayed-streams)). The generic benefits of CF-per-concern
   (per-CF tuning, compaction isolation, scoped Bloom filters) are enumerated in the
   primer above; the per-author split adds **append-only-per-CF** write behavior
@@ -1517,9 +1517,10 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   multiple CFs as one WAL record, so the per-soft-ack bundle `{own SoftAck,
   BlockResult, DepositMap, RequestHighWater, L2CommandNumber}` (+ `BlockSpine` when
   leading) lands as one transaction across **six CFs**.
-- **Snapshots** = `DepositMap` / `Treasury` are single keyed blobs in their own
-  CF, overwritten in place; `EvacuationMap` is keyed by `blockNum`, one entry per
-  committed block ([§3.3](#33-what-gets-stored-and-how-recovery-treats-it)).
+- **Snapshots** = `Treasury` is a single keyed blob in its own CF, overwritten in
+  place; `DepositMap` is keyed by `blockNum`, one entry per block, and
+  `EvacuationMap` by `blockNum`, one entry per committed block
+  ([§3.3](#33-what-gets-stored-and-how-recovery-treats-it)).
 
 **Per-CF profile — what CF-per-concern buys us.** The CFs have very
 different workload shapes, and the win of splitting them is that each one's
@@ -1538,7 +1539,7 @@ clean append-only stream. Concretely:
 | `UnsignedStack` | one entry per stack close (`Stack.Unsigned` = brief + effects), keyed by `stackNum`, read at recovery to re-form SCA's in-flight cell | scan-optimized + sparse; medium-sized values; independent of the ack CFs |
 | `SoftConfirmation` | one entry per soft-confirmed block (FCA aggregate output), keyed by `blockNum`, low write rate (one per confirmation event); `softConfirmed = max(key)` | a single `SeekToLast` derives the marker for free; small + sparse — cheap to keep |
 | `HardConfirmation` | one entry per hard-confirmed stack (multisigned effects / SECs / fallbacks), keyed by `stackNum`, the R10 evacuation floor — physical deletion never descends here; folded sequentially at recovery (`CardanoLiaison` + rule-based regime, [§6](#6-per-actor-recovery-contracts), [§5.7](#57-the-recovery-priority-ladder-graceful-degradation)) | scan-optimized; `hardConfirmed = max(key)` from `SeekToLast`; **never compacted past — physical-retention floor** |
-| `DepositMap` | one key (`Meta`-like — single keyed blob), medium-sized blob, **rewritten on every own soft ack** (high churn on a single key) | RocksDB-friendly single-key churn (large MemTable absorbs the overwrites; compaction collapses the chain quickly); isolated from ack-CF compaction |
+| `DepositMap` | one entry per block keyed by `blockNum`, a medium-sized blob bounded by the deposits still awaiting a decision, written on every own soft ack | scan-optimized + sparse like `RequestHighWater`; recovery reads the `fastBlockMark` entry, and a hub serves an earlier one when seeding a coil; pruning is bounded the way `EvacuationMap`'s is — anything strictly older than the retention floor is droppable |
 | `RequestHighWater` | one entry per block keyed by `blockNum`, a small `Map[HeadPeerNumber, RequestNumber]` (`N` entries), written on every own soft ack (cumulative — each entry extends the previous) | scan-optimized + sparse like `BlockResult`; recovery reads the `fastBlockMark` entry to seed the `N` Request journal cursors ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-journal-cursors)); its own CF keeps the churn off the journal / ack compaction queues |
 | `L2CommandNumber` | one entry per block keyed by `blockNum`, a single `Long` (the L2 ledger's commit counter reached after that block's L2 commits), written on every own soft ack | tiny scan-optimized + sparse CF; `JointLedger`'s own `recover` reads the `fastBlockMark` entry and calls `l2Ledger.restoreTo` to co-anchor the committed L2 state ([§6](#6-per-actor-recovery-contracts)); isolated from the journal / ack compaction queues |
 | `Treasury` | one key, rewritten only at own hard-ack stack-close (slow cadence); small (UTXO ref) | low write rate ⇒ tiny compaction footprint; own CF makes it trivially backupable / restorable as part of the R10 floor |
@@ -1589,12 +1590,12 @@ Notes / decisions:
   like `CardanoBackend` — `HeadMultisigRegimeManager` already reserves a
   `Dependencies.Persistence` enum case and termination handler, so the seam exists.
 - **Layout:** one store per head instance, keyed by head ID, path from `NodeConfig`.
-- **Versioning:** the store version is **held at 1** (`StoreVersion.current`, in `Cf.Meta`),
-  and recovery refuses to load an incompatible version. While the layout is unstable a format
-  change rebuilds the store rather than bumping the version; backward-incompatible bumps get
-  tracked once the layout stabilizes. (The layout unifies the head and coil own-hard-ack CFs
-  into one `PeerId`-keyed `HardAck` journal — one CF per peer, a coil author's named
-  `HardAck:<peerWireInt>`.)
+- **Versioning:** the store version is `StoreVersion.current`, stamped in `Cf.Meta`, and an open
+  that finds any other value refuses to start (`design/versioning.md`). Any change to the
+  column-family set, the key layout or a value codec bumps it, and a bump deploys by head
+  migration — no store of an earlier version is ever read. (The layout unifies the head and coil
+  own-hard-ack CFs into one `PeerId`-keyed `HardAck` journal — one CF per peer, a coil author's
+  named `HardAck:<peerWireInt>`.)
 
 ### 7.1 Key layout — journal IDs
 
@@ -1726,7 +1727,7 @@ replay seam; [§6](#6-per-actor-recovery-contracts)). **All actors start togethe
    - `fastBlockMark = max(BlockResult.key)` — the fast-side anchor;
    - `nextRequestNumber = max(own Request.key) + 1` — the RequestSequencer counter
      (`RequestNumber(0)` cold or on a coil peer; [§6.1.1](#611-requestsequencer)).
-3. **Load base snapshots** for the consensus actors — `DepositMap` +
+3. **Load base snapshots** for the consensus actors — `DepositMap[fastBlockMark]` +
    `RequestHighWater[fastBlockMark]` (JL; the latter feeds the Request journal cursors,
    [§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-journal-cursors)), `Treasury` + `EvacuationMap` (SC; the latter at
    `EvacuationMap[StackSpine[hardAcked].lastBlockNum]`, always present for a

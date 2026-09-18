@@ -49,6 +49,47 @@ object WsDuplex {
       */
     val maxTextFragments: Int = 1024
 
+    /** Read from a freshly connected `conn` until the first complete `Text` line arrives, and
+      * answer any `Ping` on the way. `None` if the peer closed its send side first, or if `budget`
+      * passed with no line.
+      *
+      * This is how a dialer collects the server's `Challenge` before it has anything to say back,
+      * so it runs **before** [[run]] and shares its frame handling — fragments defragmented, pings
+      * answered, everything else counted as traffic and dropped.
+      *
+      * **The caller must drop the connection when this yields `None`.** The deadline cancels a
+      * `receive` mid-flight, which leaks one unit of demand into the client's inbound queue, and
+      * the only thing that reclaims it is closing the socket. That is the right move anyway: a
+      * server that issues no challenge has nothing to say.
+      */
+    def firstLine(conn: WSConnection[IO], budget: FiniteDuration): IO[Option[String]] =
+        Stream
+            .repeatEval(conn.receive)
+            .unNoneTerminate
+            .evalMapAccumulate(Chain.empty[String]) { (partial, frame) =>
+                frame match {
+                    case WSFrame.Ping(data) =>
+                        conn.send(WSFrame.Pong(data)).as((partial, Option.empty[String]))
+                    case WSFrame.Text(text, true) =>
+                        IO.pure((Chain.empty[String], Some((partial :+ text).toList.mkString)))
+                    case WSFrame.Text(text, false) =>
+                        val next = partial :+ text
+                        IO.raiseWhen(next.size > maxTextFragments)(
+                          new IllegalStateException(
+                            s"peer sent over $maxTextFragments Text fragments without a final" +
+                                " frame; abandoning the connection"
+                          )
+                        ).as((next, Option.empty[String]))
+                    case _ => IO.pure((partial, Option.empty[String]))
+                }
+            }
+            .map(_._2)
+            .unNone
+            .head
+            .compile
+            .last
+            .timeoutTo(budget, IO.none)
+
     def run(
         conn: WSConnection[IO],
         outbox: Queue[IO, String],
