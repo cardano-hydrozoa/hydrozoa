@@ -131,16 +131,16 @@ class JoinOfferCodecTest extends AnyFunSuite {
     test("an offer at a minor start point survives the wire") {
         val decoded = roundTrip(offer(Some(sec)))
 
-        assert(decoded.startStack == StackNumber(2))
-        assert(decoded.cursors == cursors, "every population cursor must arrive as sent")
-        assert(decoded.ownHardAck == HardAckNumber(9))
-        assert(decoded.settlement.tx.id == signedSettlement.tx.id)
-        assert(
+        val _ = assert(decoded.startStack == StackNumber(2))
+        val _ = assert(decoded.cursors == cursors, "every population cursor must arrive as sent")
+        val _ = assert(decoded.ownHardAck == HardAckNumber(9))
+        val _ = assert(decoded.settlement.tx.id == signedSettlement.tx.id)
+        val _ = assert(
           decoded.state.commandNumber == L2CommandNumber(42L) &&
               IArray.genericWrapArray(decoded.state.bytes).toArray.sameElements(exportBytes),
           "the export's bytes are opaque to the transport and must arrive byte-identical"
         )
-        assert(decoded.sec.map(_.commitment.blockNum).contains(BlockNumber(4)))
+        val _ = assert(decoded.sec.map(_.commitment.blockNum).contains(BlockNumber(4)))
         assert(
           decoded.sec.map(_.commitment.kzgCommitment).contains(EvacuationMap.empty.kzgCommitment)
         )
@@ -166,13 +166,19 @@ class JoinOfferCodecTest extends AnyFunSuite {
         val decoded = roundTrip(offer(Some(sec)))
         val before = signedSettlement.tx.witnessSet.vkeyWitnesses.toSet
         val after = decoded.settlement.tx.witnessSet.vkeyWitnesses.toSet
-        assert(before.nonEmpty, "fixture must actually be signed")
-        assert(after.size == before.size, s"witness count changed: ${before.size} -> ${after.size}")
+        val _ = assert(before.nonEmpty, "fixture must actually be signed")
+        val _ = assert(
+          after.size == before.size,
+          s"witness count changed: ${before.size} -> ${after.size}"
+        )
         assert(after.map(_.vkey) == before.map(_.vkey), "the signing keys must arrive unchanged")
     }
 
     test("the SEC fixture is sparse — otherwise the slot test below proves nothing") {
-        assert(sec.signatures.exists(_.isEmpty), "no empty slot: the fixture cannot catch packing")
+        val _ = assert(
+          sec.signatures.exists(_.isEmpty),
+          "no empty slot: the fixture cannot catch packing"
+        )
         assert(sec.signatures.exists(_.isDefined))
     }
 
@@ -180,7 +186,7 @@ class JoinOfferCodecTest extends AnyFunSuite {
         // Coil signatures sit at roster offsets, so a codec that compacted the list would move
         // every one of them and the quorum check would read zero valid coil signatures.
         val decoded = roundTrip(offer(Some(sec))).sec.get
-        assert(decoded.signatures.length == sec.signatures.length)
+        val _ = assert(decoded.signatures.length == sec.signatures.length)
         assert(
           decoded.signatures.map(_.isDefined) == sec.signatures.map(_.isDefined),
           "the empty slots are load-bearing — they are what keeps each signature at its own index"

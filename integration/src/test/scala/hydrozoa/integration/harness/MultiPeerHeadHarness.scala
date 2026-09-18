@@ -1453,8 +1453,6 @@ object MultiPeerHeadHarness:
             hubCoilRegistry: Option[InProcessHubCoilTransport.Registry],
         ): Resource[IO, HeadNetwork] =
             val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
-            // Every peer in the harness is in the same head, so they all announce the same thing.
-            val ownHead = HeadIdentity.own(using multiNodeConfig.headConfig)
             val hubbedCoils = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
             for
                 peerT <- Resource.eval(

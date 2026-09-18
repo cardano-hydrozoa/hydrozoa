@@ -152,7 +152,7 @@ class HubJoinHandoffTest extends AnyFunSuite {
 
     test("a connected coil that needs seeding is sent the offer") {
         val out = onConnected(_ => IO.pure(CoilStartPoint.Offer(offer)))
-        assert(offers(out).map(_.startStack) == Vector(StackNumber(3)))
+        val _ = assert(offers(out).map(_.startStack) == Vector(StackNumber(3)))
         assert(offers(out).map(_.ownHardAck) == Vector(offeredAck))
     }
 
@@ -185,7 +185,7 @@ class HubJoinHandoffTest extends AnyFunSuite {
         val gets = out.collect {
             case g: hydrozoa.multisig.consensus.liaison.BatchMessages.OwnHardAck.Get => g
         }
-        assert(gets.nonEmpty, "the hub must keep pulling after seeding")
+        val _ = assert(gets.nonEmpty, "the hub must keep pulling after seeding")
         assert(
           gets.last.hardAck == offeredAck,
           s"hub is pulling from ${gets.last.hardAck}, not the offered $offeredAck"

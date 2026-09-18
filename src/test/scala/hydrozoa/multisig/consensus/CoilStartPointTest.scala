@@ -277,8 +277,11 @@ class CoilStartPointTest extends AnyFunSuite:
                 r <- decide(p, coilStack = None)
             } yield r match {
                 case CoilStartPoint.Offer(offer) =>
-                    assert(offer.startStack == StackNumber(1))
-                    assert(offer.sec.isEmpty, "a major carries its own settlement; no SEC needed")
+                    val _ = assert(offer.startStack == StackNumber(1))
+                    val _ = assert(
+                      offer.sec.isEmpty,
+                      "a major carries its own settlement; no SEC needed"
+                    )
                     assert(offer.settlement.tx.id == signedSettlement.tx.id)
                 case other => fail(s"expected an Offer, got $other")
             }
@@ -315,17 +318,18 @@ class CoilStartPointTest extends AnyFunSuite:
                 r <- decide(p, coilStack = None)
             } yield r match {
                 case CoilStartPoint.Offer(offer) =>
-                    assert(offer.startStack == StackNumber(2), "the start point is the minor")
+                    val _ =
+                        assert(offer.startStack == StackNumber(2), "the start point is the minor")
                     // ⚠️ Compared field-wise, NOT with `contains`/`==`. A SEC.s `header` is an
                     // opaque `IArray[Byte]`, so case-class equality on `MultiSigned` is reference
                     // equality on that field — two values that print identically compare unequal
                     // after a store round-trip.
-                    assert(
+                    val _ = assert(
                       offer.sec.map(_.commitment.kzgCommitment) ==
                           Some(minorSec.commitment.kzgCommitment),
                       "the minor's own SEC must travel"
                     )
-                    assert(
+                    val _ = assert(
                       offer.sec.map(_.commitment.blockNum) == Some(minorSec.commitment.blockNum)
                     )
                     assert(

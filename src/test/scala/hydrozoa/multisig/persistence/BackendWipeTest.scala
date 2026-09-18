@@ -46,7 +46,7 @@ class BackendWipeTest extends AnyFunSuite {
 
     test("a wipe clears the data column families") {
         val (_, treasury, ack) = wiped()
-        assert(treasury.isEmpty, "a singleton snapshot CF survived the wipe")
+        val _ = assert(treasury.isEmpty, "a singleton snapshot CF survived the wipe")
         assert(ack.isEmpty, "a per-author satellite CF survived the wipe")
     }
 

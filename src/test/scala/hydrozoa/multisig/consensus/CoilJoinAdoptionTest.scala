@@ -136,8 +136,8 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
 
     test("adoption records the start point it was seeded at") {
         val mark = adopted((p, _) => p.get(StoreKey.StartPoint))
-        assert(mark.map(_.startStack).contains(startStack))
-        assert(mark.map(_.lastBlockNum).contains(lastBlockNum))
+        val _ = assert(mark.map(_.startStack).contains(startStack))
+        val _ = assert(mark.map(_.lastBlockNum).contains(lastBlockNum))
         assert(mark.map(_.ownHardAckStart).contains(offeredAck))
     }
 
@@ -176,9 +176,10 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
                     )
                 )
         )
-        assert(recovered.isDefined, "a seeded store must not read as cold — that re-bootstraps")
-        assert(recovered.map(_.lastClosedStackNum).contains(startStack))
-        assert(recovered.map(_.lastClosedBlockNum).contains(lastBlockNum))
+        val _ =
+            assert(recovered.isDefined, "a seeded store must not read as cold — that re-bootstraps")
+        val _ = assert(recovered.map(_.lastClosedStackNum).contains(startStack))
+        val _ = assert(recovered.map(_.lastClosedBlockNum).contains(lastBlockNum))
         assert(
           recovered.map(_.nextOwnHardAckNum).contains(offeredAck),
           "the coil must number its first ack where its hub is already pulling from"
@@ -201,7 +202,7 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
                     )(using nodeConfig)
                 )
         )
-        assert(done.isDefined, "no anchor means restoreTo(zero), which discards the import")
+        val _ = assert(done.isDefined, "no anchor means restoreTo(zero), which discards the import")
         assert(done.map(_.previousBlockHeader.blockNum).contains(lastBlockNum))
     }
 
@@ -212,7 +213,7 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
         // be derived from the start point at all.
         val mark = adopted((p, _) => p.get(StoreKey.StartPoint))
         val cursors = mark.map(_.cursors)
-        assert(cursors.map(_.block).contains(lastBlockNum.increment))
+        val _ = assert(cursors.map(_.block).contains(lastBlockNum.increment))
         assert(cursors.map(_.stack).contains(startStack.increment))
     }
 

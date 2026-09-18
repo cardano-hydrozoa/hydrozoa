@@ -32,7 +32,7 @@ class HeadIdentityTest extends AnyFunSuite {
 
     test("a counterpart in another head is refused") {
         val result = HeadIdentity.check(Some(HeadIdentity(headId("theirs"), hash(0x11))), own)
-        assert(result.isInstanceOf[HeadIdentity.Check.Mismatch])
+        val _ = assert(result.isInstanceOf[HeadIdentity.Check.Mismatch])
         assert(
           result.asInstanceOf[HeadIdentity.Check.Mismatch].field == "headId",
           "the refusal must name which half disagreed"
@@ -58,7 +58,7 @@ class HeadIdentityTest extends AnyFunSuite {
             HeadIdentity.describe(
               HeadIdentity.check(Some(HeadIdentity(headId("theirs"), hash(0x11))), own)
             )
-        assert(detail.contains("headId"), s"unhelpful refusal: $detail")
+        val _ = assert(detail.contains("headId"), s"unhelpful refusal: $detail")
         assert(detail.contains(headId("ours").toHex) && detail.contains(headId("theirs").toHex))
     }
 

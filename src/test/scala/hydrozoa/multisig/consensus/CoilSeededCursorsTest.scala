@@ -153,11 +153,11 @@ class CoilSeededCursorsTest extends AnyFunSuite {
 
     test("a seeded coil opens its pull chain at the cursors it was given") {
         val pull = firstPull(seeded = true)
-        assert(pull.block == adoptedCursors.block, "block lane")
-        assert(pull.stack == adoptedCursors.stack, "stack lane")
-        assert(pull.requests == adoptedCursors.requests, "request lanes")
-        assert(pull.softAcks == adoptedCursors.softAcks, "soft-ack lanes")
-        assert(pull.headHardAcks == adoptedCursors.headHardAcks, "head hard-ack lanes")
+        val _ = assert(pull.block == adoptedCursors.block, "block lane")
+        val _ = assert(pull.stack == adoptedCursors.stack, "stack lane")
+        val _ = assert(pull.requests == adoptedCursors.requests, "request lanes")
+        val _ = assert(pull.softAcks == adoptedCursors.softAcks, "soft-ack lanes")
+        val _ = assert(pull.headHardAcks == adoptedCursors.headHardAcks, "head hard-ack lanes")
         assert(pull.coilHardAcks == adoptedCursors.coilHardAcks, "coil hard-ack lanes")
     }
 
@@ -174,8 +174,8 @@ class CoilSeededCursorsTest extends AnyFunSuite {
 
     test("an unseeded coil still opens cold — the start point is a floor, not a rewrite") {
         val pull = firstPull(seeded = false)
-        assert(pull.block == BlockNumber(1))
-        assert(pull.stack == StackNumber(1))
+        val _ = assert(pull.block == BlockNumber(1))
+        val _ = assert(pull.stack == StackNumber(1))
         assert(pull.headHardAcks.values.forall(_ == HardAckNumber.zero))
     }
 }
