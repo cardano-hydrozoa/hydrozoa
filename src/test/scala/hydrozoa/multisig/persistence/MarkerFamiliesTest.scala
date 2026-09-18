@@ -51,7 +51,7 @@ class MarkerFamiliesTest extends AnyFunSuite:
       */
     test("SoftAck is not a marker family") {
         val families = Markers.markerFamilies(head)
-        assert(!families.contains(Cf.SoftAck(own)))
+        assert(!families.contains(Cf.SoftAck(own))): Unit
         assert(!families.exists { case _: Cf.SoftAck => true; case _ => false })
     }
 
@@ -60,8 +60,8 @@ class MarkerFamiliesTest extends AnyFunSuite:
       */
     test("only the own author's HardAck is protected") {
         val families = Markers.markerFamilies(head)
-        assert(families.contains(Cf.HardAck(head)))
-        assert(!families.contains(Cf.HardAck(PeerId.Head(HeadPeerNumber(2)))))
+        assert(families.contains(Cf.HardAck(head))): Unit
+        assert(!families.contains(Cf.HardAck(PeerId.Head(HeadPeerNumber(2))))): Unit
         assert(!families.contains(Cf.HardAck(coil)))
     }
 
@@ -71,7 +71,7 @@ class MarkerFamiliesTest extends AnyFunSuite:
       */
     test("a head peer's own Request journal is protected, and no other peer's is") {
         val families = Markers.markerFamilies(head)
-        assert(families.contains(Cf.Request(own)))
+        assert(families.contains(Cf.Request(own))): Unit
         assert(!families.contains(Cf.Request(HeadPeerNumber(2))))
     }
 

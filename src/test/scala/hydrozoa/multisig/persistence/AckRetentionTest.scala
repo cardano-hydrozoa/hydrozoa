@@ -51,7 +51,10 @@ class AckRetentionTest extends AnyFunSuite:
         val retention = AckRetention.forArchiver(Some(watermarks))
 
         assert(retention.mayPrune(softAck0, 500)): Unit
-        assert(!retention.mayPrune(hardAck0, 1), "a hard-ack was pruned on a soft-ack's watermark")
+        assert(
+          !retention.mayPrune(hardAck0, 1),
+          "a hard-ack was pruned on a soft-ack's watermark"
+        ): Unit
         assert(!retention.mayPrune(Cf.SoftAck(HeadPeerNumber(1)), 1))
     }
 
