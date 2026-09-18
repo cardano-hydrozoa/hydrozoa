@@ -47,6 +47,7 @@ class CoilJoinBootTest extends AnyFunSuite {
     private class StubTransport(answer: IO[Join.Answer]) extends CoilTransport {
         override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] = IO.unit
         override def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit] = IO.unit
+        override def announceMarks(marks: Join.Connected): IO[Unit] = IO.unit
         override def joinAnswer: IO[Join.Answer] = answer
     }
 

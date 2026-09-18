@@ -27,6 +27,13 @@ trait CoilTransport {
     /** Enqueue a coil→hub batch for delivery to the hub. */
     def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit]
 
+    /** Announce where this coil stands, before [[joinAnswer]] is read.
+      *
+      * A dialing transport sends its marks in the handshake on every dial and has nothing to learn
+      * here. A directly-wired one never dials, so this is the only point at which it can be told.
+      */
+    def announceMarks(marks: Join.Connected): IO[Unit]
+
     /** The hub's answer to this coil's handshake, completing when the first one arrives.
       *
       * Read at **boot**, before any liaison exists — which is the only time it can be acted on, so
@@ -63,6 +70,12 @@ final class CoilPeerWsTransport private (
             case Some(wire) => outbox.offer(CoilFrame.encode(CoilFrame.Msg(wire)))
             case None       => tracer.traceWith(DroppingNonWireRequest(request))
         }
+
+    /** No-op: this transport announces its marks in the handshake it sends on every dial, read
+      * fresh from the store at that moment ([[ownMarks]]), which is strictly better than a value
+      * captured earlier by a caller.
+      */
+    override def announceMarks(marks: Join.Connected): IO[Unit] = IO.unit
 
     override def joinAnswer: IO[Join.Answer] = answer.get
 

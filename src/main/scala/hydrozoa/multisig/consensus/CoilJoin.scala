@@ -117,6 +117,11 @@ object CoilJoin {
         for {
             markers <- Markers.derive(persistence, config.ownPeerId)
             startPoint <- adoptedStartPoint(persistence)
+            // Where this coil stands, for the hub to decide on. A dialing transport already sent
+            // this in its handshake and ignores the call.
+            _ <- transport.announceMarks(
+              Join.Connected(block = markers.fastBlockMark, stack = markers.hardConfirmed)
+            )
             cold = markers.hardAckedStack.isEmpty && startPoint.isEmpty
             answer <-
                 if cold then waitForAnswer(transport, tracer).map(Some(_))

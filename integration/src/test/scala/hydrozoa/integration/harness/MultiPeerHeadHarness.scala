@@ -29,7 +29,7 @@ import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.*
-import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
+import hydrozoa.multisig.consensus.{CardanoLiaison, CoilJoin, CoilJoinEventFormat, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Screener
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
@@ -659,6 +659,11 @@ object MultiPeerHeadHarness:
         // only. The initial `peers` map entry goes stale after a restart — use the returned handle.
         restartHeadPeer: HeadPeerNumber => IO[Peer[H]],
         restartCoilPeer: CoilPeerNumber => IO[Coil[H]],
+        /** Wipe a coil peer's store and L2 ledger, then restart it — an operator recreating a
+          * volume, or a coil whose data was lost. Its only way back into the head is the join
+          * exchange, so this is what exercises it end to end.
+          */
+        rejoinCoilPeer: CoilPeerNumber => IO[Coil[H]],
     )
 
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns everything;
@@ -724,6 +729,7 @@ object MultiPeerHeadHarness:
                           system,
                           hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                           transports.coilUplinks(coilNum),
+                          transports.coilTransports(coilNum),
                           hooks.tracer.contramap(Event.Coil(coilNum, _)),
                           hooks.wrapPersistence(PeerId.Coil(coilNum), _),
                         )
@@ -845,13 +851,14 @@ object MultiPeerHeadHarness:
                   handle = h,
                 )
             }
-            restartCoilPeer = { (coilNum: CoilPeerNumber) =>
+            respawnCoil = { (coilNum: CoilPeerNumber) =>
                 for
                     old <- coilRuntime.get.map(_(coilNum))
-                    // Stop the old subtree, then re-spawn against the SAME store + L2 ledger. The
-                    // coil's uplink is reused: the hub-coil registry is keyed by coil number and
-                    // the re-spawned liaison's `register` overwrites the coil-inbound endpoint, so
-                    // the hub's next send lands on the new actor.
+                    // Stop the old subtree, then re-spawn against the same store + L2 ledger (or
+                    // the wiped one, for a rejoin). The coil's uplink is reused: the hub-coil
+                    // registry is keyed by coil number and the re-spawned liaison's `register`
+                    // overwrites the coil-inbound endpoint, so the hub's next send lands on the
+                    // new actor.
                     _ <- old.ref.stop
                     gen <- restartGen.updateAndGet(_ + 1)
                     spawned <- Mrm
@@ -861,6 +868,7 @@ object MultiPeerHeadHarness:
                           system,
                           hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                           transports.coilUplinks(coilNum),
+                          transports.coilTransports(coilNum),
                           hooks.tracer.contramap(Event.Coil(coilNum, _)),
                           old.backendStore,
                           old.l2Ledger,
@@ -888,6 +896,16 @@ object MultiPeerHeadHarness:
                   handle = h,
                 )
             }
+            restartCoilPeer = respawnCoil
+            rejoinCoilPeer = { (coilNum: CoilPeerNumber) =>
+                coilRuntime.get
+                    .map(_(coilNum))
+                    .flatMap(old =>
+                        // Wipe with the coil stopped, so nothing is writing while we do it.
+                        old.ref.stop >> old.backendStore.wipeData >>
+                            old.l2Ledger.wipe.value.flatMap(IO.fromEither)
+                    ) >> respawnCoil(coilNum)
+            }
         yield Harness(
           transportMode = transportMode,
           multiNodeConfig = multiNodeConfig,
@@ -899,6 +917,7 @@ object MultiPeerHeadHarness:
           sutErrors = sutErrors,
           restartHeadPeer = restartHeadPeer,
           restartCoilPeer = restartCoilPeer,
+          rejoinCoilPeer = rejoinCoilPeer,
         )
 
     // ===================================
@@ -1187,6 +1206,11 @@ object MultiPeerHeadHarness:
         case class Setup(
             headNetworks: Map[HeadPeerNumber, HeadNetwork],
             coilUplinks: Map[CoilPeerNumber, ContextFn[CoilTransport]],
+            /** The same transports the uplinks wrap, reachable without an actor context. A coil
+              * settles its start point BEFORE its actors exist, so the join answer has to be read
+              * from the transport directly (`CoilJoin.settleStartPoint`).
+              */
+            coilTransports: Map[CoilPeerNumber, CoilTransport],
             bringUpNetwork: Resource[IO, Unit],
             // Rebuild ONE head peer's transport bundle for a crash-restart, re-registering it in the
             // shared registry so the other peers' next sends resolve to the new transport (Direct
@@ -1255,7 +1279,7 @@ object MultiPeerHeadHarness:
                         ).map(peerNum -> _)
                     )
                     .map(_.toMap)
-                coilUplinks <- coilNodeConfigs
+                coilTransports <- coilNodeConfigs
                     .traverse { coilConfig =>
                         val coilNum = coilNumOf(coilConfig)
                         val registry = hubCoilRegistry.getOrElse(
@@ -1269,12 +1293,13 @@ object MultiPeerHeadHarness:
                               InProcessHubCoilTransport.Coil
                                   .create(coilNum, registry)
                             )
-                            .map(t => coilNum -> ((_: ContextArg) => t: CoilTransport))
+                            .map(t => coilNum -> (t: CoilTransport))
                     }
                     .map(_.toMap)
             yield Setup(
               headNetworks,
-              coilUplinks,
+              coilTransports.view.mapValues(t => (_: ContextArg) => t).toMap,
+              coilTransports,
               Resource.unit,
               rebuildHeadNetwork = peerNum =>
                   directHeadNetwork(
@@ -1347,6 +1372,7 @@ object MultiPeerHeadHarness:
             yield Setup(
               headNetworks,
               coilUplinks,
+              coilTransports.view.mapValues(t => t: CoilTransport).toMap,
               bringUp,
               rebuildHeadNetwork = _ =>
                   IO.raiseError(
@@ -1635,6 +1661,7 @@ object MultiPeerHeadHarness:
             system: ActorSystem[IO],
             cardanoBackend: L1Backend[IO],
             uplink: Transport.ContextFn[CoilTransport],
+            coilTransport: CoilTransport,
             callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
             // Wrap this coil's persistence before it reaches the regime manager (crash injection).
             wrapPersistence: Persistence[IO] => Persistence[IO] = identity,
@@ -1649,6 +1676,7 @@ object MultiPeerHeadHarness:
                       system,
                       cardanoBackend,
                       uplink,
+                      coilTransport,
                       callerTracer,
                       backendStore,
                       l2Ledger,
@@ -1671,6 +1699,7 @@ object MultiPeerHeadHarness:
             system: ActorSystem[IO],
             cardanoBackend: L1Backend[IO],
             uplink: Transport.ContextFn[CoilTransport],
+            coilTransport: CoilTransport,
             callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
             backendStore: BackendStore[IO],
             l2Ledger: L2Ledger[IO],
@@ -1693,6 +1722,19 @@ object MultiPeerHeadHarness:
                 // runtime gauges never leave their initial values.
                 _ <- metrics.sampler().background
                 firstPollResults <- Resource.eval(readFirstPollResults(cardanoBackend, coilConfig))
+                // Mirrors `Serve.buildCoilNode`: settle where this coil starts before any of its
+                // actors exist. Nothing happens on an in-process link, whose transport answers
+                // `NoOffer` immediately; over WS this is the real join exchange.
+                _ <- Resource.eval(
+                  CoilJoin.settleStartPoint(
+                    coilTransport,
+                    persistence,
+                    l2Ledger,
+                    Slf4jTracer.sink.contramap(
+                      CoilJoinEventFormat.humanFormat(Transport.coilNumOf(coilConfig))
+                    )
+                  )(using coilConfig)
+                )
                 mrm <- CoilMultisigRegimeManager.resource(
                   coilConfig,
                   cardanoBackend,
