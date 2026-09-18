@@ -5,7 +5,7 @@ import hydrozoa.multisig.consensus.liaison.PeerLiaisonEventFormat
 import hydrozoa.multisig.consensus.limiter.LimiterEventFormat
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.CoilPeerWsTransportEventFormat
-import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
+import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat, StoreCleanupActorEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 import hydrozoa.rulebased.RuleBasedActorEventFormat
 
@@ -49,6 +49,8 @@ object CoilMultisigRegimeManagerEventFormat:
                 StackComposerEventFormat.humanFormat(syntheticLabel)(sc)
             case CommonChildEvent.SlowConsensusActor(sca) =>
                 SlowConsensusActorEventFormat.humanFormat(syntheticLabel)(sca)
+            case CommonChildEvent.StoreCleanupActor(sc) =>
+                StoreCleanupActorEventFormat.humanFormat(syntheticLabel)(sc)
             case CommonChildEvent.PeerLiaison(remotePeerId, pl) =>
                 PeerLiaisonEventFormat.humanFormat(PeerId.Coil(coilNum), remotePeerId)(pl)
             case CoilOnlyChildEvent.CoilPeerWsTransport(cpwt) =>

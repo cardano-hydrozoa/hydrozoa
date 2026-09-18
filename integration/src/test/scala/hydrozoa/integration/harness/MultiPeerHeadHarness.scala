@@ -36,7 +36,7 @@ import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat, StoreIdentity}
+import hydrozoa.multisig.persistence.{AckRetention, BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat, StoreIdentity}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
@@ -1608,6 +1608,7 @@ object MultiPeerHeadHarness:
                   EutxoL2Screener(nodeConfig),
                   persistence,
                   metrics,
+                  AckRetention.unconstrained,
                   callerTracer,
                   peerFactory,
                   hubFactory,
@@ -1686,6 +1687,7 @@ object MultiPeerHeadHarness:
                   l2Ledger,
                   persistence,
                   metrics,
+                  AckRetention.unconstrained,
                   callerTracer,
                   uplinkFactory,
                 )

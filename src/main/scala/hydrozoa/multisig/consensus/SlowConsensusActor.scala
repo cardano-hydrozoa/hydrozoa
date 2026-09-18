@@ -397,6 +397,16 @@ final case class SlowConsensusActor(
         _ <- conn.stackComposer ! hardConfirmed
         // Headroom signal for the block lane: the stack this peer just hard-confirmed is the
         // backlog the block limiter released, now absorbed.
+        // Tell the cleanup actor: this confirmation is what makes the acks beneath it redundant,
+        // and the stack's last block is how far the fast side may be pruned with it. Fire and
+        // forget -- retaining more than necessary is always safe, so cleanup must never be able to
+        // hold up a confirmation.
+        _ <- conn.storeCleanup.traverse_(
+          _ ! StoreCleanupActor.Request.StackHardConfirmed(
+            stackNum,
+            restricted.unsigned.brief.lastBlockNum
+          )
+        )
         _ <- conn.blockRateGate.traverse_(_ ! LimiterControl.DownstreamDrained)
         _ <- stateRef.update(_.dropCell(stackNum))
         _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
@@ -526,7 +536,8 @@ final case class SlowConsensusActor(
                       headPeerLiaisons = c.headPeerLiaisons,
                       coilUplink = c.coilUplink,
                       coilRelay = c.coilRelay,
-                      blockRateGate = c.blockRateGate
+                      blockRateGate = c.blockRateGate,
+                      storeCleanup = c.storeCleanup
                     )
                   )
                 )
@@ -561,7 +572,12 @@ object SlowConsensusActor {
           * limiter at all. Hard confirmation is the signal rather than this peer's own hard ack;
           * [[hydrozoa.multisig.consensus.limiter.LimiterControl.DownstreamDrained]] says why.
           */
-        blockRateGate: Option[ActorRef[IO, LimiterControl]] = None
+        blockRateGate: Option[ActorRef[IO, LimiterControl]] = None,
+        /** Told when a stack hard-confirms, so it can delete what that confirmation made redundant.
+          * `None` where no cleanup actor runs: the store is simply not trimmed, which is the safe
+          * direction.
+          */
+        storeCleanup: Option[StoreCleanupActor.Handle] = None
     )
 
     type Request = PreStart.type | StackHandoff | HardAck

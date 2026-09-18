@@ -27,7 +27,7 @@ import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventForma
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{ArchiveWatermarks, Cf, ConsensusStoreReader, Markers, Persistence, PersistenceEventFormat, StoreIdentity}
+import hydrozoa.multisig.persistence.{AckRetention, ArchiveWatermarks, Cf, ConsensusStoreReader, Markers, Persistence, PersistenceEventFormat, StoreIdentity}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
@@ -142,6 +142,13 @@ object Serve {
               )
             )
             _ <- metrics.sampler().background
+
+            // One holder per process, shared by the admin endpoint that fills it and the
+            // confirmation path that reads it: an ack survives until the archive has it, so the
+            // two must see the same instance. `None` where no archiver is declared, which leaves
+            // ack-pruning unconstrained.
+            archiveWatermarks = nodeConfig.archiver.map(_ => ArchiveWatermarks.empty())
+            ackRetention = AckRetention.forArchiver(archiveWatermarks)
 
             // Select the L2 ledger the peers agreed on (HeadParameters.l2Ledger): the built-in
             // in-process EUTXO ledger, or a remote black box reached over this node's
@@ -287,6 +294,7 @@ object Serve {
                       l2QueryReader,
                       persistence,
                       metrics,
+                      ackRetention,
                       headTracer,
                       wsClient,
                       ownHeadNum,
@@ -306,6 +314,7 @@ object Serve {
                       l2Ledger,
                       persistence,
                       metrics,
+                      ackRetention,
                       coilTracer,
                       wsClient,
                       ownCoilNum,
@@ -316,30 +325,33 @@ object Serve {
               persistence,
               nodeConfig.headConfig.initialBlock.blockBrief.endTime
             )(using nodeConfig.headConfig)
-        } yield (nodeConfig, system, nodeRun, consensusReader, metrics)
+        } yield (nodeConfig, system, nodeRun, consensusReader, metrics, archiveWatermarks)
 
-        resource.use { case (nodeConfig, system, nodeRun, consensusReader, metrics) =>
-            nodeRun match {
-                case NodeRun.HeadNode(mrm, l2QueryReader) =>
-                    runHeadNode(
-                      nodeConfig,
-                      system,
-                      mrm,
-                      consensusReader,
-                      l2QueryReader,
-                      metrics,
-                      httpExtraTracer
-                    )
-                case NodeRun.CoilNode(mrm) =>
-                    runCoilNode(
-                      nodeConfig,
-                      system,
-                      mrm,
-                      consensusReader,
-                      metrics,
-                      httpExtraTracer
-                    )
-            }
+        resource.use {
+            case (nodeConfig, system, nodeRun, consensusReader, metrics, archiveWatermarks) =>
+                nodeRun match {
+                    case NodeRun.HeadNode(mrm, l2QueryReader) =>
+                        runHeadNode(
+                          nodeConfig,
+                          system,
+                          mrm,
+                          consensusReader,
+                          l2QueryReader,
+                          metrics,
+                          archiveWatermarks,
+                          httpExtraTracer
+                        )
+                    case NodeRun.CoilNode(mrm) =>
+                        runCoilNode(
+                          nodeConfig,
+                          system,
+                          mrm,
+                          consensusReader,
+                          metrics,
+                          archiveWatermarks,
+                          httpExtraTracer
+                        )
+                }
         }
     }
 
@@ -593,6 +605,7 @@ object Serve {
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         persistence: Persistence[IO],
         metrics: PeerMetrics,
+        ackRetention: AckRetention,
         mrmTracer: ContraTracer[IO, HeadRegimeManagerEvent],
         wsClient: org.http4s.client.websocket.WSClient[IO],
         ownHeadNum: HeadPeerNumber,
@@ -683,6 +696,7 @@ object Serve {
               l2Screener,
               persistence,
               metrics,
+              ackRetention,
               mrmTracer,
               peerFactory,
               hubFactory,
@@ -701,6 +715,7 @@ object Serve {
         l2Ledger: L2Ledger[IO],
         persistence: Persistence[IO],
         metrics: PeerMetrics,
+        ackRetention: AckRetention,
         mrmTracer: ContraTracer[IO, CoilRegimeManagerEvent],
         wsClient: org.http4s.client.websocket.WSClient[IO],
         ownCoilNum: CoilPeerNumber,
@@ -738,6 +753,7 @@ object Serve {
               l2Ledger,
               persistence,
               metrics,
+              ackRetention,
               mrmTracer,
               coilFactory,
             )
@@ -778,6 +794,7 @@ object Serve {
         consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         metrics: PeerMetrics,
+        archiveWatermarks: Option[ArchiveWatermarks],
         httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
     ): IO[ExitCode] =
         for {
@@ -788,11 +805,6 @@ object Serve {
             // resolve, so wait for them before binding.
             connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
             _ <- log.info("Starting HTTP server...")
-
-            // One per process, and only where this node's private config declares an archiver:
-            // its absence is what removes the watermark route, and the node then deletes as soon
-            // as consensus allows rather than waiting on a report that will never come.
-            archiveWatermarks = nodeConfig.archiver.map(_ => ArchiveWatermarks.empty())
 
             // `surround`, not `start.void`: the server is bound for exactly as long as the node
             // waits, and its finalizer runs when the actor system terminates. `runCoilNode` has
@@ -837,6 +849,7 @@ object Serve {
         mrm: CoilMultisigRegimeManager,
         consensusReader: ConsensusStoreReader[IO],
         metrics: PeerMetrics,
+        archiveWatermarks: Option[ArchiveWatermarks],
         httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
     ): IO[ExitCode] =
         for {
@@ -845,11 +858,6 @@ object Serve {
 
             connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
             _ <- log.info("Starting HTTP server (coil: read-only surface)...")
-
-            // One per process, and only where this node's private config declares an archiver:
-            // its absence is what removes the watermark route, and the node then deletes as soon
-            // as consensus allows rather than waiting on a report that will never come.
-            archiveWatermarks = nodeConfig.archiver.map(_ => ArchiveWatermarks.empty())
 
             // `surround` binds the server for the node's lifetime and releases it when the actor
             // system terminates. `use(_ => IO.never).start.void` -- what this was, on both roles --

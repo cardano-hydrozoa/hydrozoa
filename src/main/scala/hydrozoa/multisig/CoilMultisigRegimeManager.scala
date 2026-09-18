@@ -16,7 +16,7 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{CoilTransport, RemoteHubProxy}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{Markers, Persistence}
+import hydrozoa.multisig.persistence.{AckRetention, Markers, Persistence}
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
 /** Coil-peer counterpart to [[HeadMultisigRegimeManager]]. A coil runs the same multisig-regime
@@ -40,6 +40,7 @@ trait CoilMultisigRegimeManager(
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
     override protected val metrics: PeerMetrics,
+    override protected val ackRetention: AckRetention,
     override protected val tracer: ContraTracer[IO, CoilRegimeManagerEvent],
     /** Coil-uplink transport toward this coil peer's single hub. */
     coilTransport: ActorContext[IO, Request, Any] => CoilTransport,
@@ -118,6 +119,7 @@ trait CoilMultisigRegimeManager(
               // No limiter actor exists to gate, and a coil never leads block production.
               blockRateGate = None,
               slowConsensusActor = core.slowConsensusActor,
+              storeCleanup = Some(core.storeCleanupActor),
               coilUplink = Some(hubLiaison),
               remoteHubLiaison = Some(remoteHubProxy),
             )
@@ -206,6 +208,7 @@ object CoilMultisigRegimeManager {
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
         metrics: PeerMetrics,
+        ackRetention: AckRetention,
         tracer: ContraTracer[IO, CoilRegimeManagerEvent],
         coilTransport: Resource[IO, ActorContext[IO, Request, Any] => CoilTransport],
     ): Resource[IO, CoilMultisigRegimeManager] =
@@ -219,6 +222,7 @@ object CoilMultisigRegimeManager {
                   virtualLedger,
                   persistence,
                   metrics,
+                  ackRetention,
                   tracer,
                   factory,
                 ) {}

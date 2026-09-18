@@ -457,10 +457,12 @@ case class Stage4Suite(
                         // `SoftConfirmation`), and the deposits snapshot is a singleton.
                         val fastOk =
                             blockResults >= 1 && softConfirmations >= 1 && depositMaps == 1
-                        // Lane writes (own + inbound): every peer soft-acks every block (JL) and
-                        // hard-acks each stack it confirmed (SC); requests flow into the Request
-                        // lane (RequestSequencer own + PeerLiaison inbound, CR1/CR8). All non-empty.
-                        val laneOk = softAcks >= 1 && hardAcks >= 1 && requests >= 1
+                        // Lane writes (own + inbound): every peer hard-acks each stack it confirmed
+                        // (SC) and requests flow into the Request lane (RequestSequencer own +
+                        // PeerLiaison inbound, CR1/CR8). `StoreCleanupActor` prunes acks once their
+                        // stack is hard-confirmed, so soft acks may all be gone; the own `HardAck`
+                        // last row is a marker and always survives.
+                        val laneOk = hardAcks >= 1 && requests >= 1
                         Prop(hardOk && treasuryOk && evacOk && fastOk && laneOk).label(
                           s"peer${peerNum: Int}: " +
                               s"hardConfirmations=$hardConfirmations expected=$expectedStacks, " +
@@ -468,7 +470,7 @@ case class Stage4Suite(
                               s"evacuationMaps=$evacuationMaps (expected $expectedEvac), " +
                               s"blockResults=$blockResults softConfirmations=$softConfirmations " +
                               s"depositMaps=$depositMaps softAcks=$softAcks hardAcks=$hardAcks " +
-                              s"requests=$requests (fast >=1/>=1/==1, lanes >=1/>=1/>=1)"
+                              s"requests=$requests (fast >=1/>=1/==1, lanes hard >=1, requests >=1)"
                         )
                     }
                 }

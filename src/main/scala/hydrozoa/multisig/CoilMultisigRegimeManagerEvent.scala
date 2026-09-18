@@ -5,7 +5,7 @@ import cats.syntax.contravariant.*
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
+import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent, StoreCleanupActorEvent}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 import hydrozoa.rulebased.RuleBasedActorEvent
 
@@ -43,6 +43,7 @@ final case class CoilMrmTracers(
     jointLedger: ContraTracer[IO, JointLedgerEvent],
     stackComposer: ContraTracer[IO, StackComposerEvent],
     slowConsensusActor: ContraTracer[IO, SlowConsensusActorEvent],
+    storeCleanupActor: ContraTracer[IO, StoreCleanupActorEvent],
     peerLiaison: PeerId => ContraTracer[IO, PeerLiaisonEvent],
     ruleBasedActor: ContraTracer[IO, RuleBasedActorEvent],
 ) extends HasCoreTracers
@@ -56,6 +57,7 @@ object CoilMrmTracers:
           jointLedger = tracer.contramap(CommonChildEvent.JointLedger.apply),
           stackComposer = tracer.contramap(CommonChildEvent.StackComposer.apply),
           slowConsensusActor = tracer.contramap(CommonChildEvent.SlowConsensusActor.apply),
+          storeCleanupActor = tracer.contramap(CommonChildEvent.StoreCleanupActor.apply),
           peerLiaison = pid => tracer.contramap(CommonChildEvent.PeerLiaison(pid, _)),
           ruleBasedActor = tracer.contramap(RuleBasedOnlyChildEvent.RuleBasedActor.apply),
         )

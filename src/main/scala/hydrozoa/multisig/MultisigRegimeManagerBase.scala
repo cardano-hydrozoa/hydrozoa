@@ -16,7 +16,7 @@ import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.{Markers, Persistence}
+import hydrozoa.multisig.persistence.{AckRetention, Markers, Persistence}
 import scala.concurrent.duration.DurationInt
 
 /** Shared scaffolding for [[HeadMultisigRegimeManager]] and [[CoilMultisigRegimeManager]]: the
@@ -50,6 +50,11 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       * actors (see `docs/spec/peer-stats-endpoint.md`).
       */
     protected def metrics: PeerMetrics
+
+    /** How long an ack survives its confirmation — see [[AckRetention]]. Supplied by the subclass
+      * so the confirmation path is handed the policy rather than reaching for it.
+      */
+    protected def ackRetention: AckRetention
 
     /** Completed by the subclass's [[preStartLocal]] once every actor is spawned and the
       * `Connections` slots are populated.
@@ -226,6 +231,16 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 markers
               )
             )
+            // Spawned before the slow-consensus actor so its handle can be handed over: hard
+            // confirmation is what drives a cleanup pass.
+            storeCleanupActor <- context.actorOf(
+              StoreCleanupActor(
+                config,
+                persistence,
+                ackRetention,
+                tracers.storeCleanupActor
+              )
+            )
             slowConsensusActor <- context.actorOf(
               SlowConsensusActor(
                 config,
@@ -243,6 +258,7 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
           jointLedger,
           stackComposer,
           slowConsensusActor,
+          storeCleanupActor,
         )
 }
 
@@ -258,5 +274,6 @@ object MultisigRegimeManagerBase {
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
+        storeCleanupActor: StoreCleanupActor.Handle,
     )
 }
