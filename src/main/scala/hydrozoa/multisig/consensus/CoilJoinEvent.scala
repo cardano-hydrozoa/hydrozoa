@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus
 
+import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import scala.concurrent.duration.FiniteDuration
 
@@ -21,7 +22,11 @@ object CoilJoinEvent:
     final case class Adopting(startStack: StackNumber) extends CoilJoinEvent
 
     /** The offer verified and the store is seeded; the node boots from it. */
-    final case class Adopted(startStack: StackNumber) extends CoilJoinEvent
+    final case class Adopted(
+        startStack: StackNumber,
+        anchorBlock: BlockNumber,
+        cursorBlock: BlockNumber
+    ) extends CoilJoinEvent
 
     /** The hub answered that it has no start point to give. The ordinary answer: `reason` says
       * whether the coil was already close enough or the head had nothing to seed from.

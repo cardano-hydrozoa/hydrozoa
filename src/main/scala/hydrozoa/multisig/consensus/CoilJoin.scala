@@ -75,12 +75,16 @@ object CoilJoin {
                   )
                   .put(StoreKey.Treasury)(offer.settlement.treasuryProduced)
                   .put(StoreKey.EvacuationMap(lastBlockNum))(map)
-                  // The fast side resumes through `JointLedger.doneAt`, which reads all three of
-                  // these at the anchor block. The coil pulls from `lastBlockNum + 1`, so this is
-                  // the one block it will never be served.
+                  // Everything the boot path reads AT THE ANCHOR BLOCK. The coil pulls from
+                  // `lastBlockNum + 1`, so this is the one block it is never served and the one
+                  // block whose rows it cannot obtain any other way. `JointLedger.doneAt` wants
+                  // the first three; `ReplayActor` wants the fourth as its request-lane floor.
                   .put(JournalKey.Block(lastBlockNum))(JournalValue(stamp, offer.block))
                   .put(StoreKey.DepositMap(lastBlockNum))(offer.deposits)
                   .put(StoreKey.L2CommandNumber(lastBlockNum))(offer.state.commandNumber)
+                  // The hub read this key to build `cursors.requests`, so writing the cursors back
+                  // reconstitutes it exactly.
+                  .put(StoreKey.RequestHighWater(lastBlockNum))(offer.cursors.requests)
             )
         } yield ()
 
@@ -130,7 +134,10 @@ object CoilJoin {
                 case Some(offer: Join.Offer) =>
                     tracer.traceWith(CoilJoinEvent.Adopting(offer.startStack)) >>
                         adopt(offer, persistence, ledger) >>
-                        tracer.traceWith(CoilJoinEvent.Adopted(offer.startStack))
+                        tracer.traceWith(
+                          CoilJoinEvent
+                              .Adopted(offer.startStack, offer.block.blockNum, offer.cursors.block)
+                        )
                 case Some(no: Join.NoOffer) =>
                     tracer.traceWith(CoilJoinEvent.NothingToAdopt(no.reason))
                 case None =>

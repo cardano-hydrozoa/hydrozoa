@@ -1168,21 +1168,19 @@ object JointLedger {
             evacuationMapMark: Option[BlockNumber],
             l2ParamsHash: Hash32
         )(using CardanoNetwork.Section): IO[Option[Done]] =
-            // A seeded coil peer authored no `BlockResult`, so it has no `fastBlockMark` — but it
-            // does hold a durable anchor, adopted rather than produced. Everything below reads the
-            // same three keys at it, because adoption wrote them there
+            // A seeded coil peer's anchor is adopted rather than produced; `Markers` already
+            // resolves that, so `fastBlockMark` arrives here pointing at the adopted block and
+            // the three keys below are read at it — adoption wrote them there
             // (`hydrozoa.multisig.consensus.CoilJoin`).
-            persistence.get(StoreKey.StartPoint).flatMap { startPoint =>
-                recoverAt(
-                  persistence,
-                  l2Ledger,
-                  fastBlockMark.orElse(startPoint.map(_.lastBlockNum)),
-                  initialEvacuationMap,
-                  initialL2StateHash,
-                  evacuationMapMark,
-                  l2ParamsHash
-                )
-            }
+            recoverAt(
+              persistence,
+              l2Ledger,
+              fastBlockMark,
+              initialEvacuationMap,
+              initialL2StateHash,
+              evacuationMapMark,
+              l2ParamsHash
+            )
 
         private def recoverAt(
             persistence: Persistence[IO],

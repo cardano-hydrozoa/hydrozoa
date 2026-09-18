@@ -33,7 +33,7 @@ class CoilRejoinTest extends AnyFunSuite {
         // kick requests alone only ever make minor blocks. Virtual time, so the cost is iterations
         // of the kick loop rather than wall clock.
         val runUp = 12.minutes
-        val rejoinWindow = 3.minutes
+        val rejoinWindow = 60.seconds
         val kickEvery = 10.seconds
 
         val state = Stage4Suite

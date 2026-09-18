@@ -2,6 +2,7 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
 import cats.syntax.contravariant.*
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.logging.Slf4jTracer
@@ -140,13 +141,29 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
         assert(mark.map(_.ownHardAckStart).contains(offeredAck))
     }
 
-    test("a seeded store still has no own hard-ack — nothing is fabricated in the ack journal") {
-        // The one journal this coil's hub pulls from. A row here that the coil never signed would
-        // exist only to be misread, which is why the anchor is recorded separately instead.
-        val markers = adopted((p, _) => Markers.derive(p, nodeConfig.ownPeerId))
-        assert(markers.hardAcked.isEmpty, "adoption must not write an ack this peer never made")
-        assert(markers.hardAckedStack.isEmpty)
-        assert(markers.fastBlockMark.isEmpty, "nor a BlockResult it never produced")
+    test("a seeded store fabricates no own hard-ack and no block result") {
+        // Nothing is written to the two journals that would be read as this peer's own
+        // production: the `HardAck` journal its hub pulls from, and the `BlockResult` spine. A row
+        // in either would exist only to be misread.
+        val outcome = adopted((p, _) =>
+            (
+              Markers.derive(p, nodeConfig.ownPeerId),
+              Markers.recoverFastBlockMark(p.backend)
+            ).tupled
+        )
+        val (markers, blockResults) = outcome
+        val _ = assert(markers.hardAcked.isEmpty, "adoption wrote an ack this peer never made")
+        val _ = assert(
+          markers.hardAckedStack.isEmpty,
+          "the slow anchor must come from the start point, not from a fabricated ack"
+        )
+        val _ = assert(blockResults.isEmpty, "adoption wrote a block result this peer never made")
+        // ...but the FAST anchor is reported, because the peer really does hold that block. It is
+        // the replay floor: leave it empty and replay re-feeds the adopted anchor as new input.
+        assert(
+          markers.fastBlockMark.contains(lastBlockNum),
+          s"fast anchor should be the adopted block, got ${markers.fastBlockMark}"
+        )
     }
 
     test("the slow side opens at the adopted stack instead of re-bootstrapping stack 0") {

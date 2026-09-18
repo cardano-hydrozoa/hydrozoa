@@ -17,8 +17,11 @@ object CoilJoinEventFormat:
                   s"adopting a start point at stack=$startStack — discarding this peer's own " +
                       "ledger and store, which are too far behind to be served forward"
                 )
-            case Adopted(startStack) =>
-                info(s"start point at stack=$startStack verified and stored")
+            case Adopted(startStack, anchorBlock, cursorBlock) =>
+                info(
+                  s"start point at stack=$startStack stored: fast side resumes on " +
+                      s"block=$anchorBlock, population lane opens at block=$cursorBlock"
+                )
             case NothingToAdopt(reason) =>
                 info(s"hub has no start point to offer ($reason); booting from own store")
             case HubSilent(waited) =>
