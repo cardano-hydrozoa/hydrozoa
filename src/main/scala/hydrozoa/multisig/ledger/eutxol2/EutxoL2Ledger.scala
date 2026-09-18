@@ -497,7 +497,17 @@ case class EutxoL2Ledger private (
                 L2StateExport(
                   commandNumber,
                   IArray.from(
-                    L2Snapshot.fromState(s).asJson.noSpaces.getBytes(UTF_8)
+                    // Label the snapshot with the boundary that was ASKED for, the way
+                    // [[restoreTo]] does. `reconstruct` folds the *logged* commands, and a
+                    // rejected one advances the ledger without being logged — so its result
+                    // carries the number of the last APPLIED command, not the boundary. The state
+                    // is right either way (a rejected command changes nothing); only the label
+                    // would be stale, and `importState` checks the label.
+                    L2Snapshot
+                        .fromState(s.focus(_.commandNumber).replace(commandNumber))
+                        .asJson
+                        .noSpaces
+                        .getBytes(UTF_8)
                   )
                 )
             )
