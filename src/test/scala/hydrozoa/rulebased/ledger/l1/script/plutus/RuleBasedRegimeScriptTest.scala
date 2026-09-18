@@ -117,7 +117,7 @@ class RuleBasedRegimeScriptTest extends AnyFunSuite {
         assert(
           twoNames.isFailure,
           s"burning two beacon-prefixed tokens must be rejected, got: $twoNames"
-        )
+        ): Unit
         val twoUnits = runSpend(burnRegimeToken + Value(headMp, beaconName, BigInt(-2)))
         assert(
           twoUnits.isFailure,
