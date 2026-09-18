@@ -100,9 +100,10 @@ object HeadParamsHash {
 
         // -- cardanoNetwork. `networkId` is scalus's own id byte, which covers `Network.Other` too;
         // `protocolMagic` alone does not determine it, because `CardanoNetwork.Custom` pairs an
-        // arbitrary `CardanoInfo` with an arbitrary magic. The protocol params are absent on
-        // purpose: they are fetched from the chain and move with hard forks, so they are not
-        // something the peers agree on.
+        // arbitrary `CardanoInfo` with an arbitrary magic. The L1 protocol params are absent on
+        // purpose: they track the chain and move with hard forks, and `Serve.verifyProtocolParams`
+        // is what guards them. What the L2 ledger validates against is a different set, and it
+        // reaches this digest through `l2ParamsHash` above rather than from here.
         out.u64(config.protocolMagic)
         out.u8(config.network.networkId)
         val slotConfig = config.slotConfig

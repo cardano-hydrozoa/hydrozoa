@@ -93,17 +93,17 @@ abstract class PeerLiaisonHubToCoil(
     private val coilHardAckBackings =
         hubNums.map(h => h -> LaneOutgoingBacking.hubHardAck(backend, h)).toMap
 
-    // Every outbound lane holds at most this many items; older ones are served from the journal.
+    // Every outbound lane caches this many replies; older entries are served from the journal.
     // One liaison exists per *configured* coil peer, so a coil that is configured but not connected
     // advances no cursor here — the cap is the only thing that bounds its lanes.
-    private val outboxCap: Int = config.peerLiaisonOutboxCap
+    private val outboxDepth: Int = config.peerLiaisonOutboxDepth
 
     private val blockLane =
         LaneOutbound.contiguous[BlockBrief.Next, BlockNumber](
           _.blockNum,
           BlockNumber(1),
           _.increment,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           serveFromJournal = blockBacking.serveFromJournal
         )
     private val stackLane =
@@ -111,7 +111,7 @@ abstract class PeerLiaisonHubToCoil(
           _.stackNum,
           StackNumber(1),
           _.increment,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           serveFromJournal = stackBacking.serveFromJournal
         )
     private val requestLanes: Map[HeadPeerNumber, LaneOutbound[UserRequestWithId, RequestNumber]] =
@@ -121,7 +121,7 @@ abstract class PeerLiaisonHubToCoil(
               RequestNumber.zero,
               _.increment,
               config.peerLiaisonMaxRequestsPerBatch,
-              outboxCap = outboxCap,
+              outboxDepth = outboxDepth,
               serveFromJournal = requestBackings(h).serveFromJournal
             )
         }.toMap
@@ -131,7 +131,7 @@ abstract class PeerLiaisonHubToCoil(
               _.ackNum,
               SoftAckNumber.zero.increment,
               _.increment,
-              outboxCap = outboxCap,
+              outboxDepth = outboxDepth,
               serveFromJournal = softAckBackings(h).serveFromJournal
             )
         }.toMap
@@ -141,7 +141,7 @@ abstract class PeerLiaisonHubToCoil(
               _.hardAckNum,
               HardAckNumber.zero,
               _.increment,
-              outboxCap = outboxCap,
+              outboxDepth = outboxDepth,
               serveFromJournal = headHardAckBackings(h).serveFromJournal
             )
         }.toMap
@@ -152,7 +152,7 @@ abstract class PeerLiaisonHubToCoil(
               _.seqNum,
               HubHardAckNumber.zero,
               _.increment,
-              outboxCap = outboxCap,
+              outboxDepth = outboxDepth,
               serveFromJournal = coilHardAckBackings(h).serveFromJournal
             )
         }.toMap
@@ -180,22 +180,32 @@ abstract class PeerLiaisonHubToCoil(
         )
 
     // ---- Serve half (population) ----------------------------------------------------------------
+    // Every lane is ceilinged here, unlike the symmetric mesh: a hub serves the whole population
+    // and can run arbitrarily far ahead of one coil peer. Four ceilings cover six lane families —
+    // see design/liaison-backpressure.md for the anchor and window behind each.
     private def serve(get: Population.Get): IO[Server.Served[Population.New]] =
         for {
-            blockR <- blockLane.reply(get.block)
-            stackR <- stackLane.reply(get.stack)
+            blockR <- blockLane.reply(get.block, _.blockNum <= get.blockCeiling)
+            stackR <- stackLane.reply(get.stack, _.stackNum <= get.stackCeiling)
             reqR <- requestLanes.toList.traverse { case (h, l) =>
-                l.reply(get.requests(h)).map(h -> _)
+                l.reply(get.requests(h), _.requestId.requestNum <= get.requestCeilings(h))
+                    .map(h -> _)
             }
+            // A `SoftAckNumber` IS the block number, so the block ceiling bounds this lane too.
             saR <- softAckLanes.toList.traverse { case (h, l) =>
-                l.reply(get.softAcks(h)).map(h -> _)
+                l.reply(get.softAcks(h), _.blockNum <= get.blockCeiling).map(h -> _)
             }
+            // Truncated on the ack's `stackNum`, not its `HardAckNumber`: a stack draws one ack or
+            // two, so there is no arithmetic mapping from a stack to an ack number.
             hhR <- headHardAckLanes.toList.traverse { case (h, l) =>
-                l.reply(get.headHardAcks(h)).map(h -> _)
+                l.reply(get.headHardAcks(h), _.stackNum <= get.stackCeiling)
+                    .map(h -> _)
             }
             chR <- coilHardAckLanes.toList.traverse { case (h, l) =>
-                l.reply(get.coilHardAcks(h)).map(h -> _)
+                l.reply(get.coilHardAcks(h), _.ack.stackNum <= get.coilHardAckCeiling)
+                    .map(h -> _)
             }
+            _ <- traceRefusedCoilHardAckHeads(get, chR)
         } yield {
             val firstOob =
                 LaneOutbound
@@ -243,6 +253,33 @@ abstract class PeerLiaisonHubToCoil(
                             coilHardAcks
                           )
                         )
+        }
+
+    /** Trace a `coilHardAck` lane whose HEAD — the very ack at the coil peer.s cursor — the ceiling
+      * refused. The lane is contiguous, so that stops it until the coil peer.s hard-confirmed stack
+      * lifts the ceiling; see design/liaison-backpressure.md for why the window makes that
+      * temporary rather than terminal. An empty slice against a non-empty lane is the signal.
+      */
+    private def traceRefusedCoilHardAckHeads(
+        get: Population.Get,
+        replies: List[(HeadPeerNumber, LaneOutbound.Reply[HardAckWithId])]
+    ): IO[Unit] =
+        replies.traverse_ {
+            case (h, LaneOutbound.Items(Nil)) =>
+                coilHardAckLanes(h)
+                    .heldAt(get.coilHardAcks(h))
+                    .flatMap(
+                      _.traverse_(head =>
+                          tracer.traceWith(
+                            PeerLiaisonEvent.CoilHardAckHeadRefused(
+                              hub = h.toString,
+                              askedStack = head.ack.stackNum.toString,
+                              ceilingStack = get.coilHardAckCeiling.toString
+                            )
+                          )
+                      )
+                    )
+            case _ => IO.unit
         }
 
     private val server =

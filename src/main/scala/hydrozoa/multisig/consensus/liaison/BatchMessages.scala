@@ -63,14 +63,31 @@ object BatchMessages {
       * hard-acks are per hub. Pulled by the coil peer, served by the hub.
       */
     object Population {
+
+        /** Cursors, and the ceilings that bound them. A hub serves the whole population and can run
+          * arbitrarily far ahead of one coil peer, so unlike the symmetric [[Mesh]] every lane here
+          * is ceilinged — see design/liaison-backpressure.md for the anchor and window per lane.
+          *
+          * Lanes share anchors, so four ceilings cover six lane families: `blockCeiling` also
+          * bounds the soft-ack lanes (a `SoftAckNumber` IS the block number), and `stackCeiling`
+          * also bounds the head-hard-ack lanes, which are truncated on the ack's `stackNum` rather
+          * than their own `HardAckNumber` — a stack draws one ack or two, so that mapping is not
+          * arithmetic. `coilHardAckCeiling` is likewise a stack number, but carries its own wider
+          * window: a hub stamps coil acks in ARRIVAL order across all its coil peers, so stack
+          * numbers do not rise with that lane's numbering.
+          */
         final case class Get(
             batchNum: BatchNumber,
             block: BlockNumber,
+            blockCeiling: BlockNumber,
             stack: StackNumber,
+            stackCeiling: StackNumber,
             requests: Map[HeadPeerNumber, RequestNumber],
+            requestCeilings: Map[HeadPeerNumber, RequestNumber],
             softAcks: Map[HeadPeerNumber, SoftAckNumber],
             headHardAcks: Map[HeadPeerNumber, HardAckNumber],
-            coilHardAcks: Map[HeadPeerNumber, HubHardAckNumber]
+            coilHardAcks: Map[HeadPeerNumber, HubHardAckNumber],
+            coilHardAckCeiling: StackNumber
         )
 
         final case class New(

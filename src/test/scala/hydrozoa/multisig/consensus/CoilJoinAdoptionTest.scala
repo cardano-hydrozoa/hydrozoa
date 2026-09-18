@@ -95,11 +95,15 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
           cursors = Population.Get(
             batchNum = BatchNumber.zero,
             block = lastBlockNum.increment,
+            blockCeiling = lastBlockNum.increment,
             stack = startStack.increment,
+            stackCeiling = startStack.increment,
             requests = Map.empty,
+            requestCeilings = Map.empty,
             softAcks = Map.empty,
             headHardAcks = Map.empty,
-            coilHardAcks = Map.empty
+            coilHardAcks = Map.empty,
+            coilHardAckCeiling = startStack.increment
           ),
           ownHardAck = ownHardAck,
           settlement = settlement,

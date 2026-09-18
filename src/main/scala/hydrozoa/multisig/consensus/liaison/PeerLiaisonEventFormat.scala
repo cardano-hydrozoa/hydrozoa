@@ -37,6 +37,11 @@ object PeerLiaisonEventFormat:
                 info(s"no start point to offer ($reason); coil bootstraps stack 0")
             case JoinOfferTooLate(startStack) =>
                 warn(s"declining a start point at stack=$startStack: actors already running")
+            case CoilHardAckHeadRefused(hub, askedStack, ceilingStack) =>
+                debug(
+                  s"coil-hard-ack lane head refused: hub=$hub askedStack=$askedStack " +
+                      s"ceilingStack=$ceilingStack"
+                )
         }
     }
 

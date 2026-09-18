@@ -95,6 +95,13 @@ Decides what the next block looks like — per-block leader/follower mode switch
 The leader instructs `JointLedger` to produce `BlockBrief.Next`. Followers reproduce the
 same brief locally from the same inputs (deterministic).
 
+Every request is gated on arrival by `RequestCursors`, which holds each head peer's position
+in its own request stream and admits only that peer's next request number — a gap, a
+reordering or a repeat stops the weaver. The cursors are seeded in `PreStart` from
+`RequestHighWater[fastBlockMark]`, the same per-peer high-water the `ReplayActor` floors the
+Request journals with (`docs/spec/persistence-and-crash-recovery.md` §5.3), so replay's first
+entry for a peer is the one the gate expects next.
+
 ### `JointLedger` (`multisig/ledger/joint/JointLedger.scala`)
 
 Produces blocks on **every** peer, not just the leader: the leader builds the block from its

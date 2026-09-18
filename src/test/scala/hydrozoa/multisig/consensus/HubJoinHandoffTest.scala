@@ -65,11 +65,15 @@ class HubJoinHandoffTest extends AnyFunSuite {
       cursors = Population.Get(
         batchNum = BatchNumber.zero,
         block = BlockNumber(7),
+        blockCeiling = BlockNumber(7),
         stack = StackNumber(4),
+        stackCeiling = StackNumber(4),
         requests = Map.empty,
+        requestCeilings = Map.empty,
         softAcks = Map.empty,
         headHardAcks = Map.empty,
-        coilHardAcks = Map.empty
+        coilHardAcks = Map.empty,
+        coilHardAckCeiling = StackNumber(99)
       ),
       ownHardAck = offeredAck,
       settlement = settlement,

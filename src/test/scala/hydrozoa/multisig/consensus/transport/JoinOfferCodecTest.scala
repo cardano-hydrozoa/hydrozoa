@@ -100,11 +100,15 @@ class JoinOfferCodecTest extends AnyFunSuite {
     private val cursors = Population.Get(
       batchNum = BatchNumber(3),
       block = BlockNumber(5),
+      blockCeiling = BlockNumber(5),
       stack = StackNumber(2),
+      stackCeiling = StackNumber(2),
       requests = Map(h0 -> RequestNumber(11)),
+      requestCeilings = Map.empty,
       softAcks = Map(h0 -> hydrozoa.multisig.consensus.ack.SoftAckNumber(6)),
       headHardAcks = Map(h0 -> HardAckNumber(7)),
-      coilHardAcks = Map(h0 -> hydrozoa.multisig.consensus.ack.HubHardAckNumber(8))
+      coilHardAcks = Map(h0 -> hydrozoa.multisig.consensus.ack.HubHardAckNumber(8)),
+      coilHardAckCeiling = StackNumber(99)
     )
 
     private def offer(sec: Option[StandaloneEvacuationCommitment.MultiSigned]): Join.Offer =

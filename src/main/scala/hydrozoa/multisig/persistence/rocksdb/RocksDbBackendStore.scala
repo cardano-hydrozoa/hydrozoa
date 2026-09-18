@@ -2,6 +2,7 @@ package hydrozoa.multisig.persistence.rocksdb
 
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
+import hydrozoa.lib.StartupRefusal
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.persistence.*
 import hydrozoa.multisig.persistence.PersistenceEvent.{OpenRocksDbReady, OpenRocksDbStart}
@@ -273,35 +274,40 @@ object RocksDbBackendStore:
         sys.env.get(name).flatMap(_.trim.toBooleanOption).getOrElse(default)
 
     /** Run the open-time schema-version check. On a writable open a fresh store gets the current
-      * version stamped; incompatible versions raise. A read-only open never writes, so a missing
+      * version stamped; incompatible versions refuse. A read-only open never writes, so a missing
       * version key is a hard error (an uninitialized store cannot be served read-only).
+      *
+      * A mismatch is a [[StartupRefusal]] rather than a generic failure: what is on disk does not
+      * change while the node waits, so a restart re-derives the same verdict, and `Restart=` would
+      * otherwise re-derive it every `RestartSec` forever.
       */
     private def versionCheck(backend: BackendStore[IO], readOnly: Boolean): IO[Unit] =
-        backend.get(Cf.Meta, StoreVersion.key).flatMap {
-            case None =>
-                if readOnly then
+        backend.get(Cf.Meta, StoreVersion.key).flatMap { stamped =>
+            StoreVersion.check(stamped.map(StoreVersion.decode)) match {
+                case StoreVersion.Check.Fresh =>
+                    if readOnly then
+                        IO.raiseError(
+                          StartupRefusal(
+                            s"the persistence store at $backend has no schema version " +
+                                "(uninitialized); it cannot be opened read-only"
+                          )
+                        )
+                    else
+                        backend.put(
+                          Cf.Meta,
+                          StoreVersion.key,
+                          StoreVersion.encode(StoreVersion.current)
+                        )
+                case StoreVersion.Check.Compatible => IO.unit
+                case StoreVersion.Check.Incompatible(found, expected) =>
                     IO.raiseError(
-                      new IllegalStateException(
-                        s"Persistence store at $backend has no schema version " +
-                            "(uninitialized); cannot open read-only"
+                      StartupRefusal(
+                        s"persistence schema version mismatch at $backend: the store reports " +
+                            s"$found and this build expects $expected. A store written by another " +
+                            "schema version is never read — see design/versioning.md."
                       )
                     )
-                else
-                    backend.put(
-                      Cf.Meta,
-                      StoreVersion.key,
-                      StoreVersion.encode(StoreVersion.current)
-                    )
-            case Some(bytes) =>
-                val found = StoreVersion.decode(bytes)
-                if found == StoreVersion.current then IO.unit
-                else
-                    IO.raiseError(
-                      new IllegalStateException(
-                        s"Persistence schema version mismatch at $backend: " +
-                            s"store reports $found, this build expects ${StoreVersion.current}"
-                      )
-                    )
+            }
         }
 
     /** Run the open-time identity check ([[StoreIdentity]]). On a writable open a fresh store gets
@@ -323,9 +329,9 @@ object RocksDbBackendStore:
                 case StoreIdentity.Check.Fresh =>
                     if readOnly then
                         IO.raiseError(
-                          new IllegalStateException(
-                            s"Persistence store at $backend has no identity stamp " +
-                                "(uninitialized); cannot open read-only"
+                          StartupRefusal(
+                            s"the persistence store at $backend has no identity stamp " +
+                                "(uninitialized); it cannot be opened read-only"
                           )
                         )
                     else
@@ -335,8 +341,8 @@ object RocksDbBackendStore:
                 case StoreIdentity.Check.Compatible => IO.unit
                 case StoreIdentity.Check.Mismatch(problems) =>
                     IO.raiseError(
-                      new IllegalStateException(
-                        s"Persistence store at $backend belongs to a different head, " +
+                      StartupRefusal(
+                        s"the persistence store at $backend belongs to a different head, " +
                             "configuration, or peer than this node: " +
                             problems.mkString("; ")
                       )

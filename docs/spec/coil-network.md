@@ -178,17 +178,74 @@ server. That one server mounts two routes:
   `Population.Get/New` + `OwnHardAck.Get/New`). Mounted only on a hub.
 
 The hub↔coil link is a **star**: each coil peer dials its single hub's `/hub`
-(`CoilPeerWsTransport`) and opens with `CoilFrame.Handshake(coilNum, protocolVersion,
-auth)`; the hub checks the protocol version, binds that socket to the coil's
-`CoilPeerNumber`, routes inbound batches to that coil's `PeerLiaisonHubToCoil`, and
+(`CoilPeerWsTransport`); once the hub has accepted its handshake it binds that socket to the
+coil's `CoilPeerNumber`, routes inbound batches to that coil's `PeerLiaisonHubToCoil`, and
 drains that coil's outbox for outbound batches. A coil runs **no server** — only the
 uplink dialer.
 
-Both envelopes open the same way: `HeadFrame.Handshake(peerNum, protocolVersion, auth)`
-on the mesh. The version is matched **exactly** (`ProtocolVersion.check`) and a mismatch
-refuses the link, because a bump is answered by migrating the head rather than by two
-versions coexisting on one link. `auth` is carried and not verified — the identity is
-asserted, never proven (GUM-322).
+#### Opening a link: the handshake exchange
+
+Both envelopes open the same way, and the **server speaks first**:
+
+| # | frame | direction | carries |
+|---|---|---|---|
+| 1 | `Challenge(nonce)` | server → dialer | 32 random bytes, fresh per socket |
+| 2 | `Handshake(peerNum \| coilNum, protocolVersion, auth)` | dialer → server | the claimed identity and the proof of it |
+| 3 | `Refused(refusal)` | server → dialer | why, sent immediately before the socket closes |
+
+**The claimed identity is proven, not asserted.** `auth` is a `HandshakeAuth.Signed`
+carrying the head-params hash and an Ed25519 signature over `HandshakeProof.preimage`:
+
+```
+handshakeProof = "gummiworm-handshake-v1"
+  || <link>            // 0x01 coil→hub, 0x02 head↔head
+  || <claimant>        // the coil or head peer number being claimed
+  || <protocolVersion>
+  || <headParamsHash>
+  || <nonce>           // the server's per-socket challenge
+```
+
+The key is the one the roster already lists — `coilPeers` on `/hub`, `headPeers` on `/head` —
+so a liaison link authenticates with the credential the protocol is already built on, and
+there is no second identity registry to drift.
+
+Each term closes one replay:
+
+- **`nonce`** binds the signature to this socket. Without it a handshake captured once is
+  good on any socket forever.
+- **`link`** keeps a proof harvested on one lane worthless on the other.
+- **`headParamsHash`** refuses both a peer from another head and a peer that disagrees about
+  this one, at connect rather than on divergence. It subsumes the head id — one digest over the
+  whole head config, so it also covers the rosters, the timings and the script references
+  (`head-params-hash.md`) — and it is already in the multisig regime datum.
+- **`protocolVersion`** is matched **exactly** (`ProtocolVersion.check`), because a bump is
+  answered by migrating the head rather than by two versions coexisting on one link.
+
+The server checks in a fixed order — version, then the roster or dial topology, then the proof.
+Version first because a peer speaking another protocol may not mean the same thing by its own
+number; the roster next because the claimed number is what resolves the key the proof is checked
+against.
+
+**A refused handshake closes the socket, named.** The server sends a `Refused` carrying one of
+`ProtocolVersionMismatch` / `NotHubbed` / `NotInRoster` / `WrongDialDirection` /
+`HeadParamsMismatch` / `BadSignature`, then a WebSocket close with status 1008 and that reason,
+and traces it. Each case is a different operator action, so they stay distinct rather than
+collapsing into one "rejected". The dialer **keeps redialing** across a refusal — a refusal
+describes the attempt, not the peer.
+
+`auth` is **required**: there is no unproven handshake form, so a frame without one fails to
+decode and is traced as `ServerDecodeError` rather than refused with a reason. That is the one
+handshake fault with no named refusal, and it is reachable only from a build that predates this
+exchange — of which there are none, since no head is live.
+
+A dialer that gets no challenge within its 10 s budget drops the socket and redials; the budget
+stays under the 30 s WebSocket-handshake budget so an abandoned attempt cannot outlive the loop's
+claim and hold a socket open beside the redial.
+
+**What this does not cover.** Only the handshake is signed, so an attacker able to hijack the TCP
+stream afterwards owns the session. The transport supplies channel integrity and the signed
+handshake supplies identity; neither substitutes for the other. The in-process transports have no
+handshake and need none — they wire actors together directly, so identity holds by construction.
 
 The liaisons reach their counterparts through proxy actors that stand in for the
 remote handle and forward over the transport: `RemoteHubProxy` (coil → hub) and

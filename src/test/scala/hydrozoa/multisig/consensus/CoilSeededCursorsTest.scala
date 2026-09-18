@@ -55,13 +55,17 @@ class CoilSeededCursorsTest extends AnyFunSuite {
     private val adoptedCursors = Population.Get(
       batchNum = BatchNumber.zero,
       block = BlockNumber(13),
+      blockCeiling = BlockNumber(13),
       stack = StackNumber(8),
+      stackCeiling = StackNumber(8),
       requests = headPeers.map(h => h -> RequestNumber(41 + (h: Int))).toMap,
+      requestCeilings = Map.empty,
       softAcks = headPeers.map(h => h -> SoftAckNumber(13)).toMap,
       // The indices that cannot be derived from the start point at all: a stack yields one ack per
       // peer when it is sole and two when it is 2-phase.
       headHardAcks = headPeers.map(h => h -> HardAckNumber(9 + (h: Int))).toMap,
-      coilHardAcks = Map(h0 -> HubHardAckNumber(6))
+      coilHardAcks = Map(h0 -> HubHardAckNumber(6)),
+      coilHardAckCeiling = StackNumber(99)
     )
 
     private val startPoint = AdoptedStartPoint(

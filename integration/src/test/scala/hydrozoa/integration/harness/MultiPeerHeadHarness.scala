@@ -31,8 +31,8 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.consensus.{CardanoLiaison, CoilJoin, CoilJoinEventFormat, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
-import hydrozoa.multisig.ledger.eutxol2.EutxoL2Screener
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
+import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.metrics.PeerMetrics
@@ -1349,6 +1349,8 @@ object MultiPeerHeadHarness:
                               CoilPeerWsTransport
                                   .create(
                                     coilNum,
+                                    coilConfig.ownWallet,
+                                    coilConfig.headParamsHash,
                                     IO.pure(Join.Connected(None, None)),
                                     HeadIdentity.own(using multiNodeConfig.headConfig),
                                     cpwtTracer
@@ -1486,6 +1488,7 @@ object MultiPeerHeadHarness:
             peers: Seq[HeadPeerNumber],
         )(using CardanoNetwork.Section): Resource[IO, WsHeadParts] =
             val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
+            val ownNodeConfig = multiNodeConfig.nodeConfigs(peerNum)
             val ownHead = HeadIdentity.own(using multiNodeConfig.headConfig)
             val hubbedCoils = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
             val remoteIds: List[HeadPeerId] =
@@ -1498,13 +1501,29 @@ object MultiPeerHeadHarness:
                 Slf4jTracer.sink.contramap(HubWsTransportEventFormat.humanFormat(peerNum))
             for
                 peerT <- Resource.eval(
-                  WsPeerTransport.create(ownHeadPeerId, ownHead, remoteIds, ptTracer)
+                  WsPeerTransport.create(
+                    ownHeadPeerId,
+                    ownNodeConfig.ownWallet,
+                    ownNodeConfig.headConfig,
+                    ownNodeConfig.headParamsHash,
+                    ownHead,
+                    remoteIds,
+                    ptTracer
+                  )
                 )
                 hubTConcrete: Option[HubWsTransport] <-
                     if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
                     else
                         Resource
-                            .eval(HubWsTransport.create(hubbedCoils, ownHead, hubTracer))
+                            .eval(
+                              HubWsTransport.create(
+                                hubbedCoils,
+                                ownNodeConfig.headConfig.coilPeers,
+                                ownNodeConfig.headParamsHash,
+                                ownHead,
+                                hubTracer
+                              )
+                            )
                             .map(Some(_))
                 meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
                 hubRoutes = hubTConcrete.toList.map(h =>
@@ -1643,7 +1662,12 @@ object MultiPeerHeadHarness:
                   cardanoBackend,
                   firstPollResults,
                   l2Ledger,
-                  EutxoL2Screener(nodeConfig),
+                  EutxoL2Screener(
+                    nodeConfig,
+                    EutxoL2Ledger
+                        .protocolParamsOf(nodeConfig.headConfig)
+                        .getOrElse(throw RuntimeException("harness needs a cardano-eutxo head"))
+                  ),
                   persistence,
                   metrics,
                   callerTracer,

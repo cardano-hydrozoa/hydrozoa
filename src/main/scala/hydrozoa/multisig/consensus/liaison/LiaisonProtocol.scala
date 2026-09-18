@@ -3,7 +3,7 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.IO
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, SoftAck}
-import hydrozoa.multisig.consensus.{SoftConfirmedHighWater, UserRequestWithId}
+import hydrozoa.multisig.consensus.{HardConfirmedHighWater, SoftConfirmedHighWater, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.stack.StackBrief
 
@@ -71,10 +71,14 @@ object LiaisonProtocol {
       * [[BatchMessages.Join.Offer]] or [[BatchMessages.Join.NoOffer]] is the hub's answer to this
       * coil's handshake. Both normally reach the transport at boot rather than this actor; one
       * arriving here is late, and declined.
+      *
+      * It also accepts the two local confirmation notifications its pull ceilings are anchored on
+      * (design/liaison-backpressure.md).
       */
     type CoilToHubRequest =
         Control | BatchMessages.Join.Offer | BatchMessages.Join.NoOffer |
-            BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck
+            BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck |
+            SoftConfirmedHighWater | HardConfirmedHighWater
 
     type HeadToHeadHandle = ActorRef[IO, HeadToHeadRequest]
     type HubToCoilHandle = ActorRef[IO, HubToCoilRequest]

@@ -3,12 +3,13 @@ package hydrozoa.multisig.consensus
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, HubHardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, Population}
-import hydrozoa.multisig.consensus.liaison.BatchNumber
+import hydrozoa.multisig.consensus.liaison.{BatchNumber, PeerLiaisonCoilToHub}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -105,7 +106,7 @@ object CoilStartPoint:
 
     /** Everything the hub reads to assemble an offer, plus the catch-up threshold. */
     type Config = HeadPeers.Section & CardanoNetwork.Section & HeadConfig.Bootstrap.Section &
-        NodeOperationMultisigConfig.Section
+        BlockConfig.Section & NodeOperationMultisigConfig.Section
 
     /** Is this coil close enough behind to walk forward over the lanes instead of being seeded?
       *
@@ -251,15 +252,30 @@ object CoilStartPoint:
                 firstAckAfter(PeerId.Head(h), stack, persistence).map(h -> _)
             )
             coilHardAcks <- peers.traverse(h => hubHardAckStart(h, persistence).map(h -> _))
-        } yield Population.Get(
-          batchNum = BatchNumber.zero,
-          block = block.increment,
-          stack = stack.increment,
-          requests = peers.map(h => h -> highWater.getOrElse(h, RequestNumber(0))).toMap,
-          softAcks = peers.map(h => h -> SoftAckNumber((block: Int) + 1)).toMap,
-          headHardAcks = headHardAcks.toMap,
-          coilHardAcks = coilHardAcks.toMap
-        )
+        } yield
+            // Ceilings anchored at the start point, matching PeerLiaisonCoilToHub's own helpers: a
+            // coil seated here has confirmed exactly `block`/`stack`, so it may buffer the same
+            // window past them that a warm coil may.
+            Population.Get(
+              batchNum = BatchNumber.zero,
+              block = block.increment,
+              blockCeiling = BlockNumber((block: Int) + config.backpressureCoefficient),
+              stack = stack.increment,
+              stackCeiling = StackNumber((stack: Int) + 1),
+              requests = peers.map(h => h -> highWater.getOrElse(h, RequestNumber(0))).toMap,
+              requestCeilings = peers.map { h =>
+                  val confirmed = highWater.getOrElse(h, RequestNumber(0))
+                  h -> RequestNumber(
+                    (confirmed: Long) + config.backpressureCoefficient * config.maxRequestsPerBlock
+                  )
+              }.toMap,
+              softAcks = peers.map(h => h -> SoftAckNumber((block: Int) + 1)).toMap,
+              headHardAcks = headHardAcks.toMap,
+              coilHardAcks = coilHardAcks.toMap,
+              coilHardAckCeiling = StackNumber(
+                (stack: Int) + PeerLiaisonCoilToHub.coilHardAckStackWindow
+              )
+            )
 
     /** The index of `peer`'s first hard-ack covering a stack **after** `stack`.
       *

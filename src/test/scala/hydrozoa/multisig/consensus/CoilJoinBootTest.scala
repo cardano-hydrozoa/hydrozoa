@@ -83,11 +83,15 @@ class CoilJoinBootTest extends AnyFunSuite {
             cursors = Population.Get(
               batchNum = BatchNumber.zero,
               block = BlockNumber(13),
+              blockCeiling = BlockNumber(13),
               stack = StackNumber(8),
+              stackCeiling = StackNumber(8),
               requests = Map.empty,
+              requestCeilings = Map.empty,
               softAcks = Map.empty,
               headHardAcks = Map.empty,
-              coilHardAcks = Map.empty
+              coilHardAcks = Map.empty,
+              coilHardAckCeiling = StackNumber(99)
             )
           )
         )

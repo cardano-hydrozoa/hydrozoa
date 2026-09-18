@@ -23,17 +23,20 @@ object HubWsTransportEventFormat:
                 warn(s"unexpected hub-bound wire from coil=${coil.convert}: $payload")
             case ServerAccepted(coilNum) =>
                 info(s"coil server: accepted inbound from coil=$coilNum")
-            case ServerRejectedHandshake(coilNum) =>
-                warn(s"coil server: rejecting handshake from unknown coil=$coilNum")
-            case ServerRejectedHeadIdentity(coilNum, detail) =>
-                warn(s"coil server: rejecting coil=$coilNum — $detail")
-            case ServerRejectedProtocolVersion(coilNum, found, expected) =>
+            case ServerRefusedHandshake(coilNum, refusal) =>
                 warn(
-                  s"coil server: rejecting coil=$coilNum — protocol version " +
-                      s"${ProtocolVersion.describe(found)}, this node speaks $expected"
+                  s"coil server: refusing coil=$coilNum and closing the socket — " +
+                      HandshakeRefusal.describe(refusal)
+                )
+            case ServerRepeatHandshake(coilNum) =>
+                warn(
+                  s"coil server: a second handshake from coil=$coilNum on a socket that already " +
+                      "has a verdict; keeping the verdict"
                 )
             case ServerMsgBeforeHandshake =>
-                warn("coil server: msg before handshake, dropping")
+                warn("coil server: msg before an accepted handshake, dropping")
+            case ServerUnexpectedFrame =>
+                warn("coil server: a coil sent a hub-only frame, dropping")
             case ServerDecodeError(cause) =>
                 warn(s"coil server: failed to decode frame: ${cause.getMessage}")
         }

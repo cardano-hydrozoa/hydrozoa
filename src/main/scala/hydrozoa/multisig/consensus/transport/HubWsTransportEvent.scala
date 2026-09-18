@@ -30,30 +30,28 @@ object HubWsTransportEvent:
 
     // ---- server (accept side) ----
 
-    /** The server accepted an inbound connection from a coil after receiving a valid `Handshake`.
+    /** The server accepted an inbound connection from a coil whose `Handshake` proved its number.
       */
     final case class ServerAccepted(coilNum: Int) extends HubWsTransportEvent
 
-    /** The server rejected a `Handshake` from an unknown coil peer number. */
-    final case class ServerRejectedHandshake(coilNum: Int) extends HubWsTransportEvent
-
-    /** The server rejected a `Handshake` announcing a protocol version it does not speak. `found`
-      * is `None` for a coil too old to announce one at all.
+    /** The server refused a `Handshake` and closed the socket. `refusal` says which of version,
+      * roster, head params, or proof did not hold — each a different thing for an operator to fix.
       */
-    final case class ServerRejectedProtocolVersion(
-        coilNum: Int,
-        found: Option[Int],
-        expected: Int
-    ) extends HubWsTransportEvent
-
-    /** The server refused a `Handshake` from a peer that is not in this head. `detail` names which
-      * half disagreed and both values, so the log points at the config to fix.
-      */
-    final case class ServerRejectedHeadIdentity(coilNum: Int, detail: String)
+    final case class ServerRefusedHandshake(coilNum: Int, refusal: HandshakeRefusal)
         extends HubWsTransportEvent
 
     /** A `Msg` frame arrived on the server side before the coil peer sent its `Handshake`. */
+    /** A second `Handshake` arrived on a socket that already has a verdict. One socket carries one
+      * challenge and one handshake, so this is a coil misbehaving or a replay attempt; the socket
+      * keeps the verdict it has.
+      */
+    final case class ServerRepeatHandshake(coilNum: Int) extends HubWsTransportEvent
+
+    /** A `Msg` frame arrived on the server side before the coil peer's `Handshake` was accepted. */
     case object ServerMsgBeforeHandshake extends HubWsTransportEvent
+
+    /** A coil sent a frame only the hub ever sends — a `Challenge` or a `Refused`. */
+    case object ServerUnexpectedFrame extends HubWsTransportEvent
 
     /** A frame on the server side could not be decoded. */
     final case class ServerDecodeError(cause: Throwable) extends HubWsTransportEvent
