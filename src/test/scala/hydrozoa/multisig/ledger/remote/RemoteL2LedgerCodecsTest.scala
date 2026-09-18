@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.remote
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMapHash}
 import hydrozoa.multisig.ledger.l2.L2LedgerResponse.UnrecoverableError
@@ -98,6 +99,8 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
     private val evacMapHash =
         EvacuationMapHash(ByteString.fromArray(Array.fill[Byte](32)(0xab.toByte)))
     private val stateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0xcd.toByte)))
+    private val evacMapKzg: KzgCommitment =
+        ByteString.fromArray(Array.fill[Byte](48)(0x12.toByte))
     private val paramsHash = Hash32.fromByteString(
       ByteString.fromArray(Array.fill[Byte](32)(0xef.toByte))
     )
@@ -117,13 +120,19 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
 
     test("Restored encodes to the canonical SugarRush wire shape and round-trips") {
         // The vector SugarRush pins in `types/src/types/coordination/restore.rs`, now with all
-        // three digests — they are mandatory, so a remote that sends only `evacuationMapHash` is
+        // four digests — they are mandatory, so a remote that sends only `evacuationMapHash` is
         // refused at the frame (the next test).
         val response: RestoreResponse =
-            RestoreResponse.Restored(L2CommandNumber(7L), evacMapHash, stateHash, paramsHash)
+            RestoreResponse.Restored(
+              L2CommandNumber(7L),
+              evacMapHash,
+              evacMapKzg,
+              stateHash,
+              paramsHash
+            )
         val json = response.asJson.noSpaces
         assert(
-          json == """{"Restored":{"tip":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","l2ParamsHash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"}}"""
+          json == """{"Restored":{"tip":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","evacuationMapKzg":"121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","l2ParamsHash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"}}"""
               && io.circe.parser.decode[RestoreResponse](json) == Right(response)
         )
     }
@@ -145,10 +154,16 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
 
     test("StateReported encodes to its canonical wire shape and round-trips") {
         val response: StateAtResponse =
-            StateAtResponse.StateReported(L2CommandNumber(7L), evacMapHash, stateHash, paramsHash)
+            StateAtResponse.StateReported(
+              L2CommandNumber(7L),
+              evacMapHash,
+              evacMapKzg,
+              stateHash,
+              paramsHash
+            )
         val json = response.asJson.noSpaces
         assert(
-          json == """{"StateReported":{"at":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","l2ParamsHash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"}}"""
+          json == """{"StateReported":{"at":7,"evacuationMapHash":"abababababababababababababababababababababababababababababababab","evacuationMapKzg":"121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212","l2StateHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","l2ParamsHash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"}}"""
               && io.circe.parser.decode[StateAtResponse](json) == Right(response)
         )
     }
