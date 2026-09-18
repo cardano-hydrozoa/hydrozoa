@@ -6,10 +6,11 @@ import cats.effect.std.{Mutex, Queue}
 import cats.effect.{Async, Deferred, FiberIO, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.joint.EvacuationMapHash
-import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, L2StateHash, RegisterDepositResponse, RestoreError}
+import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, L2StateExport, L2StateHash, RegisterDepositResponse, RestoreError}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse, StateAtResponse}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.parser.*
@@ -187,6 +188,34 @@ class RemoteL2Ledger private (
                     Left(RestoreError.CommandNumberTooHigh(requested, tip))
                 else Left(RestoreError.OtherError(reason))
         })
+
+    /** **Not implemented — the coordination protocol has no frame for it.**
+      *
+      * Adding one is a two-repo change, not a hydrozoa change:
+      * `docs/spec/l2-ledger-command-coordination.md` is the normative contract, and Sugar Rush's
+      * `types/src/types/coordination/` is the other half of the same API. An `ExportState` /
+      * `ImportState` pair has to land on both sides in one work item, with the golden pins on both
+      * sides updated together — adding the frames here alone would break the interop tests that
+      * exist to catch exactly that.
+      *
+      * There is a prior question for whoever does it: a remote black box owns its own state and its
+      * own recovery, so it may be the wrong party to ask for a transferable blob at all. The
+      * alternative is that a joining coil's remote ledger is seeded out of band, by whatever
+      * mechanism that vendor already has, and the head only checks the digests afterwards.
+      */
+    override def exportStateAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, L2StateExport] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** **Not implemented — the counterpart of [[exportStateAt]], blocked on the same two-repo
+      * frame.** See its scaladoc, including the question of whether a remote ledger should be
+      * seeded through this protocol at all.
+      */
+    override def importState(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
 
     /** Send a [[Request.StateAt]] and return the remote's [[StateAtResponse]]. Mirrors
       * [[sendRestoreRequest]]: transport failure is retried through by [[exchange]], and an
