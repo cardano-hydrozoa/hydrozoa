@@ -78,6 +78,20 @@ class CoilSeededCursorsTest extends AnyFunSuite {
             PartialFunction.fromFunction(r => seen.update(_ :+ r))
     }
 
+    /** Poll until the liaison has sent its opening `Population.Get`, or give up loudly. */
+    private def awaitFirstPull(
+        seen: Ref[IO, Vector[LiaisonProtocol.HubToCoilRequest]]
+    ): IO[Population.Get] =
+        def go: IO[Population.Get] =
+            seen.get.flatMap(_.collectFirst { case g: Population.Get => g } match {
+                case Some(g) => IO.pure(g)
+                case None    => IO.sleep(20.millis) >> go
+            })
+        go.timeoutTo(
+          20.seconds,
+          IO.raiseError(new AssertionError("liaison never opened its pull chain"))
+        )
+
     /** Boot one coil liaison over a store and return its opening pull. `blocksTo` writes a block
       * spine, standing in for a coil that has already pulled some way past its start point.
       */
@@ -126,9 +140,11 @@ class CoilSeededCursorsTest extends AnyFunSuite {
                                 p
                               )
                             )
-                            _ <- IO.sleep(300.millis)
-                            out <- seen.get
-                        } yield out.collect { case g: Population.Get => g }.head
+                            // Wait for the opening pull rather than guessing at a duration: a
+                            // fixed sleep passes alone and fails under a loaded suite, which is a
+                            // test that reports load as a bug.
+                            out <- awaitFirstPull(seen)
+                        } yield out
                     }
                 }
             )

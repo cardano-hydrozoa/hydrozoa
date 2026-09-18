@@ -86,6 +86,21 @@ class HubJoinHandoffTest extends AnyFunSuite {
             PartialFunction.fromFunction(r => seen.update(_ :+ r))
     }
 
+    /** Poll until the hub has answered the handshake, or give up loudly. */
+    private def awaitAnswer(
+        seen: Ref[IO, Vector[LiaisonProtocol.CoilToHubRequest]]
+    ): IO[Unit] =
+        def go: IO[Unit] =
+            seen.get.flatMap(v =>
+                if v.exists(r => r.isInstanceOf[Join.Offer] || r.isInstanceOf[Join.NoOffer]) then
+                    IO.unit
+                else IO.sleep(20.millis) >> go
+            )
+        go.timeoutTo(
+          20.seconds,
+          IO.raiseError(new AssertionError("hub never answered the handshake"))
+        )
+
     /** Stand up one hub→coil liaison with `decide` as its start-point decision, hand it
       * `Join.Connected`, and return everything the hub sent down the link.
       */
@@ -118,8 +133,11 @@ class HubJoinHandoffTest extends AnyFunSuite {
                               )
                             )
                             _ <- liaison ! connected
-                            // The liaison's own pre-start pull races this; settle before reading.
-                            _ <- IO.sleep(300.millis)
+                            // Wait for the ANSWER, not for a duration. The hub answers every
+                            // handshake — an offer or a `NoOffer` — so its arrival is a
+                            // deterministic sync point, and the liaison's own pre-start pull is
+                            // not mistaken for it.
+                            _ <- awaitAnswer(seen)
                             out <- seen.get
                         } yield out
                     }
