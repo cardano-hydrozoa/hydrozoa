@@ -4,7 +4,6 @@ import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId.toHex
 import scala.util.Try
-import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
 import scalus.cardano.ledger.{AssetName, AuxiliaryData, Metadatum, MultiAsset, Transaction, Word64}
 
 /** The head-label metadata every EUTXO L2 transaction carries. It reuses the L1 transaction
@@ -65,7 +64,8 @@ object L2Metadata {
             )
         val headMap = Metadatum.Map(Map(Metadatum.Text(headId.toHex) -> Metadatum.Map(fields)))
         val roleMap = Metadatum.Map(Map(Metadatum.Text(role) -> headMap))
-        MD(Map(Word64(metadataLabel) -> roleMap))
+        // Alonzo-format (not Shelley-era Metadata) so Amaru accepts the submitted transaction.
+        AuxiliaryData.AlonzoFormat(Some(Map(Word64(metadataLabel) -> roleMap)))
     }
 
     /** Parse the head-label metadata out of `tx`, returning the pinned headId and the L2 metadata.
@@ -75,15 +75,11 @@ object L2Metadata {
     def parse(tx: Transaction): Either[String, (HeadId, L2Metadata)] =
         for {
             md <- tx.auxiliaryData match {
-                case Some(keepRaw) =>
-                    keepRaw.value match {
-                        case m: MD => Right(m)
-                        case _     => Left("L2 metadata: auxiliary data is not metadata")
-                    }
-                case None => Left("L2 metadata: transaction carries no auxiliary data")
+                case Some(keepRaw) => Right(keepRaw.value.getMetadata)
+                case None          => Left("L2 metadata: transaction carries no auxiliary data")
             }
             roleMap <- requireMap(
-              md.metadata.get(Word64(metadataLabel)),
+              md.get(Word64(metadataLabel)),
               s"head-tag label $metadataLabel"
             )
             headMap <- requireMap(roleMap.entries.get(Metadatum.Text(role)), s"role '$role'")
