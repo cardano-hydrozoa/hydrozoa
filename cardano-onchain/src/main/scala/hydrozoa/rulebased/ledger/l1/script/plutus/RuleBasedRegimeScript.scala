@@ -42,7 +42,7 @@ object RuleBasedRegimeValidator extends Validator {
     private inline val RegimeTokenNotBurned =
         "Deinit must burn the HRWT held by the regime utxo"
     private inline val TreasuryTokenNotBurned =
-        "Deinit must burn the treasury beacon token"
+        "Deinit must burn exactly one treasury beacon token"
 
     // Entry point
     override inline def spend(
@@ -83,15 +83,20 @@ object RuleBasedRegimeValidator extends Validator {
                     case None         => false
                 require(regimeTokenBurned, RegimeTokenNotBurned)
 
-                // The treasury beacon must go in the same tx. Burning the HRWT alone would leave a
-                // treasury that can never be resolved or evacuated, which is the very footgun this
-                // validator exists to close.
-                require(
-                  headTokensBurned.toList.exists((tokenName, burned) =>
-                      tokenName.take(4) == cip67BeaconTokenPrefix && burned > BigInt(0)
-                  ),
-                  TreasuryTokenNotBurned
-                )
+                // The treasury beacon must go in the same tx. This check is what ties the regime
+                // utxo's lifetime to the treasury's: the beacon leaves the treasury only through
+                // its Deinit branch, which requires the treasury to be resolved and fully
+                // evacuated. An HRWT-only check would let the regime utxo go while the treasury
+                // still needs it to resolve or evacuate.
+                headTokensBurned.toList.filter((tokenName, _) =>
+                    tokenName.take(4) == cip67BeaconTokenPrefix
+                ) match
+                    case List.Cons(tokenNameAndAmount, none) =>
+                        require(
+                          none.isEmpty && tokenNameAndAmount._2 == BigInt(1),
+                          TreasuryTokenNotBurned
+                        )
+                    case _ => fail(TreasuryTokenNotBurned)
 }
 
 object RuleBasedRegimeScript {

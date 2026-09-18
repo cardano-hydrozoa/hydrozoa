@@ -108,6 +108,23 @@ class RuleBasedRegimeScriptTest extends AnyFunSuite {
         )
     }
 
+    test("burning more than one treasury beacon is rejected") {
+        // A head has exactly one beacon, so a burn of any other shape is not a deinit tx.
+        val otherBeaconName = ByteString.fromHex("01349900" + "cc" * 28)
+        val twoNames = runSpend(
+          burnRegimeToken + burnTreasuryBeacon + Value(headMp, otherBeaconName, BigInt(-1))
+        )
+        assert(
+          twoNames.isFailure,
+          s"burning two beacon-prefixed tokens must be rejected, got: $twoNames"
+        )
+        val twoUnits = runSpend(burnRegimeToken + Value(headMp, beaconName, BigInt(-2)))
+        assert(
+          twoUnits.isFailure,
+          s"burning two units of the beacon must be rejected, got: $twoUnits"
+        )
+    }
+
     test("burning look-alike tokens under another policy is rejected") {
         // The head multisig policy is the only authentication the validator has: burning under it
         // takes the head's unanimous witness, so a foreign policy must not satisfy the check.
