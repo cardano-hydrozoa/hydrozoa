@@ -18,7 +18,7 @@ object HubWsTransportEvent:
     /** `send` was called with a request variant that cannot be serialised over the wire. */
     final case class DroppingNonWireRequest(
         coil: CoilPeerNumber,
-        request: LiaisonProtocol.CoilToHubRequest
+        request: LiaisonProtocol.CoilRequestServed
     ) extends HubWsTransportEvent
 
     /** An inbound frame arrived from a coil peer that has no registered local liaison. */
@@ -40,6 +40,7 @@ object HubWsTransportEvent:
     final case class ServerRefusedHandshake(coilNum: Int, refusal: HandshakeRefusal)
         extends HubWsTransportEvent
 
+    /** A `Msg` frame arrived on the server side before the coil peer sent its `Handshake`. */
     /** A second `Handshake` arrived on a socket that already has a verdict. One socket carries one
       * challenge and one handshake, so this is a coil misbehaving or a replay attempt; the socket
       * keeps the verdict it has.

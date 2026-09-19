@@ -37,6 +37,11 @@ enum HandshakeRefusal {
     /** The counterpart is on another head, or disagrees with this node about this one. */
     case HeadParamsMismatch(found: Hash32, expected: Hash32)
 
+    /** The counterpart announced a different head identity, or announced none at all. `detail`
+      * names which half disagreed and both values, so the log points at the config to fix.
+      */
+    case WrongHead(detail: String)
+
     /** The proof did not verify under the roster key for the claimed number. */
     case BadSignature
 }
@@ -55,6 +60,8 @@ object HandshakeRefusal {
             s"peer $claimedPeerNum must not dial peer $ownPeerNum (lower dials higher)"
         case HeadParamsMismatch(found, expected) =>
             s"head params ${found.toHex}, this node's are ${expected.toHex}"
+        case WrongHead(detail) =>
+            detail
         case BadSignature =>
             "the handshake signature did not verify under the roster key"
     }
@@ -82,6 +89,8 @@ object HandshakeRefusal {
               "found" -> found.asJson,
               "expected" -> expected.asJson
             )
+        case WrongHead(detail) =>
+            Json.obj("r" -> "wrongHead".asJson, "detail" -> detail.asJson)
         case BadSignature =>
             Json.obj("r" -> "badSignature".asJson)
     }
@@ -107,6 +116,8 @@ object HandshakeRefusal {
                     found <- c.downField("found").as[Hash32]
                     expected <- c.downField("expected").as[Hash32]
                 } yield HeadParamsMismatch(found, expected)
+            case "wrongHead" =>
+                c.downField("detail").as[String].map(WrongHead(_))
             case "badSignature" => Right(BadSignature)
             case other =>
                 Left(DecodingFailure(s"Unknown handshake refusal: $other", c.history))

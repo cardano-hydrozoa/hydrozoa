@@ -74,6 +74,7 @@ object PeerTransportEvent:
     final case class DialerNoChallenge(remote: HeadPeerId, uri: Uri, after: FiniteDuration)
         extends PeerTransportEvent
 
+    /** A `Msg` frame arrived on the server side before the peer sent its `Handshake`. */
     /** A [[HeadFrame.Challenge]] arrived on an already-established link. One socket carries one
       * challenge, answered before the link opens; a second one is the remote misbehaving.
       */

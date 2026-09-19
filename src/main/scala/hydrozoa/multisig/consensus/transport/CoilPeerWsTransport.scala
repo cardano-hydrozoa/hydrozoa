@@ -6,7 +6,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, PeerWallet}
 import hydrozoa.multisig.consensus.transport.CoilPeerWsTransportEvent.*
@@ -26,7 +26,22 @@ trait CoilTransport {
     def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit]
 
     /** Enqueue a coil→hub batch for delivery to the hub. */
-    def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit]
+    def send(request: LiaisonProtocol.HubRequestServed): IO[Unit]
+
+    /** Announce where this coil stands, before [[joinAnswer]] is read.
+      *
+      * A dialing transport sends its marks in the handshake on every dial and has nothing to learn
+      * here. A directly-wired one never dials, so this is the only point at which it can be told.
+      */
+    def announceMarks(marks: Join.Connected): IO[Unit]
+
+    /** The hub's answer to this coil's handshake, completing when the first one arrives.
+      *
+      * Read at **boot**, before any liaison exists — which is the only time it can be acted on, so
+      * the transport holds it rather than routing it to an actor that is not there yet. Later
+      * answers go the ordinary way and are declined.
+      */
+    def joinAnswer: IO[Join.Answer]
 }
 
 /** The coil side of the hub→coil WS link: a coil peer runs no server, it dials its single hub's
@@ -35,13 +50,16 @@ trait CoilTransport {
   * under `ownWallet`, and the hub binds the socket to that number.
   *
   * Outbound is the coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]); inbound is the
-  * hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]), routed to the local
+  * hub-emitted subset ([[Join.Offer]], [[Population.New]], [[OwnHardAck.Get]]), routed to the local
   * [[PeerLiaisonCoilToHub]].
   */
 final class CoilPeerWsTransport private (
     private val ownCoilNum: CoilPeerNumber,
     private val ownWallet: PeerWallet,
     private val headParamsHash: Hash32,
+    private val ownMarks: IO[Join.Connected],
+    private val ownHead: HeadIdentity,
+    private val answer: Deferred[IO, Join.Answer],
     private val outbox: Queue[IO, String],
     private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
     private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
@@ -51,20 +69,38 @@ final class CoilPeerWsTransport private (
     override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
         inboundRef.set(Some(localLiaison))
 
-    override def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit] =
+    override def send(request: LiaisonProtocol.HubRequestServed): IO[Unit] =
         CoilFrame.fromWire(request) match {
             case Some(wire) => outbox.offer(CoilFrame.encode(CoilFrame.Msg(wire)))
             case None       => tracer.traceWith(DroppingNonWireRequest(request))
         }
 
+    /** No-op: this transport announces its marks in the handshake it sends on every dial, read
+      * fresh from the store at that moment ([[ownMarks]]), which is strictly better than a value
+      * captured earlier by a caller.
+      */
+    override def announceMarks(marks: Join.Connected): IO[Unit] = IO.unit
+
+    override def joinAnswer: IO[Join.Answer] = answer.get
+
+    private def toLiaison(request: LiaisonProtocol.CoilRequestServed): IO[Unit] =
+        inboundRef.get.flatMap {
+            case Some(liaison) => liaison ! request
+            case None          => tracer.traceWith(NoLiaisonForInbound)
+        }
+
     private def dispatchInbound(payload: CoilFrame.Wire): IO[Unit] =
         payload match {
+            // The first answer is what boot is waiting on; `complete` has one winner, so a second
+            // one falls through to the liaison and is declined there.
+            //
+            // Handling the late one here instead would be tidier — the liaison can only decline it
+            // — but the two `Join` cases cannot leave `CoilRequestServed` while that union is also
+            // the hub's send-side handle type. See `LiaisonProtocol.CoilRequestServed`.
+            case a @ (_: Join.Offer | _: Join.NoOffer) =>
+                answer.complete(a).flatMap(won => IO.unlessA(won)(toLiaison(a)))
             // Only the hub-emitted subset is valid inbound here.
-            case p @ (_: Population.New | _: OwnHardAck.Get) =>
-                inboundRef.get.flatMap {
-                    case Some(liaison) => liaison ! p
-                    case None          => tracer.traceWith(NoLiaisonForInbound)
-                }
+            case p @ (_: Population.New | _: OwnHardAck.Get) => toLiaison(p)
             case other => tracer.traceWith(UnexpectedInboundWire(other))
         }
 
@@ -136,14 +172,27 @@ final class CoilPeerWsTransport private (
                                   )
                                 )
                             case ProtocolVersion.Check.Compatible =>
-                                val handshakeLine = CoilFrame.encode(
-                                  CoilFrame.Handshake
-                                      .own(ownCoilNum.convert, ownWallet, headParamsHash, nonce)
-                                )
                                 handshook.complete(()).flatMap {
                                     case true =>
+                                        // Read the marks per dial, not once at construction: a
+                                        // redial after a long drop must claim where the coil
+                                        // stands NOW, or the hub decides the start point from a
+                                        // stale position.
                                         tracer.traceWith(DialerConnected(hubUri)) >>
-                                            conn.send(WSFrame.Text(handshakeLine)) >>
+                                            ownMarks
+                                                .map(marks =>
+                                                    CoilFrame.encode(
+                                                      CoilFrame.Handshake.own(
+                                                        ownCoilNum.convert,
+                                                        ownWallet,
+                                                        headParamsHash,
+                                                        nonce,
+                                                        marks,
+                                                        ownHead
+                                                      )
+                                                    )
+                                                )
+                                                .flatMap(line => conn.send(WSFrame.Text(line))) >>
                                             WsDuplex.run(conn, outbox, onLine)
                                     // Lost the claim: the budget expired and the loop has already
                                     // redialed. Return instead, so `use` closes this socket rather
@@ -228,20 +277,28 @@ object CoilPeerWsTransport {
       * @param headParamsHash
       *   this node's digest over the whole head config, asserted in every handshake so the hub
       *   refuses a coil from another head, or one that disagrees about this one, at connect.
+      * @param ownMarks
+      *   where this coil stands, re-read on every dial. See [[CoilFrame.Handshake]].
       */
     def create(
         ownCoilNum: CoilPeerNumber,
         ownWallet: PeerWallet,
         headParamsHash: Hash32,
+        ownMarks: IO[Join.Connected],
+        ownHead: HeadIdentity,
         tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
+            answer <- Deferred[IO, Join.Answer]
             inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
         } yield new CoilPeerWsTransport(
           ownCoilNum,
           ownWallet,
           headParamsHash,
+          ownMarks,
+          ownHead,
+          answer,
           outbox,
           inboundRef,
           tracer

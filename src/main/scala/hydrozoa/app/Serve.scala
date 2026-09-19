@@ -19,7 +19,8 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, ProtocolVersion, WsPeerTransport}
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HeadIdentity, HubTransport, HubWsTransport, NodeWsServer, ProtocolVersion, WsPeerTransport}
+import hydrozoa.multisig.consensus.{CoilJoin, CoilJoinEventFormat, CoilStartPoint}
 import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
@@ -599,6 +600,9 @@ object Serve {
             .toMap
         val hubbedCoils = nodeConfig.hubbedCoilPeerNums(ownHeadNum)
         val tracers = MrmTracers.fromRoot(mrmTracer)
+        // What every link announces and checks: two peers can speak the same protocol version and
+        // still not belong to the same head.
+        val ownHead = HeadIdentity.own(using nodeConfig.headConfig)
         for {
             peerT <- Resource.eval(
               WsPeerTransport.create(
@@ -606,6 +610,7 @@ object Serve {
                 nodeConfig.ownWallet,
                 nodeConfig.headConfig,
                 nodeConfig.headParamsHash,
+                ownHead,
                 remoteHeadUris.keys.toList,
                 tracers.peerTransport
               )
@@ -619,6 +624,7 @@ object Serve {
                             hubbedCoils,
                             nodeConfig.headConfig.coilPeers,
                             nodeConfig.headParamsHash,
+                            ownHead,
                             tracers.hubWsTransport
                           )
                         )
@@ -704,10 +710,23 @@ object Serve {
                 ownCoilNum,
                 nodeConfig.ownWallet,
                 nodeConfig.headParamsHash,
+                CoilStartPoint.ownMarks(persistence, PeerId.Coil(ownCoilNum)),
+                HeadIdentity.own(using nodeConfig.headConfig),
                 cpwtTracer
               )
             )
             _ <- t.startDialer(wsClient, hubUri)
+            // Settle where this coil starts BEFORE any actor exists. It cannot be done later: the
+            // ledger adopts a state only into one that has applied nothing, and `JointLedger` and
+            // `StackComposer` position themselves off this store the moment they start.
+            _ <- Resource.eval(
+              CoilJoin.settleStartPoint(
+                t,
+                persistence,
+                l2Ledger,
+                Slf4jTracer.sink.contramap(CoilJoinEventFormat.humanFormat(ownCoilNum))
+              )(using nodeConfig)
+            )
             coilFactory: Resource[
               IO,
               ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport

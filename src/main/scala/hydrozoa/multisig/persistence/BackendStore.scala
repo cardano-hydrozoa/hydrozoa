@@ -19,6 +19,20 @@ import cats.effect.Resource
   * See `docs/spec/persistence-and-crash-recovery.md` §7.
   */
 trait BackendStore[F[_]]:
+    /** Delete every entry in every column family except [[Cf.Meta]], leaving the store as though it
+      * had just been created for this peer and this head.
+      *
+      * `Cf.Meta` survives because it is what binds the store to its owner: the schema version and
+      * the [[StoreIdentity]] stamp checked at open. Wiping those would turn a reseed into a store
+      * that any peer could adopt.
+      *
+      * For a coil peer being seeded at a start point. Its data is unusable by construction — that
+      * is why it is being seeded — and keeping it is worse than dropping it: stale journals make
+      * the store read as warm and anchor recovery below the start point, on history its hub no
+      * longer has.
+      */
+    def wipeData: F[Unit]
+
     /** Read the value at `(cf, key)`. `None` if the key is absent. */
     def get(cf: Cf, key: Array[Byte]): F[Option[Array[Byte]]]
 

@@ -75,13 +75,15 @@ class CoilCodecsTest extends AnyFunSuite {
           coilNum = 1,
           HandshakeFixture.coilWallet(1),
           HandshakeFixture.headParamsHash,
-          HandshakeFixture.nonce
+          HandshakeFixture.nonce,
+          HandshakeFixture.marks,
+          HandshakeFixture.ownHead
         )
         // The signature is an opaque IArray, so structural equality would compare array identities;
         // JSON stability is the round-trip property that holds. Same as [[CodecsTest]].
         assertJsonStable(frame)
         roundTrip(frame) match {
-            case CoilFrame.Handshake(coilNum, protocolVersion, auth) =>
+            case CoilFrame.Handshake(coilNum, protocolVersion, auth, _, _) =>
                 val _ = assert(coilNum == 1)
                 val _ = assert(protocolVersion.contains(ProtocolVersion.current))
                 assert(
@@ -114,7 +116,7 @@ class CoilCodecsTest extends AnyFunSuite {
             )
         val text = s"""{"t":"handshake","coilNum":3,"auth":$auth}"""
         CoilFrame.parse(text) match {
-            case Right(CoilFrame.Handshake(coilNum, protocolVersion, _)) =>
+            case Right(CoilFrame.Handshake(coilNum, protocolVersion, _, _, _)) =>
                 val _ = assert(coilNum == 3)
                 val _ = assert(protocolVersion.isEmpty)
                 assert(

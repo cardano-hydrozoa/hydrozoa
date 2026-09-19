@@ -14,7 +14,7 @@ object CoilPeerWsTransportEvent:
     // ---- send ----
 
     /** `send` was called with a request variant that cannot be serialised over the wire. */
-    final case class DroppingNonWireRequest(request: LiaisonProtocol.HubToCoilRequest)
+    final case class DroppingNonWireRequest(request: LiaisonProtocol.HubRequestServed)
         extends CoilPeerWsTransportEvent
 
     // ---- inbound dispatch ----

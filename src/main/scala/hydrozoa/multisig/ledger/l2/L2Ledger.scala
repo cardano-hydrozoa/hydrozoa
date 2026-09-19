@@ -5,7 +5,7 @@ import cats.data.EitherT
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup, EvacuationMapHash}
+import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup, EvacuationMap, EvacuationMapHash}
 import scalus.cardano.ledger.Hash32
 
 /** Why [[L2Ledger.restoreTo]] could not reconstruct the committed state. Extends `Throwable` so the
@@ -306,6 +306,30 @@ trait L2Ledger[F[_]] extends L2StateReader[F] {
       * it a joining peer.
       */
     def importState(exported: L2StateExport): EitherT[F, RestoreError, L2Ledger.Digests]
+
+    /** Drop everything this ledger holds and return it to genesis.
+      *
+      * **Deliberately destructive, and only for a coil peer being seeded.** Such a peer's ledger
+      * state is unusable by construction — it is too far behind for its hub to serve it forward —
+      * so there is nothing to preserve, and [[importState]] adopts only into a ledger that has
+      * applied nothing. Separate from [[importState]] rather than folded into it so that the
+      * destruction is something a caller asks for by name.
+      */
+    def wipe: EitherT[F, RestoreError, Unit]
+
+    /** The evacuation map as of `commandNumber` — the map itself, not a digest of it.
+      *
+      * The map is a projection of the ledger's main compartment, so the ledger is the only thing
+      * that can evaluate it; every other holder of one got it from here. [[L2Ledger.Digests]]
+      * answers "do two peers hold the same map", which is all the fast and slow sides ever need. A
+      * coil peer adopting a start point needs the other thing: the slow side keeps the map as live
+      * state and as one half of its balance identity, and a joining peer has no earlier copy to
+      * carry forward (GUM-312).
+      *
+      * Read-only and reconstructed like [[L2StateReader.stateAt]] beside it, so asking about a past
+      * boundary cannot disturb production at the current one.
+      */
+    def evacuationMapAt(commandNumber: L2CommandNumber): EitherT[F, RestoreError, EvacuationMap]
 }
 
 object L2Ledger {

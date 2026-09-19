@@ -4,6 +4,7 @@ import cats.effect.testkit.TestControl
 import cats.effect.{IO, Ref, Resource}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 import hydrozoa.multisig.consensus.transport.CoilPeerWsTransportEvent.*
 import org.http4s.Uri
@@ -23,6 +24,17 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 class CoilDialerBudgetTest extends AnyFunSuite {
 
     private given CardanoNetwork.Section = CardanoNetwork.Preview
+
+    /** A head identity for the fixtures; these suites are not about which head a peer is in. */
+    private val ownHead: HeadIdentity =
+        HeadIdentity(
+          hydrozoa.config.head.initialization.InitializationParameters.HeadId(
+            scalus.cardano.ledger.AssetName(scalus.uplc.builtin.ByteString.fromString("testhead"))
+          ),
+          scalus.cardano.ledger.Hash32.fromByteString(
+            scalus.uplc.builtin.ByteString.fromArray(Array.fill[Byte](32)(0x11))
+          )
+        )
 
     private val hubUri = Uri.unsafeFromString("ws://hub.invalid:3001/ws")
 
@@ -84,6 +96,8 @@ class CoilDialerBudgetTest extends AnyFunSuite {
               CoilPeerNumber(0),
               HandshakeFixture.coilWallet(0),
               HandshakeFixture.headParamsHash,
+              IO.pure(Join.Connected(None, None)),
+              ownHead,
               tracer
             )
             client = WSClient[IO](respondToPings = false) { (_: WSRequest) =>
@@ -146,15 +160,19 @@ class CoilDialerBudgetTest extends AnyFunSuite {
             CoilFrame.Challenge(HandshakeFixture.nonce, Some(ProtocolVersion.current + 1))
         val (attempts, events) =
             dial(Resource.eval(pinging(10.seconds, opening = other)), 5.seconds)
+        // `attempts` is counted when the socket connects, the refusal when it is traced, so the
+        // window can close with the last attempt's refusal still in flight. One short is the race,
+        // not a coil that answered: an answered challenge would show as `DialerConnected`.
+        val refusals = events.count(_.isInstanceOf[DialerRefusedChallenge])
         assert(
           (
             attempts > 1,
-            events.count(_.isInstanceOf[DialerRefusedChallenge]) == attempts,
+            refusals >= attempts - 1 && refusals <= attempts,
             events.count(_.isInstanceOf[DialerConnected]),
             stalls(events)
           ) == (true, true, 0, 0),
           "every attempt must refuse the challenge and none may open a link; " +
-              s"dialed $attempts times, traced $events"
+              s"dialed $attempts times, refused $refusals, traced $events"
         )
     }
 

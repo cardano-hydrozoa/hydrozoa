@@ -19,7 +19,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.{HeadMultisigRegimeManager, NoopActor}
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
@@ -218,7 +218,17 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                                 PeerId.Coil(coilNum)
                                               )
                                         ),
-                                        persistence
+                                        persistence,
+                                        // This suite drives the pull chains, not the join
+                                        // exchange. Raise rather than answer, so a later change
+                                        // that does send `Join.Connected` here fails loudly
+                                        // instead of silently taking a stubbed decision.
+                                        connected =>
+                                            IO.raiseError(
+                                              RuntimeException(
+                                                s"no join exchange in this suite: $connected"
+                                              )
+                                            )
                                       )
                                     )
                                 } yield CoilParts(
@@ -260,8 +270,21 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                             // inject each coil peer's hard-acks in order.
                             _ <- system.waitForIdle()
                             acksByCoil = mkAcks(coilPeers.map(_.coilNum))
+                            // Persist before injecting, as the consensus actors do (CR4). The
+                            // outbound lane evicts from its in-memory outbox once the remote
+                            // acknowledges past an entry, and serves older ones from the journal;
+                            // an ack that never reached the journal makes that eviction fatal
+                            // (LaneOutbound.EvictedButUnservable, which stops the actor system).
+                            // `peerLiaisonOutboxDepth` is generated, so a small draw evicts before
+                            // the hub has drained and the whole run dies.
                             _ <- coilPeers.zip(acksByCoil).traverse_ { case (c, acks) =>
-                                acks.traverse_(c.coilLiaison ! _)
+                                acks.traverse_ { ack =>
+                                    persistence.arrivalStamp.flatMap(stamp =>
+                                        persistence.put(
+                                          JournalKey.HardAck(PeerId.Coil(c.coilNum), ack.hardAckNum)
+                                        )(JournalValue(stamp, ack))
+                                    ) >> (c.coilLiaison ! ack)
+                                }
                             }
                             // The up-relay-down cascade is pull-driven (GetMsgBatch round-trips
                             // plus resend ticks), so mailbox idleness does not imply delivery
@@ -284,17 +307,30 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
             .unsafeRunSync()
     }
 
-    /** Poll until `isSettled` holds (50 ms period, 15 s budget). Budget exhaustion returns normally
-      * — the caller's property then fails with its own labels showing the shortfall.
+    /** Poll until `isSettled` holds, then return. Exhausting the budget RAISES.
+      *
+      * Returning normally instead would let the caller's property fail on whatever partial state it
+      * happened to observe — "hub saw 1 ack" reads as a broken relay when the relay was merely
+      * unfinished, and sends the reader after a bug that is not there. The budget is generous
+      * because it is a liveness bound, not a performance assertion: only a relay that never
+      * completes should reach it.
       */
     private def settleOn(isSettled: IO[Boolean]): IO[Unit] = {
         val pollPeriod = 50.millis
+        val budget = 60.seconds
         def go(remaining: FiniteDuration): IO[Unit] =
             isSettled.flatMap { settled =>
-                if settled || remaining <= Duration.Zero then IO.unit
+                if settled then IO.unit
+                else if remaining <= Duration.Zero then
+                    IO.raiseError(
+                      IllegalStateException(
+                        s"the relay did not settle within $budget — the assertion below would" +
+                            " otherwise report whatever partial state this observed"
+                      )
+                    )
                 else IO.sleep(pollPeriod) >> go(remaining - pollPeriod)
             }
-        go(15.seconds)
+        go(budget)
     }
 
     private def peerIdsOf(acks: Vector[HardAck]): Set[PeerId] = acks.map(_.ackId.peerId).toSet

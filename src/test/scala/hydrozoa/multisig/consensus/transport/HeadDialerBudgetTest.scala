@@ -25,6 +25,17 @@ class HeadDialerBudgetTest extends AnyFunSuite {
 
     private given CardanoNetwork.Section = CardanoNetwork.Preview
 
+    /** A head identity for the fixtures; these suites are not about which head a peer is in. */
+    private val ownHead: HeadIdentity =
+        HeadIdentity(
+          hydrozoa.config.head.initialization.InitializationParameters.HeadId(
+            scalus.cardano.ledger.AssetName(scalus.uplc.builtin.ByteString.fromString("testhead"))
+          ),
+          scalus.cardano.ledger.Hash32.fromByteString(
+            scalus.uplc.builtin.ByteString.fromArray(Array.fill[Byte](32)(0x11))
+          )
+        )
+
     private val nPeers = PositiveInt.unsafeApply(2)
     private val ownId = HeadPeerId(HeadPeerNumber(0), nPeers)
     // Lower peerNum dials higher, so peer 0 is the dialer and peer 1 the remote.
@@ -83,6 +94,7 @@ class HeadDialerBudgetTest extends AnyFunSuite {
               HandshakeFixture.headWallet(0),
               HandshakeFixture.headPeers,
               HandshakeFixture.headParamsHash,
+              ownHead,
               List(remoteId),
               tracer
             )
@@ -143,15 +155,19 @@ class HeadDialerBudgetTest extends AnyFunSuite {
             HeadFrame.Challenge(HandshakeFixture.nonce, Some(ProtocolVersion.current + 1))
         val (attempts, events) =
             dial(Resource.eval(pinging(10.seconds, opening = other)), 5.seconds)
+        // `attempts` is counted when the socket connects, the refusal when it is traced, so the
+        // window can close with the last attempt's refusal still in flight. One short is the race,
+        // not a dialer that answered: an answered challenge would show as `DialerConnected`.
+        val refusals = events.count(_.isInstanceOf[DialerRefusedChallenge])
         assert(
           (
             attempts > 1,
-            events.count(_.isInstanceOf[DialerRefusedChallenge]) == attempts,
+            refusals >= attempts - 1 && refusals <= attempts,
             events.count(_.isInstanceOf[DialerConnected]),
             stalls(events)
           ) == (true, true, 0, 0),
           "every attempt must refuse the challenge and none may open a link; " +
-              s"dialed $attempts times, traced $events"
+              s"dialed $attempts times, refused $refusals, traced $events"
         )
     }
 

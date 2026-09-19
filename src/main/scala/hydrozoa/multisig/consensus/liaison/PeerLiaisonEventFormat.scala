@@ -29,6 +29,14 @@ object PeerLiaisonEventFormat:
                 debug(s"dropping stale reply batch=$received (outstanding=$outstanding)")
             case BatchRejected(batchNum, reason) =>
                 warn(s"rejecting reply batch=$batchNum: $reason")
+            case CoilSeeded(startStack, ownHardAck) =>
+                info(s"seeding coil at stack=$startStack, own hard-ack from $ownHardAck")
+            case CoilCaughtUp =>
+                info("coil is within catch-up range; serving it from where it stands")
+            case CoilNotSeeded(reason) =>
+                info(s"no start point to offer ($reason); coil bootstraps stack 0")
+            case JoinOfferTooLate(startStack) =>
+                warn(s"declining a start point at stack=$startStack: actors already running")
             case CoilHardAckHeadRefused(hub, askedStack, ceilingStack) =>
                 debug(
                   s"coil-hard-ack lane head refused: hub=$hub askedStack=$askedStack " +

@@ -62,6 +62,7 @@ final class WsPeerTransport private (
     private val ownWallet: PeerWallet,
     private val headPeers: HeadPeers.Section,
     private val headParamsHash: Hash32,
+    private val ownHead: HeadIdentity,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
     private val keepAlivePing: FiniteDuration,
@@ -163,7 +164,13 @@ final class WsPeerTransport private (
                             case ProtocolVersion.Check.Compatible =>
                                 val handshakeLine = HeadFrame.encode(
                                   HeadFrame.Handshake
-                                      .own(ownPeerId.peerNum, ownWallet, headParamsHash, nonce)
+                                      .own(
+                                        ownPeerId.peerNum,
+                                        ownWallet,
+                                        headParamsHash,
+                                        nonce,
+                                        ownHead
+                                      )
                                 )
                                 handshook.complete(()).flatMap {
                                     case true =>
@@ -227,12 +234,23 @@ final class WsPeerTransport private (
         peerNum: Int,
         protocolVersion: Option[Int],
         auth: HandshakeAuth,
-        nonce: HandshakeNonce
+        nonce: HandshakeNonce,
+        head: Option[HeadIdentity]
     ): Either[HandshakeRefusal, HeadPeerId] = {
         val ownPn: Int = ownPeerId.peerNum
         ProtocolVersion.check(protocolVersion) match {
             case ProtocolVersion.Check.Incompatible(found, expected) =>
                 Left(HandshakeRefusal.ProtocolVersionMismatch(found, expected))
+            // Head identity after version, before topology: the version is what makes these
+            // fields comparable at all, and a peer in another head has no business being placed
+            // in this one's topology.
+            case ProtocolVersion.Check.Compatible
+                if HeadIdentity.check(head, ownHead) != HeadIdentity.Check.Compatible =>
+                Left(
+                  HandshakeRefusal.WrongHead(
+                    HeadIdentity.describe(HeadIdentity.check(head, ownHead))
+                  )
+                )
             // Topology: the server only accepts inbound from lower-numbered peers. It was never
             // authentication — it is the dial rule, and it stays because two peers dialing each
             // other would build two links where the mesh has one.
@@ -293,8 +311,8 @@ final class WsPeerTransport private (
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     HeadFrame.parse(s) match {
-                        case Right(HeadFrame.Handshake(peerNum, protocolVersion, auth)) =>
-                            val verdict = admit(peerNum, protocolVersion, auth, nonce)
+                        case Right(HeadFrame.Handshake(peerNum, protocolVersion, auth, head)) =>
+                            val verdict = admit(peerNum, protocolVersion, auth, nonce, head)
                             // One nonce, one handshake: a socket that already has a verdict keeps
                             // it, so a replayed handshake cannot re-bind an established session.
                             verdictD.complete(verdict).flatMap {
@@ -387,6 +405,7 @@ object WsPeerTransport {
         ownWallet: PeerWallet,
         headPeers: HeadPeers.Section,
         headParamsHash: Hash32,
+        ownHead: HeadIdentity,
         remoteIds: List[HeadPeerId],
         tracer: ContraTracer[IO, PeerTransportEvent],
         keepAlivePing: FiniteDuration = NodeWsServer.defaultKeepAlivePing,
@@ -401,6 +420,7 @@ object WsPeerTransport {
           ownWallet,
           headPeers,
           headParamsHash,
+          ownHead,
           outboxes,
           inboundRef,
           keepAlivePing,

@@ -1,11 +1,13 @@
 package hydrozoa.multisig.consensus.transport
 
 import hydrozoa.config.head.coil.CoilPeers
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerWallet}
 import io.circe.syntax.*
-import scalus.cardano.ledger.{Blake2b_256, Hash, Hash32}
+import scalus.cardano.ledger.{AssetName, Blake2b_256, Hash, Hash32}
 import scalus.uplc.builtin.ByteString
 import scodec.bits.ByteVector
 import test.{SeedPhrase, TestPeers}
@@ -44,6 +46,17 @@ object HandshakeFixture {
 
     /** What a peer running a different head config carries. */
     val otherHeadParamsHash: Hash32 = digestOf(0x22)
+
+    /** The head identity both ends of a link are expected to agree on. Pairs with
+      * [[headParamsHash]]: a fixed value, since nothing here exercises how it is derived.
+      */
+    val ownHead: HeadIdentity =
+        HeadIdentity(HeadId(AssetName(ByteString.fromString("fixture"))), headParamsHash)
+
+    /** What a coil claims about where it stands. Nothing here exercises the claim, only that it
+      * survives the round trip, so a fixed pair stands in.
+      */
+    val marks: Join.Connected = Join.Connected(None, None)
 
     /** A fixed nonce, for the cases that need the two ends to be looking at the same one. */
     val nonce: HandshakeNonce = nonceOf(0xaa)

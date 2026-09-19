@@ -12,7 +12,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, HardConfirmedHighWater, SlowConsensusActor, SoftConfirmedHighWater, StackComposer, UserRequestWithId}
@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
-import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.{AdoptedStartPoint, JournalKey, JournalValue, Persistence, StoreKey, WriteBatch}
 
 /** A coil peer's single liaison toward its hub head peer (§5.5 of `docs/spec/coil-network.md`)
   * [doc-ref].
@@ -38,7 +38,7 @@ abstract class PeerLiaisonCoilToHub(
         PeerLiaisonCoilToHub.Connections,
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
-) extends Actor[IO, LiaisonProtocol.CoilToHubRequest] {
+) extends Actor[IO, LiaisonProtocol.CoilRequestServed] {
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codecs in `persistInbound` pick it up.
     private given CardanoNetwork.Section = config
@@ -363,15 +363,19 @@ abstract class PeerLiaisonCoilToHub(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, CoilToHubRequest] =
+    override def receive: Receive[IO, CoilRequestServed] =
         PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: CoilToHubRequest): IO[Unit] = req match {
-        case PreStart                   => preStartLocal
-        case ResendCurrent              => puller.resend
-        case pop: Population.New        => puller.handleReply(pop)
-        case get: OwnHardAck.Get        => server.handleGet(get)
-        case ack: HardAck               => ownHardAckLane.append(ack) >> server.afterAppend
+    private def receiveTotal(req: CoilRequestServed): IO[Unit] = req match {
+        case PreStart            => preStartLocal
+        case ResendCurrent       => puller.resend
+        case pop: Population.New => puller.handleReply(pop)
+        case get: OwnHardAck.Get => server.handleGet(get)
+        case ack: HardAck        => ownHardAckLane.append(ack) >> server.afterAppend
+        case offer: Join.Offer   => declineLateOffer(offer)
+        // The ordinary answer, and by the time it reaches this actor the boot that wanted it has
+        // long since proceeded without it. Nothing to do and nothing wrong.
+        case _: Join.NoOffer            => IO.unit
         case hw: SoftConfirmedHighWater =>
             // Merge by max: a block carries only the authors that appear in it, and blocks arrive
             // in order but the notification is advisory, never a cursor.
@@ -388,6 +392,19 @@ abstract class PeerLiaisonCoilToHub(
             hardConfirmedStack.update(cur => Ordering[StackNumber].max(cur, hc.stackNum))
     }
 
+    /** Decline an offer that arrived too late to act on — the only thing this actor can do with
+      * one. A start point is adopted before the node's actors exist: `L2Ledger.importState` takes
+      * an imported state only into a ledger that has applied nothing, and by the time a liaison
+      * receives anything the transport has taken the real answer and `JointLedger` and
+      * `StackComposer` have positioned themselves off this store.
+      *
+      * The arm exists rather than being dropped from the union because `CoilRequestServed` is also
+      * the hub's send-side vocabulary (see [[LiaisonProtocol]]), and without it a hub that
+      * redecides mid-link would kill this actor with a `MatchError`.
+      */
+    private def declineLateOffer(offer: Join.Offer): IO[Unit] =
+        tracer.traceWith(PeerLiaisonEvent.JoinOfferTooLate(offer.startStack))
+
     private def preStartLocal: IO[Unit] =
         for {
             c <- resolveConnections
@@ -396,16 +413,40 @@ abstract class PeerLiaisonCoilToHub(
             // Restore only the own-hard-ack high-water; the lane serves older acks from the own
             // coil HardAck journal on demand (the Server half answers the hub's OwnHardAck.Get) and
             // replay re-appends the in-flight tail. An empty store leaves the lane cold.
-            highWater <- ownHardAckBacking.highWater
+            journalHighWater <- ownHardAckBacking.highWater
+            // ...unless this peer was seeded, in which case cold is fatal. Its hub pulls from the
+            // index the start point named, and a lane whose bound is below what the hub asks for
+            // reports out of bounds — which terminates the node. The start point's high-water is
+            // what makes that first pull the lane's NEXT number instead of one past its end.
+            startPoint <- persistence.get(StoreKey.StartPoint)
+            highWater = journalHighWater.orElse(startPoint.flatMap(_.ownHardAckHighWater))
             _ <- ownHardAckLane.seedHighWater(highWater)
             // Restore each inbound population cursor to next(max received), so on reconnect we pull
             // only NEW entries — verify rejects a stale re-serve, which would otherwise re-dispatch
             // to the consensus actors that ReplayActor already re-fed (CR8 persisted each inbound
             // entry before its cursor advanced).
             _ <- restoreInboundCursors
+            _ <- restoreCeilingAnchors(startPoint)
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
+
+    /** Move the pull ceilings' anchors up to the start point a seeded coil was seated at.
+      *
+      * Every ceiling is measured from this peer's own confirmed progress, and cold means "nothing
+      * confirmed yet" — the tightest correct bound for a peer that really has confirmed nothing. A
+      * seeded coil has confirmed exactly the start point, and leaving the anchors cold while
+      * [[restoreInboundCursors]] puts the cursors at the start point deadlocks the link: the
+      * cursors sit above ceilings measured from zero, the hub truncates every lane to nothing, and
+      * no confirmation ever arrives to lift them. A peer with own history has these delivered by
+      * its consensus actors instead, so there is nothing to restore.
+      */
+    private def restoreCeilingAnchors(startPoint: Option[AdoptedStartPoint]): IO[Unit] =
+        startPoint.traverse_(sp =>
+            softConfirmedBlock.set(sp.lastBlockNum)
+                >> hardConfirmedStack.set(sp.startStack)
+                >> confirmedRequestHighWater.set(sp.requestHighWater)
+        )
 
     /** Restore the inbound population lanes' receive cursors to `next(max(persisted journal))` (the
       * full population the coil peer pulls from the hub). An empty store leaves a lane at its cold
@@ -413,22 +454,63 @@ abstract class PeerLiaisonCoilToHub(
       */
     private def restoreInboundCursors: IO[Unit] =
         val backend = persistence.backend
-        for {
-            _ <- LaneIncomingCursors.block(backend).flatMap(blockLane.restoreCursor)
-            _ <- LaneIncomingCursors.stack(backend).flatMap(stackLane.restoreCursor)
-            _ <- requestLanes.toList.traverse_ { case (h, l) =>
-                LaneIncomingCursors.request(backend, h).flatMap(l.restoreCursor)
-            }
-            _ <- softAckLanes.toList.traverse_ { case (h, l) =>
-                LaneIncomingCursors.softAck(backend, h).flatMap(l.restoreCursor)
-            }
-            _ <- headHardAckLanes.toList.traverse_ { case (h, l) =>
-                LaneIncomingCursors.hardAck(backend, PeerId.Head(h)).flatMap(l.restoreCursor)
-            }
-            _ <- coilHardAckLanes.toList.traverse_ { case (h, l) =>
-                LaneIncomingCursors.hubHardAck(backend, h).flatMap(l.restoreCursor)
-            }
-        } yield ()
+        // A seeded coil starts where its hub put it, not at the cold head of each lane. The offer's
+        // cursor set is the only place those indices exist: the journals are empty, and the
+        // hard-ack ones are a lookup in the hub's journals rather than arithmetic on the start
+        // point. Absent a start point every lane falls back to its own cold cursor, as before.
+        persistence.get(StoreKey.StartPoint).flatMap { startPoint =>
+            val start = startPoint.map(_.cursors)
+            for {
+                _ <- LaneIncomingCursors
+                    .block(backend)
+                    .flatMap(blockLane.restoreCursor(_, start.fold(BlockNumber(1))(_.block)))
+                _ <- LaneIncomingCursors
+                    .stack(backend)
+                    .flatMap(stackLane.restoreCursor(_, start.fold(StackNumber(1))(_.stack)))
+                _ <- requestLanes.toList.traverse_ { case (h, l) =>
+                    LaneIncomingCursors
+                        .request(backend, h)
+                        .flatMap(
+                          l.restoreCursor(
+                            _,
+                            start.flatMap(_.requests.get(h)).getOrElse(RequestNumber.zero)
+                          )
+                        )
+                }
+                _ <- softAckLanes.toList.traverse_ { case (h, l) =>
+                    LaneIncomingCursors
+                        .softAck(backend, h)
+                        .flatMap(
+                          l.restoreCursor(
+                            _,
+                            start
+                                .flatMap(_.softAcks.get(h))
+                                .getOrElse(SoftAckNumber.zero.increment)
+                          )
+                        )
+                }
+                _ <- headHardAckLanes.toList.traverse_ { case (h, l) =>
+                    LaneIncomingCursors
+                        .hardAck(backend, PeerId.Head(h))
+                        .flatMap(
+                          l.restoreCursor(
+                            _,
+                            start.flatMap(_.headHardAcks.get(h)).getOrElse(HardAckNumber.zero)
+                          )
+                        )
+                }
+                _ <- coilHardAckLanes.toList.traverse_ { case (h, l) =>
+                    LaneIncomingCursors
+                        .hubHardAck(backend, h)
+                        .flatMap(
+                          l.restoreCursor(
+                            _,
+                            start.flatMap(_.coilHardAcks.get(h)).getOrElse(HubHardAckNumber.zero)
+                          )
+                        )
+                }
+            } yield ()
+        }
 
     private def startResendTimer: IO[Unit] =
         (IO.sleep(
@@ -477,7 +559,7 @@ object PeerLiaisonCoilToHub {
       */
     val coilHardAckStackWindow: Int = 20
 
-    type Handle = ActorRef[IO, LiaisonProtocol.CoilToHubRequest]
+    type Handle = ActorRef[IO, LiaisonProtocol.CoilRequestServed]
 
     /** The local actors a verified population reply routes to, plus the send path to the hub's
       * counterpart liaison.

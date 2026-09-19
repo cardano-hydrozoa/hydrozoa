@@ -39,6 +39,10 @@ object InMemoryL2Store:
         frozenAt: Ref[IO, Option[L2CommandNumber]]
     ) extends L2Store[IO]:
 
+        override def wipe: IO[Unit] =
+            log.set(TreeMap.empty) >> snapshots.set(TreeMap.empty) >> tip.set(None) >>
+                frozenAt.set(None)
+
         override def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand): IO[Unit] =
             log.update(_.updated(commandNumber, command))
 

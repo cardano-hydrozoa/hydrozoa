@@ -33,6 +33,7 @@
          they are doing — `hydrozoa evacuate` runs both. -->
     <logger name="RuleBasedActor" level="info"/>
     <logger name="CardanoLiaison" level="info"/>
+    <logger name="CoilJoin" level="info"/>
     <!-- Crash-recovery narration. These routes log under their own top-level names, so under root=warn
          the boot timeline is invisible: a warm restart that stalls waiting on the remote L2 ledger's
          restore (it rebuilds its whole log first) shows nothing until it errors. Route them at info so
