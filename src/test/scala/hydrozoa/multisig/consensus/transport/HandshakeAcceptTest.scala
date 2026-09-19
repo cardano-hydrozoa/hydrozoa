@@ -14,7 +14,7 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.{HttpRoutes, Uri}
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
 /** What the accept side of a liaison link does with a handshake, over a real Ember server and a
   * real WebSocket client.
@@ -239,6 +239,25 @@ class HandshakeAcceptTest extends AnyFunSuite {
             .toList
 
     /** One hub exchange: the opening frame, the frames that followed, and what the hub traced. */
+    /** Wait for the server's tracer write to land, bounded.
+      *
+      * `exchange` returns when the CLIENT has its reply; the server traces its verdict on its own
+      * fiber, so reading the ref straight after races it. Sampling once and finding `Vector()`
+      * reads as "the server said nothing" when it simply had not written yet.
+      *
+      * Returns whatever it has at the budget rather than raising: a caller asserting that nothing
+      * was traced is legitimate, and its assertion is the one that should speak.
+      */
+    private def awaitTraced[A](seen: Ref[IO, Vector[A]]): IO[Vector[A]] = {
+        val pollPeriod = 20.millis
+        def go(remaining: FiniteDuration): IO[Vector[A]] =
+            seen.get.flatMap { es =>
+                if es.nonEmpty || remaining <= Duration.Zero then IO.pure(es)
+                else IO.sleep(pollPeriod) >> go(remaining - pollPeriod)
+            }
+        go(5.seconds)
+    }
+
     private def runHub(
         reply: String => Option[String]
     ): (String, List[String], Vector[HubWsTransportEvent]) = {
@@ -246,7 +265,7 @@ class HandshakeAcceptTest extends AnyFunSuite {
             seen <- Ref[IO].of(Vector.empty[HubWsTransportEvent])
             tracer = ContraTracer[IO, HubWsTransportEvent](e => seen.update(_ :+ e))
             result <- hubLink(tracer).use { uri => exchange(uri)(reply) }
-            events <- seen.get
+            events <- awaitTraced(seen)
         } yield (result._1, result._2, events)
         prog.timeout(30.seconds).unsafeRunSync()
     }
@@ -258,7 +277,7 @@ class HandshakeAcceptTest extends AnyFunSuite {
             seen <- Ref[IO].of(Vector.empty[PeerTransportEvent])
             tracer = ContraTracer[IO, PeerTransportEvent](e => seen.update(_ :+ e))
             result <- meshLink(tracer).use { uri => exchange(uri)(reply) }
-            events <- seen.get
+            events <- awaitTraced(seen)
         } yield (result._1, result._2, events)
         prog.timeout(30.seconds).unsafeRunSync()
     }

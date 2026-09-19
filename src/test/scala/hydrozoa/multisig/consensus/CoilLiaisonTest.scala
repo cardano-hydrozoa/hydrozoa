@@ -294,17 +294,30 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
             .unsafeRunSync()
     }
 
-    /** Poll until `isSettled` holds (50 ms period, 15 s budget). Budget exhaustion returns normally
-      * — the caller's property then fails with its own labels showing the shortfall.
+    /** Poll until `isSettled` holds, then return. Exhausting the budget RAISES.
+      *
+      * Returning normally instead would let the caller's property fail on whatever partial state it
+      * happened to observe — "hub saw 1 ack" reads as a broken relay when the relay was merely
+      * unfinished, and sends the reader after a bug that is not there. The budget is generous
+      * because it is a liveness bound, not a performance assertion: only a relay that never
+      * completes should reach it.
       */
     private def settleOn(isSettled: IO[Boolean]): IO[Unit] = {
         val pollPeriod = 50.millis
+        val budget = 60.seconds
         def go(remaining: FiniteDuration): IO[Unit] =
             isSettled.flatMap { settled =>
-                if settled || remaining <= Duration.Zero then IO.unit
+                if settled then IO.unit
+                else if remaining <= Duration.Zero then
+                    IO.raiseError(
+                      IllegalStateException(
+                        s"the relay did not settle within $budget — the assertion below would" +
+                            " otherwise report whatever partial state this observed"
+                      )
+                    )
                 else IO.sleep(pollPeriod) >> go(remaining - pollPeriod)
             }
-        go(15.seconds)
+        go(budget)
     }
 
     private def peerIdsOf(acks: Vector[HardAck]): Set[PeerId] = acks.map(_.ackId.peerId).toSet
