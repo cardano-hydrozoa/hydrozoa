@@ -19,7 +19,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.{HeadMultisigRegimeManager, NoopActor}
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
@@ -270,8 +270,21 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                             // inject each coil peer's hard-acks in order.
                             _ <- system.waitForIdle()
                             acksByCoil = mkAcks(coilPeers.map(_.coilNum))
+                            // Persist before injecting, as the consensus actors do (CR4). The
+                            // outbound lane evicts from its in-memory outbox once the remote
+                            // acknowledges past an entry, and serves older ones from the journal;
+                            // an ack that never reached the journal makes that eviction fatal
+                            // (LaneOutbound.EvictedButUnservable, which stops the actor system).
+                            // `peerLiaisonOutboxDepth` is generated, so a small draw evicts before
+                            // the hub has drained and the whole run dies.
                             _ <- coilPeers.zip(acksByCoil).traverse_ { case (c, acks) =>
-                                acks.traverse_(c.coilLiaison ! _)
+                                acks.traverse_ { ack =>
+                                    persistence.arrivalStamp.flatMap(stamp =>
+                                        persistence.put(
+                                          JournalKey.HardAck(PeerId.Coil(c.coilNum), ack.hardAckNum)
+                                        )(JournalValue(stamp, ack))
+                                    ) >> (c.coilLiaison ! ack)
+                                }
                             }
                             // The up-relay-down cascade is pull-driven (GetMsgBatch round-trips
                             // plus resend ticks), so mailbox idleness does not imply delivery
