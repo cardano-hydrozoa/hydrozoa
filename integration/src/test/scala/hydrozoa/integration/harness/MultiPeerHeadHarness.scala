@@ -719,6 +719,21 @@ object MultiPeerHeadHarness:
                         .map(peerNum -> _)
                 )
                 .map(_.toMap)
+            // WS Phase 2 — bind NodeWsServers and start mesh + coil dialers. This has to be
+            // ACQUIRED before the coil MRMs: `Mrm.buildCoil` settles the coil's start point before
+            // spawning anything, and under WS the hub's answer travels the dialer started here.
+            // Start it after and the boot waits on a link its own boot is holding up.
+            //
+            // It still has to be RELEASED before the MRMs stop, or an inbound WS frame can reach an
+            // actor whose handler calls Persistence after the column-family handles were freed →
+            // use-after-free SIGSEGV in `FailIfCfHasTs`. So the release is memoized and registered
+            // twice: once below the coil MRMs, where it does the work, and once here as a safety
+            // net should a coil fail to build in between. The second call is a no-op. Direct mode
+            // allocates nothing either way.
+            releaseNetwork <- Resource.eval(
+              transports.bringUpNetwork.allocated.flatMap { case (_, release) => release.memoize }
+            )
+            _ <- Resource.onFinalize(releaseNetwork)
             coilMrms <- coilNodeConfigs
                 .traverse { coilConfig =>
                     val coilNum = Transport.coilNumOf(coilConfig)
@@ -736,12 +751,8 @@ object MultiPeerHeadHarness:
                         .map(coilNum -> _)
                 }
                 .map(_.toMap)
-            // WS Phase 2 — bind NodeWsServers and start mesh + coil dialers. Acquired *after*
-            // peerMrms/coilMrms so its finalizer (server stop + dialer cancel) runs *before*
-            // the MRMs stop their actors and close RocksDB. Otherwise an inbound WS frame can
-            // tell an actor whose handler calls Persistence after the column-family handles
-            // were freed → use-after-free SIGSEGV in `FailIfCfHasTs`. Direct mode: no-op.
-            _ <- transports.bringUpNetwork
+            // The network's real teardown point: registered below the MRMs so it runs before them.
+            _ <- Resource.onFinalize(releaseNetwork)
             peerConnections <- Resource.eval(
               peerMrms.toList
                   .traverse { case (peerNum, peerMrm) =>
