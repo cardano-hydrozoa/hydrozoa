@@ -62,17 +62,16 @@ object CoilJoin {
             map <- ledger.evacuationMapAt(offer.state.commandNumber).value.flatMap(IO.fromEither)
             stamp <- persistence.arrivalStamp
             lastBlockNum = offer.block.blockNum
+            startPoint = AdoptedStartPoint(
+              startStack = offer.startStack,
+              lastBlockNum = lastBlockNum,
+              commandNumber = offer.state.commandNumber,
+              ownHardAckStart = offer.ownHardAck,
+              cursors = offer.cursors
+            )
             _ <- persistence.write(
               WriteBatch.start
-                  .put(StoreKey.StartPoint)(
-                    AdoptedStartPoint(
-                      startStack = offer.startStack,
-                      lastBlockNum = lastBlockNum,
-                      commandNumber = offer.state.commandNumber,
-                      ownHardAckStart = offer.ownHardAck,
-                      cursors = offer.cursors
-                    )
-                  )
+                  .put(StoreKey.StartPoint)(startPoint)
                   .put(StoreKey.Treasury)(offer.settlement.treasuryProduced)
                   .put(StoreKey.EvacuationMap(lastBlockNum))(map)
                   // Everything the boot path reads AT THE ANCHOR BLOCK. The coil pulls from
@@ -82,9 +81,7 @@ object CoilJoin {
                   .put(JournalKey.Block(lastBlockNum))(JournalValue(stamp, offer.block))
                   .put(StoreKey.DepositMap(lastBlockNum))(offer.deposits)
                   .put(StoreKey.L2CommandNumber(lastBlockNum))(offer.state.commandNumber)
-                  // The hub read this key to build `cursors.requests`, so writing the cursors back
-                  // reconstitutes it exactly.
-                  .put(StoreKey.RequestHighWater(lastBlockNum))(offer.cursors.requests)
+                  .put(StoreKey.RequestHighWater(lastBlockNum))(startPoint.requestHighWater)
             )
         } yield ()
 

@@ -29,10 +29,12 @@ class CoilRejoinTest extends AnyFunSuite {
 
     test("a coil peer whose store is wiped rejoins from a start point and acks again") {
         val victim = CoilPeerNumber(0)
-        // A ceiling, not a duration: `kickUntilMajor` stops at the first hard-confirmed major,
-        // which is all a start point needs — kick requests alone only ever make minor blocks.
+        // Ceilings, not durations — see `kickUntil`. The run-up ends at the first major, which is
+        // all a start point needs; kick requests alone only ever make minor blocks. The clock is
+        // virtual and the seed fixed, so what each phase actually takes is deterministic and these
+        // only bound a phase that is not going to finish at all.
         val runUpCap = 12.minutes
-        val rejoinWindow = 60.seconds
+        val rejoinCap = 2.minutes
         val kickEvery = 10.seconds
 
         val state = Stage4Suite
@@ -57,18 +59,29 @@ class CoilRejoinTest extends AnyFunSuite {
           handle = MultiPeerHeadHarness.requestSequencerHandle,
         )
 
-        def kickFor(
+        /** Kick one head peer every `kickEvery` until `done`, giving up at `cap`.
+          *
+          * Bounded by the condition, not the horizon. Virtual time makes a long run cheap in wall
+          * clock but not in heap: every simulated minute journals real entries into four in-memory
+          * stores, and running past what the phase waits for buys only retained state. Each `cap`
+          * is wide enough that a head which never gets there fails on its own assertion below
+          * rather than hanging.
+          */
+        def kickUntil(
             harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
-            d: FiniteDuration
-        ) =
-            List
-                .range(0, (d / kickEvery).toInt)
-                .traverse_ { i =>
-                    IO.sleep(kickEvery) >> MultiPeerHeadHarness
-                        .submitKickRequest(harness, HeadPeerNumber(i % 2))
-                        .attempt
-                        .void
-                }
+            cap: FiniteDuration
+        )(done: IO[Boolean]): IO[Unit] =
+            val rounds = (cap / kickEvery).toInt
+            def go(i: Int): IO[Unit] =
+                if i >= rounds then IO.unit
+                else
+                    IO.sleep(kickEvery)
+                        >> MultiPeerHeadHarness
+                            .submitKickRequest(harness, HeadPeerNumber(i % 2))
+                            .attempt
+                            .void
+                        >> done.flatMap(d => IO.unlessA(d)(go(i + 1)))
+            go(0)
 
         // `Coil` exposes its backend, not a typed `Persistence`; build one to read the markers and
         // the start point back.
@@ -108,27 +121,6 @@ class CoilRejoinTest extends AnyFunSuite {
                         )
                 }
 
-        /** Kick until the head hard-confirms a major, giving up at `cap`.
-          *
-          * Bounded by the condition, not the horizon. Virtual time makes a long run-up cheap in
-          * wall clock but not in heap: every simulated minute journals real entries into four
-          * in-memory stores, and running past the major a start point needs buys only retained
-          * state — enough of it to exhaust the forked test JVM. `cap` is wide enough that a head
-          * which never settles still fails on `majorMade` rather than hanging.
-          */
-        def kickUntilMajor(
-            harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
-            cap: FiniteDuration
-        ): IO[Unit] =
-            val rounds = (cap / kickEvery).toInt
-            def go(i: Int): IO[Unit] =
-                if i >= rounds then IO.unit
-                else
-                    kickFor(harness, kickEvery) >> sawMajor(
-                      harness.peers(HeadPeerNumber(0)).backendStore
-                    ).flatMap(seen => IO.unlessA(seen)(go(i + 1)))
-            go(0)
-
         def readState(store: hydrozoa.multisig.persistence.BackendStore[IO]) =
             hydrozoa.multisig.persistence.Persistence
                 .fromBackend(store, persistenceTracer)
@@ -139,13 +131,19 @@ class CoilRejoinTest extends AnyFunSuite {
         val program =
             MultiPeerHeadHarness.resource(inputs, hooks).use { harness =>
                 for
-                    _ <- kickUntilMajor(harness, runUpCap)
+                    _ <- kickUntil(harness, runUpCap)(
+                      sawMajor(harness.peers(HeadPeerNumber(0)).backendStore)
+                    )
                     // Where the coil stood before the wipe, and how far the head had got.
                     majorMade <- sawMajor(harness.peers(HeadPeerNumber(0)).backendStore)
                     before <- readState(harness.coils(victim).backendStore)
                     (beforeWipe, _) = before
                     rejoined <- harness.rejoinCoilPeer(victim)
-                    _ <- kickFor(harness, rejoinWindow)
+                    // The rejoin is done the moment the coil acks for the head again — that is
+                    // what it came back to do, and what the assertion below reads.
+                    _ <- kickUntil(harness, rejoinCap)(
+                      readState(rejoined.backendStore).map(_._1.hardAckedStack.isDefined)
+                    )
                     errors <- harness.sutErrors.get
                     afterPair <- readState(rejoined.backendStore)
                     (after, startPoint) = afterPair

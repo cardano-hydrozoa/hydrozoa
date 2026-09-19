@@ -2,7 +2,9 @@ package hydrozoa.multisig.persistence
 
 import hydrozoa.multisig.consensus.ack.HardAckNumber
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Population
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l2.L2CommandNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 
@@ -53,4 +55,18 @@ final case class AdoptedStartPoint(
       */
     def ownHardAckHighWater: Option[HardAckNumber] =
         Option.when((ownHardAckStart: Int) > 0)(HardAckNumber((ownHardAckStart: Int) - 1))
+
+    /** The per-author request high-water this start point implies: one below the first number each
+      * request lane will pull. `BlockWeaver`'s contiguity gate and the replay floor both read a
+      * high-water, and [[cursors]] carries the cursor, so the step is taken here rather than at
+      * each reader.
+      *
+      * An author absent from the result has had nothing included — which is how both readers spell
+      * "this stream opens at [[RequestNumber.zero]]", and why a lane opening at zero drops out
+      * instead of claiming request zero was already counted.
+      */
+    def requestHighWater: Map[HeadPeerNumber, RequestNumber] =
+        cursors.requests.collect {
+            case (peer, first) if (first: Long) > 0L => peer -> first.previousOrZero
+        }
 }

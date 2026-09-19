@@ -237,8 +237,10 @@ object CoilStartPoint:
     /** Every population cursor the coil adopts, assembled from the start point.
       *
       * Mostly lookup rather than arithmetic, because a cursor read from the journal a lane actually
-      * serves cannot drift from it. The one arithmetic case is safe: `SoftAck.ackNum` IS the block
-      * number (one soft-ack per block), so the two coincide by construction.
+      * serves cannot drift from it. Two arithmetic cases are safe: `SoftAck.ackNum` IS the block
+      * number (one soft-ack per block), so the two coincide by construction; and a request lane
+      * cursor is its author's high-water `+ 1`, the same step `BlockWeaver`'s gate and the replay
+      * floor take (see [[RequestCursors]]).
       */
     private def cursorsAt(
         stack: StackNumber,
@@ -262,7 +264,12 @@ object CoilStartPoint:
               blockCeiling = BlockNumber((block: Int) + config.backpressureCoefficient),
               stack = stack.increment,
               stackCeiling = StackNumber((stack: Int) + 1),
-              requests = peers.map(h => h -> highWater.getOrElse(h, RequestNumber(0))).toMap,
+              // A cursor names the next number wanted, and `highWater` is the last one included:
+              // a peer that has authored requests resumes one past it, one that has authored none
+              // opens at zero — exactly what `RequestCursors` expects next on the other side.
+              requests = peers
+                  .map(h => h -> highWater.get(h).fold(RequestNumber.zero)(_.increment))
+                  .toMap,
               requestCeilings = peers.map { h =>
                   val confirmed = highWater.getOrElse(h, RequestNumber(0))
                   h -> RequestNumber(

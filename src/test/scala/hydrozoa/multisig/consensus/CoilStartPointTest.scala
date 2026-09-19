@@ -14,6 +14,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.{SettlementTx, TxSignature, genSettlementTxSeqBuilder}
@@ -297,6 +298,38 @@ class CoilStartPointTest extends AnyFunSuite:
                     assert(
                       (offer.cursors.block: Int) == (offer.block.blockNum: Int) + 1,
                       s"cursors open at ${offer.cursors.block}, anchor is ${offer.block.blockNum}"
+                    )
+                case other => fail(s"expected an Offer, got $other")
+            }
+        )
+    }
+
+    test("request lanes open one past the high-water, and at zero for an author with nothing in") {
+        // A cursor names the next number wanted. Seeded at the high-water itself, the coil's first
+        // pull replays a request the hub already counted, and `RequestCursors` stops the weaver on
+        // a stream it reads as repeated.
+        withStore(p =>
+            for {
+                _ <- seedStack(p, stack = 1, majorEffects)
+                peers = nodeConfig.headPeerNums.toList
+                author = peers.head
+                _ <- p.put(StoreKey.RequestHighWater(BlockNumber(1)))(
+                  Map(author -> RequestNumber(5))
+                )
+                r <- decide(p, coilStack = None)
+            } yield r match {
+                case CoilStartPoint.Offer(offer) =>
+                    val _ = assert(
+                      offer.cursors.requests.get(author).map(n => n: Long).contains(6L),
+                      s"peer $author had 5 included, so its lane opens at 6 — got" +
+                          s" ${offer.cursors.requests.get(author)}"
+                    )
+                    assert(
+                      peers.tail.forall(
+                        offer.cursors.requests.get(_).map(n => n: Long).contains(0L)
+                      ),
+                      "an author with nothing included opens at zero — got" +
+                          s" ${offer.cursors.requests}"
                     )
                 case other => fail(s"expected an Offer, got $other")
             }

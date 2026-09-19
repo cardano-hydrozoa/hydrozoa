@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
-import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{AdoptedStartPoint, JournalKey, JournalValue, Persistence, StoreKey, WriteBatch}
 
 /** A coil peer's single liaison toward its hub head peer (§5.5 of `docs/spec/coil-network.md`)
   * [doc-ref].
@@ -426,9 +426,27 @@ abstract class PeerLiaisonCoilToHub(
             // to the consensus actors that ReplayActor already re-fed (CR8 persisted each inbound
             // entry before its cursor advanced).
             _ <- restoreInboundCursors
+            _ <- restoreCeilingAnchors(startPoint)
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
+
+    /** Move the pull ceilings' anchors up to the start point a seeded coil was seated at.
+      *
+      * Every ceiling is measured from this peer's own confirmed progress, and cold means "nothing
+      * confirmed yet" — the tightest correct bound for a peer that really has confirmed nothing. A
+      * seeded coil has confirmed exactly the start point, and leaving the anchors cold while
+      * [[restoreInboundCursors]] puts the cursors at the start point deadlocks the link: the
+      * cursors sit above ceilings measured from zero, the hub truncates every lane to nothing, and
+      * no confirmation ever arrives to lift them. A peer with own history has these delivered by
+      * its consensus actors instead, so there is nothing to restore.
+      */
+    private def restoreCeilingAnchors(startPoint: Option[AdoptedStartPoint]): IO[Unit] =
+        startPoint.traverse_(sp =>
+            softConfirmedBlock.set(sp.lastBlockNum)
+                >> hardConfirmedStack.set(sp.startStack)
+                >> confirmedRequestHighWater.set(sp.requestHighWater)
+        )
 
     /** Restore the inbound population lanes' receive cursors to `next(max(persisted journal))` (the
       * full population the coil peer pulls from the hub). An empty store leaves a lane at its cold
