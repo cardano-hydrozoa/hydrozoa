@@ -68,9 +68,16 @@ object LiaisonProtocol {
       * hub's pull of this coil peer's own hard-ack ([[BatchMessages.OwnHardAck.Get]]). Accepts only
       * its own `HardAck` to append.
       *
-      * [[BatchMessages.Join.Offer]] or [[BatchMessages.Join.NoOffer]] is the hub's answer to this
-      * coil's handshake. Both normally reach the transport at boot rather than this actor; one
-      * arriving here is late, and declined.
+      * [[BatchMessages.Join.Offer]] and [[BatchMessages.Join.NoOffer]] are here because this union
+      * is also the element type of [[CoilToHubHandle]], which is the **hub's** remote-facing handle
+      * — the hub sends the answer by `remote ! offer`, and the transport puts it on the wire. They
+      * are in the vocabulary for the send side, not because this actor wants them.
+      *
+      * On the receive side the transport takes the real answer at boot, before these actors exist,
+      * so one reaching the actor is a late redial and can only be declined. Removing the two cases
+      * means removing them from this union, which breaks the hub's send: separating "what a coil
+      * liaison accepts" from "what a hub may send a coil" is the fix, and it is a refactor of these
+      * handle types rather than a tidy-up.
       *
       * It also accepts the two local confirmation notifications its pull ceilings are anchored on
       * (design/liaison-backpressure.md).

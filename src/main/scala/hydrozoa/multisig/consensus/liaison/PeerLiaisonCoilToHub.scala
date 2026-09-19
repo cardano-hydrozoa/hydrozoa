@@ -402,6 +402,15 @@ abstract class PeerLiaisonCoilToHub(
       * that matters happens at boot, and this arm exists to keep a late offer from killing the
       * actor with a `MatchError` — a hub that redecides mid-link is refused, not obeyed.
       */
+    /** Decline an offer that arrived too late to use.
+      *
+      * This is the only thing this actor can do with one. A start point is adopted at boot or not
+      * at all, and by the time an offer reaches here the store is past the point where adopting is
+      * possible — the transport took the real answer before these actors existed.
+      *
+      * The case exists rather than being dropped from the union because [[LiaisonProtocol]]'s
+      * `CoilToHubRequest` is also the hub's send-side vocabulary. See the note there.
+      */
     private def declineLateOffer(offer: Join.Offer): IO[Unit] =
         tracer.traceWith(PeerLiaisonEvent.JoinOfferTooLate(offer.startStack))
 

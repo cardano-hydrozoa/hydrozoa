@@ -93,6 +93,10 @@ final class CoilPeerWsTransport private (
         payload match {
             // The first answer is what boot is waiting on; `complete` has one winner, so a second
             // one falls through to the liaison and is declined there.
+            //
+            // Handling the late one here instead would be tidier — the liaison can only decline it
+            // — but the two `Join` cases cannot leave `CoilToHubRequest` while that union is also
+            // the hub's send-side handle type. See `LiaisonProtocol.CoilToHubRequest`.
             case a @ (_: Join.Offer | _: Join.NoOffer) =>
                 answer.complete(a).flatMap(won => IO.unlessA(won)(toLiaison(a)))
             // Only the hub-emitted subset is valid inbound here.
