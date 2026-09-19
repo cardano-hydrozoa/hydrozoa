@@ -26,7 +26,7 @@ trait CoilTransport {
     def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit]
 
     /** Enqueue a coil→hub batch for delivery to the hub. */
-    def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit]
+    def send(request: LiaisonProtocol.HubRequestServed): IO[Unit]
 
     /** Announce where this coil stands, before [[joinAnswer]] is read.
       *
@@ -69,7 +69,7 @@ final class CoilPeerWsTransport private (
     override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
         inboundRef.set(Some(localLiaison))
 
-    override def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit] =
+    override def send(request: LiaisonProtocol.HubRequestServed): IO[Unit] =
         CoilFrame.fromWire(request) match {
             case Some(wire) => outbox.offer(CoilFrame.encode(CoilFrame.Msg(wire)))
             case None       => tracer.traceWith(DroppingNonWireRequest(request))
@@ -83,7 +83,7 @@ final class CoilPeerWsTransport private (
 
     override def joinAnswer: IO[Join.Answer] = answer.get
 
-    private def toLiaison(request: LiaisonProtocol.CoilToHubRequest): IO[Unit] =
+    private def toLiaison(request: LiaisonProtocol.CoilRequestServed): IO[Unit] =
         inboundRef.get.flatMap {
             case Some(liaison) => liaison ! request
             case None          => tracer.traceWith(NoLiaisonForInbound)
@@ -95,8 +95,8 @@ final class CoilPeerWsTransport private (
             // one falls through to the liaison and is declined there.
             //
             // Handling the late one here instead would be tidier — the liaison can only decline it
-            // — but the two `Join` cases cannot leave `CoilToHubRequest` while that union is also
-            // the hub's send-side handle type. See `LiaisonProtocol.CoilToHubRequest`.
+            // — but the two `Join` cases cannot leave `CoilRequestServed` while that union is also
+            // the hub's send-side handle type. See `LiaisonProtocol.CoilRequestServed`.
             case a @ (_: Join.Offer | _: Join.NoOffer) =>
                 answer.complete(a).flatMap(won => IO.unlessA(won)(toLiaison(a)))
             // Only the hub-emitted subset is valid inbound here.

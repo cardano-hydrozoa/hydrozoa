@@ -18,7 +18,7 @@ object HubWsTransportEvent:
     /** `send` was called with a request variant that cannot be serialised over the wire. */
     final case class DroppingNonWireRequest(
         coil: CoilPeerNumber,
-        request: LiaisonProtocol.CoilToHubRequest
+        request: LiaisonProtocol.CoilRequestServed
     ) extends HubWsTransportEvent
 
     /** An inbound frame arrived from a coil peer that has no registered local liaison. */

@@ -38,7 +38,7 @@ abstract class PeerLiaisonCoilToHub(
         PeerLiaisonCoilToHub.Connections,
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
-) extends Actor[IO, LiaisonProtocol.CoilToHubRequest] {
+) extends Actor[IO, LiaisonProtocol.CoilRequestServed] {
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codecs in `persistInbound` pick it up.
     private given CardanoNetwork.Section = config
@@ -363,10 +363,10 @@ abstract class PeerLiaisonCoilToHub(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, CoilToHubRequest] =
+    override def receive: Receive[IO, CoilRequestServed] =
         PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: CoilToHubRequest): IO[Unit] = req match {
+    private def receiveTotal(req: CoilRequestServed): IO[Unit] = req match {
         case PreStart            => preStartLocal
         case ResendCurrent       => puller.resend
         case pop: Population.New => puller.handleReply(pop)
@@ -392,24 +392,15 @@ abstract class PeerLiaisonCoilToHub(
             hardConfirmedStack.update(cur => Ordering[StackNumber].max(cur, hc.stackNum))
     }
 
-    /** An offer that arrives once this liaison is running is too late to act on, and saying so is
-      * the point of this arm.
+    /** Decline an offer that arrived too late to act on — the only thing this actor can do with
+      * one. A start point is adopted before the node's actors exist: `L2Ledger.importState` takes
+      * an imported state only into a ledger that has applied nothing, and by the time a liaison
+      * receives anything the transport has taken the real answer and `JointLedger` and
+      * `StackComposer` have positioned themselves off this store.
       *
-      * A start point is adopted **before** the node's actors exist, not while they run: the L2
-      * ledger accepts an imported state only into a ledger that has applied nothing
-      * (`L2Ledger.importState`), and `JointLedger` and `StackComposer` have already positioned
-      * themselves off this store by the time any liaison receives anything. So the join exchange
-      * that matters happens at boot, and this arm exists to keep a late offer from killing the
-      * actor with a `MatchError` — a hub that redecides mid-link is refused, not obeyed.
-      */
-    /** Decline an offer that arrived too late to use.
-      *
-      * This is the only thing this actor can do with one. A start point is adopted at boot or not
-      * at all, and by the time an offer reaches here the store is past the point where adopting is
-      * possible — the transport took the real answer before these actors existed.
-      *
-      * The case exists rather than being dropped from the union because [[LiaisonProtocol]]'s
-      * `CoilToHubRequest` is also the hub's send-side vocabulary. See the note there.
+      * The arm exists rather than being dropped from the union because `CoilRequestServed` is also
+      * the hub's send-side vocabulary (see [[LiaisonProtocol]]), and without it a hub that
+      * redecides mid-link would kill this actor with a `MatchError`.
       */
     private def declineLateOffer(offer: Join.Offer): IO[Unit] =
         tracer.traceWith(PeerLiaisonEvent.JoinOfferTooLate(offer.startStack))
@@ -550,7 +541,7 @@ object PeerLiaisonCoilToHub {
       */
     val coilHardAckStackWindow: Int = 20
 
-    type Handle = ActorRef[IO, LiaisonProtocol.CoilToHubRequest]
+    type Handle = ActorRef[IO, LiaisonProtocol.CoilRequestServed]
 
     /** The local actors a verified population reply routes to, plus the send path to the hub's
       * counterpart liaison.

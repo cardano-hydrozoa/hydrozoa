@@ -11,9 +11,9 @@ import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
   */
 final class RemoteHubProxy private (
     uplink: CoilTransport,
-) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
+) extends Actor[IO, LiaisonProtocol.HubRequestServed] {
 
-    override def receive: Receive[IO, LiaisonProtocol.HubToCoilRequest] =
+    override def receive: Receive[IO, LiaisonProtocol.HubRequestServed] =
         PartialFunction.fromFunction(req => uplink.send(req))
 }
 

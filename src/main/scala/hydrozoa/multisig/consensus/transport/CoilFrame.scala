@@ -116,7 +116,7 @@ object CoilFrame {
       * artifacts, control ticks, and the transport-local [[Join.Connected]] never cross the wire).
       */
     def fromWire(
-        req: LiaisonProtocol.HubToCoilRequest | LiaisonProtocol.CoilToHubRequest
+        req: LiaisonProtocol.HubRequestServed | LiaisonProtocol.CoilRequestServed
     ): Option[Wire] =
         req match {
             case x: Join.Offer     => Some(x)

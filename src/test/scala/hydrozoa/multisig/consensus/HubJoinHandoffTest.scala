@@ -28,7 +28,7 @@ import test.MinorBlocks
 /** The hub's half of the join exchange: what [[PeerLiaisonHubToCoil]] does when a coil peer's link
   * comes up and announces where it stands.
   *
-  * ⚠️ **Why this suite exists at all.** `LiaisonProtocol.HubToCoilRequest` is a union type, and
+  * ⚠️ **Why this suite exists at all.** `LiaisonProtocol.HubRequestServed` is a union type, and
   * Scala does not check a match over one for exhaustiveness. Adding `Join.Connected` to the union
   * therefore compiled clean — including under `-Werror` — while leaving `receiveTotal` with no arm
   * for it, so the first coil to connect would have killed the liaison with a `MatchError`. Nothing
@@ -84,15 +84,15 @@ class HubJoinHandoffTest extends AnyFunSuite {
     )
 
     /** Records everything the hub sends down the link. */
-    private class Recorder(seen: Ref[IO, Vector[LiaisonProtocol.CoilToHubRequest]])
-        extends Actor[IO, LiaisonProtocol.CoilToHubRequest] {
-        override def receive: Receive[IO, LiaisonProtocol.CoilToHubRequest] =
+    private class Recorder(seen: Ref[IO, Vector[LiaisonProtocol.CoilRequestServed]])
+        extends Actor[IO, LiaisonProtocol.CoilRequestServed] {
+        override def receive: Receive[IO, LiaisonProtocol.CoilRequestServed] =
             PartialFunction.fromFunction(r => seen.update(_ :+ r))
     }
 
     /** Poll until the hub has answered the handshake, or give up loudly. */
     private def awaitAnswer(
-        seen: Ref[IO, Vector[LiaisonProtocol.CoilToHubRequest]]
+        seen: Ref[IO, Vector[LiaisonProtocol.CoilRequestServed]]
     ): IO[Unit] =
         def go: IO[Unit] =
             seen.get.flatMap(v =>
@@ -111,7 +111,7 @@ class HubJoinHandoffTest extends AnyFunSuite {
     private def onConnected(
         decide: Join.Connected => IO[CoilStartPoint],
         connected: Join.Connected = Join.Connected(Some(BlockNumber(1)), Some(StackNumber(1)))
-    ): Vector[LiaisonProtocol.CoilToHubRequest] = {
+    ): Vector[LiaisonProtocol.CoilRequestServed] = {
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
         InMemoryBackendStore
             .open(persistenceTracer)
@@ -119,7 +119,7 @@ class HubJoinHandoffTest extends AnyFunSuite {
                 Persistence.fromBackend(backend, persistenceTracer).flatMap { persistence =>
                     ActorSystem[IO]("hub-join-test").use { system =>
                         for {
-                            seen <- Ref[IO].of(Vector.empty[LiaisonProtocol.CoilToHubRequest])
+                            seen <- Ref[IO].of(Vector.empty[LiaisonProtocol.CoilRequestServed])
                             remote <- system.actorOf(new Recorder(seen))
                             slow <- system.actorOf(NoopActor[SlowConsensusActor.Request])
                             sequencer <- system.actorOf(NoopActor[CoilAckSequencer.Request])
@@ -151,7 +151,7 @@ class HubJoinHandoffTest extends AnyFunSuite {
     }
 
     private def offers(
-        out: Vector[LiaisonProtocol.CoilToHubRequest]
+        out: Vector[LiaisonProtocol.CoilRequestServed]
     ): Vector[Join.Offer] = out.collect { case o: Join.Offer => o }
 
     test("a connected coil that needs seeding is sent the offer") {

@@ -59,7 +59,7 @@ object LiaisonProtocol {
       * the link turns an accepted handshake into it so the start-point decision is made where the
       * store is, not in the transport.
       */
-    type HubToCoilRequest =
+    type HubRequestServed =
         Control | BatchMessages.Join.Connected | BatchMessages.Population.Get |
             BatchMessages.OwnHardAck.New |
             (BlockBrief.Next | StackBrief | UserRequestWithId | SoftAck | HardAck | HardAckWithId)
@@ -82,12 +82,12 @@ object LiaisonProtocol {
       * It also accepts the two local confirmation notifications its pull ceilings are anchored on
       * (design/liaison-backpressure.md).
       */
-    type CoilToHubRequest =
+    type CoilRequestServed =
         Control | BatchMessages.Join.Offer | BatchMessages.Join.NoOffer |
             BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck |
             SoftConfirmedHighWater | HardConfirmedHighWater
 
     type HeadToHeadHandle = ActorRef[IO, HeadToHeadRequest]
-    type HubToCoilHandle = ActorRef[IO, HubToCoilRequest]
-    type CoilToHubHandle = ActorRef[IO, CoilToHubRequest]
+    type HubToCoilHandle = ActorRef[IO, HubRequestServed]
+    type CoilToHubHandle = ActorRef[IO, CoilRequestServed]
 }

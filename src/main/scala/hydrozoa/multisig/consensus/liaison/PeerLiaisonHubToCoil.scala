@@ -42,7 +42,7 @@ abstract class PeerLiaisonHubToCoil(
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO],
     decideStartPoint: Join.Connected => IO[CoilStartPoint]
-) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
+) extends Actor[IO, LiaisonProtocol.HubRequestServed] {
 
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codec in `persistInbound` picks it up.
@@ -366,10 +366,10 @@ abstract class PeerLiaisonHubToCoil(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, HubToCoilRequest] =
+    override def receive: Receive[IO, HubRequestServed] =
         PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: HubToCoilRequest): IO[Unit] = req match {
+    private def receiveTotal(req: HubRequestServed): IO[Unit] = req match {
         case PreStart                  => preStartLocal
         case ResendCurrent             => puller.resend
         case get: Population.Get       => server.handleGet(get)
@@ -512,7 +512,7 @@ object PeerLiaisonHubToCoil {
     type Config =
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section
 
-    type Handle = ActorRef[IO, LiaisonProtocol.HubToCoilRequest]
+    type Handle = ActorRef[IO, LiaisonProtocol.HubRequestServed]
 
     /** The hub's quorum + relay-sequencer for the coil peer's inbound hard-ack, plus the send path
       * to the coil peer's counterpart liaison.
