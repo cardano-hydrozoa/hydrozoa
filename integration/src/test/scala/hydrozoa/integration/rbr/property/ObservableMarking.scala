@@ -36,6 +36,7 @@ object ObservableMarking:
           RegimeRef,
           DisputeScriptRef,
           TreasuryScriptRef,
+          RegimeScriptRef,
           SetupLadder,
           EvacuationOutput,
           WithdrawalOutput

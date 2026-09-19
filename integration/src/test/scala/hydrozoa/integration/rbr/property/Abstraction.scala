@@ -40,6 +40,7 @@ class RBRClassifier(using env: MultiNodeConfig) extends Classifier[RBRPlaceId, U
         val voteToken = env.headConfig.headTokenNames.voteTokenName
         val treasuryScriptInput = env.headConfig.rulebasedTreasuryScriptInput
         val disputeScriptInput = env.headConfig.disputeResolutionScriptInput
+        val regimeScriptInput = env.headConfig.rulebasedRegimeScriptInput
         val setupLadderInputs = env.headConfig.setupLadderInputs.toSet
         val regimeWitnessToken = env.headConfig.headTokenNames.regimeWitnessTokenName
         val collateralDatumMarker = RbrDatumSentinels.marker("collateral")
@@ -61,6 +62,7 @@ class RBRClassifier(using env: MultiNodeConfig) extends Classifier[RBRPlaceId, U
         List(
           (u: Utxo) => Option.when(u.input == treasuryScriptInput)(TreasuryScriptRef),
           (u: Utxo) => Option.when(u.input == disputeScriptInput)(DisputeScriptRef),
+          (u: Utxo) => Option.when(u.input == regimeScriptInput)(RegimeScriptRef),
           (u: Utxo) => Option.when(setupLadderInputs.contains(u.input))(SetupLadder),
           (u: Utxo) => Option.when(hasRegimeToken(u.output))(RegimeRef),
           // ResolvedTreasury / UnresolvedTreasury: carries treasury token; parse datum to distinguish

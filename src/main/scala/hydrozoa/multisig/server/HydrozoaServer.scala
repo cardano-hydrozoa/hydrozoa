@@ -8,7 +8,7 @@ import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.ConsensusStoreReader
+import hydrozoa.multisig.persistence.{ArchiveWatermarks, ConsensusStoreReader}
 import hydrozoa.multisig.server.HydrozoaHttpEvent.ServerStarted
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
@@ -59,6 +59,7 @@ object HydrozoaServer {
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
+        archiveWatermarks: Option[ArchiveWatermarks],
         headConfig: HeadConfig,
         config: Config,
         metrics: PeerMetrics,
@@ -72,6 +73,7 @@ object HydrozoaServer {
                 nodeStatus,
                 consensusReader,
                 l2QueryReader,
+                archiveWatermarks,
                 headConfig,
                 config,
                 metrics,
@@ -97,6 +99,7 @@ object HydrozoaServer {
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
+        archiveWatermarks: Option[ArchiveWatermarks],
         headConfig: HeadConfig,
         config: Config,
         metrics: PeerMetrics,
@@ -108,6 +111,7 @@ object HydrozoaServer {
           nodeStatus,
           consensusReader,
           l2QueryReader,
+          archiveWatermarks,
           headConfig,
           config,
           metrics,

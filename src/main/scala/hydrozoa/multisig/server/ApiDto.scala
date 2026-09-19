@@ -397,6 +397,32 @@ object ApiDto {
     final case class FinalizeResponse(status: String, message: String)
     given Codec[FinalizeResponse] = deriveCodec
 
+    /** `{ "watermarks": { "<column family>": <index>, … } }` — how far an attached archiver has
+      * durably copied each column family.
+      *
+      * Per family rather than one number, because the journals are independent streams advancing at
+      * independent rates: a real head has its `Request:0` lane hundreds of thousands of entries
+      * ahead of its `HardAck` lanes. A single figure could only carry the minimum, holding
+      * retention back to whichever lane moves slowest.
+      *
+      * Keys are column-family names as the store spells them (`Block`, `Request:0`, `HardAck:3`) —
+      * the archiver reads them off the store itself and never constructs one.
+      */
+    final case class ArchiveWatermarkRequest(watermarks: Map[String, Long])
+    given Codec[ArchiveWatermarkRequest] = deriveCodec
+
+    /** `{ "effectiveFloor": { "<column family>": <index>, … } }` — how far the node will actually
+      * allow deletion, per family.
+      *
+      * Not an echo of the request. The node takes the minimum of the reported watermark and what
+      * consensus still needs, so a floor below the reported watermark tells the archiver it is
+      * ahead of the head and the mesh is the binding constraint; a floor equal to it says the
+      * archiver is. Without that distinction an archiver that is comfortably ahead looks exactly
+      * like one that is holding the node back.
+      */
+    final case class ArchiveWatermarkResponse(effectiveFloor: Map[String, Long])
+    given Codec[ArchiveWatermarkResponse] = deriveCodec
+
     /** `{ "requestId": <i64> }` — a write request's assigned id, packed as the SugarRush i64 form.
       */
     final case class RequestAcceptedResponse(requestId: Long)

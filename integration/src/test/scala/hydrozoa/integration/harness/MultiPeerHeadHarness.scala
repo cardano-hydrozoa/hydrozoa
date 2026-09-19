@@ -1077,10 +1077,10 @@ object MultiPeerHeadHarness:
         /** Addresses to scope a Blockfrost `l1Snapshot` to (Blockfrost has no "all UTxOs" query):
           * the pre-init peer wallets (from `preinitPeerUtxosL1`), the treasury + dispute script
           * addresses (where head funds and open disputes sit), the deploy-time burn address (where
-          * the treasury + dispute reference scripts and the G2 setup ladder rungs live), the head
-          * multisig address (where the regime witness utxo lives, before and after fallback — the
-          * treasury moves to the rule-based address on fallback but the regime witness stays), and
-          * any `extraSnapshotAddresses` the test supplies (e.g. the RBR evacuation payout address).
+          * the validator reference scripts and the G2 setup ladder rungs live), the head multisig
+          * address (where the multisig regime utxo lives until fallback), the rule-based regime
+          * script address (where the fallback moves the regime witness utxo), and any
+          * `extraSnapshotAddresses` the test supplies (e.g. the RBR evacuation payout address).
           * That matches the mock backend's whole-ledger view for the head's slice.
           */
         private def blockfrostSnapshotAddresses(
@@ -1096,6 +1096,7 @@ object MultiPeerHeadHarness:
             val scriptAddresses = Set(
               HydrozoaBlueprint.mkTreasuryAddress(cardanoInfo.network),
               HydrozoaBlueprint.mkDisputeAddress(cardanoInfo.network),
+              HydrozoaBlueprint.mkRegimeAddress(cardanoInfo.network),
               DeploymentTx.mkBurnAddress(cardanoInfo.network),
               headMultisigAddress,
             )
@@ -1123,8 +1124,8 @@ object MultiPeerHeadHarness:
             }
 
         /** Single mock L1 shared by every peer, seeded with the merged pre-init UTxOs plus the
-          * globally-deployed script reference UTxOs (treasury + dispute validators). The head
-          * initialization tx is submitted by the protocol through normal operation.
+          * globally-deployed script reference UTxOs (treasury + dispute + regime validators). The
+          * head initialization tx is submitted by the protocol through normal operation.
           */
         def mkMock(
             preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
@@ -1815,6 +1816,7 @@ object MultiPeerHeadHarness:
               // No consensus-store reader in the harness — the block queries are unit-tested.
               ConsensusStoreReader.empty,
               // No EUTXO L2-query reader in the harness — the SubmissionClient uses the write path.
+              None,
               None,
               nodeConfig.headConfig,
               serverConfig,
