@@ -84,8 +84,8 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
         lane: LaneOutbound[BlockBrief.Next, BlockNumber],
         raised: cats.effect.Ref[IO, Vector[Throwable]],
         appended: cats.effect.Ref[IO, Int]
-    ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
-        override def receive: Receive[IO, LiaisonProtocol.HubToCoilRequest] = {
+    ) extends Actor[IO, LiaisonProtocol.HubRequestServed] {
+        override def receive: Receive[IO, LiaisonProtocol.HubRequestServed] = {
             // Record and re-raise: the raise is the incident (it kills the actor system), and the
             // record is how the harness observes it afterwards. `appended` counts briefs the lane
             // has finished with either way, which is what [[run]] waits on.

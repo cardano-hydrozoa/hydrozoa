@@ -11,10 +11,10 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{CoilAckSequencer, SlowConsensusActor, UserRequestWithId}
+import hydrozoa.multisig.consensus.{CoilAckSequencer, CoilStartPoint, SlowConsensusActor, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -40,8 +40,9 @@ abstract class PeerLiaisonHubToCoil(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections |
         PeerLiaisonHubToCoil.Connections,
     tracer: ContraTracer[IO, PeerLiaisonEvent],
-    persistence: Persistence[IO]
-) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
+    persistence: Persistence[IO],
+    decideStartPoint: Join.Connected => IO[CoilStartPoint]
+) extends Actor[IO, LiaisonProtocol.HubRequestServed] {
 
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codec in `persistInbound` picks it up.
@@ -365,18 +366,56 @@ abstract class PeerLiaisonHubToCoil(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, HubToCoilRequest] =
+    override def receive: Receive[IO, HubRequestServed] =
         PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: HubToCoilRequest): IO[Unit] = req match {
-        case PreStart            => preStartLocal
-        case ResendCurrent       => puller.resend
-        case get: Population.Get => server.handleGet(get)
-        case own: OwnHardAck.New => puller.handleReply(own)
+    private def receiveTotal(req: HubRequestServed): IO[Unit] = req match {
+        case PreStart                  => preStartLocal
+        case ResendCurrent             => puller.resend
+        case get: Population.Get       => server.handleGet(get)
+        case own: OwnHardAck.New       => puller.handleReply(own)
+        case connected: Join.Connected => handleConnected(connected)
         case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId | _: SoftAck |
             _: HardAck | _: HardAckWithId) =>
             appendArtifact(artifact) >> server.afterAppend
     }
+
+    /** Answer a coil peer whose link has just come up.
+      *
+      * The decision itself is injected, not made here: it needs the hub's `L2Ledger` as well as its
+      * store, and a liaison is a transport. What belongs here is only what the answer does to this
+      * link's own state.
+      */
+    private def handleConnected(connected: Join.Connected): IO[Unit] =
+        decideStartPoint(connected).flatMap {
+            case CoilStartPoint.Offer(offer) =>
+                // Move this link's inbound cursor to the index the offer promises BEFORE the offer
+                // leaves, so the hub never has an offer outstanding that it is not itself pulling
+                // against. The cursor is in-memory and reverts on a hub restart — which also drops
+                // the socket, so the coil redials and is offered a fresh start point.
+                ownHardAckLane.advanceTo(offer.ownHardAck) >>
+                    tracer.traceWith(
+                      PeerLiaisonEvent.CoilSeeded(offer.startStack, offer.ownHardAck)
+                    ) >>
+                    getConnections.flatMap(_.remote ! offer) >>
+                    // Re-open the pull chain from the cursor just moved. Advancing alone is not
+                    // enough: the outstanding pull still names the old index, and `resend` repeats
+                    // that same one verbatim — so the chain would never ask for anything the
+                    // seeded coil is going to produce, and the link would sit there looking idle
+                    // rather than broken.
+                    puller.start
+            case CoilStartPoint.CatchUp =>
+                tracer.traceWith(PeerLiaisonEvent.CoilCaughtUp) >> noOffer("within catch-up range")
+            case CoilStartPoint.Unavailable(reason) =>
+                tracer.traceWith(PeerLiaisonEvent.CoilNotSeeded(reason.toString)) >>
+                    noOffer(reason.toString)
+        }
+
+    /** Answer a handshake the hub has no start point for. Sent rather than left silent so the coil
+      * can tell this apart from an unreachable hub — see [[Join.NoOffer]].
+      */
+    private def noOffer(reason: String): IO[Unit] =
+        getConnections.flatMap(_.remote ! Join.NoOffer(reason))
 
     /** Restore each population outbox lane's high-water from its backing journal, leaving the
       * outboxes empty. The Server half answers the coil peer's `Population.Get` from the store
@@ -456,14 +495,24 @@ object PeerLiaisonHubToCoil {
         coil: CoilPeerNumber,
         pendingConnections: HeadMultisigRegimeManager.PendingConnections | Connections,
         tracer: ContraTracer[IO, PeerLiaisonEvent],
-        persistence: Persistence[IO]
+        persistence: Persistence[IO],
+        decideStartPoint: Join.Connected => IO[CoilStartPoint]
     ): IO[PeerLiaisonHubToCoil] =
-        IO(new PeerLiaisonHubToCoil(config, coil, pendingConnections, tracer, persistence) {})
+        IO(
+          new PeerLiaisonHubToCoil(
+            config,
+            coil,
+            pendingConnections,
+            tracer,
+            persistence,
+            decideStartPoint
+          ) {}
+        )
 
     type Config =
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section
 
-    type Handle = ActorRef[IO, LiaisonProtocol.HubToCoilRequest]
+    type Handle = ActorRef[IO, LiaisonProtocol.HubRequestServed]
 
     /** The hub's quorum + relay-sequencer for the coil peer's inbound hard-ack, plus the send path
       * to the coil peer's counterpart liaison.

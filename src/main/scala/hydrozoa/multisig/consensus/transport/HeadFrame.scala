@@ -59,7 +59,8 @@ object HeadFrame {
     final case class Handshake(
         peerNum: Int,
         protocolVersion: Option[Int],
-        auth: HandshakeAuth
+        auth: HandshakeAuth,
+        head: Option[HeadIdentity]
     ) extends HeadFrame
 
     object Handshake {
@@ -71,7 +72,8 @@ object HeadFrame {
             peerNum: Int,
             wallet: PeerWallet,
             headParamsHash: Hash32,
-            nonce: HandshakeNonce
+            nonce: HandshakeNonce,
+            head: HeadIdentity
         ): Handshake =
             Handshake(
               peerNum,
@@ -83,7 +85,8 @@ object HeadFrame {
                 ProtocolVersion.current,
                 headParamsHash,
                 nonce
-              )
+              ),
+              Some(head)
             )
     }
 
@@ -116,12 +119,13 @@ object HeadFrame {
             )
         case Refused(refusal) =>
             Json.obj("t" -> "refused".asJson, "refusal" -> refusal.asJson)
-        case Handshake(peerNum, protocolVersion, auth) =>
+        case Handshake(peerNum, protocolVersion, auth, head) =>
             Json.obj(
               "t" -> "handshake".asJson,
               "peerNum" -> peerNum.asJson,
               "protocolVersion" -> protocolVersion.asJson,
-              "auth" -> auth.asJson
+              "auth" -> auth.asJson,
+              "head" -> head.asJson
             )
         case Msg(payload) =>
             payload match {
@@ -158,7 +162,11 @@ object HeadFrame {
                     // that reads as a malformed frame.
                     protocolVersion <- c.downField("protocolVersion").as[Option[Int]]
                     auth <- c.downField("auth").as[HandshakeAuth]
-                } yield Handshake(peerNum, protocolVersion, auth)
+                    // Optional for the same reason as `protocolVersion`: a counterpart that
+                    // announces no head is refused by a check that says so, not by a decode
+                    // failure that reads as a malformed frame.
+                    head <- c.downField("head").as[Option[HeadIdentity]]
+                } yield Handshake(peerNum, protocolVersion, auth, head)
             case "msg" =>
                 c.downField("kind").as[String].flatMap {
                     case "MeshGet" =>

@@ -75,7 +75,31 @@ object Markers:
             ackedStack <- hardAck.traverse(n =>
                 persistence.getOrFail(JournalKey.HardAck(own, n)).map(_.payload.stackNum)
             )
-        } yield Markers(soft, fast, hardConf, hardAck, nextReq, evacMark, ackedStack)
+            // A seeded coil peer authored no `BlockResult`, so the scan above finds nothing — but
+            // it does hold a block, durably, adopted rather than produced. `fastBlockMark` means
+            // "the highest block this peer durably holds", and that is exactly what a start point
+            // establishes, so it stands in when there is no own production to derive it from.
+            //
+            // This is not cosmetic. The mark is the fast-side REPLAY FLOOR: leave it empty and
+            // `ReplayActor` rescans the block spine from the start and re-feeds the adopted anchor
+            // to `BlockWeaver` as though it had just arrived. `JointLedger` is already positioned
+            // on that block, so it builds the next one and compares it against the anchor —
+            // reporting consensus as broken on its first tick after a join.
+            //
+            // Only this marker takes the start point. `hardAckedStack` must NOT: a seeded peer
+            // signed nothing, and saying otherwise would put an ack it never made behind the one
+            // journal its hub pulls from. That anchor is read straight from `StoreKey.StartPoint`
+            // by the seams that need it.
+            startPoint <- persistence.get(StoreKey.StartPoint)
+        } yield Markers(
+          soft,
+          fast.orElse(startPoint.map(_.lastBlockNum)),
+          hardConf,
+          hardAck,
+          nextReq,
+          evacMark,
+          ackedStack
+        )
 
     /** The next request number this peer will assign after recovery: `max(own Request) + 1`, or
       * `RequestNumber(0)` for an empty store — the last key of the own-author `Request` CF (an

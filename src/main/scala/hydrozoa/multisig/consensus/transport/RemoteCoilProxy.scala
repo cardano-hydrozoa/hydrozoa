@@ -13,9 +13,9 @@ import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 final class RemoteCoilProxy private (
     coil: CoilPeerNumber,
     transport: HubTransport,
-) extends Actor[IO, LiaisonProtocol.CoilToHubRequest] {
+) extends Actor[IO, LiaisonProtocol.CoilRequestServed] {
 
-    override def receive: Receive[IO, LiaisonProtocol.CoilToHubRequest] =
+    override def receive: Receive[IO, LiaisonProtocol.CoilRequestServed] =
         PartialFunction.fromFunction(req => transport.send(coil, req))
 }
 

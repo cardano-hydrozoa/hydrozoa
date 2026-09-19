@@ -17,6 +17,7 @@ class NodeOperationMultisigConfigTest extends AnyFunSuite {
           |  "cardanoLiaisonPollingPeriod": 20000,
           |  "peerLiaisonMaxRequestsPerBatch": 500,
           |  "peerLiaisonResendInterval": 5000,
+          |  "coilCatchUpStacks": 16,
           |  "rateLimits": { "softBlockMinPeriod": 100, "hardStackMinPeriod": 30000 }
           |}""".stripMargin
 
@@ -42,6 +43,11 @@ class NodeOperationMultisigConfigTest extends AnyFunSuite {
     test("the encoder round-trips through the decoder") {
         val config = NodeOperationMultisigConfig.default
         assert(decode[NodeOperationMultisigConfig](config.asJson.noSpaces) == Right(config))
+    }
+
+    test("a config omitting coilCatchUpStacks is refused") {
+        val json = withOutboxDepth(2).replace("""  "coilCatchUpStacks": 16,""", "")
+        assert(decode[NodeOperationMultisigConfig](json).isLeft)
     }
 
     /** The other direction of the same operational concern: a deployed config may still carry

@@ -667,20 +667,40 @@ case class EutxoL2Ledger private (
     /** The three digests this ledger reports about a state: the evacuation map's, the L2 state's,
       * and this backend's fixed parameter digest.
       */
-    private def digestsOf(s: EutxoL2Ledger.State): EitherT[IO, RestoreError, L2Ledger.Digests] =
+    override def wipe: EitherT[IO, RestoreError, Unit] =
+        EitherT.right(store.wipe >> state.set(EutxoL2Ledger.State.genesis(config)))
+
+    override def evacuationMapAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, EvacuationMap] =
+        EitherT
+            .right(state.get)
+            .flatMap(live =>
+                if live.commandNumber == commandNumber then EitherT.rightT[IO, RestoreError](live)
+                else reconstruct(commandNumber)
+            )
+            .flatMap(mapOf)
+
+    /** The evacuation map a state projects to — the one derivation [[digestsOf]] and
+      * [[evacuationMapAt]] share, so a digest can never describe a different map than the one
+      * handed out.
+      */
+    private def mapOf(s: EutxoL2Ledger.State): EitherT[IO, RestoreError, EvacuationMap] =
         EitherT.fromEither[IO](
           s.activeUtxos
               .toEvacuationMap(config)
               .left
               .map(violation => RestoreError.OtherError(violation.toString))
-              .map(map =>
-                  L2Ledger.Digests(
-                    evacuationMapHash = map.digest,
-                    evacuationMapKzg = map.kzgCommitment,
-                    l2StateHash = L2Snapshot.fromState(s).stateHash,
-                    l2ParamsHash = EutxoL2Ledger.mkL2ParamsHash(protocolParams)
-                  )
-              )
+        )
+
+    private def digestsOf(s: EutxoL2Ledger.State): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        mapOf(s).map(map =>
+            L2Ledger.Digests(
+              evacuationMapHash = map.digest,
+              evacuationMapKzg = map.kzgCommitment,
+              l2StateHash = L2Snapshot.fromState(s).stateHash,
+              l2ParamsHash = EutxoL2Ledger.mkL2ParamsHash(protocolParams)
+            )
         )
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,

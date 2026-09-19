@@ -1168,7 +1168,30 @@ object JointLedger {
             evacuationMapMark: Option[BlockNumber],
             l2ParamsHash: Hash32
         )(using CardanoNetwork.Section): IO[Option[Done]] =
-            fastBlockMark match
+            // A seeded coil peer's anchor is adopted rather than produced; `Markers` already
+            // resolves that, so `fastBlockMark` arrives here pointing at the adopted block and
+            // the three keys below are read at it — adoption wrote them there
+            // (`hydrozoa.multisig.consensus.CoilJoin`).
+            recoverAt(
+              persistence,
+              l2Ledger,
+              fastBlockMark,
+              initialEvacuationMap,
+              initialL2StateHash,
+              evacuationMapMark,
+              l2ParamsHash
+            )
+
+        private def recoverAt(
+            persistence: Persistence[IO],
+            l2Ledger: L2Ledger[IO],
+            anchor: Option[BlockNumber],
+            initialEvacuationMap: EvacuationMap,
+            initialL2StateHash: L2StateHash,
+            evacuationMapMark: Option[BlockNumber],
+            l2ParamsHash: Hash32
+        )(using CardanoNetwork.Section): IO[Option[Done]] =
+            anchor match
                 case None =>
                     for {
                         restored <- l2Ledger

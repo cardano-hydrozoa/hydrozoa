@@ -7,7 +7,7 @@ import fs2.Stream
 import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 import hydrozoa.multisig.consensus.transport.HubWsTransportEvent.*
@@ -29,7 +29,7 @@ trait HubTransport {
     def register(coil: CoilPeerNumber, localLiaison: PeerLiaisonHubToCoil.Handle): IO[Unit]
 
     /** Enqueue a hub→coil batch for delivery to [[coil]]. */
-    def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilToHubRequest): IO[Unit]
+    def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilRequestServed): IO[Unit]
 }
 
 /** The hub side of the hub→coil WS links: contributes the `/hub` route to the hub's shared
@@ -44,14 +44,15 @@ trait HubTransport {
   * check out is told why ([[CoilFrame.Refused]]) and closed, rather than left holding a connection
   * that carries nothing.
   *
-  * Outbound is the hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]); inbound is the
-  * coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]).
+  * Outbound is the hub-emitted subset ([[Join.Offer]], [[Population.New]], [[OwnHardAck.Get]]);
+  * inbound is the coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]).
   */
 final class HubWsTransport private (
     private val outboxes: Map[CoilPeerNumber, Queue[IO, String]],
     private val coilPeers: CoilPeers,
     private val headParamsHash: Hash32,
     private val inboundRef: Ref[IO, Map[CoilPeerNumber, PeerLiaisonHubToCoil.Handle]],
+    private val ownHead: HeadIdentity,
     private val keepAlivePing: FiniteDuration,
     private val tracer: ContraTracer[IO, HubWsTransportEvent],
 )(using CardanoNetwork.Section)
@@ -63,7 +64,7 @@ final class HubWsTransport private (
     ): IO[Unit] =
         inboundRef.update(_.updated(coil, localLiaison))
 
-    override def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilToHubRequest): IO[Unit] =
+    override def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilRequestServed): IO[Unit] =
         CoilFrame.fromWire(request) match {
             case Some(wire) =>
                 val line = CoilFrame.encode(CoilFrame.Msg(wire))
@@ -78,33 +79,46 @@ final class HubWsTransport private (
     private def dispatchInbound(coil: CoilPeerNumber, payload: CoilFrame.Wire): IO[Unit] =
         payload match {
             // Only the coil-emitted subset is valid inbound here.
-            case p @ (_: Population.Get | _: OwnHardAck.New) =>
-                inboundRef.get.flatMap { m =>
-                    m.get(coil) match {
-                        case Some(liaison) => liaison ! p
-                        case None          => tracer.traceWith(NoLiaisonForInbound(coil))
-                    }
-                }
+            case p @ (_: Population.Get | _: OwnHardAck.New) => toLiaison(coil, p)
             case other =>
                 tracer.traceWith(UnexpectedInboundWire(coil, other))
+        }
+
+    private def toLiaison(
+        coil: CoilPeerNumber,
+        request: LiaisonProtocol.HubRequestServed
+    ): IO[Unit] =
+        inboundRef.get.flatMap { m =>
+            m.get(coil) match {
+                case Some(liaison) => liaison ! request
+                case None          => tracer.traceWith(NoLiaisonForInbound(coil))
+            }
         }
 
     /** The ordered verdict on one inbound handshake.
       *
       * Version first: a coil speaking another protocol may not even mean the same thing by its own
-      * number, so there is nothing to look up until the two ends agree on the vocabulary. The
-      * roster next, because the claimed number is what resolves the key the proof is checked
-      * against. Only then the proof itself.
+      * number, so there is nothing to look up until the two ends agree on the vocabulary. Head
+      * identity next, then the roster — the claimed number is what resolves the key the proof is
+      * checked against. Only then the proof itself.
       */
     private def admit(
         coilNum: Int,
         protocolVersion: Option[Int],
         auth: HandshakeAuth,
-        nonce: HandshakeNonce
+        nonce: HandshakeNonce,
+        head: Option[HeadIdentity]
     ): Either[HandshakeRefusal, CoilPeerNumber] =
         ProtocolVersion.check(protocolVersion) match {
             case ProtocolVersion.Check.Incompatible(found, expected) =>
                 Left(HandshakeRefusal.ProtocolVersionMismatch(found, expected))
+            case ProtocolVersion.Check.Compatible
+                if HeadIdentity.check(head, ownHead) != HeadIdentity.Check.Compatible =>
+                Left(
+                  HandshakeRefusal.WrongHead(
+                    HeadIdentity.describe(HeadIdentity.check(head, ownHead))
+                  )
+                )
             case ProtocolVersion.Check.Compatible =>
                 val coil = CoilPeerNumber(coilNum)
                 // Both halves of "a coil this hub serves": an outbox to drain, and a roster key to
@@ -156,15 +170,25 @@ final class HubWsTransport private (
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
                     CoilFrame.parse(s) match {
-                        case Right(CoilFrame.Handshake(coilNum, protocolVersion, auth)) =>
-                            val verdict = admit(coilNum, protocolVersion, auth, nonce)
-                            // One nonce, one handshake: a socket that already has a verdict keeps
-                            // it, so a replayed handshake cannot re-bind an established session.
+                        case Right(
+                              CoilFrame.Handshake(coilNum, protocolVersion, auth, marks, head)
+                            ) =>
+                            val verdict =
+                                admit(coilNum, protocolVersion, auth, nonce, head)
+                            // One nonce, one handshake: a socket that already has a verdict
+                            // keeps it, so a replayed handshake cannot re-bind an
+                            // established session.
                             verdictD.complete(verdict).flatMap {
-                                case false => tracer.traceWith(ServerRepeatHandshake(coilNum))
+                                case false =>
+                                    tracer.traceWith(ServerRepeatHandshake(coilNum))
                                 case true =>
                                     verdict match {
-                                        case Right(_) => tracer.traceWith(ServerAccepted(coilNum))
+                                        case Right(coil) =>
+                                            // Bind the socket BEFORE announcing the link, so
+                                            // the start point the liaison decides on has an
+                                            // outbox to leave by.
+                                            tracer.traceWith(ServerAccepted(coilNum)) >>
+                                                toLiaison(coil, marks)
                                         case Left(refusal) =>
                                             tracer.traceWith(
                                               ServerRefusedHandshake(coilNum, refusal)
@@ -204,6 +228,7 @@ object HubWsTransport {
         coils: List[CoilPeerNumber],
         coilPeers: CoilPeers,
         headParamsHash: Hash32,
+        ownHead: HeadIdentity,
         tracer: ContraTracer[IO, HubWsTransportEvent],
         keepAlivePing: FiniteDuration = NodeWsServer.defaultKeepAlivePing,
     )(using CardanoNetwork.Section): IO[HubWsTransport] =
@@ -217,6 +242,7 @@ object HubWsTransport {
           coilPeers,
           headParamsHash,
           inboundRef,
+          ownHead,
           keepAlivePing,
           tracer
         )

@@ -1,6 +1,8 @@
 package hydrozoa.multisig.consensus.liaison
 
 import cats.Eval
+import hydrozoa.multisig.consensus.ack.HardAckNumber
+import hydrozoa.multisig.ledger.stack.StackNumber
 
 /** Typed events emitted by the liaison actors ([[PeerLiaisonHeadToHead]], [[PeerLiaisonCoilToHub]],
   * [[PeerLiaisonHubToCoil]]) and their shared [[Puller]] engine. Pure data; formatters in
@@ -48,6 +50,31 @@ object PeerLiaisonEvent:
       * keeps the chain alive. `reason` names the failing lane predicate.
       */
     final case class BatchRejected(batchNum: BatchNumber, reason: String) extends PeerLiaisonEvent
+
+    /** A coil peer's link came up and the hub decided to seed it at `startStack`. `ownHardAck` is
+      * the index the hub will now ask that coil for — the value that fixes a coil whose store is
+      * too far behind to walk forward from. Rare and consequential: INFO.
+      */
+    final case class CoilSeeded(
+        startStack: StackNumber,
+        ownHardAck: HardAckNumber
+    ) extends PeerLiaisonEvent
+
+    /** A coil peer's link came up close enough behind to walk forward over the population lanes.
+      * The ordinary outcome of a reconnect — nothing is transferred.
+      */
+    case object CoilCaughtUp extends PeerLiaisonEvent
+
+    /** A coil peer's link came up but the hub has no start point to offer, so the coil bootstraps
+      * stack 0 and catches up. `reason` names which of the two cases it is.
+      */
+    final case class CoilNotSeeded(reason: String) extends PeerLiaisonEvent
+
+    /** A `Join.Offer` reached a coil peer whose actors are already running, so it was declined. A
+      * start point is adopted at boot or not at all. Worth WARN: it means the hub decided this coil
+      * needed seeding at a moment when seeding was no longer possible.
+      */
+    final case class JoinOfferTooLate(startStack: StackNumber) extends PeerLiaisonEvent
 
     /** A hub refused the ack **at a coil peer's cursor** on a `coilHardAck` lane, because its
       * `stackNum` is above the coil peer's ceiling. That lane is contiguous, so refusing its head
