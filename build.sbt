@@ -345,12 +345,6 @@ lazy val integration: Project = (project in file("integration"))
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
-      // An explicit heap for the forked test JVM. `Test / testForkedParallel` runs the suites
-      // concurrently inside one fork, so the peak is the sum of whatever overlaps — the 3-head +
-      // 3-coil durability property and `CoilRejoinTest` each stand a full node system with its own
-      // in-memory backends up. The JVM default is a quarter of the runner's RAM, which that peak
-      // now exceeds; every suite releases what it allocates, so this is headroom, not a leak.
-      Test / javaOptions += "-Xmx6g",
       // Yaci suites require Docker / a running Yaci DevKit instance, and the Preview suite requires
       // a live public testnet + a funded master wallet; exclude both from the default test run.
       // Run explicitly, e.g.: integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci
