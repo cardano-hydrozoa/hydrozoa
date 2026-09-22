@@ -28,9 +28,9 @@ import scalus.cardano.ledger.Hash32
   * hard-ack).
   *
   * Both link directions ride one duplex, so the wire vocabulary is every shape either end emits.
-  * Each transport's `send` takes only its own direction ([[LiaisonProtocol.HubEmitted]] on the hub
-  * side, [[LiaisonProtocol.CoilEmitted]] on the coil side), so a frame is built from what the
-  * caller could already send rather than filtered out of a wider request type.
+  * Each transport's `send` takes only its own direction — the join answer plus
+  * [[LiaisonProtocol.HubEmitted]] on the hub side, [[LiaisonProtocol.CoilEmitted]] on the coil side
+  * — so a frame is built from what the caller could already send.
   */
 sealed trait CoilFrame
 object CoilFrame {
@@ -110,10 +110,9 @@ object CoilFrame {
     final case class Msg(payload: Wire) extends CoilFrame
 
     /** The wire-eligible hub↔coil messages, both directions. A frame carries this; a handle carries
-      * one direction ([[LiaisonProtocol.HubEmitted]] or [[LiaisonProtocol.CoilEmitted]]), which is
-      * why nothing here has to be projected out of a liaison's inbox any more.
+      * one direction, so nothing here is projected out of a liaison's message union.
       */
-    type Wire = LiaisonProtocol.HubEmitted | LiaisonProtocol.CoilEmitted
+    type Wire = Join.Answer | LiaisonProtocol.HubEmitted | LiaisonProtocol.CoilEmitted
 
     given (using CardanoNetwork.Section): Encoder[CoilFrame] = Encoder.instance {
         case Challenge(nonce, protocolVersion) =>

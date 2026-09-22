@@ -29,7 +29,7 @@ trait HubTransport {
     def register(coil: CoilPeerNumber, localLiaison: PeerLiaisonHubToCoil.Handle): IO[Unit]
 
     /** Enqueue a hub→coil batch for delivery to [[coil]]. */
-    def send(coil: CoilPeerNumber, request: LiaisonProtocol.HubEmitted): IO[Unit]
+    def send(coil: CoilPeerNumber, request: Join.Answer | LiaisonProtocol.HubEmitted): IO[Unit]
 }
 
 /** The hub side of the hub→coil WS links: contributes the `/hub` route to the hub's shared
@@ -64,7 +64,10 @@ final class HubWsTransport private (
     ): IO[Unit] =
         inboundRef.update(_.updated(coil, localLiaison))
 
-    override def send(coil: CoilPeerNumber, request: LiaisonProtocol.HubEmitted): IO[Unit] = {
+    override def send(
+        coil: CoilPeerNumber,
+        request: Join.Answer | LiaisonProtocol.HubEmitted
+    ): IO[Unit] = {
         val line = CoilFrame.encode(CoilFrame.Msg(request))
         outboxes.get(coil) match {
             case Some(q) => q.offer(line)

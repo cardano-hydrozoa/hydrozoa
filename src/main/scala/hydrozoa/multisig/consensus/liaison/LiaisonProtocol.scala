@@ -66,15 +66,16 @@ object LiaisonProtocol {
       */
     type MeshEmitted = BatchMessages.Mesh.Get | BatchMessages.Mesh.New
 
-    /** What a hub may put on a hub↔coil link: its answer to a handshake, the population it serves,
-      * and its pull of the coil peer's own hard-ack.
+    /** What a hub puts on a hub↔coil link once the link is running: the population it serves, and
+      * its pull of the coil peer's own hard-ack.
+      *
+      * [[BatchMessages.Join.Answer]] is not part of it. That is a single exchange that runs once
+      * per connection before the coil's puller opens, so the sites carrying both name both.
       *
       * `ActorRef` is contravariant in its request, so a handle typed here accepts the proxy that
       * forwards to the transport with no widening at the call site.
       */
-    type HubEmitted =
-        BatchMessages.Join.Offer | BatchMessages.Join.NoOffer | BatchMessages.Population.New |
-            BatchMessages.OwnHardAck.Get
+    type HubEmitted = BatchMessages.Population.New | BatchMessages.OwnHardAck.Get
 
     /** What a coil may put on a hub↔coil link: its pull of the population, and its own hard-ack
       * served to the hub. Read the same way as [[HubEmitted]].
@@ -150,11 +151,12 @@ object LiaisonProtocol {
       */
     type HubLiaisonMessage = Control | BatchMessages.Join.Connected | CoilEmitted | HubLocal
 
-    /** A coil peer's single liaison to its hub: takes everything its hub may emit, plus what its
-      * own actors hand it. [[JoinWaitElapsed]] is coil-only — no other liaison has a join mode to
-      * leave.
+    /** A coil peer's single liaison to its hub: the hub's answer to its join, everything the hub
+      * emits thereafter, and what its own actors hand it. The first two are what its two modes
+      * take. [[JoinWaitElapsed]] is coil-only — no other liaison has a join mode to leave.
       */
-    type CoilLiaisonMessage = Control | JoinWaitElapsed.type | HubEmitted | CoilLocal
+    type CoilLiaisonMessage =
+        Control | JoinWaitElapsed.type | BatchMessages.Join.Answer | HubEmitted | CoilLocal
 
     // ---- Handles --------------------------------------------------------------------------------
 
@@ -166,9 +168,10 @@ object LiaisonProtocol {
     /** The **coil's** handle to its hub: it carries what a coil may emit, not the hub's inbox. */
     type HubToCoilHandle = ActorRef[IO, CoilEmitted]
 
-    /** The **hub's** handle to one coil peer: it carries what a hub may emit, not the coil's inbox.
+    /** The **hub's** handle to one coil peer: it carries what a hub may send that peer — the join
+      * answer and everything after it — not the coil liaison's whole message union.
       */
-    type CoilToHubHandle = ActorRef[IO, HubEmitted]
+    type CoilToHubHandle = ActorRef[IO, BatchMessages.Join.Answer | HubEmitted]
 
     /** A coil node's handle to its own liaison, for local appends and notifications. */
     type CoilUplinkHandle = ActorRef[IO, CoilLocal]
