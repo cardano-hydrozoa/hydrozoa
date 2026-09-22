@@ -304,7 +304,7 @@ object RocksDbBackendStore:
                       StartupRefusal(
                         s"persistence schema version mismatch at $backend: the store reports " +
                             s"$found and this build expects $expected. A store written by another " +
-                            "schema version is never read — see design/versioning.md."
+                            "schema version is never read — see docs/spec/versioning.md."
                       )
                     )
             }

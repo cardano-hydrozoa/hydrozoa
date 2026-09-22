@@ -4,11 +4,6 @@ For whoever works on the liaison lanes next. Its single job: for **every** lane 
 **every** link, record what it carries, how wide a reply is, and what ceiling bounds it
 — in one place.
 
-Still in `design/` rather than `docs/spec/` because one change is outstanding: the brief
-and ack lanes reply one item at a time today, and lifting that moves numbers in every
-table below. It graduates into
-[`docs/spec/coil-network.md`](../docs/spec/coil-network.md) §5.5 once it does.
-
 ## What a ceiling is
 
 A `GetMsgBatch` carries a **cursor** per lane — the next number the puller expects. A
