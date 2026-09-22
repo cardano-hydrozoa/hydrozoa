@@ -48,7 +48,12 @@ object LiaisonProtocol {
       */
     case object JoinWaitElapsed
 
-    type Control = PreStart.type | ResendCurrent.type | JoinWaitElapsed.type
+    /** The ticks EVERY liaison takes. Deliberately not [[JoinWaitElapsed]]: only a coil liaison has
+      * a join mode to leave, so putting that tick here would hand `PeerLiaisonHeadToHead` and
+      * `PeerLiaisonHubToCoil` a message neither can ever receive — the same conflation this
+      * object's handle types exist to avoid.
+      */
+    type Control = PreStart.type | ResendCurrent.type
 
     /** Head ↔ head: serves + pulls one head peer's own production (the [[BatchMessages.Mesh]]
       * shape), and accepts that head peer's artifacts to append to its outbox.
@@ -89,7 +94,7 @@ object LiaisonProtocol {
       * (design/liaison-backpressure.md).
       */
     type CoilRequestServed =
-        Control | BatchMessages.Join.Offer | BatchMessages.Join.NoOffer |
+        Control | JoinWaitElapsed.type | BatchMessages.Join.Offer | BatchMessages.Join.NoOffer |
             BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck |
             SoftConfirmedHighWater | HardConfirmedHighWater
 
