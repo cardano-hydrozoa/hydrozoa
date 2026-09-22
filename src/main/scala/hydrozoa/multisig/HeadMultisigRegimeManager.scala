@@ -371,7 +371,7 @@ object HeadMultisigRegimeManager {
             Map.empty,
         remoteCoilLiaisons: Map[CoilPeerNumber, liaison.LiaisonProtocol.CoilLiaisonHandle] =
             Map.empty,
-        remoteHubLiaison: Option[liaison.LiaisonProtocol.HubUplinkHandle] = None,
+        remoteHubLiaison: Option[liaison.LiaisonProtocol.RemoteHubHandle] = None,
         /** Present only on a hub head peer (§5.3) [doc-ref]: re-sequences its coil peers' hard-acks
           * onto the `HubHardAckLane`. `None` elsewhere.
           */

@@ -664,6 +664,6 @@ object PeerLiaisonCoilToHub {
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remote: LiaisonProtocol.HubUplinkHandle
+        remote: LiaisonProtocol.RemoteHubHandle
     )
 }

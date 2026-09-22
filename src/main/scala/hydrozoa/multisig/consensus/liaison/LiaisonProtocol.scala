@@ -182,13 +182,16 @@ object LiaisonProtocol {
     type MeshLocalHandle = ActorRef[IO, MeshLocal]
 
     /** A hub's own transport's handle to one of its hub↔coil liaisons. Wider than
-      * [[HubUplinkHandle]] by [[BatchMessages.Join.Connected]], which the transport synthesizes
+      * [[RemoteHubHandle]] by [[BatchMessages.Join.Connected]], which the transport synthesizes
       * from the coil's handshake and no coil ever sends itself.
       */
     type HubLiaisonHandle = ActorRef[IO, FromCoil]
 
-    /** A coil peer's handle to its hub's liaison, for the pulls and serves it emits. */
-    type HubUplinkHandle = ActorRef[IO, CoilEmitted]
+    /** A coil node's handle to its hub, which on that node is a `RemoteHubProxy` rather than the
+      * hub's own actor. It carries only what a coil emits: `Join.Connected` reaches a hub liaison
+      * from the hub's own transport, so it is in [[HubLiaisonHandle]] and not here.
+      */
+    type RemoteHubHandle = ActorRef[IO, CoilEmitted]
 
     /** A hub's own actors' handle to one of its hub↔coil liaisons — `CoilRelay`'s fan-out. */
     type HubLocalHandle = ActorRef[IO, HubLocal]
