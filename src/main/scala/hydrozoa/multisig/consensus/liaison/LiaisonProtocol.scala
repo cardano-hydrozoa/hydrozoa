@@ -80,7 +80,7 @@ object LiaisonProtocol {
       * handle types rather than a tidy-up.
       *
       * It also accepts the two local confirmation notifications its pull ceilings are anchored on
-      * (design/liaison-backpressure.md).
+      * (docs/spec/liaison-backpressure.md).
       */
     type CoilRequestServed =
         Control | BatchMessages.Join.Offer | BatchMessages.Join.NoOffer |

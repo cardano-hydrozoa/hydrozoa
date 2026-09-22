@@ -101,7 +101,7 @@ object Serve {
         val setupIO = for {
             // The protocol and store versions ride the boot line because they are what an
             // operator reads back off a node that refuses to talk to a peer or to open its data
-            // directory — see design/versioning.md.
+            // directory — see docs/spec/versioning.md.
             _ <- log.info(
               s"Hydrozoa ${BuildInfo.version} " +
                   s"(git ${BuildInfo.gitCommit}, built ${BuildInfo.builtAtString}, " +

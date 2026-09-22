@@ -106,6 +106,18 @@ Working design and reference docs (`docs/spec/`):
   instead of rebuilding it; the builder lives in the `hydrozoa.bootstrap` submodule.
 - [`head-params-hash.md`](docs/spec/head-params-hash.md) — one digest over the whole head config,
   pinned in the multisig regime datum: the preimage layout, exclusions, and the checks.
+- [`block-hash.md`](docs/spec/block-hash.md) — `requestHash` and `blockHash`: what each preimage
+  covers, when it is taken, and who re-derives and compares it.
+- [`l2-state-certificate.md`](docs/spec/l2-state-certificate.md) — `l2StateHash`: how the head
+  certifies its L2 state on the effects a stack already produces (settlement datum and SEC).
+- [`effect-tracking.md`](docs/spec/effect-tracking.md) — linking blocks and requests to their L1
+  effects: effect identity, the reverse-index CFs, and consensus-safe withdrawal tracking.
+- [`liaison-backpressure.md`](docs/spec/liaison-backpressure.md) — every liaison lane in one table:
+  what it carries, its reply width, and the ceiling that bounds it.
+- [`l2-ledger-command-coordination.md`](docs/spec/l2-ledger-command-coordination.md) — driving a
+  black-box L2 ledger as an ordered command stream, and the contract a backend must implement.
+- [`evacuate-command.md`](docs/spec/evacuate-command.md) — `hydrozoa evacuate`: starting the
+  rule-based regime standalone from a left-over database.
 
 **API**
 - [`l2-query-endpoints.md`](docs/spec/l2-query-endpoints.md) — the user-facing server's read-only L2
@@ -115,18 +127,26 @@ Working design and reference docs (`docs/spec/`):
 - [`peer-stats-endpoint.md`](docs/spec/peer-stats-endpoint.md) — the per-peer statistics surface:
   the push-based `PeerMetrics` registry (atomic counters + a 1 Hz EWMA sampler) behind
   `GET /head/stats` (JSON) and `GET /head/metrics` (Prometheus).
+- [`archive-watermark.md`](docs/spec/archive-watermark.md) — how a node learns an archiver is
+  attached and how far it got: the `archiver` declaration and `POST /api/admin/archive/watermark`.
 
 **Testing**
 - [`integration-stages.md`](docs/spec/integration-stages.md) — the stage1/stage4 integration test
   levels: what each exercises and where to add a test.
 - [`testcontrol-driver.md`](docs/spec/testcontrol-driver.md) — how `ModelBasedSuite` drives tests on a
   cats-effect `TestControl` virtual clock.
+- [`crash-recovery-testing.md`](docs/spec/crash-recovery-testing.md) — the `Persistence` decorator
+  seam and the three decorators over it, the restart primitives, and what they do not cover.
 
 **Reference**
 - [`style-guide.md`](docs/spec/style-guide.md) — hand-applied Scala conventions (see [Code
   Style](#code-style)).
 - [`logging-tracing.md`](docs/spec/logging-tracing.md) — contextual logging and Tracer design.
 - [`codecs.md`](docs/spec/codecs.md) — codec conventions (WIP notes).
+- [`versioning.md`](docs/spec/versioning.md) — the software, protocol and store versions: what each
+  covers, where it is checked, and why a format change deploys by head migration.
+- [`petri-net-library.md`](docs/spec/petri-net-library.md) — the typed Petri net library under
+  `petri/` used to model the protocol.
 
 ## Development Environment
 

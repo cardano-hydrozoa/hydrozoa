@@ -4,10 +4,7 @@ For anyone changing a wire codec, a consensus rule or a store layout. This docum
 three versions a build carries — software, protocol and store — what each one covers, where it is
 checked, when it moves, and what deploying a move costs.
 
-## Scope
-
-GUM-322's signed handshake carries items 1–3, built in hydrozoa#744 and #749. The rest ride along
-because they touch the same values.
+## What versioning guarantees
 
 1. **`ProtocolVersion.current`**: one integer, `1` — what the public testnet head initializes
    with.
@@ -18,11 +15,11 @@ because they touch the same values.
 4. **Reporting.** `hydrozoa version`, `GET /version` and the boot log report the protocol version
    and the store version beside the software version.
 5. **A store version or identity mismatch is a `StartupRefusal`** (exit 2).
-6. **Clean-up** of the contradictory text around `StoreVersion`, listed in *Present state*.
-7. **Golden fixtures** (GUM-348) for every frame, payload codec, signing preimage and digest
+6. **Golden fixtures** (GUM-348) for every frame, payload codec, signing preimage and digest
    layout the protocol version covers, so a wire change cannot land without showing up as one.
+   The one piece not built — see *Present state*.
 
-Deferred:
+Out of this document's reach:
 
 - **The L2 store's version.** GUM-324 item 3 owns it; *Store version* gives the shape it follows.
 - **Head migration's mechanism.** *Head migration* states what versioning relies on and what rides
@@ -34,7 +31,7 @@ Deferred:
 |---|---|---|---|
 | owned by | each implementation | the Gummiworm protocol, shared by every implementation | each implementation, one per store |
 | answers | which build is this? | can this peer talk to that one? | can this binary read this directory? |
-| value today | `0.1.14` (`build.sbt`, via `BuildInfo`) | `1` (`ProtocolVersion.current`) | consensus store `5`; L2 store none |
+| value today | `0.1.14` (`build.sbt`, via `BuildInfo`) | `1` (`ProtocolVersion.current`) | consensus store `7`; L2 store none |
 | compared | never | equality, at connect | equality, at open |
 | on mismatch | — | the link is refused; the node waits | the node refuses to start |
 
@@ -101,7 +98,7 @@ Two consequences:
 2. **Golden encodings make the wire half mechanical.** Once every frame, payload codec, signing
    preimage and digest layout has a golden fixture, a regenerated fixture is a bump. Today only
    the stored request record has one (`src/test/resources/golden/request-record/`); adding the
-   rest is scope item 7 (GUM-348). Behaviour changes have no fixture and need judgment — open
+   rest is item 6 above (GUM-348). Behaviour changes have no fixture and need judgment — open
    question 1.
 
 The protobuf request form shows both consequences. Flipping `userRequestWithIdCodec`'s encoder
@@ -186,7 +183,7 @@ One integer per store, owned by the implementation.
 
 | store | version | checked |
 |---|---|---|
-| consensus store | `StoreVersion.current = 5` on main (v0.1.14 ships `2`); key `store_version` in `Cf.Meta` | `RocksDbBackendStore.versionCheck` at every open, then `identityCheck` |
+| consensus store | `StoreVersion.current = 7`; key `store_version` in `Cf.Meta` | `RocksDbBackendStore.versionCheck` at every open, then `identityCheck` |
 | L2 store (`RocksDbL2Store`) | none | none — GUM-324 item 3 |
 
 Rules:
@@ -198,8 +195,8 @@ Rules:
    regenerated fixture under `src/test/resources/golden/request-record/` is a store-format change
    (`RequestRecordCodecTest`).
 3. **A mismatch is a `StartupRefusal`.** Nothing about the world changes what is on disk, so a
-   restart re-derives the same verdict. Today `Serve` converts only `RocksDBException` into a
-   refusal; a version or identity mismatch exits 1, and `Restart=on-failure` restarts it forever.
+   restart re-derives the same verdict, and `Restart=on-failure` must not spin on it.
+   `versionCheck` and `identityCheck` both raise one.
 4. **A bump deploys by head migration**, like a protocol bump, and for the reason given there.
 5. **The L2 store takes the same shape** (GUM-324).
 
@@ -239,33 +236,22 @@ declaration alongside it.]
 
 ## Present state
 
-The protocol version is defined, signed and checked on both lanes in hydrozoa#744 and #749; on main
-nothing on the wire carries a version. Scope items 4–7 are not built anywhere: `hydrozoa version`,
-`GET /version` and the boot log report only `BuildInfo`; a store version or identity mismatch
-raises `IllegalStateException` and exits 1; and only the stored request record has a golden
-fixture.
+Everything in *What versioning guarantees* is built except item 6. `ProtocolVersion.current` is defined, signed into
+`HandshakeProof.preimage` and checked on both lanes; `hydrozoa version`, `GET /version` and the
+boot log report the protocol and consensus store versions beside the software version; a store
+version or identity mismatch raises a `StartupRefusal`; and `StoreVersion.check` is what
+`RocksDbBackendStore.versionCheck` decides on.
 
-Text that contradicts the code, fixed in this work item:
-
-1. `StoreVersion.scala` says bumps wait "until the layout stabilizes"; the file lists four bumps
-   and `current` is `5`.
-2. The same scaladoc says "a format change just rebuilds the store". That holds in development and
-   fails on a live head, where a cold store never rejoins (GUM-312) — see *Head migration*.
-3. The same scaladoc cites "CR6 / §7 versioning note"; CR6 in
-   `persistence-and-crash-recovery.md` is write atomicity.
-4. `StoreVersion.Check` has no callers — `versionCheck` open-codes the same three-way decision —
-   while `head-params-hash.md` says it "already has the right three-way shape". Use it or delete
-   it.
-5. `persistence-and-crash-recovery.md` §7 says "the store version is **held at 1**" and repeats
-   the rebuild answer.
+**Item 6 — golden fixtures (GUM-348) — is not built.** Only the stored request record has one
+(`src/test/resources/golden/request-record/`), so every other frame, payload codec, signing
+preimage and digest layout can still change without a fixture moving.
 
 ## Out of scope
 
 - **The black-box L2 ledger socket.** `RemoteL2Ledger` and sugar-rush's `/ws` exchange no version
   and no handshake. It is a node-local link with its own contract
   (`docs/spec/l2-ledger-command-coordination.md`); L2 rule compatibility goes through
-  `l2ParamsHash`: `JointLedger.checkL2Params` refuses a mismatch, and only traces
-  `L2ParamsHashUnreported` when the ledger reports no hash.
+  `l2ParamsHash`: `JointLedger.checkL2Params` refuses a mismatch on either backend.
 - **The HTTP API's `apiVersion`.**
 
 ## Settled, and why

@@ -398,7 +398,7 @@ final case class SlowConsensusActor(
         // Backpressure, coil peer only: the hub serves the whole population and can run far ahead
         // of one coil peer, so the uplink anchors its stack and hard-ack pull ceilings on the stack
         // this peer has actually hard-confirmed. `None` on a head peer
-        // (design/liaison-backpressure.md).
+        // (docs/spec/liaison-backpressure.md).
         _ <- conn.coilUplink.traverse_(_ ! HardConfirmedHighWater(stackNum))
         // Headroom signal for the block lane: the stack this peer just hard-confirmed is the
         // backlog the block limiter released, now absorbed.

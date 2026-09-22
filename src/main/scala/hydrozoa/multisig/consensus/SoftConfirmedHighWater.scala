@@ -21,7 +21,7 @@ import hydrozoa.multisig.ledger.event.RequestNumber
   *
   * `blockNum` anchors the coil peer's block and soft-ack pull ceilings, which the mesh has no need
   * of: a head peer cannot run ahead of its own soft-confirmation, but a hub serving the whole
-  * population to a coil peer can. See design/liaison-backpressure.md.
+  * population to a coil peer can. See docs/spec/liaison-backpressure.md.
   */
 final case class SoftConfirmedHighWater(
     blockNum: BlockNumber,

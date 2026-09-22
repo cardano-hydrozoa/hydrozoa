@@ -66,7 +66,7 @@ object BatchMessages {
 
         /** Cursors, and the ceilings that bound them. A hub serves the whole population and can run
           * arbitrarily far ahead of one coil peer, so unlike the symmetric [[Mesh]] every lane here
-          * is ceilinged — see design/liaison-backpressure.md for the anchor and window per lane.
+          * is ceilinged — see docs/spec/liaison-backpressure.md for the anchor and window per lane.
           *
           * Lanes share anchors, so four ceilings cover six lane families: `blockCeiling` also
           * bounds the soft-ack lanes (a `SoftAckNumber` IS the block number), and `stackCeiling`

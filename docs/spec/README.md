@@ -5,11 +5,12 @@ organized and how its subsystems actually work, keyed to the current sources.
 
 These describe the system **as built**, complementing the
 [Gummiworm whitepaper](https://gummiworm.net/whitepaper/introduction) (the protocol
-spec) and the repo's top-level `design/` scratchpad (in-flight feature specs, which
-graduate here once built). For project-wide conventions, start with the style guide.
+spec). The repo's top-level `design/` directory is a scratchpad for in-flight feature specs, which
+graduate here once built. For project-wide conventions, start with the style guide.
 
 | Doc | Summary |
 |---|---|
+| [archive-watermark.md](archive-watermark.md) | How a node learns an archiver is attached and how far it got: the `archiver` declaration, `POST /api/admin/archive/watermark`, and the monotone per-family `ArchiveWatermarks` the node holds. Deleting on it is retention, and is not built. |
 | [block-hash.md](block-hash.md) | `requestHash` over a user request and `blockHash` over the block that carries it: what each preimage covers, when each is taken, who re-derives and compares them, and why the preimage does not chain to the previous block. |
 | [codecs.md](codecs.md) | Conventions for wire/storage codecs (working notes). |
 | [coil-network.md](coil-network.md) | Coil-ready peers: the follower-only node type, the hub fan-out actors (`CoilRelay`, `CoilAckSequencer`), the threshold multisig, and the head↔coil liaison lanes. |
@@ -21,13 +22,18 @@ graduate here once built). For project-wide conventions, start with the style gu
 | [init-tx-parsing.md](init-tx-parsing.md) | The head parses its initialization tx from config (a bare Cardano tx + in-tx metadata) rather than rebuilding it; the init-tx builder lives in the `hydrozoa.bootstrap` submodule. |
 | [integration-stages.md](integration-stages.md) | The two integration test stages under `integration/`: which stage tests what, where to add a test, what each property checks. |
 | [l2-isomorphism.md](l2-isomorphism.md) | L2 isomorphism: driving the EUTXO ledger with native Cardano txs — the headId pin, mandatory tx metadata, screening vs submission, how deposits pin their L2 payload, and the `cardano-eutxo` / `any-remote` backend selection. |
+| [l2-ledger-command-coordination.md](l2-ledger-command-coordination.md) | The Gummiworm ↔ L2 ledger protocol: driving a black-box L2 ledger as an ordered command stream — command numbering, how the transport survives connectivity loss, how the two sides co-anchor on crash recovery, and the frame-by-frame contract a ledger backend must implement. |
 | [l2-query-endpoints.md](l2-query-endpoints.md) | The user-facing server's read-only L2 queries: `GET /l2/cardano-eutxo/utxos/{address}` (CIP-0116 utxos) and `GET /l2/cardano-eutxo/transactions` (recent activity); EUTXO-only, empty on a remote-ledger node. |
 | [l2-state-certificate.md](l2-state-certificate.md) | `l2StateHash`: how the head certifies its L2 state, on the effects a stack already produces — the settlement's treasury datum and the SEC. Why a certificate rather than a detector, which blocks carry one, what the digest ranges over per backend, and why no stack hash is needed. |
+| [liaison-backpressure.md](liaison-backpressure.md) | Every lane on every liaison link in one table: what it carries, how wide a reply is, which ceiling bounds it and what that ceiling anchors to. Why only the request lane is bounded on the mesh, and why the `coilHardAckLanes` window cannot deadlock. |
 | [logging-tracing.md](logging-tracing.md) | Contextual logging and tracing: Tracer, IOLocal-carried context, routing keys, migration off SLF4J MDC. |
 | [observability-endpoints.md](observability-endpoints.md) | The user-facing server's `/health` (liveness) and `/ready` (readiness) endpoints: semantics, status mapping, how `NodeStatus` is maintained. |
+| [peer-stats-endpoint.md](peer-stats-endpoint.md) | `GET /head/stats` and the Prometheus `GET /head/metrics`: live per-peer operational metrics served without touching storage or perturbing the hot path. |
 | [persistence-and-crash-recovery.md](persistence-and-crash-recovery.md) | Durable consensus data and crash recovery for head and coil peers: what each actor persists, equivocation avoidance, the RocksDB CFs/journals, and snapshot + log-replay recovery. |
+| [petri-net-library.md](petri-net-library.md) | The typed Petri net library under `petri/`, used to model the protocol: its four separable concerns (topology, syntax, semantics, presentation) and the builder monad that constructs a net. |
 | [rate-limiter.md](rate-limiter.md) | A generic throttling actor that slows the fast/slow cycles (longer block/stack durations) without touching consensus logic. |
 | [slow-consensus.md](slow-consensus.md) | The slow cycle: turning a run of soft-confirmed blocks into a multisigned, L1-submittable set of effect transactions; StackComposer / hard-acks. |
 | [style-guide.md](style-guide.md) | Hydrozoa Scala conventions: opaque-tuple conversions, naming rules (verb functions, `is*`/`has*` predicates), and other house style. |
 | [testcontrol-driver.md](testcontrol-driver.md) | How `ModelBasedSuite` drives the integration suites on a cats-effect `TestControl` virtual clock. |
 | [transient-tokens.md](transient-tokens.md) | Minting/burning on L2: the transient-token compartment, `l2TransientTokens` metadata, and projection-based validation of the main compartment. |
+| [versioning.md](versioning.md) | The three versions a build carries — software, protocol and store: what each covers, where it is checked, when it moves, and why a format change of any of the three deploys by head migration rather than in place. |

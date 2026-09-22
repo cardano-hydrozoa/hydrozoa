@@ -78,7 +78,7 @@ object Main
           versionCommand
         )
 
-    /** The three versions this build carries (`design/versioning.md`). The protocol and store
+    /** The three versions this build carries (`docs/spec/versioning.md`). The protocol and store
       * versions are what an operator needs before an upgrade: they say which peers this build can
       * talk to and which data directories it can open, neither of which follows from the release
       * number.
