@@ -68,7 +68,7 @@ object FastConsensusActor:
           * can anchor its block, soft-ack and request pull ceilings. `None` on a head peer, whose
           * mesh lanes need no ceiling beyond the request one the liaisons already carry.
           */
-        coilUplink: Option[liaison.LiaisonProtocol.CoilToHubHandle] = None,
+        coilUplink: Option[liaison.LiaisonProtocol.CoilUplinkHandle] = None,
     )
 
     /** One cell per in-flight block number. A cell knows the block number it is collecting for, may

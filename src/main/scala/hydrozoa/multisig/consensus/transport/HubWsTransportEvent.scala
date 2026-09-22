@@ -1,6 +1,5 @@
 package hydrozoa.multisig.consensus.transport
 
-import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 
 /** Typed events emitted by [[HubWsTransport]]. Pure data; formatters in
@@ -14,12 +13,6 @@ object HubWsTransportEvent:
 
     /** `send` was called for a coil peer that has no outbox — wiring bug. */
     final case class NoOutboxForCoil(coil: CoilPeerNumber) extends HubWsTransportEvent
-
-    /** `send` was called with a request variant that cannot be serialised over the wire. */
-    final case class DroppingNonWireRequest(
-        coil: CoilPeerNumber,
-        request: LiaisonProtocol.CoilRequestServed
-    ) extends HubWsTransportEvent
 
     /** An inbound frame arrived from a coil peer that has no registered local liaison. */
     final case class NoLiaisonForInbound(coil: CoilPeerNumber) extends HubWsTransportEvent

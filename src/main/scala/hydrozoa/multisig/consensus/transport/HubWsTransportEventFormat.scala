@@ -15,8 +15,6 @@ object HubWsTransportEventFormat:
         e match {
             case NoOutboxForCoil(coil) =>
                 warn(s"send: no outbox for coil=${coil.convert}")
-            case DroppingNonWireRequest(coil, request) =>
-                warn(s"send: dropping non-wire request to coil=${coil.convert}: $request")
             case NoLiaisonForInbound(coil) =>
                 warn(s"inbound from coil=${coil.convert} but no liaison registered")
             case UnexpectedInboundWire(coil, payload) =>

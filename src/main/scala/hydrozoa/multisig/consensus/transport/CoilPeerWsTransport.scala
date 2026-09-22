@@ -26,7 +26,7 @@ trait CoilTransport {
     def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit]
 
     /** Enqueue a coil→hub batch for delivery to the hub. */
-    def send(request: LiaisonProtocol.HubRequestServed): IO[Unit]
+    def send(request: LiaisonProtocol.CoilEmitted): IO[Unit]
 
     /** Announce where this coil stands, before [[joinAnswer]] is read.
       *
@@ -69,11 +69,8 @@ final class CoilPeerWsTransport private (
     override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
         inboundRef.set(Some(localLiaison))
 
-    override def send(request: LiaisonProtocol.HubRequestServed): IO[Unit] =
-        CoilFrame.fromWire(request) match {
-            case Some(wire) => outbox.offer(CoilFrame.encode(CoilFrame.Msg(wire)))
-            case None       => tracer.traceWith(DroppingNonWireRequest(request))
-        }
+    override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
+        outbox.offer(CoilFrame.encode(CoilFrame.Msg(request)))
 
     /** No-op: this transport announces its marks in the handshake it sends on every dial, read
       * fresh from the store at that moment ([[ownMarks]]), which is strictly better than a value

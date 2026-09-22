@@ -16,8 +16,6 @@ object CoilPeerWsTransportEventFormat:
         )
         import ev.*
         e match {
-            case DroppingNonWireRequest(request) =>
-                warn(s"send: dropping non-wire request to hub: $request")
             case NoLiaisonForInbound =>
                 warn("inbound from hub but no liaison registered")
             case UnexpectedInboundWire(payload) =>

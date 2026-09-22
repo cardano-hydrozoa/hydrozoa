@@ -27,8 +27,10 @@ import scalus.cardano.ledger.Hash32
   * the population, [[OwnHardAck.Get]] / [[OwnHardAck.New]] pulling/serving the coil's own
   * hard-ack).
   *
-  * Both link directions ride one duplex, so the wire vocabulary is every shape either end emits;
-  * each transport's `send` filters to the subset it actually emits.
+  * Both link directions ride one duplex, so the wire vocabulary is every shape either end emits.
+  * Each transport's `send` takes only its own direction ([[LiaisonProtocol.HubEmitted]] on the hub
+  * side, [[LiaisonProtocol.CoilEmitted]] on the coil side), so a frame is built from what the
+  * caller could already send rather than filtered out of a wider request type.
   */
 sealed trait CoilFrame
 object CoilFrame {
@@ -107,26 +109,11 @@ object CoilFrame {
 
     final case class Msg(payload: Wire) extends CoilFrame
 
-    /** The wire-eligible hub↔coil messages. */
-    type Wire =
-        Join.Offer | Join.NoOffer | Population.Get | Population.New | OwnHardAck.Get |
-            OwnHardAck.New
-
-    /** Project the wire-eligible subset out of either link direction's request (the appended
-      * artifacts, control ticks, and the transport-local [[Join.Connected]] never cross the wire).
+    /** The wire-eligible hub↔coil messages, both directions. A frame carries this; a handle carries
+      * one direction ([[LiaisonProtocol.HubEmitted]] or [[LiaisonProtocol.CoilEmitted]]), which is
+      * why nothing here has to be projected out of a liaison's inbox any more.
       */
-    def fromWire(
-        req: LiaisonProtocol.HubRequestServed | LiaisonProtocol.CoilRequestServed
-    ): Option[Wire] =
-        req match {
-            case x: Join.Offer     => Some(x)
-            case x: Join.NoOffer   => Some(x)
-            case x: Population.Get => Some(x)
-            case x: Population.New => Some(x)
-            case x: OwnHardAck.Get => Some(x)
-            case x: OwnHardAck.New => Some(x)
-            case _                 => None
-        }
+    type Wire = LiaisonProtocol.HubEmitted | LiaisonProtocol.CoilEmitted
 
     given (using CardanoNetwork.Section): Encoder[CoilFrame] = Encoder.instance {
         case Challenge(nonce, protocolVersion) =>

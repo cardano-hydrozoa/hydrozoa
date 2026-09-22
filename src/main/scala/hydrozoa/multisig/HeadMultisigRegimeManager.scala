@@ -359,7 +359,7 @@ object HeadMultisigRegimeManager {
         /** A coil peer's single uplink to its hub; `None` on a head peer. `SlowConsensusActor`
           * broadcasts its own hard-ack to `headPeerLiaisons ++ coilUplink`.
           */
-        coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
+        coilUplink: Option[liaison.LiaisonProtocol.CoilUplinkHandle] = None,
         /** Present only on a hub head peer (§5.4) [doc-ref]: the fan-out that relays the population
           * to its coil peers. Producers send only their own production here. `None` elsewhere.
           */
@@ -368,8 +368,9 @@ object HeadMultisigRegimeManager {
         // Only the in-process harness (stage4 / unit tests) populates these; in a real deployment
         // the counterpart is another process reached over the transport, so they stay empty.
         remoteHeadLiaisons: Map[HeadPeerNumber, liaison.PeerLiaisonHeadToHead.Handle] = Map.empty,
-        remoteCoilLiaisons: Map[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle] = Map.empty,
-        remoteHubLiaison: Option[liaison.PeerLiaisonHubToCoil.Handle] = None,
+        remoteCoilLiaisons: Map[CoilPeerNumber, liaison.LiaisonProtocol.CoilToHubHandle] =
+            Map.empty,
+        remoteHubLiaison: Option[liaison.LiaisonProtocol.HubToCoilHandle] = None,
         /** Present only on a hub head peer (§5.3) [doc-ref]: re-sequences its coil peers' hard-acks
           * onto the `HubHardAckLane`. `None` elsewhere.
           */

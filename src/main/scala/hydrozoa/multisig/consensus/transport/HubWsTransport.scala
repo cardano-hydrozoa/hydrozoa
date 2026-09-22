@@ -29,7 +29,7 @@ trait HubTransport {
     def register(coil: CoilPeerNumber, localLiaison: PeerLiaisonHubToCoil.Handle): IO[Unit]
 
     /** Enqueue a hub→coil batch for delivery to [[coil]]. */
-    def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilRequestServed): IO[Unit]
+    def send(coil: CoilPeerNumber, request: LiaisonProtocol.HubEmitted): IO[Unit]
 }
 
 /** The hub side of the hub→coil WS links: contributes the `/hub` route to the hub's shared
@@ -64,17 +64,13 @@ final class HubWsTransport private (
     ): IO[Unit] =
         inboundRef.update(_.updated(coil, localLiaison))
 
-    override def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilRequestServed): IO[Unit] =
-        CoilFrame.fromWire(request) match {
-            case Some(wire) =>
-                val line = CoilFrame.encode(CoilFrame.Msg(wire))
-                outboxes.get(coil) match {
-                    case Some(q) => q.offer(line)
-                    case None    => tracer.traceWith(NoOutboxForCoil(coil))
-                }
-            case None =>
-                tracer.traceWith(DroppingNonWireRequest(coil, request))
+    override def send(coil: CoilPeerNumber, request: LiaisonProtocol.HubEmitted): IO[Unit] = {
+        val line = CoilFrame.encode(CoilFrame.Msg(request))
+        outboxes.get(coil) match {
+            case Some(q) => q.offer(line)
+            case None    => tracer.traceWith(NoOutboxForCoil(coil))
         }
+    }
 
     private def dispatchInbound(coil: CoilPeerNumber, payload: CoilFrame.Wire): IO[Unit] =
         payload match {

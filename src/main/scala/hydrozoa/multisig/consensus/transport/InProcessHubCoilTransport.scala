@@ -57,7 +57,7 @@ object InProcessHubCoilTransport {
 
         override def send(
             coil: CoilPeerNumber,
-            request: LiaisonProtocol.CoilRequestServed
+            request: LiaisonProtocol.HubEmitted
         ): IO[Unit] =
             registry.get.flatMap { m =>
                 val endpoints = m.get(coil)
@@ -76,7 +76,7 @@ object InProcessHubCoilTransport {
 
         private def toCoil(
             endpoints: Option[Endpoints],
-            request: LiaisonProtocol.CoilRequestServed
+            request: LiaisonProtocol.HubEmitted
         ): IO[Unit] =
             endpoints.flatMap(_.coilInbound) match {
                 case Some(liaison) => liaison ! request
@@ -105,7 +105,7 @@ object InProcessHubCoilTransport {
                 )
             )
 
-        override def send(request: LiaisonProtocol.HubRequestServed): IO[Unit] =
+        override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
             registry.get.flatMap { m =>
                 m.get(ownCoilNum).flatMap(_.hubInbound) match {
                     case Some(liaison) => liaison ! request

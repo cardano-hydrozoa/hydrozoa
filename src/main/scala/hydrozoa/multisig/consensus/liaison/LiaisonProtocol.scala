@@ -87,7 +87,40 @@ object LiaisonProtocol {
             BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck |
             SoftConfirmedHighWater | HardConfirmedHighWater
 
+    /** What a hub may put on a hub↔coil link: its answer to a handshake, the population it serves,
+      * and its pull of the coil peer's own hard-ack.
+      *
+      * A **send vocabulary**, not an inbox. It is deliberately not [[CoilRequestServed]]: a coil
+      * liaison also accepts control ticks and local artifacts no hub can send, and the handshake
+      * answer is taken by the transport rather than by the actor. `ActorRef` is contravariant in
+      * its request, so a handle typed here accepts the proxy that forwards to the transport without
+      * any widening at the call site.
+      */
+    type HubEmitted =
+        BatchMessages.Join.Offer | BatchMessages.Join.NoOffer | BatchMessages.Population.New |
+            BatchMessages.OwnHardAck.Get
+
+    /** What a coil may put on a hub↔coil link: its pull of the population, and its own hard-ack
+      * served to the hub. Read the same way as [[HubEmitted]].
+      */
+    type CoilEmitted = BatchMessages.Population.Get | BatchMessages.OwnHardAck.New
+
+    /** What a coil node's own actors hand their local liaison: the hard-ack to append, and the two
+      * confirmation notifications the pull ceilings are anchored on. Nothing here crosses the wire,
+      * and nothing a hub sends belongs in it — this is the third role [[CoilRequestServed]] used to
+      * cover on its own.
+      */
+    type CoilUplink = HardAck | SoftConfirmedHighWater | HardConfirmedHighWater
+
     type HeadToHeadHandle = ActorRef[IO, HeadToHeadRequest]
-    type HubToCoilHandle = ActorRef[IO, HubRequestServed]
-    type CoilToHubHandle = ActorRef[IO, CoilRequestServed]
+
+    /** The **coil's** handle to its hub: it carries what a coil may emit, not the hub's inbox. */
+    type HubToCoilHandle = ActorRef[IO, CoilEmitted]
+
+    /** The **hub's** handle to one coil peer: it carries what a hub may emit, not the coil's inbox.
+      */
+    type CoilToHubHandle = ActorRef[IO, HubEmitted]
+
+    /** A coil node's handle to its own liaison, for local appends and notifications. */
+    type CoilUplinkHandle = ActorRef[IO, CoilUplink]
 }

@@ -1,6 +1,5 @@
 package hydrozoa.multisig.consensus.transport
 
-import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import org.http4s.Uri
 import scala.concurrent.duration.FiniteDuration
 
@@ -10,12 +9,6 @@ import scala.concurrent.duration.FiniteDuration
 sealed trait CoilPeerWsTransportEvent
 
 object CoilPeerWsTransportEvent:
-
-    // ---- send ----
-
-    /** `send` was called with a request variant that cannot be serialised over the wire. */
-    final case class DroppingNonWireRequest(request: LiaisonProtocol.HubRequestServed)
-        extends CoilPeerWsTransportEvent
 
     // ---- inbound dispatch ----
 
