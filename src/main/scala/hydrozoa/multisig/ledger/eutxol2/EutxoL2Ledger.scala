@@ -142,7 +142,7 @@ object EutxoL2Ledger {
       * Derivable from the bootstrap config alone, without a store or a running ledger, which is
       * what lets the initialization transaction's treasury datum certify the opening L2 state and
       * lets every peer check that datum while parsing the transaction. At a cold boot the ledger's
-      * own `stateAt(0)` is compared against it — the same check `initialEvacuationMap` already
+      * own `digestsAt(0)` is compared against it — the same check `initialEvacuationMap` already
       * gets, one layer down.
       */
     def initialStateHash(initialEvacuationMap: EvacuationMap): L2StateHash =
@@ -524,7 +524,7 @@ case class EutxoL2Ledger private (
       * one), so the in-memory state at the tip *is* the reconstruction, and the partition boundary
       * a stack closes at is the tip whenever no block has been cut since.
       */
-    override def stateAt(
+    override def digestsAt(
         commandNumber: L2CommandNumber
     ): EitherT[IO, RestoreError, L2Ledger.Digests] =
         EitherT
@@ -539,9 +539,9 @@ case class EutxoL2Ledger private (
       * bytes the store already writes for a snapshot, and the same projection: `activeUtxos`,
       * `transientTokens`, `pendingDeposits`, and the command number they stand at.
       *
-      * Read-only, like [[stateAt]] beside it, and reconstructed the same way — at the tip from the
-      * live state, otherwise through [[reconstruct]]. Exporting a past boundary therefore cannot
-      * disturb block production at the current one.
+      * Read-only, like [[digestsAt]] beside it, and reconstructed the same way — at the tip from
+      * the live state, otherwise through [[reconstruct]]. Exporting a past boundary therefore
+      * cannot disturb block production at the current one.
       *
       * ⚠️ **A full copy of the utxo set, in the store's own encoding.** That is what makes this a
       * naive implementation and not the final one: GUM-324 replaces this representation with a
@@ -606,26 +606,7 @@ case class EutxoL2Ledger private (
                     "a state may only be adopted into a ledger that has applied nothing"
               )
             )
-            snapshot <- EitherT.fromEither[IO](
-              io.circe.parser
-                  .decode[L2Snapshot](
-                    new String(IArray.genericWrapArray(exported.bytes).toArray, UTF_8)
-                  )
-                  .left
-                  .map(e =>
-                      RestoreError.StateImportRefused(
-                        s"exported state did not decode as an L2 snapshot: ${e.getMessage}"
-                      )
-                  )
-            )
-            _ <- EitherT.cond[IO](
-              snapshot.commandNumber == exported.commandNumber,
-              (),
-              RestoreError.StateImportRefused(
-                s"exported state is labelled command number ${exported.commandNumber} but " +
-                    s"describes ${snapshot.commandNumber}"
-              )
-            )
+            snapshot <- decodeExport(exported)
             restored = restoreFromSnapshot((exported.commandNumber, snapshot))
             _ <- EitherT.right[RestoreError](store.putSnapshot(exported.commandNumber, snapshot))
             _ <- EitherT.right[RestoreError](store.putTip(exported.commandNumber))
@@ -681,9 +662,57 @@ case class EutxoL2Ledger private (
             )
             .flatMap(mapOf)
 
-    /** The evacuation map a state projects to — the one derivation [[digestsOf]] and
-      * [[evacuationMapAt]] share, so a digest can never describe a different map than the one
-      * handed out.
+    override def digestsOf(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        stateOf(exported).flatMap(digestsOf)
+
+    override def evacuationMapOf(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, EvacuationMap] =
+        stateOf(exported).flatMap(mapOf)
+
+    /** The state an export describes, without publishing it anywhere: decode the bytes, check the
+      * label, rebuild. Everything [[importState]] does before its first write, which is what makes
+      * the pre-adoption checks and the adoption itself answer about the same state.
+      */
+    private def stateOf(exported: L2StateExport): EitherT[IO, RestoreError, EutxoL2Ledger.State] =
+        decodeExport(exported).map(snapshot =>
+            restoreFromSnapshot((exported.commandNumber, snapshot))
+        )
+
+    /** Decode an export's opaque bytes as this backend's snapshot and check that it describes the
+      * boundary it is labelled with. A blob that decodes but describes another command number is
+      * refused rather than adopted at its own number: the caller is about to check it against a
+      * certificate for the boundary it asked for.
+      */
+    private def decodeExport(exported: L2StateExport): EitherT[IO, RestoreError, L2Snapshot] =
+        for {
+            snapshot <- EitherT.fromEither[IO](
+              io.circe.parser
+                  .decode[L2Snapshot](
+                    new String(IArray.genericWrapArray(exported.bytes).toArray, UTF_8)
+                  )
+                  .left
+                  .map(e =>
+                      RestoreError.StateImportRefused(
+                        s"exported state did not decode as an L2 snapshot: ${e.getMessage}"
+                      )
+                  )
+            )
+            _ <- EitherT.cond[IO](
+              snapshot.commandNumber == exported.commandNumber,
+              (),
+              RestoreError.StateImportRefused(
+                s"exported state is labelled command number ${exported.commandNumber} but " +
+                    s"describes ${snapshot.commandNumber}"
+              )
+            )
+        } yield snapshot
+
+    /** The evacuation map a state projects to — the one derivation every caller shares, whether it
+      * reached the state through a command number or through an export, so a digest can never
+      * describe a different map than the one handed out.
       */
     private def mapOf(s: EutxoL2Ledger.State): EitherT[IO, RestoreError, EvacuationMap] =
         EitherT.fromEither[IO](
@@ -697,7 +726,6 @@ case class EutxoL2Ledger private (
         mapOf(s).map(map =>
             L2Ledger.Digests(
               evacuationMapHash = map.digest,
-              evacuationMapKzg = map.kzgCommitment,
               l2StateHash = L2Snapshot.fromState(s).stateHash,
               l2ParamsHash = EutxoL2Ledger.mkL2ParamsHash(protocolParams)
             )

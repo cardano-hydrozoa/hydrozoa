@@ -538,24 +538,29 @@ the offer carries the narrowest set that still lets it check what it adopts:
 - `cursors` + `ownHardAck` — every lane's first index, to adopt exactly as sent.
 
 **Nothing is trusted because it arrived.** `CoilJoin.adopt` checks the digests
-the coil's **own** ledger reports after adopting, never the ones travelling with
-the bytes, against the certificate the head peers signed (`JoinOfferVerifier`).
-The treasury/evacuation-map balance identity comes for free:
-`StackComposer.State.recover` checks it on whatever pair it boots from.
+the coil's **own** ledger computes from the offered bytes, never the ones
+travelling with them, against the certificate the head peers signed
+(`JoinOfferVerifier`). The treasury/evacuation-map balance identity comes for
+free: `StackComposer.State.recover` checks it on whatever pair it boots from.
+
+**The whole offer is checked before anything is destroyed.** The certificate and
+the state blob are joined by nothing but that digest comparison: verifying the
+certificate establishes that the head peers signed a settlement and says nothing
+about the bytes beside it. A settlement is an ordinary L1 transaction, so anyone
+can read a genuine one off the chain and attach whatever state they like. So the
+ledger digests the blob where it lies — `L2Ledger.digestsOf` and
+`evacuationMapOf`, neither of which touches the live ledger — and the coil
+commits to nothing until both the certificate and the state check out.
 
 **Adopting destroys what was there.** Both the L2 ledger and the consensus store
-are wiped first. A peer being seeded holds nothing worth keeping — it is too far
-behind for its hub to serve it forward — and keeping it is actively wrong: stale
-journals make the store read as warm and anchor recovery below the start point,
-on history the hub no longer has. `Cf.Meta` survives, because it binds the store
-to this peer and this head.
+are wiped once the offer has passed. A peer being seeded holds nothing worth
+keeping — it is too far behind for its hub to serve it forward — and keeping it
+is actively wrong: stale journals make the store read as warm and anchor recovery
+below the start point, on history the hub no longer has. `Cf.Meta` survives,
+because it binds the store to this peer and this head.
 
-The order is what makes that safe. Everything checkable without the ledger — the
-settlement is a transaction this head could have produced, it belongs to this
-head, the signatures hold — is checked **before** anything is destroyed, so an
-offer anyone could forge costs the coil nothing. An offer that clears those and
-then fails on digests took N-of-N head signatures to build. A crash after the
-wipe leaves a cold store, which rejoins cleanly on the next boot.
+A crash after the wipe leaves a cold store, which rejoins cleanly on the next
+boot.
 
 **Adoption happens before the actors exist, and can only happen there.**
 `L2Ledger.importState` accepts a state only into a ledger that has applied

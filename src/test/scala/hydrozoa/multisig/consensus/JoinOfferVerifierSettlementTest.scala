@@ -66,17 +66,6 @@ class JoinOfferVerifierSettlementTest extends AnyFunSuite:
 
     private val treasury = signedSettlement.treasuryProduced
 
-    /** The digests a coil's own ledger would report after adopting a state that genuinely matches
-      * this settlement's certificate.
-      */
-    private val matchingDigests: L2Ledger.Digests =
-        L2Ledger.Digests(
-          evacuationMapHash = EvacuationMap.empty.digest,
-          evacuationMapKzg = treasury.kzgCommitment,
-          l2StateHash = L2StateHash(treasury.datum.l2StateHash),
-          l2ParamsHash = env.headConfig.l2ParamsHash
-        )
-
     /** Replace the produced treasury, whichever settlement shape this fixture turned out to be. */
     private def withTreasury(s: SettlementTx, t: MultisigTreasuryUtxo): SettlementTx = s match {
         case x: SettlementTx.NoPayouts             => x.copy(treasuryProduced = t)
@@ -84,11 +73,40 @@ class JoinOfferVerifierSettlementTest extends AnyFunSuite:
         case x: SettlementTx.WithRollouts          => x.copy(treasuryProduced = t)
     }
 
+    /** The evacuation map a coil's own ledger would project from the offered state. */
+    private val matchingMap: EvacuationMap = EvacuationMap.empty
+
+    /** The settlement with its treasury committing to [[matchingMap]].
+      *
+      * The builder commits to whatever map its own generated inputs produce, and it has no idea
+      * which state a coil will be offered — so the honest fixture has to make the two agree. That
+      * agreement is the whole of what the verifier establishes, and nothing else joins the
+      * certificate to the state.
+      */
+    private val certifiedSettlement: SettlementTx =
+        withTreasury(
+          signedSettlement,
+          treasury.copy(datum = treasury.datum.copy(commit = matchingMap.kzgCommitment))
+        )
+
+    /** The digests a coil's own ledger would compute from a state that genuinely matches
+      * [[certifiedSettlement]].
+      */
+    private val matchingDigests: L2Ledger.Digests =
+        L2Ledger.Digests(
+          evacuationMapHash = matchingMap.digest,
+          l2StateHash = L2StateHash(treasury.datum.l2StateHash),
+          l2ParamsHash = env.headConfig.l2ParamsHash
+        )
+
     private def verify(
-        settlement: SettlementTx = signedSettlement,
-        digests: L2Ledger.Digests = matchingDigests
+        settlement: SettlementTx = certifiedSettlement,
+        digests: L2Ledger.Digests = matchingDigests,
+        map: EvacuationMap = matchingMap
     ): Either[JoinRefusal, Unit] =
-        JoinOfferVerifier.verify(settlement, sec = None, adopted = digests).unsafeRunSync()
+        JoinOfferVerifier
+            .verify(settlement, sec = None, offered = digests, offeredMap = map)
+            .unsafeRunSync()
 
     test("a settlement and matching state are accepted end to end") {
         assert(verify() == Right(()), s"an honest offer was refused: ${verify()}")
@@ -129,11 +147,18 @@ class JoinOfferVerifierSettlementTest extends AnyFunSuite:
     }
 
     test("a state whose evacuation map is not the certified one is refused") {
-        val wrongMap = matchingDigests.copy(
-          evacuationMapKzg = ByteString.fromArray(Array.fill[Byte](48)(0x77.toByte))
+        // The certificate commits to a map this state does not project to. Varied on the
+        // certificate rather than the map because the commitment cannot be inverted: there is no
+        // second map to hand in whose commitment is known in advance.
+        val otherMap = withTreasury(
+          certifiedSettlement,
+          treasury.copy(
+            datum = treasury.datum
+                .copy(commit = ByteString.fromArray(Array.fill[Byte](48)(0x77.toByte)))
+          )
         )
         assert(
-          verify(digests = wrongMap).left.exists(
+          verify(settlement = otherMap).left.exists(
             _.isInstanceOf[JoinRefusal.EvacuationMapMismatch]
           )
         )

@@ -572,7 +572,7 @@ final case class StackComposer(
       * Each block's L2 command number comes from the per-block `L2CommandNumber` row written in the
       * same atomic bundle as its `BlockResult`, so the anchor is the one the fast side actually
       * reached — the composer never converts a block number to a command number itself. The
-      * ledger's own position is untouched; see [[L2StateReader.stateAt]] for why it cannot be
+      * ledger's own position is untouched; see [[L2StateReader.digestsAt]] for why it cannot be
       * `restoreTo`.
       *
       * Every reported digest is mandatory ([[L2StateReader]]), so this covers every block
@@ -589,7 +589,7 @@ final case class StackComposer(
                 for {
                     commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
                     digests <- l2StateReader
-                        .stateAt(commandNumber)
+                        .digestsAt(commandNumber)
                         .value
                         .flatMap(IO.fromEither)
                 } yield blockNum -> digests.l2StateHash

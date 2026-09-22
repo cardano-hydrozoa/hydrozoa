@@ -11,6 +11,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2StateHash}
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
@@ -50,18 +51,18 @@ object JoinRefusal:
             s"offered settlement's treasury carries beacon token $actual, not this head's $expected"
     }
 
-    /** The adopted state does not digest to the `l2StateHash` the head peers signed. */
+    /** The offered state does not digest to the `l2StateHash` the head peers signed. */
     final case class L2StateMismatch(expected: L2StateHash, actual: L2StateHash)
         extends JoinRefusal {
         override def getMessage: String =
-            s"adopted L2 state digests to $actual, but the certificate commits to $expected"
+            s"offered L2 state digests to $actual, but the certificate commits to $expected"
     }
 
-    /** The evacuation map the adopted state projects to is not the one committed on L1. */
+    /** The evacuation map the offered state projects to is not the one committed on L1. */
     final case class EvacuationMapMismatch(expected: KzgCommitment, actual: KzgCommitment)
         extends JoinRefusal {
         override def getMessage: String =
-            s"adopted state's evacuation-map commitment $actual does not match the certified " +
+            s"offered state's evacuation-map commitment $actual does not match the certified " +
                 s"$expected"
     }
 
@@ -105,8 +106,9 @@ object JoinRefusal:
 /** What a coil peer checks before it adopts the start point its hub offered (GUM-312).
   *
   * The hub chooses where a coil starts, but it does not get to be believed. Everything here is
-  * established against values the coil already holds — its head config, and the digests its **own**
-  * ledger reported after importing the state — so a hub that lies is refused rather than obeyed.
+  * established against values the coil already holds — its head config, and what its **own** ledger
+  * makes of the offered state — so a hub that lies is refused rather than obeyed, and is refused
+  * before the coil destroys anything of its own.
   *
   * What this does NOT establish, and cannot:
   *
@@ -146,31 +148,32 @@ object JoinOfferVerifier:
       *   major, otherwise the latest major at or before it.
       * @param sec
       *   the start point's SEC, present exactly when the start point is a minor partition.
-      * @param adopted
-      *   the digests **this coil's own ledger** reported after importing the offered state. Never
-      *   the donor's word for them: a hash that travels with the bytes it describes attests to
-      *   nothing.
+      * @param offered
+      *   the digests **this coil's own ledger** computed from the offered state. Never the donor's
+      *   word for them: a hash that travels with the bytes it describes attests to nothing.
+      * @param offeredMap
+      *   the evacuation map that same state projects to, likewise computed here. The head commits
+      *   to it with KZG and compares that against the certificate.
       */
     def verify(
         settlement: SettlementTx,
         sec: Option[StandaloneEvacuationCommitment.MultiSigned],
-        adopted: L2Ledger.Digests
+        offered: L2Ledger.Digests,
+        offeredMap: EvacuationMap
     )(using config: Config): IO[Either[JoinRefusal, Unit]] =
         (for {
             _ <- EitherT(verifyCertificate(settlement, sec))
-            _ <- EitherT.fromEither[IO](verifyAdoptedState(settlement, sec, adopted))
+            _ <- EitherT.fromEither[IO](verifyOfferedState(settlement, sec, offered, offeredMap))
         } yield ()).value
 
-    /** Everything checkable **before** the offered state is anywhere near this node's ledger: that
-      * the settlement is a transaction this head could have produced, that it belongs to this head,
-      * and that the signatures on both artifacts hold.
+    /** The half that needs no ledger at all: that the settlement is a transaction this head could
+      * have produced, that it belongs to this head, and that the signatures on both artifacts hold.
       *
-      * Split out because adopting a start point **destroys what the coil already had** — its ledger
-      * and its store are wiped, since a peer being seeded holds nothing worth keeping and stale
-      * journals would anchor recovery below the start point. So everything that can be refused
-      * without touching the ledger is refused first, and a forged offer costs the coil nothing. An
-      * offer that clears this and then fails on digests took N-of-N head signatures to construct,
-      * which is the head itself lying.
+      * ⛔ **Passing this says nothing about the state offered beside it.** The certificate and the
+      * blob are joined only by [[verifyOfferedState]]'s digest comparison. A settlement is an
+      * ordinary L1 transaction, so anyone can read a genuine one off the chain and pair it with
+      * arbitrary bytes; this would pass on that pairing, exactly as it should. Both halves run
+      * before a coil wipes anything (GUM-354).
       */
     def verifyCertificate(
         settlement: SettlementTx,
@@ -183,17 +186,18 @@ object JoinOfferVerifier:
             _ <- EitherT(verifySecSignatures(sec))
         } yield ()).value
 
-    /** The half that needs the import to have happened: what this coil's **own** ledger reports,
-      * against what the certificate commits to.
+    /** The half that needs the ledger: what this coil's **own** ledger makes of the offered state,
+      * against what the certificate commits to. This is the only thing that binds the two.
       */
-    def verifyAdoptedState(
+    def verifyOfferedState(
         settlement: SettlementTx,
         sec: Option[StandaloneEvacuationCommitment.MultiSigned],
-        adopted: L2Ledger.Digests
+        offered: L2Ledger.Digests,
+        offeredMap: EvacuationMap
     )(using config: Config): Either[JoinRefusal, Unit] =
         for {
-            _ <- checkLedgerParams(adopted)
-            _ <- checkStateAndMap(settlement, sec, adopted)
+            _ <- checkLedgerParams(offered)
+            _ <- checkStateAndMap(settlement, sec, offered, offeredMap)
         } yield ()
 
     /** Public alongside [[verifySecSignatures]], and for the same reason: "would the chain have
@@ -260,12 +264,12 @@ object JoinOfferVerifier:
       * ledger reports this among the digests it computes while importing.
       */
     private def checkLedgerParams(
-        adopted: L2Ledger.Digests
+        offered: L2Ledger.Digests
     )(using config: Config): Either[JoinRefusal, Unit] =
         Either.cond(
-          adopted.l2ParamsHash == config.l2ParamsHash,
+          offered.l2ParamsHash == config.l2ParamsHash,
           (),
-          JoinRefusal.L2ParamsMismatch(config.l2ParamsHash.toHex, adopted.l2ParamsHash.toHex)
+          JoinRefusal.L2ParamsMismatch(config.l2ParamsHash.toHex, offered.l2ParamsHash.toHex)
         )
 
     /** When both artifacts are present they must agree about the evacuation map. This catches a
@@ -286,21 +290,25 @@ object JoinOfferVerifier:
             )
         }
 
-    /** The adopted state must digest to what the head peers signed, in both representations.
+    /** The offered state must digest to what the head peers signed, in both representations.
       *
       * The **SEC is authoritative when present**: it commits to the start point's own minor, while
       * the settlement is from the latest major at or before it and therefore describes an older
       * state. At a major start point there is no SEC and the settlement's own datum is the one.
       *
-      * Both digests are checked even though `l2StateHash` covers the utxo set the map projects from
-      * — so a matching state hash nearly implies a matching map. The commitment is the value
-      * **anchored on L1**, and checking it is what makes the coil's agreement with the chain
-      * explicit rather than transitive.
+      * Both are checked even though `l2StateHash` covers the utxo set the map projects from — so a
+      * matching state hash nearly implies a matching map. The commitment is the value **anchored on
+      * L1**, and checking it is what makes the coil's agreement with the chain explicit rather than
+      * transitive.
+      *
+      * **The commitment is taken here, not reported by the ledger.** KZG is this head's choice of
+      * scheme; the ledger hands over the map it projects and nothing more ([[L2Ledger.Digests]]).
       */
     private def checkStateAndMap(
         settlement: SettlementTx,
         sec: Option[StandaloneEvacuationCommitment.MultiSigned],
-        adopted: L2Ledger.Digests
+        offered: L2Ledger.Digests,
+        offeredMap: EvacuationMap
     ): Either[JoinRefusal, Unit] =
         val (certifiedState, certifiedMap) = sec match {
             case Some(s) => (s.commitment.l2StateHash, s.commitment.kzgCommitment)
@@ -310,16 +318,17 @@ object JoinOfferVerifier:
                   settlement.treasuryProduced.kzgCommitment
                 )
         }
+        val offeredCommitment = offeredMap.kzgCommitment
         for {
             _ <- Either.cond(
-              adopted.l2StateHash == certifiedState,
+              offered.l2StateHash == certifiedState,
               (),
-              JoinRefusal.L2StateMismatch(certifiedState, adopted.l2StateHash)
+              JoinRefusal.L2StateMismatch(certifiedState, offered.l2StateHash)
             )
             _ <- Either.cond(
-              adopted.evacuationMapKzg == certifiedMap,
+              offeredCommitment == certifiedMap,
               (),
-              JoinRefusal.EvacuationMapMismatch(certifiedMap, adopted.evacuationMapKzg)
+              JoinRefusal.EvacuationMapMismatch(certifiedMap, offeredCommitment)
             )
         } yield ()
 

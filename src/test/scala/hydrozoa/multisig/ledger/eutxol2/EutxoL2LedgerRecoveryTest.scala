@@ -411,15 +411,15 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
         }
     }
 
-    // --- stateAt (the read-only sibling; docs/spec/l2-state-certificate.md) ------
+    // --- digestsAt (the read-only sibling; docs/spec/l2-state-certificate.md) ------
 
-    test("stateAt at the tip reports the live state and leaves the ledger where it was") {
+    test("digestsAt at the tip reports the live state and leaves the ledger where it was") {
         run {
             val total = L2Store.SnapshotInterval.toInt + 3
             for
                 run <- runCommits(total)
                 tip = L2CommandNumber(total.toLong)
-                digests <- run.ledger.stateAt(tip).value.flatMap(IO.fromEither)
+                digests <- run.ledger.digestsAt(tip).value.flatMap(IO.fromEither)
                 after <- run.ledger.peekState
             yield assert(
               digests.l2StateHash == L2Snapshot.fromState(run.finalState).stateHash
@@ -429,7 +429,7 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
         }
     }
 
-    test("stateAt below the tip reports that past state without moving the ledger") {
+    test("digestsAt below the tip reports that past state without moving the ledger") {
         run {
             val total = L2Store.SnapshotInterval.toInt + 5
             val target = L2Store.SnapshotInterval.toInt + 1
@@ -437,7 +437,7 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 run <- runCommits(total)
                 past <- replayLiveTo(target)
                 digests <- run.ledger
-                    .stateAt(L2CommandNumber(target.toLong))
+                    .digestsAt(L2CommandNumber(target.toLong))
                     .value
                     .flatMap(IO.fromEither)
                 after <- run.ledger.peekState
@@ -449,14 +449,14 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
         }
     }
 
-    test("stateAt agrees with restoreTo at the same commandNumber") {
+    test("digestsAt agrees with restoreTo at the same commandNumber") {
         run {
             val total = L2Store.SnapshotInterval.toInt + 4
             val target = L2Store.SnapshotInterval.toInt + 2
             for
                 run <- runCommits(total)
                 queried <- run.ledger
-                    .stateAt(L2CommandNumber(target.toLong))
+                    .digestsAt(L2CommandNumber(target.toLong))
                     .value
                     .flatMap(IO.fromEither)
                 // A separate ledger over the same store, so restoring does not disturb the first.
@@ -469,11 +469,11 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
         }
     }
 
-    test("stateAt beyond the tip fails rather than reporting a state that does not exist") {
+    test("digestsAt beyond the tip fails rather than reporting a state that does not exist") {
         run {
             for
                 run <- runCommits(3)
-                outcome <- run.ledger.stateAt(L2CommandNumber(9L)).value
+                outcome <- run.ledger.digestsAt(L2CommandNumber(9L)).value
             yield assert(
               outcome.left.exists(_.isInstanceOf[RestoreError.CommandNumberTooHigh])
             )

@@ -22,6 +22,7 @@ import hydrozoa.multisig.persistence.{InMemoryBackendStore, JournalKey, JournalV
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
+import scalus.uplc.builtin.ByteString
 import test.MinorBlocks
 
 /** Adopting a start point into a cold store — [[CoilJoin.adopt]] — and what the store reads as
@@ -67,6 +68,8 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
         case x: SettlementTx.WithRollouts          => x.copy(treasuryProduced = t)
     }
 
+    private val initTreasury: MultisigTreasuryUtxo = nodeConfig.initializationTx.treasuryProduced
+
     /** A genuine multisigned settlement carrying the head's **init** treasury.
       *
       * The treasury and the evacuation map are not independent: `StackComposer.State.recover`
@@ -80,7 +83,7 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
             unsignedSettlement.txLens.replace(env.multisignTx(unsignedSettlement.tx))(
               unsignedSettlement
             )
-        withTreasury(signed, nodeConfig.initializationTx.treasuryProduced)
+        withTreasury(signed, initTreasury)
 
     /** An offer whose state is a real export from a genesis donor, so the digests line up with the
       * settlement the fixture head config produced.
@@ -306,6 +309,54 @@ class CoilJoinAdoptionTest extends AnyFunSuite {
         )
         val (result, mark, after) = outcome
         val _ = assert(result.isLeft, "a settlement that does not verify must fail the boot")
+        val _ = assert(mark.isEmpty, "a refused offer must leave no start point behind")
+        assert(
+          after.hardAckedStack.contains(StackNumber(1)),
+          "a refused offer wiped the store it was refused by"
+        )
+    }
+
+    test("an offer refused on its state, not its signatures, destroys nothing either") {
+        // The half the signatures do not cover. `verifyCertificate` passes here — the settlement
+        // is the genuine multisigned one — and the offer still fails, on the only thing that
+        // binds the certificate to the bytes beside it. Before GUM-354 that comparison ran after
+        // the wipe, so reaching it cost the coil its store.
+        val certifiesAnotherState = withTreasury(
+          settlement,
+          initTreasury.copy(
+            datum = initTreasury.datum
+                .copy(l2StateHash = ByteString.fromArray(Array.fill[Byte](32)(0x99.toByte)))
+          )
+        )
+        val outcome = withStore(p =>
+            for {
+                ledger <- freshLedger
+                stamp <- p.arrivalStamp
+                _ <- p.put(JournalKey.HardAck(nodeConfig.ownPeerId, HardAckNumber(0)))(
+                  JournalValue(
+                    stamp,
+                    HardAck(
+                      ackId = HardAckId(nodeConfig.ownPeerId, HardAckNumber(0)),
+                      stackNum = StackNumber(1),
+                      payload = HardAck.Round2Payload
+                          .Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
+                    )
+                  )
+                )
+                o <- offer()
+                result <- CoilJoin
+                    .adopt(o.copy(settlement = certifiesAnotherState), p, ledger)
+                    .attempt
+                mark <- p.get(StoreKey.StartPoint)
+                after <- Markers.derive(p, nodeConfig.ownPeerId)
+            } yield (result, mark, after)
+        )
+        val (result, mark, after) = outcome
+        val _ =
+            assert(
+              result.isLeft,
+              s"a state the certificate does not commit to was adopted: $result"
+            )
         val _ = assert(mark.isEmpty, "a refused offer must leave no start point behind")
         assert(
           after.hardAckedStack.contains(StackNumber(1)),
