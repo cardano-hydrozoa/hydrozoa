@@ -82,7 +82,7 @@ final class HubWsTransport private (
 
     private def toLiaison(
         coil: CoilPeerNumber,
-        request: LiaisonProtocol.HubRequestServed
+        request: LiaisonProtocol.HubLiaisonMessage
     ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(coil) match {

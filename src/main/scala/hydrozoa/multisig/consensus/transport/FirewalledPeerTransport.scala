@@ -23,7 +23,7 @@ final class FirewalledPeerTransport(
     ): IO[Unit] =
         underlying.register(remote, localLiaison)
 
-    override def send(remote: HeadPeerId, request: LiaisonProtocol.HeadToHeadRequest): IO[Unit] =
+    override def send(remote: HeadPeerId, request: LiaisonProtocol.MeshLiaisonMessage): IO[Unit] =
         shouldDrop(remote).flatMap {
             case true =>
                 firewallTracer.traceWith(FirewalledPeerTransportEvent.DroppedOutbound(remote))

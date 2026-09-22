@@ -32,7 +32,7 @@ trait PeerTransport {
     def register(remote: HeadPeerId, localLiaison: PeerLiaisonHeadToHead.Handle): IO[Unit]
 
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. */
-    def send(remote: HeadPeerId, request: LiaisonProtocol.HeadToHeadRequest): IO[Unit]
+    def send(remote: HeadPeerId, request: LiaisonProtocol.MeshLiaisonMessage): IO[Unit]
 }
 
 /** Real WS-backed [[PeerTransport]]: contributes the `/head` route to the peer's shared
@@ -79,7 +79,7 @@ final class WsPeerTransport private (
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. The message is held in
       * the per-remote outbox queue until the WS link drains it.
       */
-    override def send(remote: HeadPeerId, request: LiaisonProtocol.HeadToHeadRequest): IO[Unit] =
+    override def send(remote: HeadPeerId, request: LiaisonProtocol.MeshLiaisonMessage): IO[Unit] =
         HeadFrame.fromWire(request) match {
             case Some(wire) =>
                 val line = HeadFrame.encode(HeadFrame.Msg(wire))
@@ -94,7 +94,7 @@ final class WsPeerTransport private (
 
     private def dispatchInbound(
         remote: HeadPeerId,
-        payload: LiaisonProtocol.HeadToHeadRequest
+        payload: LiaisonProtocol.MeshLiaisonMessage
     ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(remote) match {

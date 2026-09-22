@@ -25,7 +25,7 @@ final class InProcessPeerTransport private (
 
     override def send(
         remote: HeadPeerId,
-        request: LiaisonProtocol.HeadToHeadRequest
+        request: LiaisonProtocol.MeshLiaisonMessage
     ): IO[Unit] =
         registry.get.flatMap { m =>
             m.get(remote) match {
@@ -38,7 +38,7 @@ final class InProcessPeerTransport private (
 
     private def dispatchInbound(
         sender: HeadPeerId,
-        payload: LiaisonProtocol.HeadToHeadRequest
+        payload: LiaisonProtocol.MeshLiaisonMessage
     ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(sender) match {

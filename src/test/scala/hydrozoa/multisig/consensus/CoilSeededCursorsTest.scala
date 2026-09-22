@@ -76,15 +76,15 @@ class CoilSeededCursorsTest extends AnyFunSuite {
       cursors = adoptedCursors
     )
 
-    private class Recorder(seen: Ref[IO, Vector[LiaisonProtocol.HubRequestServed]])
-        extends Actor[IO, LiaisonProtocol.HubRequestServed] {
-        override def receive: Receive[IO, LiaisonProtocol.HubRequestServed] =
+    private class Recorder(seen: Ref[IO, Vector[LiaisonProtocol.HubLiaisonMessage]])
+        extends Actor[IO, LiaisonProtocol.HubLiaisonMessage] {
+        override def receive: Receive[IO, LiaisonProtocol.HubLiaisonMessage] =
             PartialFunction.fromFunction(r => seen.update(_ :+ r))
     }
 
     /** Poll until the liaison has sent its opening `Population.Get`, or give up loudly. */
     private def awaitFirstPull(
-        seen: Ref[IO, Vector[LiaisonProtocol.HubRequestServed]]
+        seen: Ref[IO, Vector[LiaisonProtocol.HubLiaisonMessage]]
     ): IO[Population.Get] =
         def go: IO[Population.Get] =
             seen.get.flatMap(_.collectFirst { case g: Population.Get => g } match {
@@ -119,7 +119,7 @@ class CoilSeededCursorsTest extends AnyFunSuite {
                                     } yield ()
                                 )
                             )
-                            seen <- Ref[IO].of(Vector.empty[LiaisonProtocol.HubRequestServed])
+                            seen <- Ref[IO].of(Vector.empty[LiaisonProtocol.HubLiaisonMessage])
                             remote <- system.actorOf(new Recorder(seen))
                             blockWeaver <- system.actorOf(NoopActor[Any])
                             consensus <- system.actorOf(NoopActor[Any])

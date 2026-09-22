@@ -111,7 +111,7 @@ object CoilRelay {
     case object PreStart
 
     /** The population artifacts a relay forwards. Each is also a member of
-      * [[LiaisonProtocol.HubRequestServed]], so it can be sent straight to a
+      * [[LiaisonProtocol.HubLiaisonMessage]], so it can be sent straight to a
       * `PeerLiaisonHubToCoil`.
       */
     type Artifact =

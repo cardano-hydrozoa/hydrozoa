@@ -40,7 +40,7 @@ abstract class PeerLiaisonHeadToHead(
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO],
     metrics: PeerMetrics
-) extends Actor[IO, LiaisonProtocol.HeadToHeadRequest] {
+) extends Actor[IO, LiaisonProtocol.MeshLiaisonMessage] {
 
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codecs in `persistInbound` pick it up.
@@ -448,10 +448,10 @@ abstract class PeerLiaisonHeadToHead(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, HeadToHeadRequest] =
+    override def receive: Receive[IO, MeshLiaisonMessage] =
         PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: HeadToHeadRequest): IO[Unit] = req match {
+    private def receiveTotal(req: MeshLiaisonMessage): IO[Unit] = req match {
         case PreStart                   => preStartLocal
         case ResendCurrent              => puller.resend
         case get: Mesh.Get              => server.handleGet(get)
@@ -535,7 +535,7 @@ object PeerLiaisonHeadToHead {
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section &
             BlockConfig.Section
 
-    type Handle = ActorRef[IO, LiaisonProtocol.HeadToHeadRequest]
+    type Handle = ActorRef[IO, LiaisonProtocol.MeshLiaisonMessage]
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,

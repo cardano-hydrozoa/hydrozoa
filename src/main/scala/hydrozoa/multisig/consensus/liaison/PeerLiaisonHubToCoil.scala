@@ -42,7 +42,7 @@ abstract class PeerLiaisonHubToCoil(
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO],
     decideStartPoint: Join.Connected => IO[CoilStartPoint]
-) extends Actor[IO, LiaisonProtocol.HubRequestServed] {
+) extends Actor[IO, LiaisonProtocol.HubLiaisonMessage] {
 
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codec in `persistInbound` picks it up.
@@ -381,7 +381,7 @@ abstract class PeerLiaisonHubToCoil(
       * and does not pause because one coil's link is renegotiating; an artifact dropped here is
       * production missing from this coil's outbox lane forever.
       */
-    private def joining: Receive[IO, HubRequestServed] = PartialFunction.fromFunction {
+    private def joining: Receive[IO, HubLiaisonMessage] = PartialFunction.fromFunction {
         // Join mode is only ever entered from `regular`, which has already run this.
         case PreStart                  => IO.unit
         case connected: Join.Connected => handleConnected(connected)
@@ -403,7 +403,7 @@ abstract class PeerLiaisonHubToCoil(
     /** Regular mode: the ordinary serve/pull liaison, with `Join.Connected` as the one arm that
       * leaves it.
       */
-    private def regular: Receive[IO, HubRequestServed] = PartialFunction.fromFunction {
+    private def regular: Receive[IO, HubLiaisonMessage] = PartialFunction.fromFunction {
         case ResendCurrent       => puller.resend
         case get: Population.Get => server.handleGet(get)
         case own: OwnHardAck.New => puller.handleReply(own)
@@ -421,7 +421,7 @@ abstract class PeerLiaisonHubToCoil(
       * outstanding and the lanes restore and start pulling exactly as they always have. Join mode
       * is the transient state a link-up drops this actor into.
       */
-    override def receive: Receive[IO, HubRequestServed] = regular
+    override def receive: Receive[IO, HubLiaisonMessage] = regular
 
     /** Leave join mode, replaying whatever pull arrived while the decision was outstanding. */
     private def becomeRegular: IO[Unit] =
@@ -561,7 +561,7 @@ object PeerLiaisonHubToCoil {
     type Config =
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section
 
-    type Handle = ActorRef[IO, LiaisonProtocol.HubRequestServed]
+    type Handle = ActorRef[IO, LiaisonProtocol.HubLiaisonMessage]
 
     /** The hub's quorum + relay-sequencer for the coil peer's inbound hard-ack, plus the send path
       * to the coil peer's counterpart liaison.

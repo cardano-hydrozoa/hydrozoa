@@ -69,7 +69,7 @@ final class CoilPeerWsTransport private (
       */
     override def announceMarks(marks: Join.Connected): IO[Unit] = IO.unit
 
-    private def toLiaison(request: LiaisonProtocol.CoilRequestServed): IO[Unit] =
+    private def toLiaison(request: LiaisonProtocol.CoilLiaisonMessage): IO[Unit] =
         inboundRef.get.flatMap {
             case Some(liaison) => liaison ! request
             case None          => tracer.traceWith(NoLiaisonForInbound)

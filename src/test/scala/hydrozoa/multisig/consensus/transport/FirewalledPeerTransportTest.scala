@@ -14,7 +14,7 @@ class FirewalledPeerTransportTest extends AnyFunSuite:
     private val remoteId: HeadPeerId = HeadPeerId(HeadPeerNumber(1), PositiveInt.unsafeApply(2))
 
     private def newFakeTransport(
-        sends: Ref[IO, List[(HeadPeerId, LiaisonProtocol.HeadToHeadRequest)]]
+        sends: Ref[IO, List[(HeadPeerId, LiaisonProtocol.MeshLiaisonMessage)]]
     ): PeerTransport =
         new PeerTransport:
             override def ownPeerId: HeadPeerId = ownId
@@ -24,13 +24,13 @@ class FirewalledPeerTransportTest extends AnyFunSuite:
             ): IO[Unit] = IO.unit
             override def send(
                 remote: HeadPeerId,
-                request: LiaisonProtocol.HeadToHeadRequest,
+                request: LiaisonProtocol.MeshLiaisonMessage,
             ): IO[Unit] =
                 sends.update((remote, request) :: _)
 
     test("send is forwarded when shouldDrop = false; underlying receives it, no drop event") {
         val io = for
-            sends <- Ref[IO].of(List.empty[(HeadPeerId, LiaisonProtocol.HeadToHeadRequest)])
+            sends <- Ref[IO].of(List.empty[(HeadPeerId, LiaisonProtocol.MeshLiaisonMessage)])
             captured <- Ref[IO].of(List.empty[FirewalledPeerTransportEvent])
             underlying = newFakeTransport(sends)
             sink = ContraTracer[IO, FirewalledPeerTransportEvent](e => captured.update(e :: _))
@@ -46,7 +46,7 @@ class FirewalledPeerTransportTest extends AnyFunSuite:
 
     test("send is short-circuited when shouldDrop = true; underlying is never asked") {
         val io = for
-            sends <- Ref[IO].of(List.empty[(HeadPeerId, LiaisonProtocol.HeadToHeadRequest)])
+            sends <- Ref[IO].of(List.empty[(HeadPeerId, LiaisonProtocol.MeshLiaisonMessage)])
             captured <- Ref[IO].of(List.empty[FirewalledPeerTransportEvent])
             underlying = newFakeTransport(sends)
             sink = ContraTracer[IO, FirewalledPeerTransportEvent](e => captured.update(e :: _))
@@ -65,7 +65,7 @@ class FirewalledPeerTransportTest extends AnyFunSuite:
     test("shouldDrop can key on remote — drop peer 1, forward to peer 2") {
         val other = HeadPeerId(HeadPeerNumber(2), PositiveInt.unsafeApply(3))
         val io = for
-            sends <- Ref[IO].of(List.empty[(HeadPeerId, LiaisonProtocol.HeadToHeadRequest)])
+            sends <- Ref[IO].of(List.empty[(HeadPeerId, LiaisonProtocol.MeshLiaisonMessage)])
             captured <- Ref[IO].of(List.empty[FirewalledPeerTransportEvent])
             underlying = newFakeTransport(sends)
             sink = ContraTracer[IO, FirewalledPeerTransportEvent](e => captured.update(e :: _))

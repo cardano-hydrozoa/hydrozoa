@@ -47,7 +47,7 @@ abstract class PeerLiaisonCoilToHub(
       * one the rest of the node should boot from.
       */
     joinSettled: Deferred[IO, Either[Throwable, Unit]]
-) extends Actor[IO, LiaisonProtocol.CoilRequestServed] {
+) extends Actor[IO, LiaisonProtocol.CoilLiaisonMessage] {
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codecs in `persistInbound` pick it up.
     private given CardanoNetwork.Section = config
@@ -385,11 +385,10 @@ abstract class PeerLiaisonCoilToHub(
       *
       * The serving cases are **ignored on purpose**: a hub that starts serving before its answer is
       * seated is answering a pull this coil is about to re-issue from a different cursor, so there
-      * is nothing to keep. The local cases cannot arrive — the actors that send them are not
-      * spawned until this mode exits — and are ignored rather than left to `unhandled`, so the
-      * behaviour stays total and the reason is in the code.
+      * is nothing to keep. The local cases cannot arrive at all — the actors that send them are not
+      * spawned until this mode exits. Every case is named, so the behaviour stays total.
       */
-    private def joining: Receive[IO, CoilRequestServed] = PartialFunction.fromFunction {
+    private def joining: Receive[IO, CoilLiaisonMessage] = PartialFunction.fromFunction {
         case PreStart        => startJoin
         case JoinWaitElapsed => hubSilent
         case offer: Join.Offer =>
@@ -407,7 +406,7 @@ abstract class PeerLiaisonCoilToHub(
     }
 
     /** Regular mode: the ordinary pull/serve liaison, entered once the start point is settled. */
-    private def regular: Receive[IO, CoilRequestServed] = PartialFunction.fromFunction {
+    private def regular: Receive[IO, CoilLiaisonMessage] = PartialFunction.fromFunction {
         case ResendCurrent       => puller.resend
         case pop: Population.New => puller.handleReply(pop)
         case get: OwnHardAck.Get => server.handleGet(get)
@@ -434,7 +433,7 @@ abstract class PeerLiaisonCoilToHub(
             hardConfirmedStack.update(cur => Ordering[StackNumber].max(cur, hc.stackNum))
     }
 
-    override def receive: Receive[IO, CoilRequestServed] = joining
+    override def receive: Receive[IO, CoilLiaisonMessage] = joining
 
     /** Tell the hub where this coil stands and arm the wait for its answer.
       *
@@ -658,7 +657,7 @@ object PeerLiaisonCoilToHub {
       */
     val coilHardAckStackWindow: Int = 20
 
-    type Handle = ActorRef[IO, LiaisonProtocol.CoilRequestServed]
+    type Handle = ActorRef[IO, LiaisonProtocol.CoilLiaisonMessage]
 
     /** The local actors a verified population reply routes to, plus the send path to the hub's
       * counterpart liaison.
