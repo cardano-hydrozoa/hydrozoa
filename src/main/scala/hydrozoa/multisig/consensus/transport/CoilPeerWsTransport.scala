@@ -28,20 +28,12 @@ trait CoilTransport {
     /** Enqueue a coil→hub batch for delivery to the hub. */
     def send(request: LiaisonProtocol.CoilEmitted): IO[Unit]
 
-    /** Announce where this coil stands, before [[joinAnswer]] is read.
+    /** Announce where this coil stands, as its liaison enters join mode.
       *
       * A dialing transport sends its marks in the handshake on every dial and has nothing to learn
       * here. A directly-wired one never dials, so this is the only point at which it can be told.
       */
     def announceMarks(marks: Join.Connected): IO[Unit]
-
-    /** The hub's answer to this coil's handshake, completing when the first one arrives.
-      *
-      * Read at **boot**, before any liaison exists — which is the only time it can be acted on, so
-      * the transport holds it rather than routing it to an actor that is not there yet. Later
-      * answers go the ordinary way and are declined.
-      */
-    def joinAnswer: IO[Join.Answer]
 }
 
 /** The coil side of the hub→coil WS link: a coil peer runs no server, it dials its single hub's
@@ -59,7 +51,6 @@ final class CoilPeerWsTransport private (
     private val headParamsHash: Hash32,
     private val ownMarks: IO[Join.Connected],
     private val ownHead: HeadIdentity,
-    private val answer: Deferred[IO, Join.Answer],
     private val outbox: Queue[IO, String],
     private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
     private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
@@ -78,8 +69,6 @@ final class CoilPeerWsTransport private (
       */
     override def announceMarks(marks: Join.Connected): IO[Unit] = IO.unit
 
-    override def joinAnswer: IO[Join.Answer] = answer.get
-
     private def toLiaison(request: LiaisonProtocol.CoilRequestServed): IO[Unit] =
         inboundRef.get.flatMap {
             case Some(liaison) => liaison ! request
@@ -88,14 +77,10 @@ final class CoilPeerWsTransport private (
 
     private def dispatchInbound(payload: CoilFrame.Wire): IO[Unit] =
         payload match {
-            // The first answer is what boot is waiting on; `complete` has one winner, so a second
-            // one falls through to the liaison and is declined there.
-            //
-            // Handling the late one here instead would be tidier — the liaison can only decline it
-            // — but the two `Join` cases cannot leave `CoilRequestServed` while that union is also
-            // the hub's send-side handle type. See `LiaisonProtocol.CoilRequestServed`.
-            case a @ (_: Join.Offer | _: Join.NoOffer) =>
-                answer.complete(a).flatMap(won => IO.unlessA(won)(toLiaison(a)))
+            // The answer goes to the liaison like any other inbound frame: it is in join mode
+            // waiting for exactly this, and a later one reaching it in regular mode is a late
+            // redial it declines.
+            case a @ (_: Join.Offer | _: Join.NoOffer) => toLiaison(a)
             // Only the hub-emitted subset is valid inbound here.
             case p @ (_: Population.New | _: OwnHardAck.Get) => toLiaison(p)
             case other => tracer.traceWith(UnexpectedInboundWire(other))
@@ -287,7 +272,6 @@ object CoilPeerWsTransport {
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
-            answer <- Deferred[IO, Join.Answer]
             inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
         } yield new CoilPeerWsTransport(
           ownCoilNum,
@@ -295,7 +279,6 @@ object CoilPeerWsTransport {
           headParamsHash,
           ownMarks,
           ownHead,
-          answer,
           outbox,
           inboundRef,
           tracer

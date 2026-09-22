@@ -42,7 +42,13 @@ object LiaisonProtocol {
       */
     case object ResendCurrent
 
-    type Control = PreStart.type | ResendCurrent.type
+    /** Join-wait tick — self-message telling a coil liaison in join mode to stop waiting for its
+      * hub's answer and become the regular liaison. Armed only for a warm coil; a cold one has
+      * nothing to walk forward from and waits indefinitely (`CoilJoin.joinWait`).
+      */
+    case object JoinWaitElapsed
+
+    type Control = PreStart.type | ResendCurrent.type | JoinWaitElapsed.type
 
     /** Head ↔ head: serves + pulls one head peer's own production (the [[BatchMessages.Mesh]]
       * shape), and accepts that head peer's artifacts to append to its outbox.

@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus.liaison
 import cats.Eval
 import hydrozoa.multisig.consensus.ack.HardAckNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
+import scala.concurrent.duration.FiniteDuration
 
 /** Typed events emitted by the liaison actors ([[PeerLiaisonHeadToHead]], [[PeerLiaisonCoilToHub]],
   * [[PeerLiaisonHubToCoil]]) and their shared [[Puller]] engine. Pure data; formatters in
@@ -70,11 +71,47 @@ object PeerLiaisonEvent:
       */
     final case class CoilNotSeeded(reason: String) extends PeerLiaisonEvent
 
-    /** A `Join.Offer` reached a coil peer whose actors are already running, so it was declined. A
-      * start point is adopted at boot or not at all. Worth WARN: it means the hub decided this coil
+    /** A `Join.Offer` reached a coil liaison already in regular mode, so it was declined. A start
+      * point is adopted in join mode or not at all. Worth WARN: it means the hub decided this coil
       * needed seeding at a moment when seeding was no longer possible.
       */
     final case class JoinOfferTooLate(startStack: StackNumber) extends PeerLiaisonEvent
+
+    // ---- Coil join mode -------------------------------------------------------------------------
+
+    /** The coil liaison entered join mode and announced where it stands. */
+    case object JoinStarted extends PeerLiaisonEvent
+
+    /** A cold coil is still waiting for its hub. Repeats on a timer: a cold coil cannot boot
+      * without an answer, so this is what tells an operator the hub is the problem.
+      */
+    case object JoinStillWaiting extends PeerLiaisonEvent
+
+    /** The hub offered a start point and the coil is about to adopt it — **discarding this peer's
+      * ledger and store**. See `CoilJoin.adopt`.
+      */
+    final case class JoinAdopting(startStack: StackNumber) extends PeerLiaisonEvent
+
+    /** The start point was adopted; the liaison is becoming the regular coil liaison. */
+    final case class JoinAdopted(startStack: StackNumber) extends PeerLiaisonEvent
+
+    /** The hub answered that it has nothing to seed from — an answer, not a timeout. At a real
+      * bring-up every coil gets this and leaves join mode straight away.
+      */
+    final case class JoinNothingToAdopt(reason: String) extends PeerLiaisonEvent
+
+    /** A warm coil gave up waiting and proceeded on its own history. */
+    final case class JoinHubSilent(waited: FiniteDuration) extends PeerLiaisonEvent
+
+    /** The hub served a batch while the join was still outstanding. Ignored: this coil is about to
+      * re-issue its pull from whatever cursor the answer settles on.
+      */
+    case object JoinIgnoredServe extends PeerLiaisonEvent
+
+    /** A local artifact or confirmation reached the liaison during join mode. Ignored, and not
+      * expected: the actors that send these are not spawned until the join settles.
+      */
+    case object JoinIgnoredLocal extends PeerLiaisonEvent
 
     /** A hub refused the ack **at a coil peer's cursor** on a `coilHardAck` lane, because its
       * `stackNum` is above the coil peer's ceiling. That lane is contiguous, so refusing its head

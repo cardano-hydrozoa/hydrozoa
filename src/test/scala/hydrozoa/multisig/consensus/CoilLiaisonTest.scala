@@ -14,6 +14,7 @@ import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
 import hydrozoa.multisig.consensus.liaison.{PeerLiaisonCoilToHub, PeerLiaisonEventFormat, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -192,6 +193,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                     coilSlowConsensus <- system.actorOf(
                                       new HardAckRecorder(coilSeen)
                                     )
+                                    joinSettled <- Deferred[IO, Either[Throwable, Unit]]
                                     coilLiaison <- system.actorOf(
                                       PeerLiaisonCoilToHub(
                                         coilConfig,
@@ -203,9 +205,29 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                                 PeerId.Head(hubNum)
                                               )
                                         ),
-                                        persistence
+                                        persistence,
+                                        // This suite drives the pull chains, not the join
+                                        // exchange: nobody is listening for the marks, and an
+                                        // offer would mean the hub decided to seed a coil this
+                                        // suite never sets up as stale.
+                                        _ => IO.unit,
+                                        offer =>
+                                            IO.raiseError(
+                                              RuntimeException(
+                                                s"no join exchange in this suite: $offer"
+                                              )
+                                            ),
+                                        joinSettled
                                       )
                                     )
+                                    // Drive the liaison out of join mode the way a real bring-up
+                                    // does — every coil is cold and its hub has nothing to seed
+                                    // from. Awaiting `joinSettled` is safe before `pending` is
+                                    // completed below: the liaison opens this barrier before it
+                                    // resolves its connections, precisely so the two cannot wait
+                                    // on each other.
+                                    _ <- coilLiaison ! Join.NoOffer("no join exchange in suite")
+                                    _ <- joinSettled.get.flatMap(IO.fromEither)
                                     hubLiaison <- system.actorOf(
                                       PeerLiaisonHubToCoil(
                                         hubConfig,

@@ -1,7 +1,7 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.unsafe.implicits.global
-import cats.effect.{IO, Ref}
+import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.*
 import cats.syntax.contravariant.*
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -11,7 +11,7 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.NoopActor
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, HubHardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.Population
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, Population}
 import hydrozoa.multisig.consensus.liaison.{BatchNumber, LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonEventFormat}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -125,7 +125,8 @@ class CoilSeededCursorsTest extends AnyFunSuite {
                             consensus <- system.actorOf(NoopActor[Any])
                             stackComposer <- system.actorOf(NoopActor[Any])
                             slow <- system.actorOf(NoopActor[Any])
-                            _ <- system.actorOf(
+                            joinSettled <- Deferred[IO, Either[Throwable, Unit]]
+                            liaison <- system.actorOf(
                               PeerLiaisonCoilToHub(
                                 coilConfig,
                                 PeerLiaisonCoilToHub.Connections(
@@ -141,9 +142,21 @@ class CoilSeededCursorsTest extends AnyFunSuite {
                                     PeerId.Head(h0)
                                   )
                                 ),
-                                p
+                                p,
+                                _ => IO.unit,
+                                offer =>
+                                    IO.raiseError(
+                                      RuntimeException(s"this store is already seeded: $offer")
+                                    ),
+                                joinSettled
                               )
                             )
+                            // This store was seeded on a previous boot, so its hub has nothing
+                            // left to offer — the answer that ends join mode and lets the liaison
+                            // restore its cursors from the start point, which is what is under
+                            // test here.
+                            _ <- liaison ! Join.NoOffer("already seeded")
+                            _ <- joinSettled.get.flatMap(IO.fromEither)
                             // Wait for the opening pull rather than guessing at a duration: a
                             // fixed sleep passes alone and fails under a loaded suite, which is a
                             // test that reports load as a bug.
