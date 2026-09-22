@@ -3,7 +3,6 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{Deferred, Fiber, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
@@ -657,8 +656,6 @@ object PeerLiaisonCoilToHub {
       */
     val coilHardAckStackWindow: Int = 20
 
-    type Handle = ActorRef[IO, LiaisonProtocol.CoilLiaisonMessage]
-
     /** The local actors a verified population reply routes to, plus the send path to the hub's
       * counterpart liaison.
       */
@@ -667,6 +664,6 @@ object PeerLiaisonCoilToHub {
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remote: LiaisonProtocol.HubToCoilHandle
+        remote: LiaisonProtocol.HubUplinkHandle
     )
 }

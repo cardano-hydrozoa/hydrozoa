@@ -2,7 +2,7 @@ package hydrozoa.multisig.consensus.transport
 
 import cats.effect.{IO, Ref}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 import scala.concurrent.duration.DurationInt
 
@@ -21,8 +21,8 @@ object InProcessHubCoilTransport {
       * each spawn and register their liaisons.
       */
     final case class Endpoints(
-        hubInbound: Option[PeerLiaisonHubToCoil.Handle],
-        coilInbound: Option[PeerLiaisonCoilToHub.Handle],
+        hubInbound: Option[LiaisonProtocol.HubLiaisonHandle],
+        coilInbound: Option[LiaisonProtocol.CoilLiaisonHandle],
     )
 
     object Endpoints:
@@ -40,7 +40,7 @@ object InProcessHubCoilTransport {
     final class Hub private (registry: Registry) extends HubTransport {
         override def register(
             coil: CoilPeerNumber,
-            localLiaison: PeerLiaisonHubToCoil.Handle
+            localLiaison: LiaisonProtocol.HubLiaisonHandle
         ): IO[Unit] =
             registry.update(m =>
                 m.updated(
@@ -82,7 +82,7 @@ object InProcessHubCoilTransport {
         registry: Registry,
         marks: Ref[IO, Join.Connected]
     ) extends CoilTransport {
-        override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
+        override def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit] =
             registry.update(m =>
                 m.updated(
                   ownCoilNum,

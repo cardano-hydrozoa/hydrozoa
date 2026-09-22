@@ -7,7 +7,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub}
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, PeerWallet}
 import hydrozoa.multisig.consensus.transport.CoilPeerWsTransportEvent.*
 import org.http4s.Uri
@@ -23,7 +23,7 @@ trait CoilTransport {
     /** Wire the local [[PeerLiaisonCoilToHub]] as the inbound dispatch target. Must be called
       * before the link starts receiving traffic.
       */
-    def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit]
+    def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit]
 
     /** Enqueue a coil→hub batch for delivery to the hub. */
     def send(request: LiaisonProtocol.CoilEmitted): IO[Unit]
@@ -52,12 +52,12 @@ final class CoilPeerWsTransport private (
     private val ownMarks: IO[Join.Connected],
     private val ownHead: HeadIdentity,
     private val outbox: Queue[IO, String],
-    private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
+    private val inboundRef: Ref[IO, Option[LiaisonProtocol.CoilLiaisonHandle]],
     private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
 )(using CardanoNetwork.Section)
     extends CoilTransport {
 
-    override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
+    override def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit] =
         inboundRef.set(Some(localLiaison))
 
     override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
@@ -69,7 +69,7 @@ final class CoilPeerWsTransport private (
       */
     override def announceMarks(marks: Join.Connected): IO[Unit] = IO.unit
 
-    private def toLiaison(request: LiaisonProtocol.CoilLiaisonMessage): IO[Unit] =
+    private def toLiaison(request: LiaisonProtocol.FromHub): IO[Unit] =
         inboundRef.get.flatMap {
             case Some(liaison) => liaison ! request
             case None          => tracer.traceWith(NoLiaisonForInbound)
@@ -272,7 +272,7 @@ object CoilPeerWsTransport {
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
-            inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
+            inboundRef <- Ref[IO].of(Option.empty[LiaisonProtocol.CoilLiaisonHandle])
         } yield new CoilPeerWsTransport(
           ownCoilNum,
           ownWallet,

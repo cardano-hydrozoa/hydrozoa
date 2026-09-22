@@ -14,9 +14,9 @@ import hydrozoa.multisig.consensus.peer.HeadPeerId
 final class RemotePeerProxy private (
     remote: HeadPeerId,
     transport: PeerTransport,
-) extends Actor[IO, LiaisonProtocol.MeshLiaisonMessage] {
+) extends Actor[IO, LiaisonProtocol.MeshEmitted] {
 
-    override def receive: Receive[IO, LiaisonProtocol.MeshLiaisonMessage] =
+    override def receive: Receive[IO, LiaisonProtocol.MeshEmitted] =
         PartialFunction.fromFunction(req => transport.send(remote, req))
 }
 

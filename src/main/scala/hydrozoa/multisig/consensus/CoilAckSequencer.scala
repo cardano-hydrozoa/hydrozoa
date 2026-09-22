@@ -210,7 +210,7 @@ object CoilAckSequencer {
         HubHardAckNumber(ByteBuffer.wrap(bytes).getInt)
 
     final case class Connections(
-        liaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        liaisons: List[liaison.LiaisonProtocol.MeshLocalHandle],
         coilRelay: Option[CoilRelay.Handle] = None
     )
 

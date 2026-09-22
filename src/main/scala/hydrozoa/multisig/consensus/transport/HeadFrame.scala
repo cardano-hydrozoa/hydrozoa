@@ -96,12 +96,12 @@ object HeadFrame {
       */
     final case class Refused(refusal: HandshakeRefusal) extends HeadFrame
 
-    final case class Msg(payload: LiaisonProtocol.MeshLiaisonMessage) extends HeadFrame
+    final case class Msg(payload: Wire) extends HeadFrame
 
     /** The wire-eligible subset of a head↔head liaison's `Request`. The proxy actor only forwards
       * these over the transport; everything else is local-only and gets dropped with a log line.
       */
-    type Wire = Mesh.Get | Mesh.New
+    type Wire = LiaisonProtocol.MeshEmitted
 
     def fromWire(req: LiaisonProtocol.MeshLiaisonMessage): Option[Wire] =
         req match {

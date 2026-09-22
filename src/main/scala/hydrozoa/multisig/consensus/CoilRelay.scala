@@ -6,7 +6,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, SoftAck}
-import hydrozoa.multisig.consensus.liaison.PeerLiaisonHubToCoil
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.stack.StackBrief
 
@@ -121,5 +121,5 @@ object CoilRelay {
 
     type Handle = ActorRef[IO, Request]
 
-    final case class Connections(coilPeerLiaisons: List[PeerLiaisonHubToCoil.Handle])
+    final case class Connections(coilPeerLiaisons: List[LiaisonProtocol.HubLocalHandle])
 }

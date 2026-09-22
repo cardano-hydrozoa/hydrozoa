@@ -82,6 +82,17 @@ object LiaisonProtocol {
       */
     type CoilEmitted = BatchMessages.Population.Get | BatchMessages.OwnHardAck.New
 
+    /** Everything that reaches a coil liaison over its link: the hub's answer to its join, then
+      * everything the hub emits after it.
+      */
+    type FromHub = BatchMessages.Join.Answer | HubEmitted
+
+    /** Everything that reaches a hub liaison over its link. [[BatchMessages.Join.Connected]] is
+      * synthesized by the transport from the coil's handshake, so it originates with the coil even
+      * though it never crosses the wire as a frame.
+      */
+    type FromCoil = BatchMessages.Join.Connected | CoilEmitted
+
     // ---- Local vocabularies ---------------------------------------------------------------------
     // What a node's OWN actors and transport hand a liaison. None of it crosses a link, and each
     // set is the union of two roles: the production to append to an outbox lane, and the
@@ -159,20 +170,32 @@ object LiaisonProtocol {
         Control | JoinWaitElapsed.type | BatchMessages.Join.Answer | HubEmitted | CoilLocal
 
     // ---- Handles --------------------------------------------------------------------------------
+    // One per (liaison, sender) pair, each carrying exactly one vocabulary. A liaison takes from
+    // two sides — its link and this node's own actors — and they are different sets, so each side
+    // gets its own handle rather than one typed at the union of both. No handle is typed at a
+    // liaison's whole message union: that is the conflation GUM-352 removed.
 
-    /** ⚠️ Typed at the receiving actor's message union, so it carries `Control` and [[Artifacts]]
-      * that never cross a mesh link. [[MeshEmitted]] is the vocabulary it wants (GUM-352).
+    /** A remote head peer's handle to this peer's mesh liaison. */
+    type MeshLiaisonHandle = ActorRef[IO, MeshEmitted]
+
+    /** A head peer's own actors' handle to one of its mesh liaisons. */
+    type MeshLocalHandle = ActorRef[IO, MeshLocal]
+
+    /** A hub's own transport's handle to one of its hub↔coil liaisons. Wider than
+      * [[HubUplinkHandle]] by [[BatchMessages.Join.Connected]], which the transport synthesizes
+      * from the coil's handshake and no coil ever sends itself.
       */
-    type HeadToHeadHandle = ActorRef[IO, MeshLiaisonMessage]
+    type HubLiaisonHandle = ActorRef[IO, FromCoil]
 
-    /** The **coil's** handle to its hub: it carries what a coil may emit, not the hub's inbox. */
-    type HubToCoilHandle = ActorRef[IO, CoilEmitted]
+    /** A coil peer's handle to its hub's liaison, for the pulls and serves it emits. */
+    type HubUplinkHandle = ActorRef[IO, CoilEmitted]
 
-    /** The **hub's** handle to one coil peer: it carries what a hub may send that peer — the join
-      * answer and everything after it — not the coil liaison's whole message union.
-      */
-    type CoilToHubHandle = ActorRef[IO, BatchMessages.Join.Answer | HubEmitted]
+    /** A hub's own actors' handle to one of its hub↔coil liaisons — `CoilRelay`'s fan-out. */
+    type HubLocalHandle = ActorRef[IO, HubLocal]
 
-    /** A coil node's handle to its own liaison, for local appends and notifications. */
-    type CoilUplinkHandle = ActorRef[IO, CoilLocal]
+    /** A hub's handle to one coil peer's liaison. */
+    type CoilLiaisonHandle = ActorRef[IO, FromHub]
+
+    /** A coil node's own actors' handle to its single liaison. */
+    type CoilLocalHandle = ActorRef[IO, CoilLocal]
 }

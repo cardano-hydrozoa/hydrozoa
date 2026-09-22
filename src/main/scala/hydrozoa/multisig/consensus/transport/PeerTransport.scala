@@ -8,7 +8,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHeadToHead}
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.consensus.transport.PeerTransportEvent.*
 import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
@@ -29,10 +29,10 @@ trait PeerTransport {
       * arriving from [[remote]]. Must be called before the link to [[remote]] starts receiving
       * traffic.
       */
-    def register(remote: HeadPeerId, localLiaison: PeerLiaisonHeadToHead.Handle): IO[Unit]
+    def register(remote: HeadPeerId, localLiaison: LiaisonProtocol.MeshLiaisonHandle): IO[Unit]
 
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. */
-    def send(remote: HeadPeerId, request: LiaisonProtocol.MeshLiaisonMessage): IO[Unit]
+    def send(remote: HeadPeerId, request: LiaisonProtocol.MeshEmitted): IO[Unit]
 }
 
 /** Real WS-backed [[PeerTransport]]: contributes the `/head` route to the peer's shared
@@ -64,7 +64,7 @@ final class WsPeerTransport private (
     private val headParamsHash: Hash32,
     private val ownHead: HeadIdentity,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
-    private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
+    private val inboundRef: Ref[IO, Map[HeadPeerId, LiaisonProtocol.MeshLiaisonHandle]],
     private val keepAlivePing: FiniteDuration,
     private val tracer: ContraTracer[IO, PeerTransportEvent],
 )(using CardanoNetwork.Section)
@@ -72,14 +72,14 @@ final class WsPeerTransport private (
 
     override def register(
         remote: HeadPeerId,
-        localLiaison: PeerLiaisonHeadToHead.Handle
+        localLiaison: LiaisonProtocol.MeshLiaisonHandle
     ): IO[Unit] =
         inboundRef.update(_.updated(remote, localLiaison))
 
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. The message is held in
       * the per-remote outbox queue until the WS link drains it.
       */
-    override def send(remote: HeadPeerId, request: LiaisonProtocol.MeshLiaisonMessage): IO[Unit] =
+    override def send(remote: HeadPeerId, request: LiaisonProtocol.MeshEmitted): IO[Unit] =
         HeadFrame.fromWire(request) match {
             case Some(wire) =>
                 val line = HeadFrame.encode(HeadFrame.Msg(wire))
@@ -94,7 +94,7 @@ final class WsPeerTransport private (
 
     private def dispatchInbound(
         remote: HeadPeerId,
-        payload: LiaisonProtocol.MeshLiaisonMessage
+        payload: LiaisonProtocol.MeshEmitted
     ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(remote) match {
@@ -414,7 +414,7 @@ object WsPeerTransport {
             outboxes <- remoteIds
                 .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                 .map(_.toMap)
-            inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
+            inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, LiaisonProtocol.MeshLiaisonHandle])
         } yield new WsPeerTransport(
           ownPeerId,
           ownWallet,

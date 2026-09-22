@@ -15,7 +15,7 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
-import hydrozoa.multisig.consensus.liaison.{PeerLiaisonCoilToHub, PeerLiaisonEventFormat, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonEventFormat, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -142,8 +142,8 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
         pending: HeadMultisigRegimeManager.PendingConnections,
         coilSeen: Ref[IO, Vector[HardAck]],
         coilSlowConsensus: SlowConsensusActor.Handle,
-        coilLiaison: PeerLiaisonCoilToHub.Handle,
-        hubLiaison: PeerLiaisonHubToCoil.Handle,
+        coilLiaison: ActorRef[IO, LiaisonProtocol.CoilLiaisonMessage],
+        hubLiaison: ActorRef[IO, LiaisonProtocol.HubLiaisonMessage],
     )
 
     /** Stand up one hub head serving `nCoil` coil peers, inject each coil peer's hard-acks (built

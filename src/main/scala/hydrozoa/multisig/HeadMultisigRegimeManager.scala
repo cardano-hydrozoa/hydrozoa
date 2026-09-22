@@ -199,7 +199,7 @@ trait HeadMultisigRegimeManager(
             // `remoteHeadProxies` wiring above. Errors loudly if a hub is missing its transport.
             remoteCoilLiaisons <-
                 if hubbedCoilPeers.isEmpty then
-                    IO.pure(Map.empty[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle])
+                    IO.pure(Map.empty[CoilPeerNumber, liaison.LiaisonProtocol.CoilLiaisonHandle])
                 else
                     hubCoilTransport match {
                         case None =>
@@ -355,11 +355,11 @@ object HeadMultisigRegimeManager {
           * broadcast their own artifacts here. `ActorRef` is contravariant in its message type, so
           * a handle is usable as `ActorRef[IO, <any artifact in its Request>]`.
           */
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle] = Nil,
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle] = Nil,
         /** A coil peer's single uplink to its hub; `None` on a head peer. `SlowConsensusActor`
           * broadcasts its own hard-ack to `headPeerLiaisons ++ coilUplink`.
           */
-        coilUplink: Option[liaison.LiaisonProtocol.CoilUplinkHandle] = None,
+        coilUplink: Option[liaison.LiaisonProtocol.CoilLocalHandle] = None,
         /** Present only on a hub head peer (§5.4) [doc-ref]: the fan-out that relays the population
           * to its coil peers. Producers send only their own production here. `None` elsewhere.
           */
@@ -367,16 +367,17 @@ object HeadMultisigRegimeManager {
         // ---- Remote-handle resolution for spawned liaisons (in-process only) ----
         // Only the in-process harness (stage4 / unit tests) populates these; in a real deployment
         // the counterpart is another process reached over the transport, so they stay empty.
-        remoteHeadLiaisons: Map[HeadPeerNumber, liaison.PeerLiaisonHeadToHead.Handle] = Map.empty,
-        remoteCoilLiaisons: Map[CoilPeerNumber, liaison.LiaisonProtocol.CoilToHubHandle] =
+        remoteHeadLiaisons: Map[HeadPeerNumber, liaison.LiaisonProtocol.MeshLiaisonHandle] =
             Map.empty,
-        remoteHubLiaison: Option[liaison.LiaisonProtocol.HubToCoilHandle] = None,
+        remoteCoilLiaisons: Map[CoilPeerNumber, liaison.LiaisonProtocol.CoilLiaisonHandle] =
+            Map.empty,
+        remoteHubLiaison: Option[liaison.LiaisonProtocol.HubUplinkHandle] = None,
         /** Present only on a hub head peer (§5.3) [doc-ref]: re-sequences its coil peers' hard-acks
           * onto the `HubHardAckLane`. `None` elsewhere.
           */
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
         /** Hub→coil liaisons this hub runs (for `CoilRelay`'s fan-out); empty elsewhere. */
-        coilPeerLiaisons: List[liaison.PeerLiaisonHubToCoil.Handle] = Nil,
+        coilPeerLiaisons: List[liaison.LiaisonProtocol.HubLocalHandle] = Nil,
     )
 
     type PendingConnections = Deferred[IO, Either[Throwable, Connections]]

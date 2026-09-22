@@ -3,7 +3,6 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{Fiber, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
@@ -535,14 +534,12 @@ object PeerLiaisonHeadToHead {
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section &
             BlockConfig.Section
 
-    type Handle = ActorRef[IO, LiaisonProtocol.MeshLiaisonMessage]
-
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remote: LiaisonProtocol.HeadToHeadHandle,
+        remote: LiaisonProtocol.MeshLiaisonHandle,
         /** Present only on a hub head peer: this remote head peer's satellites are forwarded here
           * so the hub's coil peers hear the whole population. `None` on non-hub head peers.
           */

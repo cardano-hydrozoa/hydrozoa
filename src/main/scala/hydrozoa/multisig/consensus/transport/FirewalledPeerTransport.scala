@@ -2,7 +2,7 @@ package hydrozoa.multisig.consensus.transport
 
 import cats.effect.IO
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHeadToHead}
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 
 /** Wraps a [[PeerTransport]] and drops outbound [[send]] calls when `shouldDrop` says so. Every
@@ -19,11 +19,11 @@ final class FirewalledPeerTransport(
 
     override def register(
         remote: HeadPeerId,
-        localLiaison: PeerLiaisonHeadToHead.Handle,
+        localLiaison: LiaisonProtocol.MeshLiaisonHandle,
     ): IO[Unit] =
         underlying.register(remote, localLiaison)
 
-    override def send(remote: HeadPeerId, request: LiaisonProtocol.MeshLiaisonMessage): IO[Unit] =
+    override def send(remote: HeadPeerId, request: LiaisonProtocol.MeshEmitted): IO[Unit] =
         shouldDrop(remote).flatMap {
             case true =>
                 firewallTracer.traceWith(FirewalledPeerTransportEvent.DroppedOutbound(remote))

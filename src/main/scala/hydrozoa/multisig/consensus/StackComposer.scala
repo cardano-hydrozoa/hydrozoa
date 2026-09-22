@@ -881,7 +881,7 @@ object StackComposer {
         jointLedger: JointLedger.Handle,
         fastConsensusActor: FastConsensusActor.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle],
         /** A hub's coil relay (§5.4) [doc-ref]: every stack brief (own-led and received) is sent
           * here so the hub's coil peers get the whole stack spine. `None` off a hub.
           */

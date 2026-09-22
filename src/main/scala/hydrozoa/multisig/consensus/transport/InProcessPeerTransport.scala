@@ -1,7 +1,7 @@
 package hydrozoa.multisig.consensus.transport
 
 import cats.effect.{IO, Ref}
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHeadToHead}
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 
 /** In-process [[PeerTransport]] for test harnesses (e.g. `integration/stage4`): routes sends
@@ -13,19 +13,19 @@ import hydrozoa.multisig.consensus.peer.HeadPeerId
   */
 final class InProcessPeerTransport private (
     val ownPeerId: HeadPeerId,
-    private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
+    private val inboundRef: Ref[IO, Map[HeadPeerId, LiaisonProtocol.MeshLiaisonHandle]],
     private val registry: InProcessPeerTransport.Registry,
 ) extends PeerTransport {
 
     override def register(
         remote: HeadPeerId,
-        localLiaison: PeerLiaisonHeadToHead.Handle
+        localLiaison: LiaisonProtocol.MeshLiaisonHandle
     ): IO[Unit] =
         inboundRef.update(_.updated(remote, localLiaison))
 
     override def send(
         remote: HeadPeerId,
-        request: LiaisonProtocol.MeshLiaisonMessage
+        request: LiaisonProtocol.MeshEmitted
     ): IO[Unit] =
         registry.get.flatMap { m =>
             m.get(remote) match {
@@ -38,7 +38,7 @@ final class InProcessPeerTransport private (
 
     private def dispatchInbound(
         sender: HeadPeerId,
-        payload: LiaisonProtocol.MeshLiaisonMessage
+        payload: LiaisonProtocol.MeshEmitted
     ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(sender) match {
@@ -60,7 +60,7 @@ object InProcessPeerTransport {
     /** Allocate this peer's transport and register it in the shared map under [[ownPeerId]]. */
     def create(ownPeerId: HeadPeerId, registry: Registry): IO[InProcessPeerTransport] =
         for {
-            inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
+            inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, LiaisonProtocol.MeshLiaisonHandle])
             transport = new InProcessPeerTransport(ownPeerId, inboundRef, registry)
             _ <- registry.update(_.updated(ownPeerId, transport))
         } yield transport

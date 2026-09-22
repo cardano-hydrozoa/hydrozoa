@@ -58,7 +58,7 @@ object FastConsensusActor:
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
         requestSequencer: Option[RequestSequencer.Handle],
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle],
         stackComposer: StackComposer.Handle,
         /** A hub's coil relay (§5.4) [doc-ref]: this actor's **own** soft-ack is sent here so the
           * hub's coil peers receive it. `None` off a hub.
@@ -68,7 +68,7 @@ object FastConsensusActor:
           * can anchor its block, soft-ack and request pull ceilings. `None` on a head peer, whose
           * mesh lanes need no ceiling beyond the request one the liaisons already carry.
           */
-        coilUplink: Option[liaison.LiaisonProtocol.CoilUplinkHandle] = None,
+        coilUplink: Option[liaison.LiaisonProtocol.CoilLocalHandle] = None,
     )
 
     /** One cell per in-flight block number. A cell knows the block number it is collecting for, may
