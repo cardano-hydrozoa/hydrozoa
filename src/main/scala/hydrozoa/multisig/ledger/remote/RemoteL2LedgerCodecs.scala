@@ -4,7 +4,6 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputDecoder, keepRawTransactionOutputEncoder}
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationMapHash}
@@ -227,10 +226,9 @@ object RemoteL2LedgerCodecs {
                           hash <- body.downField("evacuationMapHash").as[EvacuationMapHash]
                           // All mandatory: a remote that omits any is not a ledger this
                           // head can drive. See `L2Ledger.Digests`.
-                          kzg <- body.downField("evacuationMapKzg").as[KzgCommitment]
                           l2State <- body.downField("l2StateHash").as[L2StateHash]
                           l2Params <- body.downField("l2ParamsHash").as[Hash32]
-                      } yield RestoreResponse.Restored(tip, hash, kzg, l2State, l2Params)
+                      } yield RestoreResponse.Restored(tip, hash, l2State, l2Params)
                   case "RestoreFailed" =>
                       val body = c.downField("RestoreFailed")
                       for {
@@ -250,7 +248,6 @@ object RemoteL2LedgerCodecs {
           case RestoreResponse.Restored(
                 tip,
                 evacuationMapHash,
-                evacuationMapKzg,
                 l2StateHash,
                 l2ParamsHash
               ) =>
@@ -259,7 +256,6 @@ object RemoteL2LedgerCodecs {
                     .obj(
                       "tip" -> tip.asJson,
                       "evacuationMapHash" -> evacuationMapHash.asJson,
-                      "evacuationMapKzg" -> evacuationMapKzg.asJson,
                       "l2StateHash" -> l2StateHash.asJson,
                       "l2ParamsHash" -> l2ParamsHash.asJson
                     )
@@ -295,10 +291,9 @@ object RemoteL2LedgerCodecs {
                           hash <- body.downField("evacuationMapHash").as[EvacuationMapHash]
                           // All mandatory: a remote that omits any is not a ledger this
                           // head can drive. See `L2Ledger.Digests`.
-                          kzg <- body.downField("evacuationMapKzg").as[KzgCommitment]
                           l2State <- body.downField("l2StateHash").as[L2StateHash]
                           l2Params <- body.downField("l2ParamsHash").as[Hash32]
-                      } yield StateAtResponse.StateReported(at, hash, kzg, l2State, l2Params)
+                      } yield StateAtResponse.StateReported(at, hash, l2State, l2Params)
                   case "StateAtFailed" =>
                       val body = c.downField("StateAtFailed")
                       for {
@@ -318,7 +313,6 @@ object RemoteL2LedgerCodecs {
           case StateAtResponse.StateReported(
                 at,
                 evacuationMapHash,
-                evacuationMapKzg,
                 l2StateHash,
                 l2ParamsHash
               ) =>
@@ -327,7 +321,6 @@ object RemoteL2LedgerCodecs {
                     .obj(
                       "at" -> at.asJson,
                       "evacuationMapHash" -> evacuationMapHash.asJson,
-                      "evacuationMapKzg" -> evacuationMapKzg.asJson,
                       "l2StateHash" -> l2StateHash.asJson,
                       "l2ParamsHash" -> l2ParamsHash.asJson
                     )

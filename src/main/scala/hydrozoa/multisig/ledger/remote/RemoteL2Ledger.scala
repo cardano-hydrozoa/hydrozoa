@@ -9,7 +9,6 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, EvacuationMapHash}
 import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, L2StateExport, L2StateHash, RegisterDepositResponse, RestoreError}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse, StateAtResponse}
@@ -167,7 +166,6 @@ class RemoteL2Ledger private (
                 Right(
                   L2Ledger.Digests(
                     r.evacuationMapHash,
-                    r.evacuationMapKzg,
                     r.l2StateHash,
                     r.l2ParamsHash
                   )
@@ -185,7 +183,7 @@ class RemoteL2Ledger private (
       * the asked-for number answers by re-folding its log. It is retried on timeout, unlike a
       * restore — a read changes nothing, so a second attempt cannot compound the first.
       */
-    override def stateAt(
+    override def digestsAt(
         commandNumber: L2CommandNumber
     ): EitherT[IO, RestoreError, L2Ledger.Digests] =
         EitherT(sendStateAtRequest(Request.StateAt(commandNumber)).map {
@@ -193,7 +191,6 @@ class RemoteL2Ledger private (
                 Right(
                   L2Ledger.Digests(
                     r.evacuationMapHash,
-                    r.evacuationMapKzg,
                     r.l2StateHash,
                     r.l2ParamsHash
                   )
@@ -246,6 +243,22 @@ class RemoteL2Ledger private (
       * call to make, and the seeding path that would need it is refused anyway.
       */
     override def wipe: EitherT[IO, RestoreError, Unit] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** **Not implemented.** The blob these read is one only [[importState]] could have been handed,
+      * and that path is refused on this backend. There is no frame to ask on either: the
+      * coordination protocol reports digests at a command number, never about a transferable state.
+      */
+    override def digestsOf(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** **Not implemented**, for the reasons [[digestsOf]] is not.
+      */
+    override def evacuationMapOf(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, EvacuationMap] =
         EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
 
     /** Send a [[Request.StateAt]] and return the remote's [[StateAtResponse]]. Mirrors
@@ -562,7 +575,7 @@ object RemoteL2Ledger {
         /** Ask the remote what its state at `commandNumber` digests to, **without rewinding it**.
           * Like [[Restore]] it carries no command payload and is un-numbered (it does not consume a
           * command number); unlike [[Restore]] it is a read, issued at every partition boundary of
-          * a closed stack rather than once at boot. See [[RemoteL2Ledger.stateAt]].
+          * a closed stack rather than once at boot. See [[RemoteL2Ledger.digestsAt]].
           */
         final case class StateAt(commandNumber: L2CommandNumber) extends Request
     }
@@ -589,7 +602,6 @@ object RemoteL2Ledger {
         final case class Restored(
             tip: L2CommandNumber,
             evacuationMapHash: EvacuationMapHash,
-            evacuationMapKzg: KzgCommitment,
             l2StateHash: L2StateHash,
             l2ParamsHash: Hash32
         ) extends RestoreResponse {
@@ -625,7 +637,6 @@ object RemoteL2Ledger {
         final case class StateReported(
             at: L2CommandNumber,
             evacuationMapHash: EvacuationMapHash,
-            evacuationMapKzg: KzgCommitment,
             l2StateHash: L2StateHash,
             l2ParamsHash: Hash32
         ) extends StateAtResponse {

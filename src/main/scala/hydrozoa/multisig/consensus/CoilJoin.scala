@@ -30,18 +30,21 @@ object CoilJoin {
     /** Check an offer and, if it holds up, seed the store from it.
       *
       * **Nothing is trusted because it arrived.** The digests this checks are the ones the coil's
-      * own ledger reports after adopting, never the ones travelling with the bytes — a hash beside
-      * the thing it describes attests to nothing.
+      * own ledger computes from the offered bytes, never the ones travelling with them — a hash
+      * beside the thing it describes attests to nothing.
+      *
+      * **The whole offer is checked before anything of the coil's is destroyed.** Verifying the
+      * certificate establishes only that the head peers signed a settlement; a settlement is an
+      * ordinary L1 transaction, so anyone can pair a genuine one with arbitrary bytes, and the
+      * digest comparison is the only thing that joins the two. Running it after the wipe would mean
+      * a single wrong hub — malicious, or merely exporting the wrong boundary — could cost a coil
+      * its store on every join it refuses. So the ledger digests the blob where it lies, and the
+      * coil commits to nothing until both halves pass (GUM-354).
       *
       * **Adopting destroys what was there.** A peer being seeded holds nothing worth keeping: its
       * ledger is too far behind for its hub to serve it forward, and its stale journals would
       * anchor recovery below the start point on history the hub no longer has. So both stores are
       * wiped rather than merged into.
-      *
-      * The order is what makes that safe. Everything checkable without the ledger — the settlement
-      * is a transaction this head could have produced, it belongs to this head, the signatures hold
-      * — is checked **before** anything is destroyed, so a forged offer costs the coil nothing. An
-      * offer that clears those and then fails on digests took N-of-N head signatures to build.
       *
       * A crash anywhere after the wipe leaves a cold store, which rejoins cleanly on the next boot.
       */
@@ -53,13 +56,14 @@ object CoilJoin {
         for {
             certificate <- JoinOfferVerifier.verifyCertificate(offer.settlement, offer.sec)
             _ <- IO.fromEither(certificate)
+            digests <- ledger.digestsOf(offer.state).value.flatMap(IO.fromEither)
+            map <- ledger.evacuationMapOf(offer.state).value.flatMap(IO.fromEither)
+            _ <- IO.fromEither(
+              JoinOfferVerifier.verifyOfferedState(offer.settlement, offer.sec, digests, map)
+            )
             _ <- ledger.wipe.value.flatMap(IO.fromEither)
             _ <- persistence.backend.wipeData
-            digests <- ledger.importState(offer.state).value.flatMap(IO.fromEither)
-            _ <- IO.fromEither(
-              JoinOfferVerifier.verifyAdoptedState(offer.settlement, offer.sec, digests)
-            )
-            map <- ledger.evacuationMapAt(offer.state.commandNumber).value.flatMap(IO.fromEither)
+            _ <- ledger.importState(offer.state).value.flatMap(IO.fromEither)
             stamp <- persistence.arrivalStamp
             lastBlockNum = offer.block.blockNum
             startPoint = AdoptedStartPoint(

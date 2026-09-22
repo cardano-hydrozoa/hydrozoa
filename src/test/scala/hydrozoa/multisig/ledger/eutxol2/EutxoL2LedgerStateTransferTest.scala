@@ -110,7 +110,7 @@ class EutxoL2LedgerStateTransferTest extends AnyFunSuite:
     test("an exported state imports into a fresh ledger with identical digests") {
         val io = for {
             donorLedger <- donorAt5
-            expected <- donorLedger.stateAt(tip).value
+            expected <- donorLedger.digestsAt(tip).value
             exported <- donorLedger.exportStateAt(tip).value
             joiner <- freshLedger
             adopted <- joiner.importState(exported.toOption.get).value
@@ -125,13 +125,13 @@ class EutxoL2LedgerStateTransferTest extends AnyFunSuite:
         val past = L2CommandNumber(3L)
         val io = for {
             donorLedger <- donorAt5
-            tipBefore <- donorLedger.stateAt(tip).value
-            expected <- donorLedger.stateAt(past).value
+            tipBefore <- donorLedger.digestsAt(tip).value
+            expected <- donorLedger.digestsAt(past).value
             exported <- donorLedger.exportStateAt(past).value
             joiner <- freshLedger
             adopted <- joiner.importState(exported.toOption.get).value
             // Exporting a past boundary leaves the donor at its own tip.
-            tipAfter <- donorLedger.stateAt(tip).value
+            tipAfter <- donorLedger.digestsAt(tip).value
         } yield {
             val _ =
                 assert(adopted.isRight && adopted == expected, s"adopted $adopted, want $expected")
@@ -204,14 +204,49 @@ class EutxoL2LedgerStateTransferTest extends AnyFunSuite:
         // derivations, the coil could pass verification and then run on a different map.
         val io = for {
             donorLedger <- donorAt5
-            digests <- donorLedger.stateAt(tip).value
+            digests <- donorLedger.digestsAt(tip).value
             map <- donorLedger.evacuationMapAt(tip).value
         } yield {
             val d = digests.toOption.get
             val m = map.toOption.get
-            val _ = assert(m.digest == d.evacuationMapHash, "map digest disagrees with the report")
-            assert(m.kzgCommitment == d.evacuationMapKzg, "map commitment disagrees")
+            assert(m.digest == d.evacuationMapHash, "map digest disagrees with the report")
         }
+        io.unsafeRunSync()
+    }
+
+    test("what the ledger reports about a blob is what adopting it produces") {
+        // The pre-adoption checks and the adoption itself must answer about the same state: a
+        // blob that digests one way here and lands another way there would let a coil pass
+        // verification and then run on something else (GUM-354).
+        val io = for {
+            donorLedger <- donorAt5
+            exported <- donorLedger.exportStateAt(tip).value.map(_.toOption.get)
+            offered <- donorLedger.digestsOf(exported).value
+            offeredMap <- donorLedger.evacuationMapOf(exported).value
+            recipient <- freshLedger
+            adopted <- recipient.importState(exported).value
+            adoptedMap <- recipient.evacuationMapAt(tip).value
+        } yield {
+            val _ = assert(offered.toOption.get == adopted.toOption.get, "digests disagree")
+            assert(
+              offeredMap.toOption.get.digest == adoptedMap.toOption.get.digest,
+              "maps disagree"
+            )
+        }
+        io.unsafeRunSync()
+    }
+
+    test("digesting a blob leaves the ledger where it was") {
+        // The whole point of asking before the wipe: a coil still holding its own state must be
+        // able to inspect an offer without that inspection moving anything.
+        val io = for {
+            donorLedger <- donorAt5
+            exported <- donorLedger.exportStateAt(L2CommandNumber(3L)).value.map(_.toOption.get)
+            before <- donorLedger.digestsAt(tip).value
+            _ <- donorLedger.digestsOf(exported).value
+            _ <- donorLedger.evacuationMapOf(exported).value
+            after <- donorLedger.digestsAt(tip).value
+        } yield assert(before == after, "inspecting an export moved the ledger")
         io.unsafeRunSync()
     }
 

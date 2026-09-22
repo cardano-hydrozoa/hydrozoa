@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.l2
 
 import cats.Monad
 import cats.data.EitherT
-import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationDiffGroup, EvacuationMap, EvacuationMapHash}
@@ -27,8 +26,8 @@ object RestoreError:
     final case class OtherError(message: String) extends RestoreError
 
     /** This backend cannot serialize its state, or adopt a serialized one
-      * ([[L2StateReader.exportStateAt]] / [[L2Ledger.importState]]). `backend` is the
-      * `L2LedgerKind` config string.
+      * ([[L2Ledger.exportStateAt]] / [[L2Ledger.importState]]). `backend` is the `L2LedgerKind`
+      * config string.
       *
       * Distinct from [[OtherError]] so a coil peer that cannot be seeded reads as hitting a
       * capability the backend does not have, rather than as a corrupt store on either side.
@@ -206,7 +205,7 @@ trait L2StateReader[F[_]] {
       * At `commandNumber` equal to the ledger's tip this is only the digest — no snapshot load, no
       * re-fold, no write.
       */
-    def stateAt(commandNumber: L2CommandNumber): EitherT[F, RestoreError, L2Ledger.Digests]
+    def digestsAt(commandNumber: L2CommandNumber): EitherT[F, RestoreError, L2Ledger.Digests]
 }
 
 trait L2Ledger[F[_]] extends L2StateReader[F] {
@@ -277,7 +276,7 @@ trait L2Ledger[F[_]] extends L2StateReader[F] {
       *
       * Reads a past state and leaves the live one alone, so a hub serves a joining coil without
       * rewinding the ledger out from under its own block production. The reconstruction is the one
-      * [[L2StateReader.stateAt]] already does; only the disposal differs — digest it, or write it
+      * [[L2StateReader.digestsAt]] already does; only the disposal differs — digest it, or write it
       * out.
       *
       * Here rather than on [[L2StateReader]] even though it mutates nothing: that trait is the
@@ -293,13 +292,14 @@ trait L2Ledger[F[_]] extends L2StateReader[F] {
 
     /** Adopt a state exported by another instance of this backend, positioning the ledger at
       * `exported.commandNumber`. The seeding half of a coil peer's join (GUM-312); the counterpart
-      * of [[L2StateReader.exportStateAt]].
+      * of [[exportStateAt]].
       *
-      * **The returned digests are computed from the adopted state, never read out of the blob.** A
-      * hash travelling with the bytes it describes attests to nothing, so this reports what the
-      * ledger actually reached and the caller checks that against the `l2StateHash` on a
-      * certificate the head peers signed (`docs/spec/l2-state-certificate.md`). An import that
-      * decodes is not yet an import that is trusted.
+      * ⛔ **The returned digests are not what verifies the blob, and must not be used for it.** By
+      * the time this runs the caller has already destroyed what it had — [[wipe]] is what makes a
+      * ledger willing to adopt — so there is nothing left to act on a mismatch with. The blob is
+      * checked against the certificate **before** any of that, through [[digestsOf]] and
+      * [[evacuationMapOf]]; see `CoilJoin.adopt`. These digests report what the ledger actually
+      * reached, which is worth having and is not a verdict.
       *
       * Distinct from [[restoreTo]], which reconstructs from the ledger's *own* durable record and
       * therefore needs a record to reconstruct from. A joining peer has none — that is what makes
@@ -326,16 +326,52 @@ trait L2Ledger[F[_]] extends L2StateReader[F] {
       * state and as one half of its balance identity, and a joining peer has no earlier copy to
       * carry forward (GUM-312).
       *
-      * Read-only and reconstructed like [[L2StateReader.stateAt]] beside it, so asking about a past
-      * boundary cannot disturb production at the current one.
+      * Read-only and reconstructed like [[L2StateReader.digestsAt]] beside it, so asking about a
+      * past boundary cannot disturb production at the current one.
       */
     def evacuationMapAt(commandNumber: L2CommandNumber): EitherT[F, RestoreError, EvacuationMap]
+
+    /** The digests an exported state would reach if it were adopted — decoded and digested with
+      * nothing written and the live ledger untouched. [[digestsAt]] asks about a boundary this
+      * ledger holds; this asks about a state someone else's does.
+      *
+      * **This is what lets a joining coil peer refuse an offer while it still has something to
+      * lose.** The certificate and the blob are joined by nothing but this comparison: verifying
+      * the certificate establishes that the head peers signed a settlement, and says nothing
+      * whatsoever about the bytes travelling beside it. Since a settlement is an ordinary L1
+      * transaction, anyone can pair a real one with an arbitrary blob — so the check that catches
+      * that must come before [[wipe]], not after [[importState]] (GUM-354).
+      *
+      * **The same computation [[importState]] performs**, and factored so it cannot drift: a blob
+      * that passes here and lands as something else would defeat the whole exchange.
+      *
+      * The bytes are opaque to everyone but the backend that produced them, which is why only a
+      * ledger can answer this. A backend that cannot read a transferable blob fails the way
+      * [[importState]] does, with [[RestoreError.StateTransferNotSupported]].
+      */
+    def digestsOf(exported: L2StateExport): EitherT[F, RestoreError, L2Ledger.Digests]
+
+    /** The evacuation map an exported state projects to — the blob-side counterpart of
+      * [[evacuationMapAt]], and the other half of what a coil peer checks before it wipes.
+      *
+      * The head commits to this map with KZG and compares that against the commitment on the
+      * settlement's treasury datum or on an SEC. The map is what crosses the seam; the commitment
+      * is made on this side of it ([[L2Ledger.Digests]]).
+      */
+    def evacuationMapOf(exported: L2StateExport): EitherT[F, RestoreError, EvacuationMap]
 }
 
 object L2Ledger {
 
-    /** What a ledger reports about itself at a command number — an anchor it was told to
-      * [[L2Ledger.restoreTo]], or one it was merely asked about via [[L2Ledger.stateAt]].
+    /** What a ledger reports about one of its states — an anchor it was told to
+      * [[L2Ledger.restoreTo]], one it was merely asked about via [[L2StateReader.digestsAt]], or
+      * one it was handed as a blob via [[L2Ledger.digestsOf]].
+      *
+      * **Digests, and nothing but digests.** A commitment is a different kind of statement: the
+      * scheme, its setup and its parameters are the head's, and a ledger backend has no business
+      * knowing this head commits to its evacuation map with KZG. The head asks for the map itself
+      * ([[L2Ledger.evacuationMapAt]], [[L2Ledger.evacuationMapOf]]) and commits to it on its own
+      * side.
       *
       * The three digests answer different questions, which is why all three are here.
       * `evacuationMapHash` and `l2StateHash` both move with every applied command: the first says
@@ -353,20 +389,6 @@ object L2Ledger {
       */
     final case class Digests(
         evacuationMapHash: EvacuationMapHash,
-        /** The KZG commitment to the same evacuation map `evacuationMapHash` digests.
-          *
-          * Two representations of one map, both reported, because they answer to different readers.
-          * The hash is what a peer compares against its own folded map. The commitment is what the
-          * head **signs and anchors on L1** — it is the `commit` on a settlement's treasury datum
-          * and the `commitment` on an SEC — so it is the only one of the two a peer with no history
-          * to fold can check a certificate against. That is what a coil peer seeded at a start
-          * point has (GUM-312).
-          *
-          * The ledger is the right side to evaluate it: the evacuation map is a projection of the
-          * main compartment, so producing it is the ledger's own business, and any implementation
-          * that can report `evacuationMapHash` is already holding the map this comes from.
-          */
-        evacuationMapKzg: KzgCommitment,
         l2StateHash: L2StateHash,
         l2ParamsHash: Hash32
     )
