@@ -55,57 +55,25 @@ object LiaisonProtocol {
       */
     type Control = PreStart.type | ResendCurrent.type
 
-    /** Head ↔ head: serves + pulls one head peer's own production (the [[BatchMessages.Mesh]]
-      * shape), and accepts that head peer's artifacts to append to its outbox.
-      */
-    type HeadToHeadRequest =
-        Control | BatchMessages.Mesh.Get | BatchMessages.Mesh.New | SoftConfirmedHighWater |
-            (BlockBrief.Next | StackBrief | UserRequestWithId | SoftAck | HardAck | HardAckWithId)
+    // ---- Send vocabularies ----------------------------------------------------------------------
+    // What each party may put on a link, and what local actors may hand a liaison. These are the
+    // pieces the inboxes below are assembled from, and the element types of the handles at the
+    // foot of this object. A send vocabulary is never an inbox: the two sets differ at every one
+    // of these links, and conflating them is what this object exists to stop.
 
-    /** Hub → coil: serves the full population pull ([[BatchMessages.Population.Get]] →
-      * [[BatchMessages.Population.New]]) and pulls the coil peer's own hard-ack
-      * ([[BatchMessages.OwnHardAck]]). Accepts population artifacts (from `CoilRelay`) to append.
-      *
-      * [[BatchMessages.Join.Connected]] arrives from the transport, not the wire: the hub side of
-      * the link turns an accepted handshake into it so the start-point decision is made where the
-      * store is, not in the transport.
+    /** What either end of a head↔head link may put on it. Symmetric, unlike the hub↔coil pair: the
+      * mesh is peer-to-peer, so both ends pull with [[BatchMessages.Mesh.Get]] and serve with
+      * [[BatchMessages.Mesh.New]].
       */
-    type HubRequestServed =
-        Control | BatchMessages.Join.Connected | BatchMessages.Population.Get |
-            BatchMessages.OwnHardAck.New |
-            (BlockBrief.Next | StackBrief | UserRequestWithId | SoftAck | HardAck | HardAckWithId)
-
-    /** Coil → hub: pulls the full population ([[BatchMessages.Population.New]]) and serves the
-      * hub's pull of this coil peer's own hard-ack ([[BatchMessages.OwnHardAck.Get]]). Accepts only
-      * its own `HardAck` to append.
-      *
-      * [[BatchMessages.Join.Offer]] and [[BatchMessages.Join.NoOffer]] are here because this union
-      * is also the element type of [[CoilToHubHandle]], which is the **hub's** remote-facing handle
-      * — the hub sends the answer by `remote ! offer`, and the transport puts it on the wire. They
-      * are in the vocabulary for the send side, not because this actor wants them.
-      *
-      * On the receive side the transport takes the real answer at boot, before these actors exist,
-      * so one reaching the actor is a late redial and can only be declined. Removing the two cases
-      * means removing them from this union, which breaks the hub's send: separating "what a coil
-      * liaison accepts" from "what a hub may send a coil" is the fix, and it is a refactor of these
-      * handle types rather than a tidy-up.
-      *
-      * It also accepts the two local confirmation notifications its pull ceilings are anchored on
-      * (design/liaison-backpressure.md).
-      */
-    type CoilRequestServed =
-        Control | JoinWaitElapsed.type | BatchMessages.Join.Offer | BatchMessages.Join.NoOffer |
-            BatchMessages.Population.New | BatchMessages.OwnHardAck.Get | HardAck |
-            SoftConfirmedHighWater | HardConfirmedHighWater
+    type MeshEmitted = BatchMessages.Mesh.Get | BatchMessages.Mesh.New
 
     /** What a hub may put on a hub↔coil link: its answer to a handshake, the population it serves,
       * and its pull of the coil peer's own hard-ack.
       *
-      * A **send vocabulary**, not an inbox. It is deliberately not [[CoilRequestServed]]: a coil
-      * liaison also accepts control ticks and local artifacts no hub can send, and the handshake
-      * answer is taken by the transport rather than by the actor. `ActorRef` is contravariant in
-      * its request, so a handle typed here accepts the proxy that forwards to the transport without
-      * any widening at the call site.
+      * It is deliberately not [[CoilRequestServed]]: a coil liaison also takes control ticks and
+      * local artifacts no hub can send. `ActorRef` is contravariant in its request, so a handle
+      * typed here accepts the proxy that forwards to the transport with no widening at the call
+      * site.
       */
     type HubEmitted =
         BatchMessages.Join.Offer | BatchMessages.Join.NoOffer | BatchMessages.Population.New |
@@ -117,12 +85,55 @@ object LiaisonProtocol {
     type CoilEmitted = BatchMessages.Population.Get | BatchMessages.OwnHardAck.New
 
     /** What a coil node's own actors hand their local liaison: the hard-ack to append, and the two
-      * confirmation notifications the pull ceilings are anchored on. Nothing here crosses the wire,
-      * and nothing a hub sends belongs in it — this is the third role [[CoilRequestServed]] used to
-      * cover on its own.
+      * confirmation notifications its pull ceilings are anchored on
+      * (design/liaison-backpressure.md). Nothing here crosses the wire, and nothing a hub sends
+      * belongs in it.
       */
     type CoilUplink = HardAck | SoftConfirmedHighWater | HardConfirmedHighWater
 
+    /** What a head peer's own actors hand a liaison to append to an outbox lane.
+      *
+      * The same set on both of a head peer's liaison kinds: a hub relays its own production to its
+      * coil peers exactly as it relays it across the mesh.
+      */
+    type Artifacts =
+        BlockBrief.Next | StackBrief | UserRequestWithId | SoftAck | HardAck | HardAckWithId
+
+    // ---- Inboxes --------------------------------------------------------------------------------
+    // Each reads the same way: the ticks this liaison sends itself, what its peer may put on the
+    // link, and what its own local actors hand it. Anything that appears on one line and not the
+    // others is genuinely one-sided, and visibly so.
+
+    /** Head ↔ head: serves and pulls one head peer's own production, and accepts that head peer's
+      * artifacts to append to its outbox. [[SoftConfirmedHighWater]] is the local notification its
+      * request ceiling is anchored on.
+      */
+    type HeadToHeadRequest = Control | MeshEmitted | SoftConfirmedHighWater | Artifacts
+
+    /** Hub → coil: serves this coil peer's population pull, pulls its own hard-ack, and accepts the
+      * population artifacts `CoilRelay` hands it.
+      *
+      * [[BatchMessages.Join.Connected]] arrives from the transport, not the wire: the hub side of
+      * the link turns an accepted handshake into it so the start-point decision is made where the
+      * store is, not in the transport. Hub-only, and the reason this line is not simply
+      * `Control | CoilEmitted | Artifacts`.
+      */
+    type HubRequestServed = Control | BatchMessages.Join.Connected | CoilEmitted | Artifacts
+
+    /** Coil → hub: takes everything its hub may send, plus what its own actors hand it.
+      *
+      * [[JoinWaitElapsed]] is coil-only — no other liaison has a join mode to leave — which is why
+      * it sits here rather than in [[Control]].
+      */
+    type CoilRequestServed = Control | JoinWaitElapsed.type | HubEmitted | CoilUplink
+
+    // ---- Handles --------------------------------------------------------------------------------
+
+    /** ⚠️ The one handle still typed at the receiving actor's **inbox** rather than at what a head
+      * peer may send: it carries `Control` and [[Artifacts]] that never cross a mesh link.
+      * [[MeshEmitted]] is the vocabulary it wants, and retyping it is the head-mesh half of
+      * GUM-352, left out of that work item.
+      */
     type HeadToHeadHandle = ActorRef[IO, HeadToHeadRequest]
 
     /** The **coil's** handle to its hub: it carries what a coil may emit, not the hub's inbox. */
