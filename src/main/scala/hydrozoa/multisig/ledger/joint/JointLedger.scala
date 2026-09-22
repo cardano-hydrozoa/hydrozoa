@@ -1231,15 +1231,6 @@ object JointLedger {
                         _ <- checkL2Params(restored, l2ParamsHash)
                     } yield Some(done)
 
-        /** Compare the ledger's reported agreed parameters against the head config's.
-          *
-          * Unlike the evacuation map digest, this one never moves, so it is checked at **every**
-          * anchor — warm or cold — against a config value that is equally fixed. Past a cold start
-          * the map digest only says both sides hold the same *state*; this is what keeps asking
-          * whether this is still the right *ledger*.
-          *
-          * See `docs/spec/head-params-hash.md`.
-          */
         /** Compare the ledger's state digest at a **cold** start against the opening state the head
           * config declares.
           *
@@ -1260,6 +1251,15 @@ object JointLedger {
               )
             )
 
+        /** Compare the ledger's reported agreed parameters against the head config's.
+          *
+          * Unlike the evacuation map digest, this one never moves, so it is checked at **every**
+          * anchor — warm or cold — against a config value that is equally fixed. Past a cold start
+          * the map digest only says both sides hold the same *state*; this is what keeps asking
+          * whether this is still the right *ledger*.
+          *
+          * See `docs/spec/head-params-hash.md`.
+          */
         private def checkL2Params(
             restored: L2Ledger.Digests,
             expected: Hash32

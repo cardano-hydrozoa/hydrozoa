@@ -650,7 +650,7 @@ object PeerLiaisonCoilToHub {
       * ceiling that refuses the ack at the cursor stops a contiguous lane. Any window >= 1 is
       * provably safe — a coil emits an ack for stack N+1 only after locally hard-confirming N, so a
       * full quorum for N is always stamped below any N+1 ack — and this is margin over that proof,
-      * not a substitute for it. See design/liaison-backpressure.md.
+      * not a substitute for it. See docs/spec/liaison-backpressure.md.
       *
       * A constant rather than a config field: it is a correctness margin, not an operating knob.
       */

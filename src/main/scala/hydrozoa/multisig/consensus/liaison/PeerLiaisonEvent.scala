@@ -119,7 +119,7 @@ object PeerLiaisonEvent:
       * advances and lifts the ceiling.
       *
       * This is the precondition for the deadlock the window is sized to avoid
-      * (design/liaison-backpressure.md), so it is worth seeing. A few are normal — a coil peer
+      * (docs/spec/liaison-backpressure.md), so it is worth seeing. A few are normal — a coil peer
       * behind on blocks parks its ack lanes, which is the ceiling working. A lane that never
       * resumes is not.
       */

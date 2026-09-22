@@ -128,7 +128,7 @@ object LiaisonProtocol {
 
     /** What a coil node's own actors hand its liaison: its own hard-ack to append — the only
       * production a coil peer authors — plus the two confirmations its pull ceilings are anchored
-      * on (design/liaison-backpressure.md).
+      * on (docs/spec/liaison-backpressure.md).
       *
       * Both advance a `Ref` by max, and `PeerLiaisonCoilToHub` reads all three when it composes the
       * four ceilings of its next [[BatchMessages.Population.Get]]:

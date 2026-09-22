@@ -9,18 +9,19 @@ import java.nio.ByteBuffer
   * changes what is on disk, so a restart re-derives the same verdict.
   *
   * One of the three versions a build carries, and the two beside it fail differently — see
-  * `design/versioning.md`:
+  * `docs/spec/versioning.md`:
   *
   *   - [[hydrozoa.multisig.consensus.transport.ProtocolVersion]] is compared against a counterpart
   *     at every handshake; this one is compared against a local directory at every open.
   *   - The software version is compared against nothing at all.
   */
 object StoreVersion:
-    /** Current on-disk schema version — **5**.
+    /** Current on-disk schema version — **7**.
       *
       * **Bump on any change to the column-family set, the key layout or a value codec.** A bump is
       * not a migration: no store of an earlier version is ever read, because a bump deploys by head
-      * migration (`design/versioning.md`) and every peer of the new head starts from a fresh store.
+      * migration (`docs/spec/versioning.md`) and every peer of the new head starts from a fresh
+      * store.
       *
       * ⛔ A bump therefore cannot be answered by rebuilding the store of a running peer. A cold
       * store re-bootstraps stack 0 and never rejoins its head (GUM-312), so the rebuild that
@@ -42,6 +43,10 @@ object StoreVersion:
       *   - 6: `Cf.DepositMap` is keyed by `blockNum` instead of holding one singleton blob, so the
       *     deposits map at any retained block is recoverable and servable rather than only the one
       *     at the tip. The value codec is unchanged; only the key is.
+      *   - 7: [[Cf.StartPoint]] arrived (`docs/spec/coil-network.md`). A coil peer that adopted a
+      *     start point records it under [[StoreKey.StartPoint]], so both `State.recover`s and the
+      *     coil's own-hard-ack outbound lane read the anchor by name instead of deriving it from
+      *     journals a seeded peer never wrote.
       */
     val current: Int = 7
 

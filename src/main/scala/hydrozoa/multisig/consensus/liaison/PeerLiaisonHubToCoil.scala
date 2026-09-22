@@ -186,7 +186,7 @@ abstract class PeerLiaisonHubToCoil(
     // ---- Serve half (population) ----------------------------------------------------------------
     // Every lane is ceilinged here, unlike the symmetric mesh: a hub serves the whole population
     // and can run arbitrarily far ahead of one coil peer. Four ceilings cover six lane families —
-    // see design/liaison-backpressure.md for the anchor and window behind each.
+    // see docs/spec/liaison-backpressure.md for the anchor and window behind each.
     private def serve(get: Population.Get): IO[Server.Served[Population.New]] =
         for {
             blockR <- blockLane.reply(get.block, _.blockNum <= get.blockCeiling)
@@ -261,7 +261,7 @@ abstract class PeerLiaisonHubToCoil(
 
     /** Trace a `coilHardAck` lane whose HEAD — the very ack at the coil peer.s cursor — the ceiling
       * refused. The lane is contiguous, so that stops it until the coil peer.s hard-confirmed stack
-      * lifts the ceiling; see design/liaison-backpressure.md for why the window makes that
+      * lifts the ceiling; see docs/spec/liaison-backpressure.md for why the window makes that
       * temporary rather than terminal. An empty slice against a non-empty lane is the signal.
       */
     private def traceRefusedCoilHardAckHeads(

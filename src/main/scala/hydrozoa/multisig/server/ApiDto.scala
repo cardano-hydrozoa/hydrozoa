@@ -153,7 +153,7 @@ object ApiDto {
     /** `{ "version": ..., "gitCommit": ..., "buildTime": ..., "protocolVersion": ...,
       * "storeVersion": ... }` — served from `GET /version`.
       *
-      * The three versions a build carries (`design/versioning.md`). `version`, `gitCommit` and
+      * The three versions a build carries (`docs/spec/versioning.md`). `version`, `gitCommit` and
       * `buildTime` are the build identity baked in at compile time ([[hydrozoa.BuildInfo]]) and are
       * compared against nothing. `protocolVersion` is what this node's peers must match at the
       * handshake, and `storeVersion` what its data directory must match at every open — so an

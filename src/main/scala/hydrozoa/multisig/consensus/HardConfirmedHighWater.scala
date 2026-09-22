@@ -11,6 +11,6 @@ import hydrozoa.multisig.ledger.stack.StackNumber
   * needs none of this: N-of-N confirmation already gates every mesh lane.
   *
   * The number alone rather than the `Stack.HardConfirmed` it came from: the liaison bounds pulls,
-  * it does not inspect stacks. See design/liaison-backpressure.md.
+  * it does not inspect stacks. See docs/spec/liaison-backpressure.md.
   */
 final case class HardConfirmedHighWater(stackNum: StackNumber)
