@@ -552,11 +552,11 @@ object SlowConsensusActor {
         /** Head-peer-mesh liaisons; this actor broadcasts its **own** hard-ack here (empty on a
           * coil peer).
           */
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle],
         /** A coil peer's single uplink to its hub; this actor's own hard-ack also goes here. `None`
           * on a head peer.
           */
-        coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
+        coilUplink: Option[liaison.LiaisonProtocol.CoilLocalHandle] = None,
         /** A hub's coil relay (§5.4) [doc-ref]: this actor's **own** hard-ack is sent here so the
           * hub's coil peers receive it. `None` off a hub.
           */

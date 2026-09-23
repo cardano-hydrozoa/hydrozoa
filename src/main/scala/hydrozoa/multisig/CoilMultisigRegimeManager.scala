@@ -1,6 +1,6 @@
 package hydrozoa.multisig
 
-import cats.effect.{IO, Ref, Resource}
+import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.syntax.all.*
 import com.suprnation.actor.ActorContext
 import com.suprnation.actor.ActorRef.NoSendActorRef
@@ -70,9 +70,35 @@ trait CoilMultisigRegimeManager(
                   throw new IllegalStateException(s"No hub configured for coil $ownCoilNum")
                 )
 
+            // Exactly one liaison, toward the hub head peer (§5.5) [doc-ref]. It is spawned FIRST,
+            // before any other actor and before `Markers.derive`, because it owns the join
+            // exchange: a start point is adopted in its join mode, and adopting wipes this store
+            // and this ledger. Everything below reads what the join settles.
+            transport = coilTransport(context)
+            joinSettled <- Deferred[IO, Either[Throwable, Unit]]
+            hubLiaison <- context.actorOf(
+              liaison.PeerLiaisonCoilToHub(
+                config,
+                pendingConnections,
+                tracers.peerLiaison(Head(hubNum)),
+                persistence,
+                transport.announceMarks,
+                offer => CoilJoin.adopt(offer, persistence, l2Ledger)(using config),
+                joinSettled
+              )
+            )
+            _ <- transport.register(hubLiaison)
+            remoteHubProxy <- context.actorOf(RemoteHubProxy(transport))
+
+            // Block here until the liaison leaves join mode. A cold coil waits as long as it takes
+            // — booting it without an answer is the failure the exchange exists to prevent
+            // (`CoilJoin`) — so this is deliberately unbounded on a cold store.
+            _ <- joinSettled.get.flatMap(IO.fromEither)
+
             // Every recovery marker this peer boots from, derived ONCE here and projected into
             // each child actor. Deriving per-actor let two paths interpret the same journal
             // independently, which is how a seeded store could satisfy one and not the other.
+            // Derived AFTER the join: adoption rewrites every journal these are read from.
             markers <- Markers.derive(persistence, config.ownPeerId)
             core <- spawnCoreActors(
               config,
@@ -82,21 +108,6 @@ trait CoilMultisigRegimeManager(
               pendingConnections,
               markers,
             )
-
-            // Exactly one liaison, toward the hub head peer (§5.5) [doc-ref]. Register it on the
-            // coil-uplink transport for inbound dispatch, then spawn a `RemoteHubProxy` so the
-            // local actors talk to the hub through a single uniform handle.
-            hubLiaison <- context.actorOf(
-              liaison.PeerLiaisonCoilToHub(
-                config,
-                pendingConnections,
-                tracers.peerLiaison(Head(hubNum)),
-                persistence
-              )
-            )
-            transport = coilTransport(context)
-            _ <- transport.register(hubLiaison)
-            remoteHubProxy <- context.actorOf(RemoteHubProxy(transport))
 
             // A coil peer never leads, so there is nothing to pace against L1 timing: the limiter
             // slots alias the unthrottled handles directly (no `Limiter` actors spawned). A coil has

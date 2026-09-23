@@ -3,7 +3,6 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{Fiber, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
@@ -40,7 +39,7 @@ abstract class PeerLiaisonHeadToHead(
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO],
     metrics: PeerMetrics
-) extends Actor[IO, LiaisonProtocol.HeadToHeadRequest] {
+) extends Actor[IO, LiaisonProtocol.MeshLiaisonMessage] {
 
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codecs in `persistInbound` pick it up.
@@ -448,10 +447,10 @@ abstract class PeerLiaisonHeadToHead(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, HeadToHeadRequest] =
+    override def receive: Receive[IO, MeshLiaisonMessage] =
         PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: HeadToHeadRequest): IO[Unit] = req match {
+    private def receiveTotal(req: MeshLiaisonMessage): IO[Unit] = req match {
         case PreStart                   => preStartLocal
         case ResendCurrent              => puller.resend
         case get: Mesh.Get              => server.handleGet(get)
@@ -535,14 +534,12 @@ object PeerLiaisonHeadToHead {
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section &
             BlockConfig.Section
 
-    type Handle = ActorRef[IO, LiaisonProtocol.HeadToHeadRequest]
-
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remote: LiaisonProtocol.HeadToHeadHandle,
+        remote: LiaisonProtocol.MeshLiaisonHandle,
         /** Present only on a hub head peer: this remote head peer's satellites are forwarded here
           * so the hub's coil peers hear the whole population. `None` on non-hub head peers.
           */

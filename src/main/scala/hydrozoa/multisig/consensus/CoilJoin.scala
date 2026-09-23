@@ -3,20 +3,19 @@ package hydrozoa.multisig.consensus
 import cats.effect.IO
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
-import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
-import hydrozoa.multisig.consensus.transport.CoilTransport
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.{AdoptedStartPoint, JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 /** The coil peer's half of the join exchange: adopting the start point its hub offered.
   *
-  * **This runs before the node's actors exist, and it can only run there.** `L2Ledger.importState`
-  * accepts a state only into a ledger that has applied nothing, and by the time any actor is
-  * listening `JointLedger` and `StackComposer` have already positioned themselves off this store.
-  * So a start point is adopted at boot or not at all — [[hydrozoa.multisig.consensus.liaison]]'s
-  * coil liaison declines one that arrives later.
+  * **This runs while the coil liaison is in join mode, before any other actor has read the store.**
+  * `L2Ledger.importState` accepts a state only into a ledger that has applied nothing, so adoption
+  * has to precede `JointLedger` and `StackComposer` positioning themselves. They do that behind the
+  * regime manager's connections barrier, which is what leaves the window open: the coil liaison is
+  * spawned and joins first, and the barrier opens only once it has become the regular liaison. An
+  * offer reaching the liaison after that is a late redial and is declined.
   *
   * What it leaves behind is an ordinary store that the ordinary recovery paths read: the treasury
   * and evacuation map the slow side opens from, the block brief, deposit map and command number the
@@ -95,56 +94,53 @@ object CoilJoin {
     def adoptedStartPoint(persistence: Persistence[IO]): IO[Option[AdoptedStartPoint]] =
         persistence.get(StoreKey.StartPoint)
 
-    /** Settle where this coil peer starts, before any of its actors exist. Returns once the store
-      * is the one the node should boot from.
+    /** Where this coil stands, for its hub to decide on, and how long it may wait for the answer.
+      *
+      * Read once by the coil liaison as it enters join mode. The marks go out to the hub — a
+      * dialing transport already sent them in its handshake and ignores the call — and the
+      * [[JoinWait]] arms the liaison's join-mode timer.
       *
       * **A cold store waits for its hub; a warm one does not.** Booting cold without an answer is
-      * the failure this ticket exists to fix: the coil re-derives stack 0 from config, the head is
-      * long past it, and nothing afterwards can reconcile the two — the node looks healthy and is
-      * permanently useless. Waiting is the honest alternative, and it clears the moment the hub
-      * answers. A coil with history has somewhere to walk forward from, so it proceeds on its own
-      * after [[warmJoinWait]] rather than blocking a working node on an unreachable hub.
+      * the failure the exchange exists to prevent: the coil re-derives stack 0 from config, the
+      * head is long past it, and nothing afterwards can reconcile the two — the node looks healthy
+      * and is permanently useless. Waiting is the honest alternative, and it clears the moment the
+      * hub answers. A coil with history has somewhere to walk forward from, so it proceeds on its
+      * own after [[warmJoinWait]] rather than blocking a working node on an unreachable hub.
       *
       * `NoOffer` is an answer, not a timeout: at a real bring-up every coil is cold and every hub
-      * says there is nothing to seed from, and all of them boot straight through this.
+      * says there is nothing to seed from, and all of them leave join mode straight away.
       *
       * **An offer is adopted whether the store is cold or warm**, and adopting discards whatever
       * was there. A stale coil is the case the whole exchange is for — the empty store is its
       * degenerate form — and a hub only offers when the coil is too far behind to be walked
       * forward, so there is nothing left to preserve. See [[adopt]].
       */
-    def settleStartPoint(
-        transport: CoilTransport,
-        persistence: Persistence[IO],
-        ledger: L2Ledger[IO],
-        tracer: ContraTracer[IO, CoilJoinEvent]
-    )(using config: Config): IO[Unit] =
+    def marksAndWait(
+        persistence: Persistence[IO]
+    )(using config: OwnPeerPublic.Section): IO[(Join.Connected, JoinWait)] =
         for {
             markers <- Markers.derive(persistence, config.ownPeerId)
             startPoint <- adoptedStartPoint(persistence)
-            // Where this coil stands, for the hub to decide on. A dialing transport already sent
-            // this in its handshake and ignores the call.
-            _ <- transport.announceMarks(
-              Join.Connected(block = markers.fastBlockMark, stack = markers.hardConfirmed)
+            connected = Join.Connected(
+              block = markers.fastBlockMark,
+              stack = markers.hardConfirmed
             )
             cold = markers.hardAckedStack.isEmpty && startPoint.isEmpty
-            answer <-
-                if cold then waitForAnswer(transport, tracer).map(Some(_))
-                else transport.joinAnswer.map(Some(_)).timeoutTo(warmJoinWait, IO.none)
-            _ <- answer match {
-                case Some(offer: Join.Offer) =>
-                    tracer.traceWith(CoilJoinEvent.Adopting(offer.startStack)) >>
-                        adopt(offer, persistence, ledger) >>
-                        tracer.traceWith(
-                          CoilJoinEvent
-                              .Adopted(offer.startStack, offer.block.blockNum, offer.cursors.block)
-                        )
-                case Some(no: Join.NoOffer) =>
-                    tracer.traceWith(CoilJoinEvent.NothingToAdopt(no.reason))
-                case None =>
-                    tracer.traceWith(CoilJoinEvent.HubSilent(warmJoinWait))
-            }
-        } yield ()
+        } yield (connected, if cold then JoinWait.Forever else JoinWait.Until(warmJoinWait))
+
+    /** How long a coil liaison stays in join mode without an answer from its hub. */
+    enum JoinWait:
+
+        /** A cold coil: wait as long as it takes. Booting without an answer is the failure the
+          * exchange exists to prevent — the coil would re-derive stack 0 from config, the head is
+          * long past it, and nothing afterwards can reconcile the two.
+          */
+        case Forever
+
+        /** A coil with history: proceed after this long. It has somewhere to walk forward from, so
+          * a working node is not blocked on an unreachable hub.
+          */
+        case Until(after: FiniteDuration)
 
     /** How long a coil peer that already has history waits for its hub before booting anyway. Not
       * configurable: past it the node boots and catches up, so the only cost of the wait being
@@ -152,20 +148,8 @@ object CoilJoin {
       */
     val warmJoinWait: FiniteDuration = 30.seconds
 
-    /** Wait as long as it takes, saying so periodically — a cold coil has nothing useful to do
-      * without an answer, and the log line is what tells an operator the hub is the problem.
+    /** How often a cold coil says it is still waiting — the log line is what tells an operator the
+      * hub is the problem.
       */
-    private def waitForAnswer(
-        transport: CoilTransport,
-        tracer: ContraTracer[IO, CoilJoinEvent]
-    ): IO[Join.Answer] =
-        transport.joinAnswer
-            .race(
-              (IO.sleep(coldJoinReportEvery) >> tracer.traceWith(
-                CoilJoinEvent.StillWaiting
-              )).foreverM
-            )
-            .map(_.merge)
-
-    private val coldJoinReportEvery: FiniteDuration = 10.seconds
+    val coldJoinReportEvery: FiniteDuration = 10.seconds
 }

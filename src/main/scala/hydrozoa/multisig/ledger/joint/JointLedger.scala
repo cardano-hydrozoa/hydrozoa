@@ -17,7 +17,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.ack.SoftAck
-import hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{CoilRelay, FastConsensusActor, StackComposer, UserRequestWithId}
@@ -1022,7 +1022,7 @@ object JointLedger {
         fastConsensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         /** Head-peer-mesh liaisons; this peer broadcasts its own-led brief here when it leads. */
-        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
+        headPeerLiaisons: List[LiaisonProtocol.MeshLocalHandle],
         /** A hub's coil relay (§5.4) [doc-ref]: EVERY (re)produced brief is sent here so the hub's
           * coil peers follow the whole contiguous block spine. `None` off a hub.
           */

@@ -1,9 +1,8 @@
 package hydrozoa.multisig.consensus.liaison
 
-import cats.effect.{Fiber, IO, Ref}
+import cats.effect.{Deferred, Fiber, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
@@ -15,7 +14,7 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, H
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, HardConfirmedHighWater, SlowConsensusActor, SoftConfirmedHighWater, StackComposer, UserRequestWithId}
+import hydrozoa.multisig.consensus.{BlockWeaver, CoilJoin, FastConsensusActor, HardConfirmedHighWater, SlowConsensusActor, SoftConfirmedHighWater, StackComposer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -37,8 +36,17 @@ abstract class PeerLiaisonCoilToHub(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections |
         PeerLiaisonCoilToHub.Connections,
     tracer: ContraTracer[IO, PeerLiaisonEvent],
-    persistence: Persistence[IO]
-) extends Actor[IO, LiaisonProtocol.CoilRequestServed] {
+    persistence: Persistence[IO],
+    // Injected rather than taken as a `CoilTransport` and an `L2Ledger`, for the same reason the
+    // hub's `decideStartPoint` is a function: a liaison is a transport, and neither the ledger nor
+    // the link belongs in one. Mirrors `PeerLiaisonHubToCoil`.
+    announceMarks: Join.Connected => IO[Unit],
+    adoptOffer: Join.Offer => IO[Unit],
+    /** Completed once this liaison leaves join mode, so the regime manager knows the store is the
+      * one the rest of the node should boot from.
+      */
+    joinSettled: Deferred[IO, Either[Throwable, Unit]]
+) extends Actor[IO, LiaisonProtocol.CoilLiaisonMessage] {
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codecs in `persistInbound` pick it up.
     private given CardanoNetwork.Section = config
@@ -159,6 +167,10 @@ abstract class PeerLiaisonCoilToHub(
     // Handle to the resend-timer fiber ([[startResendTimer]]); cancelled in [[postStop]] so it
     // doesn't outlive the actor.
     private val resendFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
+
+    // Handle to the join-mode timer ([[armJoinTimer]]); cancelled on leaving join mode and again
+    // in [[postStop]], under the same single-fiber discipline as [[resendFiber]].
+    private val joinFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Unit]]](None)
 
     private def getConnections: IO[PeerLiaisonCoilToHub.Connections] =
         connections.get.flatMap(
@@ -363,19 +375,47 @@ abstract class PeerLiaisonCoilToHub(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, CoilRequestServed] =
-        PartialFunction.fromFunction(receiveTotal)
+    /** Join mode, the behaviour this liaison starts in.
+      *
+      * It owns the whole join exchange: announce where this coil stands, wait for the hub's answer,
+      * adopt an offer, and only then [[becomeRegular]]. Nothing else on the node has read the store
+      * yet — the regime manager holds every other actor behind its connections barrier until this
+      * mode exits — which is what makes adoption possible here at all (`CoilJoin`).
+      *
+      * The serving cases are **ignored on purpose**: a hub that starts serving before its answer is
+      * seated is answering a pull this coil is about to re-issue from a different cursor, so there
+      * is nothing to keep. The local cases cannot arrive at all — the actors that send them are not
+      * spawned until this mode exits. Every case is named, so the behaviour stays total.
+      */
+    private def joining: Receive[IO, CoilLiaisonMessage] = PartialFunction.fromFunction {
+        case PreStart        => startJoin
+        case JoinWaitElapsed => hubSilent
+        case offer: Join.Offer =>
+            tracer.traceWith(PeerLiaisonEvent.JoinAdopting(offer.startStack)) >>
+                adoptOffer(offer) >>
+                tracer.traceWith(PeerLiaisonEvent.JoinAdopted(offer.startStack)) >>
+                becomeRegular
+        case no: Join.NoOffer =>
+            tracer.traceWith(PeerLiaisonEvent.JoinNothingToAdopt(no.reason)) >> becomeRegular
+        case _: Population.New | _: OwnHardAck.Get =>
+            tracer.traceWith(PeerLiaisonEvent.JoinIgnoredServe)
+        case ResendCurrent => IO.unit
+        case _: HardAck | _: SoftConfirmedHighWater | _: HardConfirmedHighWater =>
+            tracer.traceWith(PeerLiaisonEvent.JoinIgnoredLocal)
+    }
 
-    private def receiveTotal(req: CoilRequestServed): IO[Unit] = req match {
-        case PreStart            => preStartLocal
+    /** Regular mode: the ordinary pull/serve liaison, entered once the start point is settled. */
+    private def regular: Receive[IO, CoilLiaisonMessage] = PartialFunction.fromFunction {
         case ResendCurrent       => puller.resend
         case pop: Population.New => puller.handleReply(pop)
         case get: OwnHardAck.Get => server.handleGet(get)
         case ack: HardAck        => ownHardAckLane.append(ack) >> server.afterAppend
         case offer: Join.Offer   => declineLateOffer(offer)
-        // The ordinary answer, and by the time it reaches this actor the boot that wanted it has
-        // long since proceeded without it. Nothing to do and nothing wrong.
-        case _: Join.NoOffer            => IO.unit
+        // The ordinary answer, and by the time it reaches this mode the join it belonged to has
+        // long since concluded. Nothing to do and nothing wrong.
+        case _: Join.NoOffer => IO.unit
+        // Join mode is entered once, at `preStart`, so this is a tick that outlived it.
+        case PreStart | JoinWaitElapsed => IO.unit
         case hw: SoftConfirmedHighWater =>
             // Merge by max: a block carries only the authors that appear in it, and blocks arrive
             // in order but the notification is advisory, never a cursor.
@@ -392,24 +432,69 @@ abstract class PeerLiaisonCoilToHub(
             hardConfirmedStack.update(cur => Ordering[StackNumber].max(cur, hc.stackNum))
     }
 
-    /** Decline an offer that arrived too late to act on — the only thing this actor can do with
-      * one. A start point is adopted before the node's actors exist: `L2Ledger.importState` takes
-      * an imported state only into a ledger that has applied nothing, and by the time a liaison
-      * receives anything the transport has taken the real answer and `JointLedger` and
-      * `StackComposer` have positioned themselves off this store.
+    override def receive: Receive[IO, CoilLiaisonMessage] = joining
+
+    /** Tell the hub where this coil stands and arm the wait for its answer.
       *
-      * The arm exists rather than being dropped from the union because `CoilRequestServed` is also
-      * the hub's send-side vocabulary (see [[LiaisonProtocol]]), and without it a hub that
-      * redecides mid-link would kill this actor with a `MatchError`.
+      * A cold coil has no timer: it has nothing to walk forward from, so it stays in join mode
+      * until answered rather than booting into a stack 0 the head is long past. A warm one is
+      * released after `CoilJoin.warmJoinWait`.
+      */
+    private def startJoin: IO[Unit] =
+        tracer.traceWith(PeerLiaisonEvent.JoinStarted) >>
+            CoilJoin.marksAndWait(persistence)(using config).flatMap { (marks, wait) =>
+                announceMarks(marks) >> armWait(wait)
+            }
+
+    private def armWait(wait: CoilJoin.JoinWait): IO[Unit] = wait match {
+        case CoilJoin.JoinWait.Until(after) =>
+            armJoinTimer(IO.sleep(after) >> (context.self ! JoinWaitElapsed))
+        case CoilJoin.JoinWait.Forever =>
+            armJoinTimer(
+              (IO.sleep(CoilJoin.coldJoinReportEvery) >>
+                  tracer.traceWith(PeerLiaisonEvent.JoinStillWaiting)).foreverM
+            )
+    }
+
+    /** Hold the join-mode timer under the same single-fiber discipline as [[startResendTimer]], so
+      * leaving join mode cannot leave a fiber pinging a liaison that has moved on.
+      */
+    private def armJoinTimer(work: IO[Unit]): IO[Unit] =
+        work.start.flatMap(fib => joinFiber.getAndSet(Some(fib)).flatMap(_.fold(IO.unit)(_.cancel)))
+
+    private def hubSilent: IO[Unit] =
+        tracer.traceWith(PeerLiaisonEvent.JoinHubSilent(CoilJoin.warmJoinWait)) >> becomeRegular
+
+    /** Leave join mode: restore this liaison's own state from the store the join just settled, open
+      * the barrier the regime manager is waiting on, then resolve connections and start pulling.
+      *
+      * **`joinSettled` completes before `resolveConnections`.** The regime manager spawns the rest
+      * of the node only once the join is done, and those actors are what `pendingConnections`
+      * carries — so blocking on connections first would have each side waiting on the other.
+      */
+    private def becomeRegular: IO[Unit] =
+        for {
+            _ <- joinFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
+            _ <- context.become(regular)
+            _ <- restoreFromStore
+            _ <- joinSettled.complete(Right(())).void
+            c <- resolveConnections
+            _ <- connections.set(Some(c))
+            _ <- tracer.traceWith(PeerLiaisonEvent.Started)
+            _ <- puller.start
+            _ <- startResendTimer
+        } yield ()
+
+    /** Decline an offer that arrived too late to act on — the only thing this actor can do with
+      * one. A start point is adopted in join mode and nowhere else: `L2Ledger.importState` takes an
+      * imported state only into a ledger that has applied nothing, and by the time this mode is
+      * running `JointLedger` and `StackComposer` have positioned themselves off this store.
       */
     private def declineLateOffer(offer: Join.Offer): IO[Unit] =
         tracer.traceWith(PeerLiaisonEvent.JoinOfferTooLate(offer.startStack))
 
-    private def preStartLocal: IO[Unit] =
+    private def restoreFromStore: IO[Unit] =
         for {
-            c <- resolveConnections
-            _ <- connections.set(Some(c))
-            _ <- tracer.traceWith(PeerLiaisonEvent.Started)
             // Restore only the own-hard-ack high-water; the lane serves older acks from the own
             // coil HardAck journal on demand (the Server half answers the hub's OwnHardAck.Get) and
             // replay re-appends the in-flight tail. An empty store leaves the lane cold.
@@ -427,8 +512,6 @@ abstract class PeerLiaisonCoilToHub(
             // entry before its cursor advanced).
             _ <- restoreInboundCursors
             _ <- restoreCeilingAnchors(startPoint)
-            _ <- puller.start
-            _ <- startResendTimer
         } yield ()
 
     /** Move the pull ceilings' anchors up to the start point a seeded coil was seated at.
@@ -530,7 +613,8 @@ abstract class PeerLiaisonCoilToHub(
       * that keeps delivering `ResendCurrent` to a dead actor (dead letters).
       */
     override def postStop: IO[Unit] =
-        resendFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
+        resendFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel)) >>
+            joinFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 }
 
 object PeerLiaisonCoilToHub {
@@ -538,9 +622,22 @@ object PeerLiaisonCoilToHub {
         config: Config,
         pendingConnections: HeadMultisigRegimeManager.PendingConnections | Connections,
         tracer: ContraTracer[IO, PeerLiaisonEvent],
-        persistence: Persistence[IO]
+        persistence: Persistence[IO],
+        announceMarks: Join.Connected => IO[Unit],
+        adoptOffer: Join.Offer => IO[Unit],
+        joinSettled: Deferred[IO, Either[Throwable, Unit]]
     ): IO[PeerLiaisonCoilToHub] =
-        IO(new PeerLiaisonCoilToHub(config, pendingConnections, tracer, persistence) {})
+        IO(
+          new PeerLiaisonCoilToHub(
+            config,
+            pendingConnections,
+            tracer,
+            persistence,
+            announceMarks,
+            adoptOffer,
+            joinSettled
+          ) {}
+        )
 
     type Config =
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section &
@@ -559,8 +656,6 @@ object PeerLiaisonCoilToHub {
       */
     val coilHardAckStackWindow: Int = 20
 
-    type Handle = ActorRef[IO, LiaisonProtocol.CoilRequestServed]
-
     /** The local actors a verified population reply routes to, plus the send path to the hub's
       * counterpart liaison.
       */
@@ -569,6 +664,6 @@ object PeerLiaisonCoilToHub {
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remote: LiaisonProtocol.HubToCoilHandle
+        remote: LiaisonProtocol.RemoteHubHandle
     )
 }

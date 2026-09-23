@@ -29,7 +29,7 @@ import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.*
-import hydrozoa.multisig.consensus.{CardanoLiaison, CoilJoin, CoilJoinEventFormat, RequestSequencer}
+import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
@@ -744,7 +744,6 @@ object MultiPeerHeadHarness:
                           system,
                           hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                           transports.coilUplinks(coilNum),
-                          transports.coilTransports(coilNum),
                           hooks.tracer.contramap(Event.Coil(coilNum, _)),
                           hooks.wrapPersistence(PeerId.Coil(coilNum), _),
                         )
@@ -879,7 +878,6 @@ object MultiPeerHeadHarness:
                           system,
                           hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                           transports.coilUplinks(coilNum),
-                          transports.coilTransports(coilNum),
                           hooks.tracer.contramap(Event.Coil(coilNum, _)),
                           old.backendStore,
                           old.l2Ledger,
@@ -1695,7 +1693,6 @@ object MultiPeerHeadHarness:
             system: ActorSystem[IO],
             cardanoBackend: L1Backend[IO],
             uplink: Transport.ContextFn[CoilTransport],
-            coilTransport: CoilTransport,
             callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
             // Wrap this coil's persistence before it reaches the regime manager (crash injection).
             wrapPersistence: Persistence[IO] => Persistence[IO] = identity,
@@ -1710,7 +1707,6 @@ object MultiPeerHeadHarness:
                       system,
                       cardanoBackend,
                       uplink,
-                      coilTransport,
                       callerTracer,
                       backendStore,
                       l2Ledger,
@@ -1733,7 +1729,6 @@ object MultiPeerHeadHarness:
             system: ActorSystem[IO],
             cardanoBackend: L1Backend[IO],
             uplink: Transport.ContextFn[CoilTransport],
-            coilTransport: CoilTransport,
             callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
             backendStore: BackendStore[IO],
             l2Ledger: L2Ledger[IO],
@@ -1756,19 +1751,8 @@ object MultiPeerHeadHarness:
                 // runtime gauges never leave their initial values.
                 _ <- metrics.sampler().background
                 firstPollResults <- Resource.eval(readFirstPollResults(cardanoBackend, coilConfig))
-                // Mirrors `Serve.buildCoilNode`: settle where this coil starts before any of its
-                // actors exist. Nothing happens on an in-process link, whose transport answers
-                // `NoOffer` immediately; over WS this is the real join exchange.
-                _ <- Resource.eval(
-                  CoilJoin.settleStartPoint(
-                    coilTransport,
-                    persistence,
-                    l2Ledger,
-                    Slf4jTracer.sink.contramap(
-                      CoilJoinEventFormat.humanFormat(Transport.coilNumOf(coilConfig))
-                    )
-                  )(using coilConfig)
-                )
+                // Where this coil starts is settled by its liaison's join mode, inside the regime
+                // manager below — exactly as in `Serve.buildCoilNode`.
                 mrm <- CoilMultisigRegimeManager.resource(
                   coilConfig,
                   cardanoBackend,

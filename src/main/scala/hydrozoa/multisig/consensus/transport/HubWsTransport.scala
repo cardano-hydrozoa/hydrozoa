@@ -8,7 +8,7 @@ import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 import hydrozoa.multisig.consensus.transport.HubWsTransportEvent.*
 import org.http4s.HttpRoutes
@@ -26,10 +26,10 @@ trait HubTransport {
     /** Wire a local [[PeerLiaisonHubToCoil]] handle as the inbound dispatch target for the given
       * coil peer. Must be called before that coil's link starts receiving traffic.
       */
-    def register(coil: CoilPeerNumber, localLiaison: PeerLiaisonHubToCoil.Handle): IO[Unit]
+    def register(coil: CoilPeerNumber, localLiaison: LiaisonProtocol.HubLiaisonHandle): IO[Unit]
 
     /** Enqueue a hub→coil batch for delivery to [[coil]]. */
-    def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilRequestServed): IO[Unit]
+    def send(coil: CoilPeerNumber, request: Join.Answer | LiaisonProtocol.HubEmitted): IO[Unit]
 }
 
 /** The hub side of the hub→coil WS links: contributes the `/hub` route to the hub's shared
@@ -51,7 +51,7 @@ final class HubWsTransport private (
     private val outboxes: Map[CoilPeerNumber, Queue[IO, String]],
     private val coilPeers: CoilPeers,
     private val headParamsHash: Hash32,
-    private val inboundRef: Ref[IO, Map[CoilPeerNumber, PeerLiaisonHubToCoil.Handle]],
+    private val inboundRef: Ref[IO, Map[CoilPeerNumber, LiaisonProtocol.HubLiaisonHandle]],
     private val ownHead: HeadIdentity,
     private val keepAlivePing: FiniteDuration,
     private val tracer: ContraTracer[IO, HubWsTransportEvent],
@@ -60,21 +60,20 @@ final class HubWsTransport private (
 
     override def register(
         coil: CoilPeerNumber,
-        localLiaison: PeerLiaisonHubToCoil.Handle
+        localLiaison: LiaisonProtocol.HubLiaisonHandle
     ): IO[Unit] =
         inboundRef.update(_.updated(coil, localLiaison))
 
-    override def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilRequestServed): IO[Unit] =
-        CoilFrame.fromWire(request) match {
-            case Some(wire) =>
-                val line = CoilFrame.encode(CoilFrame.Msg(wire))
-                outboxes.get(coil) match {
-                    case Some(q) => q.offer(line)
-                    case None    => tracer.traceWith(NoOutboxForCoil(coil))
-                }
-            case None =>
-                tracer.traceWith(DroppingNonWireRequest(coil, request))
+    override def send(
+        coil: CoilPeerNumber,
+        request: Join.Answer | LiaisonProtocol.HubEmitted
+    ): IO[Unit] = {
+        val line = CoilFrame.encode(CoilFrame.Msg(request))
+        outboxes.get(coil) match {
+            case Some(q) => q.offer(line)
+            case None    => tracer.traceWith(NoOutboxForCoil(coil))
         }
+    }
 
     private def dispatchInbound(coil: CoilPeerNumber, payload: CoilFrame.Wire): IO[Unit] =
         payload match {
@@ -86,7 +85,7 @@ final class HubWsTransport private (
 
     private def toLiaison(
         coil: CoilPeerNumber,
-        request: LiaisonProtocol.HubRequestServed
+        request: LiaisonProtocol.FromCoil
     ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(coil) match {
@@ -236,7 +235,7 @@ object HubWsTransport {
             outboxes <- coils
                 .traverse(c => Queue.unbounded[IO, String].map(c -> _))
                 .map(_.toMap)
-            inboundRef <- Ref[IO].of(Map.empty[CoilPeerNumber, PeerLiaisonHubToCoil.Handle])
+            inboundRef <- Ref[IO].of(Map.empty[CoilPeerNumber, LiaisonProtocol.HubLiaisonHandle])
         } yield new HubWsTransport(
           outboxes,
           coilPeers,

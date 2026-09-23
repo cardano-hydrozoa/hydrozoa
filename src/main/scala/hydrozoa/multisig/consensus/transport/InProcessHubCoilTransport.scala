@@ -1,9 +1,8 @@
 package hydrozoa.multisig.consensus.transport
 
-import cats.effect.{Deferred, IO, Ref}
-import cats.syntax.all.*
+import cats.effect.{IO, Ref}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 import scala.concurrent.duration.DurationInt
 
@@ -22,17 +21,12 @@ object InProcessHubCoilTransport {
       * each spawn and register their liaisons.
       */
     final case class Endpoints(
-        hubInbound: Option[PeerLiaisonHubToCoil.Handle],
-        coilInbound: Option[PeerLiaisonCoilToHub.Handle],
-        /** Where a hub's answer to the join exchange lands. A coil reads its start point **before**
-          * its actors exist, so the answer cannot be routed to `coilInbound` — there is nothing
-          * there yet.
-          */
-        joinAnswer: Option[Deferred[IO, Join.Answer]],
+        hubInbound: Option[LiaisonProtocol.HubLiaisonHandle],
+        coilInbound: Option[LiaisonProtocol.CoilLiaisonHandle],
     )
 
     object Endpoints:
-        val empty: Endpoints = Endpoints(None, None, None)
+        val empty: Endpoints = Endpoints(None, None)
 
     /** Shared lookup table used by both ends of every hub↔coil link in one test scenario. The test
       * builds one of these via [[emptyRegistry]], then passes it to each hub's [[Hub.create]] and
@@ -46,7 +40,7 @@ object InProcessHubCoilTransport {
     final class Hub private (registry: Registry) extends HubTransport {
         override def register(
             coil: CoilPeerNumber,
-            localLiaison: PeerLiaisonHubToCoil.Handle
+            localLiaison: LiaisonProtocol.HubLiaisonHandle
         ): IO[Unit] =
             registry.update(m =>
                 m.updated(
@@ -57,26 +51,18 @@ object InProcessHubCoilTransport {
 
         override def send(
             coil: CoilPeerNumber,
-            request: LiaisonProtocol.CoilRequestServed
+            request: Join.Answer | LiaisonProtocol.HubEmitted
         ): IO[Unit] =
             registry.get.flatMap { m =>
                 val endpoints = m.get(coil)
-                request match {
-                    // The join answer goes to the coil's boot, not its liaison. `complete` has one
-                    // winner, so a second answer falls through and is declined there.
-                    case a @ (_: Join.Offer | _: Join.NoOffer) =>
-                        endpoints.flatMap(_.joinAnswer) match {
-                            case Some(d) =>
-                                d.complete(a).flatMap(won => IO.unlessA(won)(toCoil(endpoints, a)))
-                            case None => toCoil(endpoints, a)
-                        }
-                    case other => toCoil(endpoints, other)
-                }
+                // Everything a hub emits, the answer included, goes to the coil liaison: it is in
+                // join mode waiting for exactly that.
+                toCoil(endpoints, request)
             }
 
         private def toCoil(
             endpoints: Option[Endpoints],
-            request: LiaisonProtocol.CoilRequestServed
+            request: Join.Answer | LiaisonProtocol.HubEmitted
         ): IO[Unit] =
             endpoints.flatMap(_.coilInbound) match {
                 case Some(liaison) => liaison ! request
@@ -94,10 +80,9 @@ object InProcessHubCoilTransport {
     final class Coil private (
         ownCoilNum: CoilPeerNumber,
         registry: Registry,
-        marks: Ref[IO, Join.Connected],
-        answer: Ref[IO, Deferred[IO, Join.Answer]]
+        marks: Ref[IO, Join.Connected]
     ) extends CoilTransport {
-        override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
+        override def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit] =
             registry.update(m =>
                 m.updated(
                   ownCoilNum,
@@ -105,7 +90,7 @@ object InProcessHubCoilTransport {
                 )
             )
 
-        override def send(request: LiaisonProtocol.HubRequestServed): IO[Unit] =
+        override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
             registry.get.flatMap { m =>
                 m.get(ownCoilNum).flatMap(_.hubInbound) match {
                     case Some(liaison) => liaison ! request
@@ -113,45 +98,26 @@ object InProcessHubCoilTransport {
                 }
             }
 
-        override def announceMarks(m: Join.Connected): IO[Unit] = marks.set(m)
-
-        /** Run the join exchange over the direct link: hand the hub this coil's marks and wait for
-          * its answer.
+        /** Hand the hub this coil's marks, retrying until its liaison is registered.
           *
-          * The wait for a registered hub liaison is what a dialer does over a socket — a coil that
-          * comes up before its hub retries until the hub is there. It is also why the marks must
-          * already be set: they are what the hub decides on.
+          * The retry is what a dialer does over a socket — a coil that comes up before its hub
+          * keeps trying until the hub is there. Forked, because the caller is the coil liaison's
+          * join mode and it must stay free to receive the answer this announcement provokes.
           */
-        override def joinAnswer: IO[Join.Answer] =
+        override def announceMarks(m: Join.Connected): IO[Unit] =
             def announce: IO[Unit] =
-                (registry.get, marks.get).flatMapN { (m, own) =>
-                    m.get(ownCoilNum).flatMap(_.hubInbound) match {
-                        case Some(hub) => hub ! own
+                registry.get.flatMap { reg =>
+                    reg.get(ownCoilNum).flatMap(_.hubInbound) match {
+                        case Some(hub) => hub ! m
                         case None      => IO.sleep(100.millis) >> announce
                     }
                 }
-            // A FRESH sink per exchange. The transport outlives the coil actors in a harness that
-            // restarts them, and a `Deferred` fires once — reuse it and a restarted coil reads the
-            // answer its predecessor got, silently, while looking like a successful exchange.
-            for {
-                fresh <- Deferred[IO, Join.Answer]
-                _ <- answer.set(fresh)
-                _ <- registry.update(m =>
-                    m.updated(
-                      ownCoilNum,
-                      m.getOrElse(ownCoilNum, Endpoints.empty).copy(joinAnswer = Some(fresh))
-                    )
-                )
-                _ <- announce
-                a <- fresh.get
-            } yield a
+            marks.set(m) >> announce.start.void
     }
 
     object Coil:
         def create(ownCoilNum: CoilPeerNumber, registry: Registry): IO[Coil] =
-            for {
-                marks <- Ref[IO].of(Join.Connected(None, None))
-                first <- Deferred[IO, Join.Answer]
-                answer <- Ref[IO].of(first)
-            } yield new Coil(ownCoilNum, registry, marks, answer)
+            Ref[IO]
+                .of(Join.Connected(None, None))
+                .map(marks => new Coil(ownCoilNum, registry, marks))
 }

@@ -1,32 +1,29 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.IO
-import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, Population}
-import hydrozoa.multisig.consensus.liaison.{BatchNumber, LiaisonProtocol, PeerLiaisonCoilToHub}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Population
+import hydrozoa.multisig.consensus.liaison.BatchNumber
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.transport.CoilTransport
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
-import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEvent, StoreKey}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
-import scala.concurrent.duration.DurationInt
 
-/** When a coil peer boots and when it refuses to — [[CoilJoin.settleStartPoint]].
+/** How long a coil liaison may stay in join mode — [[CoilJoin.marksAndWait]].
   *
-  * ⚠️ **The cold case is the whole ticket.** A coil with an empty store that boots without an
-  * answer re-derives stack 0 from config, and a head long past stack 0 can never reconcile with it:
-  * the node reports healthy and is permanently useless. Blocking is the deliberate alternative, so
-  * the test that matters here is the one asserting a cold coil does *not* return.
+  * ⚠️ **The cold case is the whole ticket.** A coil with an empty store that leaves join mode
+  * without an answer re-derives stack 0 from config, and a head long past stack 0 can never
+  * reconcile with it: the node reports healthy and is permanently useless. Waiting is the
+  * deliberate alternative, so the test that matters here is the one asserting a cold store yields
+  * [[CoilJoin.JoinWait.Forever]].
   */
 class CoilJoinBootTest extends AnyFunSuite {
 
@@ -35,21 +32,10 @@ class CoilJoinBootTest extends AnyFunSuite {
 
     private val nodeConfig: NodeConfig = env.nodeConfigs(HeadPeerNumber.zero)
 
-    private given CoilJoin.Config = nodeConfig
-
-    private val silentTracer: ContraTracer[IO, CoilJoinEvent] =
-        ContraTracer(_ => IO.unit)
+    private given CardanoNetwork.Section = nodeConfig
 
     private val quietPersistence: ContraTracer[IO, PersistenceEvent] =
         ContraTracer(_ => IO.unit)
-
-    /** A transport whose only job is to hand back one prepared answer, or never answer at all. */
-    private class StubTransport(answer: IO[Join.Answer]) extends CoilTransport {
-        override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] = IO.unit
-        override def send(request: LiaisonProtocol.HubRequestServed): IO[Unit] = IO.unit
-        override def announceMarks(marks: Join.Connected): IO[Unit] = IO.unit
-        override def joinAnswer: IO[Join.Answer] = answer
-    }
 
     private val ownPeerId: PeerId = nodeConfig.ownPeerId
 
@@ -96,11 +82,10 @@ class CoilJoinBootTest extends AnyFunSuite {
           )
         )
 
-    private def settle(
-        answer: IO[Join.Answer],
+    private def waitFor(
         warm: Boolean = false,
         seeded: Boolean = false
-    ): IO[Unit] =
+    ): CoilJoin.JoinWait =
         InMemoryBackendStore
             .open(quietPersistence)
             .use(backend =>
@@ -108,58 +93,27 @@ class CoilJoinBootTest extends AnyFunSuite {
                     p <- Persistence.fromBackend(backend, quietPersistence)
                     _ <- IO.whenA(warm)(warmUp(p))
                     _ <- IO.whenA(seeded)(seed(p))
-                    store <- InMemoryL2Store.create
-                    ledger <- EutxoL2Ledger(nodeConfig, store)
-                    _ <- CoilJoin
-                        .settleStartPoint(new StubTransport(answer), p, ledger, silentTracer)
-                } yield ()
+                    r <- CoilJoin.marksAndWait(p)(using nodeConfig)
+                } yield r._2
             )
-
-    test("a cold coil whose hub never answers does not boot") {
-        // Left to itself it would bootstrap stack 0 and be unrecoverable. `TestControl` advances
-        // the clock past every timeout in the code, so a non-terminating result here is the
-        // assertion: nothing in the cold path gives up.
-        val outcome = TestControl
-            .execute(settle(IO.never))
-            .flatMap(control => control.tick >> control.advanceAndTick(1.hour) >> control.results)
             .unsafeRunSync()
-        assert(outcome.isEmpty, s"a cold coil booted without an answer: $outcome")
+
+    test("a cold coil waits for its hub indefinitely") {
+        // Left to itself it would bootstrap stack 0 and be unrecoverable, so there is deliberately
+        // no deadline on this path: the liaison stays in join mode until its hub answers.
+        assert(waitFor() == CoilJoin.JoinWait.Forever)
     }
 
-    test("a warm coil whose hub never answers boots anyway") {
+    test("a warm coil does not wait indefinitely") {
         // It has history to walk forward from, so blocking a working node on an unreachable hub
         // would be the wrong trade.
-        val outcome = TestControl
-            .execute(settle(IO.never, warm = true))
-            .flatMap(control =>
-                control.tick >> control.advanceAndTick(CoilJoin.warmJoinWait + 1.second) >>
-                    control.results
-            )
-            .unsafeRunSync()
-        assert(outcome.exists(_.isSuccess), s"a warm coil failed to boot: $outcome")
+        assert(waitFor(warm = true) == CoilJoin.JoinWait.Until(CoilJoin.warmJoinWait))
     }
 
     test("a coil that was already seeded does not wait again on reboot") {
         // It has no own hard-ack — a seeded coil authors none until it acks its first stack — so
         // the own-ack journal alone still reads as cold here. The start point is what says this
-        // peer已 has somewhere to boot from; miss it and every restart of a seeded coil hangs.
-        val outcome = TestControl
-            .execute(settle(IO.never, seeded = true))
-            .flatMap(control =>
-                control.tick >> control.advanceAndTick(CoilJoin.warmJoinWait + 1.second) >>
-                    control.results
-            )
-            .unsafeRunSync()
-        assert(outcome.exists(_.isSuccess), s"a seeded coil blocked on reboot: $outcome")
-    }
-
-    test("a cold coil boots as soon as its hub says there is nothing to seed from") {
-        // The ordinary bring-up: every coil is cold and the head is at stack 0. None of them may
-        // block, or a fresh head never starts.
-        val outcome = TestControl
-            .execute(settle(IO.pure(Join.NoOffer("head at stack 0"))))
-            .flatMap(control => control.tick >> control.results)
-            .unsafeRunSync()
-        assert(outcome.exists(_.isSuccess), s"a cold coil blocked on a NoOffer: $outcome")
+        // peer has somewhere to boot from; miss it and every restart of a seeded coil hangs.
+        assert(waitFor(seeded = true) == CoilJoin.JoinWait.Until(CoilJoin.warmJoinWait))
     }
 }

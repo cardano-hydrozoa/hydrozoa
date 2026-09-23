@@ -36,7 +36,23 @@ object PeerLiaisonEventFormat:
             case CoilNotSeeded(reason) =>
                 info(s"no start point to offer ($reason); coil bootstraps stack 0")
             case JoinOfferTooLate(startStack) =>
-                warn(s"declining a start point at stack=$startStack: actors already running")
+                warn(s"declining a start point at stack=$startStack: past join mode")
+            case JoinStarted =>
+                info("join mode: announced marks, waiting for the hub's answer")
+            case JoinStillWaiting =>
+                warn("join mode: cold store and no answer yet — this node cannot boot without one")
+            case JoinAdopting(startStack) =>
+                info(s"join mode: adopting a start point at stack=$startStack (wipes this store)")
+            case JoinAdopted(startStack) =>
+                info(s"join mode: adopted stack=$startStack; becoming the regular coil liaison")
+            case JoinNothingToAdopt(reason) =>
+                info(s"join mode: hub has nothing to seed from ($reason)")
+            case JoinHubSilent(waited) =>
+                warn(s"join mode: no answer within $waited; proceeding on own history")
+            case JoinIgnoredServe =>
+                debug("join mode: ignoring a served batch until the start point is settled")
+            case JoinIgnoredLocal =>
+                warn("join mode: ignoring a local artifact — no local actor should exist yet")
             case CoilHardAckHeadRefused(hub, askedStack, ceilingStack) =>
                 debug(
                   s"coil-hard-ack lane head refused: hub=$hub askedStack=$askedStack " +

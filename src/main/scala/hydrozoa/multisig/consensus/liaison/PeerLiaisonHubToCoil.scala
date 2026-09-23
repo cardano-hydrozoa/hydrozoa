@@ -3,7 +3,6 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{Fiber, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
@@ -42,7 +41,7 @@ abstract class PeerLiaisonHubToCoil(
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO],
     decideStartPoint: Join.Connected => IO[CoilStartPoint]
-) extends Actor[IO, LiaisonProtocol.HubRequestServed] {
+) extends Actor[IO, LiaisonProtocol.HubLiaisonMessage] {
 
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codec in `persistInbound` picks it up.
@@ -167,6 +166,11 @@ abstract class PeerLiaisonHubToCoil(
 
     // ---- Connections ----------------------------------------------------------------------------
     private val connections = Ref.unsafe[IO, Option[PeerLiaisonHubToCoil.Connections]](None)
+
+    // The one pull a coil may have outstanding while this link's start point is being decided,
+    // held across join mode and replayed by `becomeRegular`. One slot is the whole backlog: the
+    // pull chain is strictly request/reply, so a coil never has two in flight.
+    private val heldPull = Ref.unsafe[IO, Option[Population.Get]](None)
 
     // Handle to the resend-timer fiber ([[startResendTimer]]); cancelled in [[postStop]] so it
     // doesn't outlive the actor.
@@ -366,19 +370,62 @@ abstract class PeerLiaisonHubToCoil(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, HubRequestServed] =
-        PartialFunction.fromFunction(receiveTotal)
-
-    private def receiveTotal(req: HubRequestServed): IO[Unit] = req match {
-        case PreStart                  => preStartLocal
-        case ResendCurrent             => puller.resend
-        case get: Population.Get       => server.handleGet(get)
-        case own: OwnHardAck.New       => puller.handleReply(own)
+    /** Join mode: this link has a start-point decision outstanding, so nothing is served on it yet.
+      *
+      * Unlike the coil's, the hub's modes are **cyclic**. This actor outlives its socket — a coil
+      * redials after any drop — so it re-enters join mode on every `Join.Connected` rather than
+      * passing through once.
+      *
+      * **Artifacts are appended here exactly as in [[regular]].** `CoilRelay` produces continuously
+      * and does not pause because one coil's link is renegotiating; an artifact dropped here is
+      * production missing from this coil's outbox lane forever.
+      */
+    private def joining: Receive[IO, HubLiaisonMessage] = PartialFunction.fromFunction {
+        // Join mode is only ever entered from `regular`, which has already run this.
+        case PreStart                  => IO.unit
         case connected: Join.Connected => handleConnected(connected)
         case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId | _: SoftAck |
             _: HardAck | _: HardAckWithId) =>
             appendArtifact(artifact) >> server.afterAppend
+        // Held, not dropped. The coil's pull chain has exactly one request outstanding, so one
+        // slot is the whole backlog, and it is replayed the moment the decision lands. Dropping it
+        // would instead cost this link `peerLiaisonResendInterval` of silence on every reconnect —
+        // and `CoilStartPoint.CatchUp`, which reconnects without seeding, is the common outcome.
+        case get: Population.Get => heldPull.set(Some(get))
+        // The coil is answering a pull this hub issued before the link reset. Whatever it says is
+        // about to be superseded by the start point, so there is nothing worth keeping.
+        case _: OwnHardAck.New => IO.unit
+        // The pull chain is not running in this mode; `becomeRegular` restarts it.
+        case ResendCurrent => IO.unit
     }
+
+    /** Regular mode: the ordinary serve/pull liaison, with `Join.Connected` as the one arm that
+      * leaves it.
+      */
+    private def regular: Receive[IO, HubLiaisonMessage] = PartialFunction.fromFunction {
+        case ResendCurrent       => puller.resend
+        case get: Population.Get => server.handleGet(get)
+        case own: OwnHardAck.New => puller.handleReply(own)
+        // The coil redialled. Re-open the decision rather than serving the new socket from where
+        // the old one left off — that is the case seeding exists for.
+        case connected: Join.Connected =>
+            context.become(joining) >> handleConnected(connected)
+        case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId | _: SoftAck |
+            _: HardAck | _: HardAckWithId) =>
+            appendArtifact(artifact) >> server.afterAppend
+        case PreStart => preStartLocal
+    }
+
+    /** The hub starts **regular**: at boot no coil has dialled in yet, so there is no decision
+      * outstanding and the lanes restore and start pulling exactly as they always have. Join mode
+      * is the transient state a link-up drops this actor into.
+      */
+    override def receive: Receive[IO, HubLiaisonMessage] = regular
+
+    /** Leave join mode, replaying whatever pull arrived while the decision was outstanding. */
+    private def becomeRegular: IO[Unit] =
+        context.become(regular) >>
+            heldPull.getAndSet(None).flatMap(_.traverse_(server.handleGet))
 
     /** Answer a coil peer whose link has just come up.
       *
@@ -403,12 +450,13 @@ abstract class PeerLiaisonHubToCoil(
                     // that same one verbatim — so the chain would never ask for anything the
                     // seeded coil is going to produce, and the link would sit there looking idle
                     // rather than broken.
-                    puller.start
+                    puller.start >> becomeRegular
             case CoilStartPoint.CatchUp =>
-                tracer.traceWith(PeerLiaisonEvent.CoilCaughtUp) >> noOffer("within catch-up range")
+                tracer.traceWith(PeerLiaisonEvent.CoilCaughtUp) >>
+                    noOffer("within catch-up range") >> becomeRegular
             case CoilStartPoint.Unavailable(reason) =>
                 tracer.traceWith(PeerLiaisonEvent.CoilNotSeeded(reason.toString)) >>
-                    noOffer(reason.toString)
+                    noOffer(reason.toString) >> becomeRegular
         }
 
     /** Answer a handshake the hub has no start point for. Sent rather than left silent so the coil
@@ -512,15 +560,13 @@ object PeerLiaisonHubToCoil {
     type Config =
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section
 
-    type Handle = ActorRef[IO, LiaisonProtocol.HubRequestServed]
-
     /** The hub's quorum + relay-sequencer for the coil peer's inbound hard-ack, plus the send path
       * to the coil peer's counterpart liaison.
       */
     final case class Connections(
         slowConsensusActor: SlowConsensusActor.Handle,
         coilAckSequencer: CoilAckSequencer.Handle,
-        remote: LiaisonProtocol.CoilToHubHandle
+        remote: LiaisonProtocol.CoilLiaisonHandle
     )
 
 }

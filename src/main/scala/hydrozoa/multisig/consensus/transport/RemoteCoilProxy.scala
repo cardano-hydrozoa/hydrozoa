@@ -2,20 +2,23 @@ package hydrozoa.multisig.consensus.transport
 
 import cats.effect.IO
 import com.suprnation.actor.Actor.{Actor, Receive}
-import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
+import hydrozoa.multisig.consensus.liaison.{BatchMessages, LiaisonProtocol}
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 
 /** A drop-in replacement, on a hub head peer, for one coil peer's
-  * [[hydrozoa.multisig.consensus.liaison.PeerLiaisonCoilToHub]] handle: it forwards the hub-emitted
-  * batch messages (`Population.New` / `OwnHardAck.Get`) over a [[HubTransport]] to the bound coil
-  * peer. Local-only request variants are dropped by the transport's `send`.
+  * [[hydrozoa.multisig.consensus.liaison.PeerLiaisonCoilToHub]] handle: it forwards everything a
+  * hub may emit ([[BatchMessages.Join.Answer | LiaisonProtocol.HubEmitted]]) over a
+  * [[HubTransport]] to the bound coil peer.
+  *
+  * It is typed at that send vocabulary rather than at the coil liaison's inbox, so a local-only
+  * request cannot reach it and there is nothing for the transport to drop.
   */
 final class RemoteCoilProxy private (
     coil: CoilPeerNumber,
     transport: HubTransport,
-) extends Actor[IO, LiaisonProtocol.CoilRequestServed] {
+) extends Actor[IO, BatchMessages.Join.Answer | LiaisonProtocol.HubEmitted] {
 
-    override def receive: Receive[IO, LiaisonProtocol.CoilRequestServed] =
+    override def receive: Receive[IO, BatchMessages.Join.Answer | LiaisonProtocol.HubEmitted] =
         PartialFunction.fromFunction(req => transport.send(coil, req))
 }
 
