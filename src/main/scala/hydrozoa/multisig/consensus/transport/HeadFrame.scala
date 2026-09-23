@@ -133,13 +133,6 @@ object HeadFrame {
                     Json.obj("t" -> "msg".asJson, "kind" -> "MeshGet".asJson, "v" -> x.asJson)
                 case x: Mesh.New =>
                     Json.obj("t" -> "msg".asJson, "kind" -> "MeshNew".asJson, "v" -> x.asJson)
-                case _ =>
-                    // Should be filtered out before reaching this codec; defensive fallback.
-                    Json.obj(
-                      "t" -> "msg".asJson,
-                      "kind" -> "Unknown".asJson,
-                      "v" -> Json.Null
-                    )
             }
     }
 
