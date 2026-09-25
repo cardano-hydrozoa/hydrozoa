@@ -624,8 +624,12 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           env <- ask
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
           // Feed at most one block's worth so every event is forwarded rather than held back by the
-          // cap — this property is about immediate pass-through, not the overflow behaviour.
-          events <- pick(Gen.choose(1, config.maxRequestsPerBlock: Int).flatMap(genUserRequests))
+          // cap — this property is about immediate pass-through, not the overflow behaviour. Also at
+          // most 20, like the residual-requests property: each event is awaited on a 50 ms poll and
+          // the generated cap reaches 2000, which made this one property take ~35 min of CI.
+          events <- pick(
+            Gen.choose(1, math.min(config.maxRequestsPerBlock: Int, 20)).flatMap(genUserRequests)
+          )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           brief <- mkDummyBlockBrief1(config.headConfig)
           _ <- lift(weaver ! brief)
