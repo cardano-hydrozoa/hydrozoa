@@ -403,8 +403,8 @@ abstract class PeerLiaisonHubToCoil(
             for {
                 // Suspends on the start barrier, so connections are in place before any real
                 // message is processed.
-                given Env.Connected <- initializeConnections
-                engines = new Engines
+                connected <- initializeConnections
+                engines = new Engines(using connected)
                 _ <- restoreAndStart(engines)
                 _ <- context.become(regular(engines))
             } yield ()
