@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber as LedgerL2CommandNumber
 import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec, UnsignedStackCodec}
+import hydrozoa.multisig.persistence.codec.{AdoptedStartPointCodec, BlockResultCodec, CoilStampMarkCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec, UnsignedStackCodec}
 import scalus.cardano.ledger.TransactionHash
 
 /** The typed key surface for the high-level persistence API.
@@ -32,14 +32,16 @@ import scalus.cardano.ledger.TransactionHash
   *     [[StoreKey.RequestHighWater]] — `Cf.RequestHighWater`, keyed by `blockNum`.
   *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
   *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
+  *     [[StoreKey.DepositMap]] — `Cf.DepositMap`, keyed by `blockNum` (per-block; see the case
+  *     docstring for why).
   *   - Reverse-index CFs: [[StoreKey.RequestBlockIndex]] — `Cf.RequestBlockIndex`, keyed by the
   *     request id (its packed i64). [[StoreKey.DepositDecisionIndex]] — `Cf.DepositDecisionIndex`,
   *     keyed by the deposit request's id (its packed i64). [[StoreKey.WithdrawalEffectIndex]] —
   *     `Cf.WithdrawalEffectIndex`, keyed by `(requestId i64, l1TxId)` (many effects per request).
   *     [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by `blockNum`.
   *     [[StoreKey.EffectStackIndex]] — `Cf.EffectStackIndex`, keyed by the effect's `l1TxId`.
-  *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
-  *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
+  *   - Singleton snapshot CFs (one entry total): [[StoreKey.Treasury]], [[StoreKey.CoilStampMark]]
+  *     (a hub's per-coil-peer stamped marks, one keyed blob).
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
   *
   * Each subtype declares its `Value` and a `given codec: StoreCodec[Value]`; the trait's
@@ -170,13 +172,22 @@ object StoreKey:
         val cf: Cf = Cf.WithdrawalEffectIndex
         def encode: Array[Byte] = JournalKey.longBytes(id.asI64) ++ l1TxId.bytes.toArray
 
-    /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */
-    case object DepositMap extends StoreKey:
+    /** Key for [[Cf.DepositMap]] — JointLedger's registered-but-undecided L1 deposits **as of block
+      * `num`**. One entry per block, written in the same atomic bundle as that block's
+      * `BlockResult`, so the two advance together and a crash mid-block cannot separate them.
+      *
+      * Block-keyed (not a singleton) for the same reason [[EvacuationMap]] is: a peer holding only
+      * the map at its own tip can serve no earlier point, and seeding a joining coil needs the map
+      * exactly at the block it is seeded from. Pruning is bounded the same way — anything strictly
+      * older than the retention floor is removable, and the map is bounded in size besides, holding
+      * only deposits still awaiting a decision.
+      */
+    final case class DepositMap(num: BlockNumber) extends StoreKey:
         type Value = DepositsMap
         import DepositMapCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.DepositMap
-        def encode: Array[Byte] = singletonKey
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.Treasury]] — the single blob holding SC's treasury UTXO chain at `hardAcked`.
       *
@@ -189,6 +200,19 @@ object StoreKey:
         import TreasuryCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.Treasury
+        def encode: Array[Byte] = singletonKey
+
+    /** Key for [[Cf.StartPoint]] — where this coil peer was seeded when it joined, or absent.
+      *
+      * Present only on a coil peer that adopted a start point; a head peer and a coil peer that
+      * bootstrapped stack 0 both leave it empty. Value type =
+      * `hydrozoa.multisig.consensus.AdoptedStartPoint`.
+      */
+    case object StartPoint extends StoreKey:
+        type Value = AdoptedStartPoint
+        import AdoptedStartPointCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.StartPoint
         def encode: Array[Byte] = singletonKey
 
     /** Key for [[Cf.EvacuationMap]] — the cumulative evacuation map at each block, keyed by

@@ -5,16 +5,20 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, SoftAck, SoftAckId, SoftAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{Mesh, OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, Mesh, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.BatchNumber.given
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWithId}
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2StateExport}
+import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.persistence.codec.DepositMapCodec.given
 import hydrozoa.multisig.persistence.codec.RequestRecordCodec
+import hydrozoa.multisig.persistence.codec.SecCodec.given
+import hydrozoa.multisig.persistence.codec.SettlementTxCodec.given
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -59,15 +63,31 @@ object Codecs {
     // one shape everywhere it appears on the wire and in persistence, including this batch's
     // `requests[i].requestId` and `blockBrief…events[i][0]`.
 
-    private given Codec[BlockHeader.HeaderSignature] =
+    // The two signature types share one hex encoding, so a soft-ack's and an SEC's look alike on
+    // the wire. Only the type tells them apart.
+
+    private given softAckSignatureCodec: Codec[SoftAck.Signature] =
         io.circe.Codec.from(
           Decoder.decodeString.emap(s =>
               ByteVector
                   .fromHex(s)
-                  .toRight(s"Invalid hex for HeaderSignature: $s")
-                  .map(bv => BlockHeader.Minor.HeaderSignature(IArray.from(bv.toArray)))
+                  .toRight(s"Invalid hex for SoftAck.Signature: $s")
+                  .map(bv => SoftAck.Signature(IArray.from(bv.toArray)))
           ),
-          Encoder.encodeString.contramap((sig: BlockHeader.HeaderSignature) =>
+          Encoder.encodeString.contramap((sig: SoftAck.Signature) =>
+              ByteVector(IArray.genericWrapArray(sig).toArray).toHex
+          )
+        )
+
+    private given secSignatureCodec: Codec[StandaloneEvacuationCommitment.Signature] =
+        io.circe.Codec.from(
+          Decoder.decodeString.emap(s =>
+              ByteVector
+                  .fromHex(s)
+                  .toRight(s"Invalid hex for StandaloneEvacuationCommitment.Signature: $s")
+                  .map(bv => StandaloneEvacuationCommitment.Signature(IArray.from(bv.toArray)))
+          ),
+          Encoder.encodeString.contramap((sig: StandaloneEvacuationCommitment.Signature) =>
               ByteVector(IArray.genericWrapArray(sig).toArray).toHex
           )
         )
@@ -172,7 +192,9 @@ object Codecs {
                         fallback <- c.downField("fallback").as[TxSignature]
                         rollouts <- c.downField("rollouts").as[List[TxSignature]]
                         refunds <- c.downField("refunds").as[List[TxSignature]]
-                        sec <- c.downField("sec").as[Option[BlockHeader.HeaderSignature]]
+                        sec <- c
+                            .downField("sec")
+                            .as[Option[StandaloneEvacuationCommitment.Signature]]
                     } yield PartitionSigs.MajorComplete(
                       settlement,
                       fallback,
@@ -185,7 +207,9 @@ object Codecs {
                         fallback <- c.downField("fallback").as[TxSignature]
                         rollouts <- c.downField("rollouts").as[List[TxSignature]]
                         refunds <- c.downField("refunds").as[List[TxSignature]]
-                        sec <- c.downField("sec").as[Option[BlockHeader.HeaderSignature]]
+                        sec <- c
+                            .downField("sec")
+                            .as[Option[StandaloneEvacuationCommitment.Signature]]
                     } yield PartitionSigs.MajorPartial(fallback, rollouts, refunds, sec)
                 case "finalComplete" =>
                     for {
@@ -198,7 +222,7 @@ object Codecs {
                     } yield PartitionSigs.FinalPartial(rollouts)
                 case "minor" =>
                     for {
-                        sec <- c.downField("sec").as[BlockHeader.HeaderSignature]
+                        sec <- c.downField("sec").as[StandaloneEvacuationCommitment.Signature]
                         refunds <- c.downField("refunds").as[List[TxSignature]]
                     } yield PartitionSigs.Minor(sec, refunds)
                 case other =>
@@ -383,7 +407,7 @@ object Codecs {
                     } yield Round2Payload.Initial(initTxSig, individualSig)
                 case "sole" =>
                     for {
-                        sec <- c.downField("sec").as[BlockHeader.HeaderSignature]
+                        sec <- c.downField("sec").as[StandaloneEvacuationCommitment.Signature]
                         refunds <- c.downField("refunds").as[List[TxSignature]]
                     } yield SolePayload(sec, refunds)
                 case other =>
@@ -421,24 +445,33 @@ object Codecs {
     private given Codec[UserRequestBody.TransactionRequestBody] =
         deriveCodec[UserRequestBody.TransactionRequestBody]
 
+    // `requestHash` rides along as the submitter sent it and the assigning peer verified it. A
+    // receiving peer does not check it — it derives its own digest from the body (JointLedger),
+    // and this field is only what a peer relays onward and stores.
     given Codec[UserRequest.DepositRequest] = {
         val enc: Encoder[UserRequest.DepositRequest] =
-            Encoder.instance(r => Json.obj("body" -> r.body.asJson))
+            Encoder.instance(r =>
+                Json.obj("body" -> r.body.asJson, "requestHash" -> r.requestHash.asJson)
+            )
         val dec: Decoder[UserRequest.DepositRequest] = Decoder.instance(c =>
-            c.downField("body")
-                .as[UserRequestBody.DepositRequestBody]
-                .map(UserRequest.DepositRequest(_))
+            for {
+                body <- c.downField("body").as[UserRequestBody.DepositRequestBody]
+                requestHash <- c.downField("requestHash").as[RequestHash]
+            } yield UserRequest.DepositRequest(body, requestHash)
         )
         io.circe.Codec.from(dec, enc)
     }
 
     given Codec[UserRequest.TransactionRequest] = {
         val enc: Encoder[UserRequest.TransactionRequest] =
-            Encoder.instance(r => Json.obj("body" -> r.body.asJson))
+            Encoder.instance(r =>
+                Json.obj("body" -> r.body.asJson, "requestHash" -> r.requestHash.asJson)
+            )
         val dec: Decoder[UserRequest.TransactionRequest] = Decoder.instance(c =>
-            c.downField("body")
-                .as[UserRequestBody.TransactionRequestBody]
-                .map(UserRequest.TransactionRequest(_))
+            for {
+                body <- c.downField("body").as[UserRequestBody.TransactionRequestBody]
+                requestHash <- c.downField("requestHash").as[RequestHash]
+            } yield UserRequest.TransactionRequest(body, requestHash)
         )
         io.circe.Codec.from(dec, enc)
     }
@@ -576,4 +609,37 @@ object Codecs {
     given ownHardAckGetCodec: Codec[OwnHardAck.Get] = deriveCodec[OwnHardAck.Get]
 
     given ownHardAckNewCodec: Codec[OwnHardAck.New] = deriveCodec[OwnHardAck.New]
+
+    // ---- Join: the once-per-connection start-point exchange (GUM-312) ----
+    //
+    // `Join.Connected` rides inside `CoilFrame.Handshake`; `Join.Offer` is a wire message of its
+    // own. The offer's two signed artifacts reuse the persistence codecs rather than getting
+    // transport-local ones: a coil writes the settlement it adopts straight to its own store, so a
+    // second shape here would mean two encodings of a value that already has a canonical form.
+
+    given joinConnectedCodec: Codec[Join.Connected] = deriveCodec[Join.Connected]
+
+    /** An export's bytes are opaque to the transport — hex, and nothing here reads them. */
+    given l2StateExportCodec: Codec[L2StateExport] =
+        io.circe.Codec.from(
+          Decoder.instance(c =>
+              for {
+                  commandNumber <- c.downField("commandNumber").as[L2CommandNumber]
+                  hex <- c.downField("bytes").as[String]
+                  bytes <- ByteVector
+                      .fromHex(hex)
+                      .toRight(DecodingFailure("Invalid hex for L2StateExport bytes", c.history))
+              } yield L2StateExport(commandNumber, IArray.from(bytes.toArray))
+          ),
+          Encoder.instance((e: L2StateExport) =>
+              Json.obj(
+                "commandNumber" -> e.commandNumber.asJson,
+                "bytes" -> ByteVector(IArray.genericWrapArray(e.bytes).toArray).toHex.asJson
+              )
+          )
+        )
+
+    given joinOfferCodec(using CardanoNetwork.Section): Codec[Join.Offer] = deriveCodec[Join.Offer]
+
+    given joinNoOfferCodec: Codec[Join.NoOffer] = deriveCodec[Join.NoOffer]
 }

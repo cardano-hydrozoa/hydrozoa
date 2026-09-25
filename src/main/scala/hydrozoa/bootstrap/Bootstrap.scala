@@ -6,7 +6,6 @@ import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.config.ScriptReferenceUtxos
-import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.block.BlockConfig
@@ -14,14 +13,14 @@ import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
+import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerConfig, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
+import hydrozoa.config.head.{HeadConfig, HeadParamsHash}
 import hydrozoa.config.node.{NodeConfig, PrivateSecrets}
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
@@ -30,11 +29,12 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
-import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
+import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationMap}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json, JsonObject, parser}
@@ -173,16 +173,15 @@ object Bootstrap:
 
     /** Assembly-time defaults (`defaults.json`): everything the head needs that is neither peer
       * topology (the roster), script references, nor the opening L2 state — the L1 network, the
-      * head protocol parameters, the per-peer equity contributions, and (optionally) the block-zero
-      * timing anchors. [[InitBootstrapFiles]] writes these with demo defaults for the operators to
-      * adjust before [[BuildHeadConfig]]. Block-zero timing is optional: omit it and
-      * [[BuildHeadConfig]] anchors the initial block to wall-clock at build time.
+      * head protocol parameters, the per-peer equity contributions, and (optionally) block zero's
+      * end time. [[InitBootstrapFiles]] writes these with demo defaults for the operators to adjust
+      * before [[BuildHeadConfig]]. `blockZeroEndTime` is optional: omit it and [[BuildHeadConfig]]
+      * anchors the initial block to wall-clock at build time.
       */
     final case class BootstrapDefaults(
         cardanoNetwork: CardanoNetwork,
         headParams: BootstrapHeadParams,
         initialEquityContributions: Map[HeadPeerNumber, Coin],
-        blockZeroStartTime: Option[BlockCreationStartTime],
         blockZeroEndTime: Option[BlockCreationEndTime]
     )
 
@@ -241,7 +240,6 @@ object Bootstrap:
         scriptReferenceUtxos: ScriptReferenceUtxos.Unresolved,
         initialL2State: List[L2Output],
         initialEquityContributions: Map[HeadPeerNumber, Coin],
-        blockZeroStartTime: Option[BlockCreationStartTime],
         blockZeroEndTime: Option[BlockCreationEndTime]
     )
 
@@ -292,7 +290,6 @@ object Bootstrap:
           scriptReferenceUtxos = refUtxos,
           initialL2State = l2State,
           initialEquityContributions = defaults.initialEquityContributions,
-          blockZeroStartTime = defaults.blockZeroStartTime,
           blockZeroEndTime = defaults.blockZeroEndTime
         )
     }
@@ -337,11 +334,24 @@ object Bootstrap:
         l2Ledger: L2LedgerKind,
         mbInitialEvacuationMap: Option[EvacuationMap]
     ): IO[HeadConfig] = for {
-        blockCreationStartTime <- bootstrapConfig.blockZeroStartTime.fold(
-          realTimeQuantizedInstant(cardanoNetwork.slotConfig).map(BlockCreationStartTime(_))
-        )(IO.pure)
+        // Equity comes from the config (per head peer). Its total is what the treasury backs beyond
+        // the L2 value; the per-peer split is recorded but the init tx consumes only the sum.
+        initialEquityContributions <- IO.fromOption(
+          NonEmptyMap.fromMap(SortedMap.from(bootstrapConfig.initialEquityContributions))
+        )(RuntimeException("initialEquityContributions must be non-empty"))
+        totalEquity = initialEquityContributions.toSortedMap.values.foldLeft(Coin.zero)(_ + _)
 
         bhp = bootstrapConfig.headParams
+        // The agreed L2 ledger, with whatever that ledger's peers agreed about it. The built-in
+        // EUTXO ledger's parameters are the network's, snapshotted here and then fixed for the
+        // head's life: L1's keep tracking the chain, this copy must not, because `l2ParamsHash`
+        // pins it in the regime datum (docs/spec/head-params-hash.md). A remote ledger's
+        // parameters are its own and never reach the head config.
+        l2LedgerConfig = l2Ledger match {
+            case L2LedgerKind.CardanoEutxo =>
+                L2LedgerConfig.CardanoEutxo(cardanoNetwork.cardanoProtocolParams)
+            case L2LedgerKind.AnyRemote => L2LedgerConfig.AnyRemote
+        }
         headParams = HeadParameters(
           txTiming = bhp.txTiming,
           fallbackContingency = bhp.fallbackContingency,
@@ -349,10 +359,8 @@ object Bootstrap:
           settlementConfig = bhp.settlementConfig,
           blockConfig = bhp.blockConfig,
           coilQuorum = bhp.coilQuorum,
-          // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
-          // a zero hash rather than empty bytes (which fail the length check).
-          l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
-          l2Ledger = l2Ledger,
+          l2ParamsHash = sourceL2ParamsHash(l2LedgerConfig),
+          l2Ledger = l2LedgerConfig,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
           identityIsomorphism = false,
         )
@@ -364,13 +372,6 @@ object Bootstrap:
         initialL2Value = mbInitialEvacuationMap.fold(
           Value.combine(bootstrapConfig.initialL2State.map(_.value))
         )(_.totalValue)
-
-        // Equity comes from the config (per head peer). Its total is what the treasury backs beyond
-        // the L2 value; the per-peer split is recorded but the init tx consumes only the sum.
-        initialEquityContributions <- IO.fromOption(
-          NonEmptyMap.fromMap(SortedMap.from(bootstrapConfig.initialEquityContributions))
-        )(RuntimeException("initialEquityContributions must be non-empty"))
-        totalEquity = initialEquityContributions.toSortedMap.values.foldLeft(Coin.zero)(_ + _)
 
         headPeers <- IO.fromOption(
           HeadPeers(
@@ -497,8 +498,11 @@ object Bootstrap:
           )
         )(IO.pure)
 
+        initialL2StateHash = sourceInitialL2StateHash(l2Ledger, evacMap)
+
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
+          initialL2StateHash = initialL2StateHash,
           initialEquityContributions = initialEquityContributions,
           headId = funding.headId
         )
@@ -529,30 +533,24 @@ object Bootstrap:
           )
         )(IO.pure)
 
+        // Block zero's header is built before the transactions, not read back off them: the init
+        // tx's regime datum carries `headParamsHash`, and the header is part of that digest's
+        // preimage. Every field follows from `blockCreationEndTime`, which is exactly what
+        // `InitializationTxSeq.Build` derives the fallback's start time from.
+        initialBlockHeader = BlockHeader.Initial(blockCreationEndTime)(using headParams.txTiming)
+        headParamsHash = HeadParamsHash(bootstrap, initialBlockHeader)
+
         initTxSeq <- InitializationTxSeq
-            .Build(bootstrap, funding)(blockCreationEndTime)
+            .Build(bootstrap, funding)(blockCreationEndTime, headParamsHash)
             .result
             .fold(
               e => logger.error(e.toString) >> IO.raiseError(e),
               IO.pure
             )
 
-        fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime
-        forcedMajorBlockWakeupTime = headParams.txTiming.forcedMajorBlockWakeupTime(
-          fallbackTxStartTime
-        )
-
         initialBlock = InitialBlock(
           Block.Unsigned.Initial(
-            blockBrief = BlockBrief.Initial(
-              BlockHeader.Initial(
-                startTime = blockCreationStartTime,
-                endTime = blockCreationEndTime,
-                fallbackTxStartTime = fallbackTxStartTime,
-                forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
-                mDepositDecisionWakeupTime = None,
-              )
-            ),
+            blockBrief = BlockBrief.Initial(initialBlockHeader),
             // Unsigned init+fallback — slow consensus's stack-0 hard-ack flow signs them at boot.
             effects = BlockEffects.Unsigned.Initial(
               initializationTx = initTxSeq.initializationTx,
@@ -572,6 +570,50 @@ object Bootstrap:
                 )
         }
     } yield headConfig
+
+    /** The L2 ledger's agreed-parameters digest, for the head config's `l2ParamsHash`.
+      *
+      * The head cannot compute this: only the ledger knows its own parameters, and bootstrap has no
+      * ledger running to ask. So it is sourced per backend instead
+      * (`docs/spec/head-params-hash.md`) — the built-in ledger's is computed from the same L2
+      * parameter snapshot the ledger will validate against. The checks themselves never branch this
+      * way; obtaining the value is the one place that must.
+      *
+      * TODO: a remote ledger's digest has to come from the operator, printed out-of-band as the
+      * initial evacuation map already is. Until that input exists a remote head carries a zero
+      * hash, which the reported digest will not match — an `any-remote` head does not boot.
+      * GUM-342.
+      */
+    private def sourceL2ParamsHash(l2Ledger: L2LedgerConfig): Hash32 = l2Ledger match {
+        case L2LedgerConfig.CardanoEutxo(protocolParams) =>
+            EutxoL2Ledger.mkL2ParamsHash(protocolParams)
+        case L2LedgerConfig.AnyRemote => Hash32.fromByteString(zeroDigest)
+    }
+
+    /** The digest of the state the L2 ledger opens the head in, which the initialization
+      * transaction's treasury datum certifies (`docs/spec/l2-state-certificate.md`).
+      *
+      * Sourced per backend for the same reason as [[sourceL2ParamsHash]], and from the same place —
+      * the ledger's construction is its own. The built-in ledger's is derivable from the opening
+      * evacuation map with no ledger running, because that map *is* its opening state (as the utxo
+      * set, both other compartments empty). A remote ledger's is not derivable at all: the map is
+      * only a projection of whatever state sits behind it.
+      *
+      * TODO: a remote ledger's has to come from the operator, beside the initial evacuation map.
+      * Until that input exists a remote head certifies a zero hash on its initialization
+      * transaction and then refuses to boot against the real digest. GUM-342.
+      */
+    private def sourceInitialL2StateHash(
+        l2Ledger: L2LedgerKind,
+        initialEvacuationMap: EvacuationMap
+    ): L2StateHash = l2Ledger match {
+        case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.initialStateHash(initialEvacuationMap)
+        case L2LedgerKind.AnyRemote    => L2StateHash(zeroDigest)
+    }
+
+    /** The 32 zero bytes both `any-remote` placeholders above stand on until GUM-342 replaces them.
+      */
+    private def zeroDigest: ByteString = ByteString.fromArray(new Array[Byte](32))
 
 end Bootstrap
 
@@ -1268,8 +1310,7 @@ end BuildHeadConfig
   * contributions — with demo defaults) and an `l2-cardano-eutxo.json` template (a min-ada
   * placeholder per head peer's L1 address, which the operators edit into the opening distribution).
   * Block-zero timing is left out of the defaults, so [[BuildHeadConfig]] anchors the initial block
-  * to wall-clock at build time; operators who want to pin it add `blockZeroStartTime` /
-  * `blockZeroEndTime` (epoch millis).
+  * to wall-clock at build time; operators who want to pin it add `blockZeroEndTime` (epoch millis).
   *
   * Usage:
   * {{{
@@ -1341,7 +1382,7 @@ object InitBootstrapFiles:
             equity = roster.headPeers.indices
                 .map(i => HeadPeerNumber(i) -> (if i == 0 then Coin.ada(100) else Coin.zero))
                 .toMap
-            defaults = Bootstrap.BootstrapDefaults(network, headParams, equity, None, None)
+            defaults = Bootstrap.BootstrapDefaults(network, headParams, equity, None)
             defaultsJson = {
                 given CardanoNetwork.Section = network
                 defaults.asJson.deepDropNullValues

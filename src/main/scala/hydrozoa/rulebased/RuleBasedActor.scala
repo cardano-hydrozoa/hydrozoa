@@ -20,7 +20,6 @@ import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
@@ -106,7 +105,7 @@ final case class RuleBasedActor(
             traced(
               before = RuleBasedActorEvent.Regime.Querying,
               action = cardanoBackend.utxosAt(
-                address = config.headMultisigAddress,
+                address = config.ruleBasedRegimeAddress,
                 asset = (
                   config.headMultisigScript.policyId,
                   config.headTokenNames.regimeWitnessTokenName
@@ -242,10 +241,10 @@ final case class RuleBasedActor(
             }
         } yield treasuryUtxo
 
-    /** Read the regime utxo (by HRWT beacon at the head multisig address) and parse it. The
-      * rule-based txs reference it for the immutable head-identity fields. Missing or datum-less is
-      * recoverable — the HRWT still sits in the datum-less multisig regime utxo until the fallback
-      * tx lands (or it was rolled back); other parse failures throw.
+    /** Read the regime utxo (by HRWT beacon at the rule-based regime script address) and parse it.
+      * The rule-based txs reference it for the immutable head-identity fields. Missing is
+      * recoverable — the HRWT sits in the multisig regime utxo, at the head multisig address, until
+      * the fallback tx moves it here (or the fallback was rolled back); parse failures throw.
       */
     private def getRegime: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] = {
         val regimeMissing: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] =
@@ -259,8 +258,6 @@ final case class RuleBasedActor(
                 case (i, o) :: Nil =>
                     RuleBasedRegimeUtxo.parse(Utxo(i, o)) match {
                         case Right(u) => pure(u)
-                        case Left(_: RuleBasedRegimeOutput.ParseError.RegimeDatumMissing) =>
-                            regimeMissing
                         case Left(e) =>
                             raiseError(Error.ParseError.Regime.WrappedRegimeParseError(e))
                     }
@@ -283,12 +280,12 @@ final case class RuleBasedActor(
             case Nil =>
                 DisputeAction.Abstain
             case multiSec :: _ =>
-                // `headerMultiSigned` is peer-position-aligned over
+                // `signatures` is peer-position-aligned over
                 // `allHeadPeers.sorted ++ allCoilPeers.sorted` (Some/None per peer). The first
                 // `nHeadPeers` slots are the head peers (AllOf, always Some); the rest are the coil
                 // peers in sorted order — exactly the sparse `coilMultisig` the dispute-resolution
                 // script verifies position for position, so pass the coil tail through unchanged.
-                val (head, coil) = multiSec.headerMultiSigned.splitAt(config.nHeadPeers.convert)
+                val (head, coil) = multiSec.signatures.splitAt(config.nHeadPeers.convert)
                 DisputeAction.Vote(
                   sec = RuleBasedActor.toOnchain(multiSec.commitment),
                   signatures = head.flatten,
@@ -1274,8 +1271,8 @@ object RuleBasedActor {
     enum DisputeAction:
         case Vote(
             sec: StandaloneEvacuationCommitment.Onchain,
-            signatures: List[BlockHeader.Minor.HeaderSignature],
-            coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]]
+            signatures: List[StandaloneEvacuationCommitment.Signature],
+            coilSignatures: List[Option[StandaloneEvacuationCommitment.Signature]]
         )
         case Abstain
 

@@ -5,7 +5,7 @@ import cats.effect.{IO, Resource}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.blueprint.Blueprint
+import scalus.cardano.blueprint.{Blueprint, Validator}
 import scalus.cardano.ledger.{Script, ScriptHash}
 import scalus.uplc.builtin.ByteString
 
@@ -72,110 +72,52 @@ object HydrozoaBlueprint {
         }
     }
 
-    /** Gets the script hash for the Rule-Based Treasury validator from the blueprint. */
-    private def getTreasuryScriptHash: Either[Error, ScriptHash] = {
-        for {
-            blueprint <- loadBlueprint
-            validator <- blueprint.validators
-                .find(_.title == "Rule-Based Treasury Validator")
-                .toRight(
-                  Error.BlueprintLoadError(
-                    "Rule-Based Treasury Validator not found in blueprint",
-                    None
-                  )
-                )
-            hashHex <- validator.hash.toRight(
-              Error.BlueprintLoadError(
-                "Rule-Based Treasury Validator hash not present in blueprint",
-                None
-              )
-            )
-        } yield ScriptHash.fromHex(hashHex)
-    }
-
-    /** Gets the script hash for the Dispute Resolution validator from the blueprint. */
-    private def getDisputeScriptHash: Either[Error, ScriptHash] = {
-        for {
-            blueprint <- loadBlueprint
-            validator <- blueprint.validators
-                .find(_.title == "Dispute Resolution Validator")
-                .toRight(
-                  Error.BlueprintLoadError(
-                    "Dispute Resolution Validator not found in blueprint",
-                    None
-                  )
-                )
-            hashHex <- validator.hash.toRight(
-              Error.BlueprintLoadError(
-                "Dispute Resolution Validator hash not present in blueprint",
-                None
-              )
-            )
-        } yield ScriptHash.fromHex(hashHex)
-    }
-
-    /** Gets the compiled PlutusV3 script for the Rule-Based Treasury validator from the blueprint.
+    /** Titles of the validators in the blueprint, as
+      * [[hydrozoa.rulebased.ledger.l1.script.plutus.Export]] writes them.
       */
-    private def getTreasuryScript: Either[Error, Script] = {
+    private val treasuryTitle: String = "Rule-Based Treasury Validator"
+    private val disputeTitle: String = "Dispute Resolution Validator"
+    private val regimeTitle: String = "Rule-Based Regime Validator"
+
+    /** Gets the script hash for the validator titled `title` from the blueprint. */
+    private def getScriptHash(title: String): Either[Error, ScriptHash] =
         for {
-            blueprint <- loadBlueprint
-            validator <- blueprint.validators
-                .find(_.title == "Rule-Based Treasury Validator")
-                .toRight(
-                  Error.BlueprintLoadError(
-                    "Rule-Based Treasury Validator not found in blueprint",
-                    None
-                  )
-                )
+            validator <- getValidator(title)
+            hashHex <- validator.hash.toRight(
+              Error.BlueprintLoadError(s"$title hash not present in blueprint", None)
+            )
+        } yield ScriptHash.fromHex(hashHex)
+
+    /** Gets the compiled PlutusV3 script for the validator titled `title` from the blueprint. */
+    private def getScript(title: String): Either[Error, Script] =
+        for {
+            validator <- getValidator(title)
             compiledCodeHex <- validator.compiledCode.toRight(
-              Error.BlueprintLoadError(
-                "Rule-Based Treasury Validator compiledCode not present in blueprint",
-                None
-              )
+              Error.BlueprintLoadError(s"$title compiledCode not present in blueprint", None)
             )
             scriptBytes <- Try(ByteString.fromHex(compiledCodeHex)).toEither.left.map(e =>
                 Error.BlueprintLoadError(
-                  s"Failed to parse treasury script hex: ${e.getMessage}",
+                  s"Failed to parse $title script hex: ${e.getMessage}",
                   Some(e)
                 )
             )
         } yield Script.PlutusV3(scriptBytes)
-    }
 
-    /** Gets the compiled PlutusV3 script for the Dispute Resolution validator from the blueprint.
-      */
-    private def getDisputeScript: Either[Error, Script] = {
+    /** Looks up the blueprint entry for the validator titled `title`. */
+    private def getValidator(title: String): Either[Error, Validator] =
         for {
             blueprint <- loadBlueprint
             validator <- blueprint.validators
-                .find(_.title == "Dispute Resolution Validator")
-                .toRight(
-                  Error.BlueprintLoadError(
-                    "Dispute Resolution Validator not found in blueprint",
-                    None
-                  )
-                )
-            compiledCodeHex <- validator.compiledCode.toRight(
-              Error.BlueprintLoadError(
-                "Dispute Resolution Validator compiledCode not present in blueprint",
-                None
-              )
-            )
-            scriptBytes <- Try(ByteString.fromHex(compiledCodeHex)).toEither.left.map(e =>
-                Error.BlueprintLoadError(
-                  s"Failed to parse dispute script hex: ${e.getMessage}",
-                  Some(e)
-                )
-            )
-        } yield Script.PlutusV3(scriptBytes)
-    }
+                .find(_.title == title)
+                .toRight(Error.BlueprintLoadError(s"$title not found in blueprint", None))
+        } yield validator
 
     /** The canonical script hash for the Rule-Based Treasury validator.
       *
       * This is loaded from the blueprint and represents the hash of the compiled script. Throws if
       * the blueprint cannot be loaded or the hash is not found.
       */
-    lazy val treasuryScriptHash: ScriptHash = getTreasuryScriptHash match {
+    lazy val treasuryScriptHash: ScriptHash = getScriptHash(treasuryTitle) match {
         case Right(hash) => hash
         case Left(error) => throw error
     }
@@ -185,7 +127,17 @@ object HydrozoaBlueprint {
       * This is loaded from the blueprint and represents the hash of the compiled script. Throws if
       * the blueprint cannot be loaded or the hash is not found.
       */
-    lazy val disputeScriptHash: ScriptHash = getDisputeScriptHash match {
+    lazy val disputeScriptHash: ScriptHash = getScriptHash(disputeTitle) match {
+        case Right(hash) => hash
+        case Left(error) => throw error
+    }
+
+    /** The canonical script hash for the Rule-Based Regime validator.
+      *
+      * This is loaded from the blueprint and represents the hash of the compiled script. Throws if
+      * the blueprint cannot be loaded or the hash is not found.
+      */
+    lazy val regimeScriptHash: ScriptHash = getScriptHash(regimeTitle) match {
         case Right(hash) => hash
         case Left(error) => throw error
     }
@@ -195,7 +147,7 @@ object HydrozoaBlueprint {
       * This is loaded from the blueprint and represents the compiled script. Throws if the
       * blueprint cannot be loaded or the script is not found.
       */
-    lazy val treasuryScript: Script = getTreasuryScript match {
+    lazy val treasuryScript: Script = getScript(treasuryTitle) match {
         case Right(script) => script
         case Left(error)   => throw error
     }
@@ -205,7 +157,17 @@ object HydrozoaBlueprint {
       * This is loaded from the blueprint and represents the compiled script. Throws if the
       * blueprint cannot be loaded or the script is not found.
       */
-    lazy val disputeScript: Script = getDisputeScript match {
+    lazy val disputeScript: Script = getScript(disputeTitle) match {
+        case Right(script) => script
+        case Left(error)   => throw error
+    }
+
+    /** The canonical PlutusV3 script for the Rule-Based Regime validator.
+      *
+      * This is loaded from the blueprint and represents the compiled script. Throws if the
+      * blueprint cannot be loaded or the script is not found.
+      */
+    lazy val regimeScript: Script = getScript(regimeTitle) match {
         case Right(script) => script
         case Left(error)   => throw error
     }
@@ -232,6 +194,19 @@ object HydrozoaBlueprint {
           network = network,
           payment = ShelleyPaymentPart.Script(
             scalus.cardano.ledger.ScriptHash.fromArray(disputeScriptHash.bytes)
+          ),
+          delegation = Null
+        )
+
+    /** Creates the Rule-Based Regime script address for the given network.
+      *
+      * This is the canonical way to construct the rule-based regime script address.
+      */
+    def mkRegimeAddress(network: Network): ShelleyAddress =
+        ShelleyAddress(
+          network = network,
+          payment = ShelleyPaymentPart.Script(
+            scalus.cardano.ledger.ScriptHash.fromArray(regimeScriptHash.bytes)
           ),
           delegation = Null
         )

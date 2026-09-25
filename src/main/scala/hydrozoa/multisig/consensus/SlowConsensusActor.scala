@@ -407,6 +407,11 @@ final case class SlowConsensusActor(
             _ <- persistHardConfirmation(stackNum, restricted.unsigned.brief, signed)
             _ <- connections.cardanoLiaison ! hardConfirmed
             _ <- connections.stackComposer ! hardConfirmed
+            // Backpressure, coil peer only: the hub serves the whole population and can run far
+            // ahead of one coil peer, so the uplink anchors its stack and hard-ack pull ceilings on
+            // the stack this peer has actually hard-confirmed. `None` on a head peer
+            // (docs/spec/liaison-backpressure.md).
+            _ <- connections.coilUplink.traverse_(_ ! HardConfirmedHighWater(stackNum))
             // Headroom signal for the block lane: the stack this peer just hard-confirmed is the
             // backlog the block limiter released, now absorbed.
             _ <- connections.blockRateGate.traverse_(_ ! LimiterControl.DownstreamDrained)
@@ -567,11 +572,11 @@ object SlowConsensusActor {
         /** Head-peer-mesh liaisons; this actor broadcasts its **own** hard-ack here (empty on a
           * coil peer).
           */
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle],
         /** A coil peer's single uplink to its hub; this actor's own hard-ack also goes here. `None`
           * on a head peer.
           */
-        coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
+        coilUplink: Option[liaison.LiaisonProtocol.CoilLocalHandle] = None,
         /** A hub's coil relay (§5.4) [doc-ref]: this actor's **own** hard-ack is sent here so the
           * hub's coil peers receive it. `None` off a hub.
           */

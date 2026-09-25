@@ -340,6 +340,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
         val nonZero = Map(
           TreasuryScriptRef -> 1,
           DisputeScriptRef -> 1,
+          RegimeScriptRef -> 1,
           RegimeRef -> 1,
           SetupLadder -> 7,
           ResolvedTreasury -> 1,

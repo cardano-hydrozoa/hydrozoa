@@ -1,6 +1,8 @@
 package hydrozoa.multisig.persistence.rocksdb
 
 import cats.effect.{IO, Resource}
+import cats.syntax.all.*
+import hydrozoa.lib.StartupRefusal
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.persistence.*
 import hydrozoa.multisig.persistence.PersistenceEvent.{OpenRocksDbReady, OpenRocksDbStart}
@@ -30,6 +32,26 @@ final class RocksDbBackendStore private (
     writeOptions: WriteOptions,
     readOptions: ReadOptions
 ) extends BackendStore[IO]:
+
+    def wipeData: IO[Unit] =
+        handles.keys.toList.filterNot(_ == Cf.Meta).traverse_ { cf =>
+            // Collect then delete: RocksDB forbids mutating a CF through an open iterator, and a
+            // `deleteRange` would need an upper bound above every possible key, which variable-
+            // length keys do not have.
+            IO.blocking {
+                val it = db.newIterator(handles(cf), readOptions)
+                try
+                    val wb = new RWriteBatch()
+                    try
+                        it.seekToFirst()
+                        while it.isValid do
+                            wb.delete(handles(cf), it.key())
+                            it.next()
+                        db.write(writeOptions, wb)
+                    finally wb.close()
+                finally it.close()
+            }
+        }
 
     def get(cf: Cf, key: Array[Byte]): IO[Option[Array[Byte]]] =
         IO.blocking(Option(db.get(handles(cf), readOptions, key)))
@@ -100,9 +122,10 @@ object RocksDbBackendStore:
     def open(
         path: Path,
         cfs: List[Cf],
+        identity: StoreIdentity,
         tracer: ContraTracer[IO, PersistenceEvent]
     ): Resource[IO, BackendStore[IO]] =
-        openInternal(path, cfs, tracer, readOnly = false)
+        openInternal(path, cfs, identity, tracer, readOnly = false)
 
     /** Open an existing store **read-only** — the mode `hydrozoa evacuate` uses (design
       * `docs/spec/evacuate-command.md`). The rule-based regime only reads persistence, so RO is
@@ -112,13 +135,15 @@ object RocksDbBackendStore:
     def openReadOnly(
         path: Path,
         cfs: List[Cf],
+        identity: StoreIdentity,
         tracer: ContraTracer[IO, PersistenceEvent]
     ): Resource[IO, BackendStore[IO]] =
-        openInternal(path, cfs, tracer, readOnly = true)
+        openInternal(path, cfs, identity, tracer, readOnly = true)
 
     private def openInternal(
         path: Path,
         cfs: List[Cf],
+        identity: StoreIdentity,
         tracer: ContraTracer[IO, PersistenceEvent],
         readOnly: Boolean
     ): Resource[IO, BackendStore[IO]] =
@@ -152,7 +177,10 @@ object RocksDbBackendStore:
             opened <- openDb(path, dbOpts, cfOpts, cfs, readOnly)
             (db, handles) = opened
             backend = new RocksDbBackendStore(db, handles, writeOptions, readOptions)
+            // Order matters: a store whose schema this build does not understand must not have
+            // its metadata interpreted at all, and neither check may run after a recovery read.
             _ <- Resource.eval(versionCheck(backend, readOnly))
+            _ <- Resource.eval(identityCheck(backend, identity, readOnly))
             _ <- Resource.eval(tracer.traceWith(OpenRocksDbReady(path, handles.size)))
         yield backend
 
@@ -246,36 +274,81 @@ object RocksDbBackendStore:
         sys.env.get(name).flatMap(_.trim.toBooleanOption).getOrElse(default)
 
     /** Run the open-time schema-version check. On a writable open a fresh store gets the current
-      * version stamped; incompatible versions raise. A read-only open never writes, so a missing
+      * version stamped; incompatible versions refuse. A read-only open never writes, so a missing
       * version key is a hard error (an uninitialized store cannot be served read-only).
+      *
+      * A mismatch is a [[StartupRefusal]] rather than a generic failure: what is on disk does not
+      * change while the node waits, so a restart re-derives the same verdict, and `Restart=` would
+      * otherwise re-derive it every `RestartSec` forever.
       */
     private def versionCheck(backend: BackendStore[IO], readOnly: Boolean): IO[Unit] =
-        backend.get(Cf.Meta, StoreVersion.key).flatMap {
-            case None =>
-                if readOnly then
+        backend.get(Cf.Meta, StoreVersion.key).flatMap { stamped =>
+            StoreVersion.check(stamped.map(StoreVersion.decode)) match {
+                case StoreVersion.Check.Fresh =>
+                    if readOnly then
+                        IO.raiseError(
+                          StartupRefusal(
+                            s"the persistence store at $backend has no schema version " +
+                                "(uninitialized); it cannot be opened read-only"
+                          )
+                        )
+                    else
+                        backend.put(
+                          Cf.Meta,
+                          StoreVersion.key,
+                          StoreVersion.encode(StoreVersion.current)
+                        )
+                case StoreVersion.Check.Compatible => IO.unit
+                case StoreVersion.Check.Incompatible(found, expected) =>
                     IO.raiseError(
-                      new IllegalStateException(
-                        s"Persistence store at $backend has no schema version " +
-                            "(uninitialized); cannot open read-only"
+                      StartupRefusal(
+                        s"persistence schema version mismatch at $backend: the store reports " +
+                            s"$found and this build expects $expected. A store written by another " +
+                            "schema version is never read — see docs/spec/versioning.md."
                       )
                     )
-                else
-                    backend.put(
-                      Cf.Meta,
-                      StoreVersion.key,
-                      StoreVersion.encode(StoreVersion.current)
-                    )
-            case Some(bytes) =>
-                val found = StoreVersion.decode(bytes)
-                if found == StoreVersion.current then IO.unit
-                else
-                    IO.raiseError(
-                      new IllegalStateException(
-                        s"Persistence schema version mismatch at $backend: " +
-                            s"store reports $found, this build expects ${StoreVersion.current}"
-                      )
-                    )
+            }
         }
+
+    /** Run the open-time identity check ([[StoreIdentity]]). On a writable open a fresh store gets
+      * the current identity stamped; a mismatch raises, naming every field that differs.
+      *
+      * A read-only open never writes, so a missing stamp is a hard error there — it cannot stamp
+      * one, and an unstamped store cannot be served. Same rule [[versionCheck]] follows.
+      */
+    private def identityCheck(
+        backend: BackendStore[IO],
+        identity: StoreIdentity,
+        readOnly: Boolean
+    ): IO[Unit] =
+        for {
+            stamped <- StoreIdentity.fields
+                .traverse(f => backend.get(Cf.Meta, f.key).map(_.map(f.name -> _)))
+                .map(_.flatten.toMap)
+            _ <- StoreIdentity.check(stamped, identity) match {
+                case StoreIdentity.Check.Fresh =>
+                    if readOnly then
+                        IO.raiseError(
+                          StartupRefusal(
+                            s"the persistence store at $backend has no identity stamp " +
+                                "(uninitialized); it cannot be opened read-only"
+                          )
+                        )
+                    else
+                        StoreIdentity.fields.traverse_(f =>
+                            backend.put(Cf.Meta, f.key, f.of(identity))
+                        )
+                case StoreIdentity.Check.Compatible => IO.unit
+                case StoreIdentity.Check.Mismatch(problems) =>
+                    IO.raiseError(
+                      StartupRefusal(
+                        s"the persistence store at $backend belongs to a different head, " +
+                            "configuration, or peer than this node: " +
+                            problems.mkString("; ")
+                      )
+                    )
+            }
+        } yield ()
 
     private def openDb(
         path: Path,

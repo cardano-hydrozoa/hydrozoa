@@ -34,14 +34,15 @@ private object InitializationTxSeqOps {
     }
 
     final case class Build(config: Config, funding: InitializationFunding)(
-        blockCreationEndTime: BlockCreationEndTime
+        blockCreationEndTime: BlockCreationEndTime,
+        headParamsHash: Hash32
     ) {
         import Build.*
         import Build.Error.*
 
         def result: Either[Error, InitializationTxSeq] = for {
             initializationTx <- InitializationTxBuilder
-                .Build(config, funding)(blockCreationEndTime)
+                .Build(config, funding)(blockCreationEndTime, headParamsHash)
                 .result
                 .left
                 .map(InitializationTxError(_))
@@ -109,6 +110,7 @@ private object InitializationTxSeqOps {
         blockCreationEndTime: BlockCreationEndTime,
         transactionSequence: (Transaction, Transaction),
         resolvedUtxos: ResolvedUtxos,
+        headParamsHash: Hash32
     ) {
         import Parse.*
         import Parse.Error.*
@@ -124,7 +126,8 @@ private object InitializationTxSeqOps {
                         .Parse(config)(
                           blockCreationEndTime = blockCreationEndTime,
                           tx = initializationTx,
-                          resolvedUtxos = resolvedUtxos
+                          resolvedUtxos = resolvedUtxos,
+                          headParamsHash = headParamsHash
                         )
                         .result
                         .left

@@ -40,7 +40,8 @@ final case class DeinitTx(
   * every will use their own collateral. This should be addressed when implementing automatic
   * signing if we decide to have it, for now we expect this operation to be done manually.
   *
-  * All head tokens under the head's policy id (and only those) should be burnt.
+  * All head tokens under the head's policy id (and only those) should be burnt. The regime utxo's
+  * validator requires exactly that: the HRWT it holds plus the treasury beacon, in this one tx.
   */
 object DeinitTx {
     given TxFamily[DeinitTx] = TxFamily.of("Deinit")
@@ -93,9 +94,11 @@ private object DeinitTxOps {
                 context <- build(
                   List(
                     config.referenceTreasury,
+                    config.referenceRegime,
                     // Spend the treasury utxo
                     treasuryUtxo.spendAttached(TreasuryRedeemer.Deinit),
-                    // Spend the regime utxo (native multisig, script attached by value)
+                    // Spend the regime utxo; its validator accepts only this tx shape — the HRWT
+                    // and the treasury beacon burned together
                     regimeUtxo.spend,
                     // Fees are covered by the collateral to simplify the balancing
                     collateralUtxo.spend,

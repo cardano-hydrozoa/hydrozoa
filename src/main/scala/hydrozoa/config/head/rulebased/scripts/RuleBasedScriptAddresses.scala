@@ -7,6 +7,7 @@ import scalus.cardano.address.{Network, ShelleyAddress}
 final case class RuleBasedScriptAddresses private (
     override val ruleBasedTreasuryAddress: ShelleyAddress,
     override val ruleBasedDisputeResolutionAddress: ShelleyAddress,
+    override val ruleBasedRegimeAddress: ShelleyAddress,
 ) extends RuleBasedScriptAddresses.Section {
     override transparent inline def ruleBasedScriptAddresses: RuleBasedScriptAddresses = this
 }
@@ -18,7 +19,8 @@ object RuleBasedScriptAddresses {
     def apply(network: Network): RuleBasedScriptAddresses =
         new RuleBasedScriptAddresses(
           ruleBasedTreasuryAddress = HydrozoaBlueprint.mkTreasuryAddress(network),
-          ruleBasedDisputeResolutionAddress = HydrozoaBlueprint.mkDisputeAddress(network)
+          ruleBasedDisputeResolutionAddress = HydrozoaBlueprint.mkDisputeAddress(network),
+          ruleBasedRegimeAddress = HydrozoaBlueprint.mkRegimeAddress(network)
         )
 
     trait Section {
@@ -28,5 +30,7 @@ object RuleBasedScriptAddresses {
             ruleBasedScriptAddresses.ruleBasedTreasuryAddress
         def ruleBasedDisputeResolutionAddress: ShelleyAddress =
             ruleBasedScriptAddresses.ruleBasedDisputeResolutionAddress
+        def ruleBasedRegimeAddress: ShelleyAddress =
+            ruleBasedScriptAddresses.ruleBasedRegimeAddress
     }
 }

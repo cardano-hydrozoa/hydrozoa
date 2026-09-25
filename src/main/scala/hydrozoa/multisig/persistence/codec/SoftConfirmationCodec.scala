@@ -2,21 +2,31 @@ package hydrozoa.multisig.persistence.codec
 
 import cats.syntax.functor.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder}
+import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.ledger.block.Block
-import hydrozoa.multisig.persistence.codec.SecCodec.{headerSignatureDecoder, headerSignatureEncoder}
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json}
+import scalus.uplc.builtin.ByteString
 
 /** Persistence-layer JSON codec for [[Block.SoftConfirmed.Next]] — the value stored at
   * `StoreKey.SoftConfirmation`, the FastConsensusActor aggregate (block brief + every head peer's
-  * header signature) written at soft-confirmation (§6). Tag-discriminated
+  * soft-ack signature) written at soft-confirmation (§6). Tag-discriminated
   * `{"kind": "Minor"|"Major"|"Final"}` like the other variant codecs.
   *
-  * Reuses the per-variant `BlockBrief` codecs (their companion, implicit scope) and the
-  * header-signature codec ([[SecCodec]]).
+  * Reuses the per-variant `BlockBrief` codecs (their companion, implicit scope). The soft-ack
+  * signatures use the same CIP-0116 byte-string form as the SEC's in [[SecCodec]].
   */
 object SoftConfirmationCodec:
+
+    private given Encoder[SoftAck.Signature] = Encoder.instance { sig =>
+        val bytes: Array[Byte] = sig // implicit Conversion[Signature, Array[Byte]]
+        ByteString.fromArray(bytes).asJson
+    }
+
+    private given Decoder[SoftAck.Signature] =
+        byteStringDecoder.map(bs => SoftAck.Signature(IArray.from(bs.bytes)))
 
     private given minorEncoder(using CardanoNetwork.Section): Encoder[Block.SoftConfirmed.Minor] =
         deriveEncoder[Block.SoftConfirmed.Minor]

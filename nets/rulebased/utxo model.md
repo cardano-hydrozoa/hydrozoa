@@ -178,6 +178,7 @@ Each will be determined based on the following generated variables:
   - Multisig treasury
   - Dispute Ref Script Utxo
   - Treasury Ref Script Utxo
+  - Regime Ref Script Utxo
   - Rule-based Regime Utxo (HRWT beacon + head-identity datum, after fallback)
 - 7 initial tokens in the Setup Ladder Ref place (the deployed-once G2 setup rungs)
 

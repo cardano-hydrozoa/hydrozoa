@@ -18,6 +18,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult, BlockVer
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.l2.{L2StateHash, L2StateReader}
 import hydrozoa.multisig.ledger.stack.*
 import hydrozoa.multisig.metrics.{PeerMetrics, StackComposerPhase}
 import hydrozoa.multisig.persistence.recovery.{BlockResultScan, SoftConfirmationScan}
@@ -51,6 +52,11 @@ final case class StackComposer(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | StackComposer.Connections,
     tracer: ContraTracer[IO, StackComposerEvent],
     persistence: Persistence[IO],
+    /** The L2 ledger, narrowed to its read-only slice: every carrier this actor derives certifies
+      * the L2 state at its block (`docs/spec/l2-state-certificate.md`), and reading that state is
+      * the only thing the slow side asks of the ledger. JointLedger remains its sole driver.
+      */
+    l2StateReader: L2StateReader[IO],
     metrics: PeerMetrics,
     /** The boot markers, derived once by the regime manager (§5.2). `hardAckedStack` in particular
       * is projected, not re-derived: this actor and `ReplayActor` used to unpack it from the
@@ -550,31 +556,67 @@ final case class StackComposer(
     )(using env: Env.Connected): IO[ComposedStack] = {
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val partitions = StackPartition.partition(results)
-        // Derivation runs to completion inside this one actor message — nothing else in the
-        // composer is processed meanwhile — so the phase is set before the fold, not during it.
-        metrics.onComposerPhase(StackComposerPhase.Deriving, System.currentTimeMillis())
-        StackEffectsBuilder.mkEffectsRegular(
-          env.config,
-          treasury,
-          partitions,
-          evacuationMap,
-          onPartitionDerived = metrics.onPartitionDerived,
-          onDerivationStarted = metrics.onDerivationStarted
-        ) match {
-            case Right((effects, newTreasury, newMap, withdrawalTracking)) =>
-                IO.pure(
-                  ComposedStack(
-                    Stack.Unsigned(brief, effects),
-                    newTreasury,
-                    newMap,
-                    partitions,
-                    withdrawalTracking
-                  )
-                )
-            case Left(err) =>
-                IO.raiseError(err)
-        }
+        for {
+            l2StateHashes <- l2StateHashesFor(partitions)
+            // Derivation runs to completion inside this one actor message — nothing else in the
+            // composer is processed meanwhile — so the phase is set before the fold, not during it.
+            _ <- IO(
+              metrics.onComposerPhase(StackComposerPhase.Deriving, System.currentTimeMillis())
+            )
+            composed <- StackEffectsBuilder.mkEffectsRegular(
+              env.config,
+              treasury,
+              partitions,
+              evacuationMap,
+              l2StateHashes,
+              onPartitionDerived = metrics.onPartitionDerived,
+              onDerivationStarted = metrics.onDerivationStarted
+            ) match {
+                case Right((effects, newTreasury, newMap, withdrawalTracking)) =>
+                    IO.pure(
+                      ComposedStack(
+                        Stack.Unsigned(brief, effects),
+                        newTreasury,
+                        newMap,
+                        partitions,
+                        withdrawalTracking
+                      )
+                    )
+                case Left(err) =>
+                    IO.raiseError(err)
+            }
+        } yield composed
     }
+
+    /** Ask the L2 ledger what its state digests to at every block this stack's effects certify
+      * ([[StackEffectsBuilder.certifiedBlocks]]).
+      *
+      * Each block's L2 command number comes from the per-block `L2CommandNumber` row written in the
+      * same atomic bundle as its `BlockResult`, so the anchor is the one the fast side actually
+      * reached — the composer never converts a block number to a command number itself. The
+      * ledger's own position is untouched; see [[L2StateReader.digestsAt]] for why it cannot be
+      * `restoreTo`.
+      *
+      * Every reported digest is mandatory ([[L2StateReader]]), so this covers every block
+      * [[StackEffectsBuilder.certifiedBlocks]] names — a ledger that cannot report one fails its
+      * own frame rather than leaving a gap here.
+      */
+    private def l2StateHashesFor(
+        partitions: NonEmptyList[StackPartition]
+    ): IO[Map[BlockNumber, L2StateHash]] =
+        StackEffectsBuilder
+            .certifiedBlocks(partitions)
+            .distinct
+            .traverse(blockNum =>
+                for {
+                    commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
+                    digests <- l2StateReader
+                        .digestsAt(commandNumber)
+                        .value
+                        .flatMap(IO.fromEither)
+                } yield blockNum -> digests.l2StateHash
+            )
+            .map(_.toMap)
 
     /** Sign this peer's own hard-acks for every round the stack will need, allocating monotonic
       * `HardAckNumber`s from the local counter. Bundles `(unsigned, ownAcks)` into a
@@ -698,7 +740,7 @@ final case class StackComposer(
                 val fallbackSig = wallet.mkTxSignature(fallback.tx)
                 val rolloutSigs = rollouts.map(r => wallet.mkTxSignature(r.tx))
                 val refundSigs = refunds.map(r => wallet.mkTxSignature(r.tx))
-                val secSig = sec.map(s => wallet.mkHeaderSignature(s.header))
+                val secSig = sec.map(s => wallet.mkSecSignature(s.header))
                 if isUnlock then
                     HardAck.Round1Payload.PartitionSigs.MajorPartial(
                       fallback = fallbackSig,
@@ -725,7 +767,7 @@ final case class StackComposer(
                     )
             case PartitionEffects.Minor(sec, refunds) =>
                 HardAck.Round1Payload.PartitionSigs.Minor(
-                  sec = wallet.mkHeaderSignature(sec.header),
+                  sec = wallet.mkSecSignature(sec.header),
                   refunds = refunds.map(r => wallet.mkTxSignature(r.tx))
                 )
         }
@@ -756,7 +798,7 @@ final case class StackComposer(
         ): HardAck.SolePayload = pe match {
             case PartitionEffects.Minor(sec, refunds) =>
                 HardAck.SolePayload(
-                  sec = wallet.mkHeaderSignature(sec.header),
+                  sec = wallet.mkSecSignature(sec.header),
                   refunds = refunds.map(rt => wallet.mkTxSignature(rt.tx))
                 )
             case _ =>
@@ -850,7 +892,7 @@ object StackComposer {
         jointLedger: JointLedger.Handle,
         fastConsensusActor: FastConsensusActor.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle],
         /** A hub's coil relay (§5.4) [doc-ref]: every stack brief (own-led and received) is sent
           * here so the hub's coil peers get the whole stack spine. `None` off a hub.
           */
@@ -1064,74 +1106,123 @@ object StackComposer {
             hardConfirmed: Option[StackNumber],
             hardAckedStack: Option[StackNumber]
         )(using config: HeadConfig.Bootstrap.Section): IO[Option[State]] =
-            // The anchor is `hardAckedStack`; the ack NUMBER only says what to assign next. They can
-            // come apart in exactly one situation: a store seeded from another peer, where the floor
-            // supplies the stack from `hardConfirmed` while this peer's own ack journal is empty
-            // because the donor never recorded an ack from it. `Markers.derive` unpacks the stack
-            // FROM the number, so `(None, Some(_))` is unreachable by reading a store — only the
-            // transplant floor can construct it, which is why treating it as a cold ack counter
-            // cannot change normal operation.
+            // The anchor is `hardAckedStack`; the ack NUMBER only says what to assign next.
+            // `Markers.derive` unpacks the stack FROM the number, so `(None, Some(_))` is
+            // unreachable by reading a store — nothing that derives markers can construct it, which
+            // is why treating it as a cold ack counter cannot change normal operation. Zero is the
+            // right counter for a peer with no own acks: its hub's cursor for that lane is at zero,
+            // which is exactly what it will ask for.
             //
-            // Zero is the right counter there for the same reason a coil must never be handed fewer
-            // acks than its hub recorded: the donor recorded none, so the hub's cursor for this
-            // peer's ack lane is at zero, which is exactly what it will ask for.
+            // A **seeded coil peer** reaches neither branch on its own terms: it signed no ack, so
+            // it has no `hardAckedStack`, and it composed no stack, so there is no `UnsignedStack`
+            // to read a `lastBlockNum` out of. Its anchor was adopted rather than produced and says
+            // both directly. The rest of the recovery is identical, which is the point — past this
+            // resolution a seeded coil is an ordinary peer holding an ordinary store.
+            resolveAnchor(persistence, hardAcked, hardConfirmed, hardAckedStack).flatMap {
+                case None         => IO.pure(None)
+                case Some(anchor) => recoverAt(persistence, anchor)
+            }
+
+        /** Where the slow side opens, however this peer came by it. */
+        private final case class Anchor(
+            stackNum: StackNumber,
+            lastBlockNum: BlockNumber,
+            nextOwnHardAckNum: HardAckNumber,
+            previousStackHardConfirmed: Boolean
+        )
+
+        private def resolveAnchor(
+            persistence: Persistence[IO],
+            hardAcked: Option[HardAckNumber],
+            hardConfirmed: Option[StackNumber],
+            hardAckedStack: Option[StackNumber]
+        ): IO[Option[Anchor]] =
             hardAckedStack match
-                case None => IO.pure(None)
-                case Some(hardAckedStack) =>
-                    for {
-                        // The closing stack's `lastBlockNum` comes from the `UnsignedStack` every
-                        // peer persists on every close (atomic with the hard-ack, so always present
-                        // for a stack this peer itself acked). `hardAckedStack` is projected from
-                        // the one marker bundle, so this anchor and the replay gate cannot disagree.
-                        unsignedStack <- persistence.getOrFail(
-                          StoreKey.UnsignedStack(hardAckedStack)
+                case Some(stackNum) =>
+                    // The closing stack's `lastBlockNum` comes from the `UnsignedStack` every peer
+                    // persists on every close (atomic with the hard-ack, so always present for a
+                    // stack this peer itself acked). `hardAckedStack` is projected from the one
+                    // marker bundle, so this anchor and the replay gate cannot disagree.
+                    persistence
+                        .getOrFail(StoreKey.UnsignedStack(stackNum))
+                        .map(unsigned =>
+                            Some(
+                              Anchor(
+                                stackNum = stackNum,
+                                lastBlockNum = unsigned.brief.lastBlockNum,
+                                nextOwnHardAckNum = hardAcked.fold(HardAckNumber.zero)(_.increment),
+                                previousStackHardConfirmed =
+                                    hardConfirmed.exists(Ordering[StackNumber].gteq(_, stackNum))
+                              )
+                            )
                         )
-                        lastBlockNum = unsignedStack.brief.lastBlockNum
-                        treasury <- persistence.getOrFail(StoreKey.Treasury)
-                        evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
-                        // The recovered pair is the balance-identity anchor re-entering the
-                        // system: the treasury and map snapshots live under two independent
-                        // store keys, so a divergent pair (partial write, replay bug, doctored
-                        // store) must be caught here, before the first stack close derives from
-                        // it. Like a missing key, an unbalanced pair is store corruption: fail
-                        // the boot.
-                        imbalance = treasury.value - evacuationMap.totalValue -
-                            Value(treasury.equity.coin) - config.treasuryToken
-                        _ <- IO.raiseWhen(!imbalance.isZero)(
-                          new IllegalStateException(
-                            "Recovered slow-side state is not balanced: treasury value" +
-                                s" (${treasury.value}) must equal the evacuation map total" +
-                                s" (${evacuationMap.totalValue}) + equity" +
-                                s" (${treasury.equity.coin}) + the beacon token, exactly" +
-                                s" (imbalance: $imbalance)"
+                case None =>
+                    persistence
+                        .get(StoreKey.StartPoint)
+                        .map(
+                          _.map(startPoint =>
+                              Anchor(
+                                stackNum = startPoint.startStack,
+                                lastBlockNum = startPoint.lastBlockNum,
+                                nextOwnHardAckNum = startPoint.ownHardAckStart,
+                                // A hub offers only stacks it has hard-confirmed, and the coil checked
+                                // the certificate for this one before adopting it.
+                                previousStackHardConfirmed = true
+                              )
                           )
                         )
-                        blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
-                        softConfirmeds <- SoftConfirmationScan.scanFrom(persistence, lastBlockNum)
-                    } yield {
-                        val opening = State(
-                          pending = Map.empty,
-                          ready = Map.empty,
-                          inboundLeaderBrief = Map.empty,
-                          lastClosedStackNum = hardAckedStack,
-                          lastClosedBlockNum = lastBlockNum,
-                          previousStackHardConfirmed =
-                              hardConfirmed.exists(Ordering[StackNumber].gteq(_, hardAckedStack)),
-                          nextOwnHardAckNum = hardAcked.fold(HardAckNumber.zero)(_.increment),
-                          treasury = treasury,
-                          evacuationMap = evacuationMap
-                        )
-                        // Restore BOTH halves of each block's pair, then pair them, mirroring
-                        // live `handleBlockResult` / `handleSoftConfirmed`. Neither half can be
-                        // left to the replay tail — see [[SoftConfirmationScan]] for why.
-                        val recorded = softConfirmeds.foldLeft(
-                          blockResults.foldLeft(opening)(_.recordBlockResult(_))
-                        )(_.recordSoftConfirmed(_))
-                        val restored =
-                            (blockResults.map(_.brief.blockNum) ++ softConfirmeds.map(
-                              _.blockNum
-                            )).distinct
-                        Some(restored.foldLeft(recorded)(_.tryPair(_)))
-                    }
+
+        private def recoverAt(
+            persistence: Persistence[IO],
+            anchor: Anchor
+        )(using config: HeadConfig.Bootstrap.Section): IO[Option[State]] =
+            val hardAckedStack = anchor.stackNum
+            val lastBlockNum = anchor.lastBlockNum
+            for {
+                treasury <- persistence.getOrFail(StoreKey.Treasury)
+                evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
+                // The recovered pair is the balance-identity anchor re-entering the
+                // system: the treasury and map snapshots live under two independent
+                // store keys, so a divergent pair (partial write, replay bug, doctored
+                // store) must be caught here, before the first stack close derives from
+                // it. Like a missing key, an unbalanced pair is store corruption: fail
+                // the boot.
+                imbalance = treasury.value - evacuationMap.totalValue -
+                    Value(treasury.equity.coin) - config.treasuryToken
+                _ <- IO.raiseWhen(!imbalance.isZero)(
+                  new IllegalStateException(
+                    "Recovered slow-side state is not balanced: treasury value" +
+                        s" (${treasury.value}) must equal the evacuation map total" +
+                        s" (${evacuationMap.totalValue}) + equity" +
+                        s" (${treasury.equity.coin}) + the beacon token, exactly" +
+                        s" (imbalance: $imbalance)"
+                  )
+                )
+                blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
+                softConfirmeds <- SoftConfirmationScan.scanFrom(persistence, lastBlockNum)
+            } yield {
+                val opening = State(
+                  pending = Map.empty,
+                  ready = Map.empty,
+                  inboundLeaderBrief = Map.empty,
+                  lastClosedStackNum = hardAckedStack,
+                  lastClosedBlockNum = lastBlockNum,
+                  previousStackHardConfirmed = anchor.previousStackHardConfirmed,
+                  nextOwnHardAckNum = anchor.nextOwnHardAckNum,
+                  treasury = treasury,
+                  evacuationMap = evacuationMap
+                )
+                // Restore BOTH halves of each block's pair, then pair them, mirroring
+                // live `handleBlockResult` / `handleSoftConfirmed`. Neither half can be
+                // left to the replay tail — see [[SoftConfirmationScan]] for why.
+                val recorded = softConfirmeds.foldLeft(
+                  blockResults.foldLeft(opening)(_.recordBlockResult(_))
+                )(_.recordSoftConfirmed(_))
+                val restored =
+                    (blockResults.map(_.brief.blockNum) ++ softConfirmeds.map(
+                      _.blockNum
+                    )).distinct
+                Some(restored.foldLeft(recorded)(_.tryPair(_)))
+            }
     }
 }

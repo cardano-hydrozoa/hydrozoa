@@ -17,17 +17,17 @@ import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.StartupRefusal
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.CoilStartPoint
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HeadIdentity, HubTransport, HubWsTransport, NodeWsServer, ProtocolVersion, WsPeerTransport}
 import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, EutxoL2Screener}
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger, L2Screener}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat, RemoteL2Screener, RemoteL2ScreenerEventFormat}
-import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Markers, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{ArchiveWatermarks, Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat, StoreIdentity, StoreVersion}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
@@ -99,9 +99,13 @@ object Serve {
         backendOverride: Option[CardanoBackend[IO]] = None,
     ): IO[ExitCode] = {
         val setupIO = for {
+            // The protocol and store versions ride the boot line because they are what an
+            // operator reads back off a node that refuses to talk to a peer or to open its data
+            // directory — see docs/spec/versioning.md.
             _ <- log.info(
               s"Hydrozoa ${BuildInfo.version} " +
-                  s"(git ${BuildInfo.gitCommit}, built ${BuildInfo.builtAtString})"
+                  s"(git ${BuildInfo.gitCommit}, built ${BuildInfo.builtAtString}, " +
+                  s"protocol ${ProtocolVersion.current}, store ${StoreVersion.current})"
             )
             _ <- log.info("Starting Hydrozoa node...")
             _ <- log.info(s"Loading head config from $headConfigPath")
@@ -166,6 +170,12 @@ object Serve {
                     coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
                     hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
                   ),
+                  StoreIdentity(
+                    headParamsHash = nodeConfig.headParamsHash,
+                    headId = nodeConfig.headId,
+                    headAddress = nodeConfig.headMultisigAddress,
+                    ownPeerId = nodeConfig.ownPeerId
+                  ),
                   persistenceTracer,
                 )
                 // `recoverWith`, not `handleErrorWith`: this handles ONE error type, and a
@@ -188,48 +198,7 @@ object Serve {
                 Persistence.fromBackend(backendStore, persistenceTracer)
             }
 
-            // ⛔ A transplant must contain the stack it is tagged with.
-            //
-            // `transplantStackNumber` names the stack this peer ELECTS TO ADOPT: everything at or
-            // below it is taken on trust from the donor committee and never verified, and only the
-            // stacks above it are checked. That makes the tag a partition of the store, chosen by
-            // the operator — any stack the store actually holds is a legitimate choice. A tag
-            // naming a stack the store does NOT hold is a different thing entirely: the config and
-            // the data have been mis-paired, and no amount of restarting will pair them.
-            //
-            // ⛔ This runs BEFORE the ActorSystem deliberately. The same verdict raised inside it
-            // escalates to the guardian, which terminates the system and exits 1 — and the unit's
-            // `RestartPreventExitStatus=2` does not catch a 1, so a mistyped tag would crash-loop.
-            // Here it is an ordinary `StartupRefusal` and exits 2. It needs nothing but the store
-            // and the config, so there is no reason for it to run any later.
-            //
-            // ⚠️ Reads `hardConfirmed` only — a plain `lastKey`, safe to derive more than once.
-            // NOT `hardAckedStack`, which is an interpretation the regime manager must derive
-            // exactly once and project into its children.
-            _ <- Resource.eval {
-                nodeConfig.transplantStackNumber.fold(IO.unit)(tag =>
-                    Markers
-                        .derive(persistence, nodeConfig.ownPeerId)
-                        .flatMap(markers =>
-                            IO.raiseUnless(
-                              markers.hardConfirmed.exists(Ordering[StackNumber].gteq(_, tag))
-                            )(
-                              StartupRefusal(
-                                s"transplantStackNumber is $tag, but the highest hard-confirmed " +
-                                    "stack in this store is " +
-                                    markers.hardConfirmed.fold("none — the store is empty")(
-                                      _.toString
-                                    ) +
-                                    ". A transplant must contain the stack it is tagged with; " +
-                                    "check that the store was copied and the tag read from that copy."
-                              )
-                            )
-                        )
-                )
-            }
-
-            // ⛔ BOTH L1 boot facts are established HERE, before the ActorSystem, and for the same
-            // two reasons the transplant gate above is.
+            // ⛔ BOTH L1 boot facts are established HERE, before the ActorSystem, for two reasons.
             //
             // 1. Cancellability. `preStartLocal` is the handler for a `PreStart` message the regime
             //    manager posts to itself (`MultisigRegimeManagerBase`), so it runs inside
@@ -306,9 +275,10 @@ object Serve {
                     )
             }
             // Read-only consensus-store view behind the /head/blocks queries.
-            consensusReader = ConsensusStoreReader.fromPersistence(persistence)(using
-              nodeConfig.headConfig
-            )
+            consensusReader = ConsensusStoreReader.fromPersistence(
+              persistence,
+              nodeConfig.headConfig.initialBlock.blockBrief.endTime
+            )(using nodeConfig.headConfig)
         } yield (nodeConfig, system, nodeRun, consensusReader, metrics)
 
         resource.use { case (nodeConfig, system, nodeRun, consensusReader, metrics) =>
@@ -393,7 +363,7 @@ object Serve {
         nodeConfig: NodeConfig,
         dataDir: Path,
     ): Resource[IO, (L2Ledger[IO], L2Screener[IO], Option[EutxoL2LedgerReader[IO]], IO[Unit])] =
-        nodeConfig.headConfig.l2Ledger match {
+        nodeConfig.headConfig.l2Ledger.kind match {
             case L2LedgerKind.CardanoEutxo =>
                 for {
                     _ <- Resource.eval(log.info("L2 ledger: built-in cardano-eutxo"))
@@ -401,7 +371,12 @@ object Serve {
                       dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/l2-rocksdb")
                     )
                     ledger <- Resource.eval(EutxoL2Ledger(nodeConfig, store))
-                } yield (ledger, EutxoL2Screener(nodeConfig), Some(ledger), IO.unit)
+                } yield (
+                  ledger,
+                  EutxoL2Screener(nodeConfig, ledger.protocolParams),
+                  Some(ledger),
+                  IO.unit
+                )
             case L2LedgerKind.AnyRemote =>
                 val tracer = Slf4jTracer.sink.contramap(RemoteL2LedgerEventFormat.humanFormat)
                 val wsUri = nodeConfig.remoteLedgerUri.getOrElse(
@@ -625,10 +600,17 @@ object Serve {
             .toMap
         val hubbedCoils = nodeConfig.hubbedCoilPeerNums(ownHeadNum)
         val tracers = MrmTracers.fromRoot(mrmTracer)
+        // What every link announces and checks: two peers can speak the same protocol version and
+        // still not belong to the same head.
+        val ownHead = HeadIdentity.own(using nodeConfig.headConfig)
         for {
             peerT <- Resource.eval(
               WsPeerTransport.create(
                 ownHeadPeerId,
+                nodeConfig.ownWallet,
+                nodeConfig.headConfig,
+                nodeConfig.headParamsHash,
+                ownHead,
                 remoteHeadUris.keys.toList,
                 tracers.peerTransport
               )
@@ -637,7 +619,15 @@ object Serve {
                 if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
                 else
                     Resource
-                        .eval(HubWsTransport.create(hubbedCoils, tracers.hubWsTransport))
+                        .eval(
+                          HubWsTransport.create(
+                            hubbedCoils,
+                            nodeConfig.headConfig.coilPeers,
+                            nodeConfig.headParamsHash,
+                            ownHead,
+                            tracers.hubWsTransport
+                          )
+                        )
                         .map(Some(_))
             meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
             hubRoutes =
@@ -715,8 +705,20 @@ object Serve {
         val cpwtTracer =
             Slf4jTracer.sink.contramap(CoilPeerWsTransportEventFormat.humanFormat(ownCoilNum))
         for {
-            t <- Resource.eval(CoilPeerWsTransport.create(ownCoilNum, cpwtTracer))
+            t <- Resource.eval(
+              CoilPeerWsTransport.create(
+                ownCoilNum,
+                nodeConfig.ownWallet,
+                nodeConfig.headParamsHash,
+                CoilStartPoint.ownMarks(persistence, PeerId.Coil(ownCoilNum)),
+                HeadIdentity.own(using nodeConfig.headConfig),
+                cpwtTracer
+              )
+            )
             _ <- t.startDialer(wsClient, hubUri)
+            // Where this coil starts is settled by its liaison's join mode, inside the regime
+            // manager below — it is spawned before every other actor, and the manager waits on it
+            // before deriving markers or spawning anything that reads the store.
             coilFactory: Resource[
               IO,
               ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport
@@ -782,6 +784,11 @@ object Serve {
             connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
             _ <- log.info("Starting HTTP server...")
 
+            // One per process, and only where this node's private config declares an archiver:
+            // its absence is what removes the watermark route, and the node then deletes as soon
+            // as consensus allows rather than waiting on a report that will never come.
+            archiveWatermarks = nodeConfig.archiver.map(_ => ArchiveWatermarks.empty())
+
             // `surround`, not `start.void`: the server is bound for exactly as long as the node
             // waits, and its finalizer runs when the actor system terminates. `runCoilNode` has
             // the same shape and spells out what the old one leaked.
@@ -799,6 +806,7 @@ object Serve {
                   // Some(reader) for a cardano-eutxo node (mounts GET /l2/cardano-eutxo/...); None for
                   // a remote-ledger node, which serves no L2-query endpoints.
                   l2QueryReader,
+                  archiveWatermarks,
                   nodeConfig.headConfig,
                   httpServerConfig(nodeConfig),
                   metrics,
@@ -833,6 +841,11 @@ object Serve {
             connections <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
             _ <- log.info("Starting HTTP server (coil: read-only surface)...")
 
+            // One per process, and only where this node's private config declares an archiver:
+            // its absence is what removes the watermark route, and the node then deletes as soon
+            // as consensus allows rather than waiting on a report that will never come.
+            archiveWatermarks = nodeConfig.archiver.map(_ => ArchiveWatermarks.empty())
+
             // `surround` binds the server for the node's lifetime and releases it when the actor
             // system terminates. `use(_ => IO.never).start.void` -- what this was, on both roles --
             // dropped the fiber handle, so nothing could cancel it and the finalizer never ran: the
@@ -847,6 +860,7 @@ object Serve {
                   consensusReader,
                   // A coil always runs a remote ledger, so no L2-query endpoints.
                   None,
+                  archiveWatermarks,
                   nodeConfig.headConfig,
                   httpServerConfig(nodeConfig),
                   metrics,

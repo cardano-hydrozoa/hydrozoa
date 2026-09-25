@@ -46,6 +46,9 @@ object InMemoryBackendStore:
             cf: Cf
         ): TreeMap[Vector[Byte], Array[Byte]] = s.getOrElse(cf, emptyTree)
 
+        def wipeData: IO[Unit] =
+            state.update(_.filter((cf, _) => cf == Cf.Meta))
+
         def get(cf: Cf, key: Array[Byte]): IO[Option[Array[Byte]]] =
             state.get.map(s => tree(s, cf).get(key.toVector))
 

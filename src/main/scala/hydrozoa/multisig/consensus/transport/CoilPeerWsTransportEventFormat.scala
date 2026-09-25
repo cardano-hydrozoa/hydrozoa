@@ -16,14 +16,29 @@ object CoilPeerWsTransportEventFormat:
         )
         import ev.*
         e match {
-            case DroppingNonWireRequest(request) =>
-                warn(s"send: dropping non-wire request to hub: $request")
             case NoLiaisonForInbound =>
                 warn("inbound from hub but no liaison registered")
             case UnexpectedInboundWire(payload) =>
                 warn(s"unexpected coil-bound wire from hub: $payload")
             case DecodeError(cause) =>
                 warn(s"failed to decode coil frame from hub: ${cause.getMessage}")
+            case DialerRefused(refusal) =>
+                warn(
+                  s"the hub refused this coil's handshake: ${HandshakeRefusal.describe(refusal)}" +
+                      " — redialing"
+                )
+            case DialerNoChallenge(uri, after) =>
+                warn(
+                  s"dialer: the hub at $uri issued no challenge within $after; dropping the " +
+                      "socket and redialing"
+                )
+            case DialerLateChallenge =>
+                warn("a challenge arrived on an established link; ignoring")
+            case DialerRefusedChallenge(refusal) =>
+                warn(
+                  s"dialer: refusing the hub's challenge — ${HandshakeRefusal.describe(refusal)}" +
+                      "; dropping the socket and redialing"
+                )
             case DialerConnected(uri) =>
                 info(s"dialer: connected to hub at $uri")
             case DialerFailed(cause) =>

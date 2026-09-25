@@ -35,8 +35,8 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
 
 2. **Check the baked-in reference-script UTxOs are current.** The image ships per-network default
    reference UTxOs at `src/main/resources/scaffold/ref-utxos/` (Preview and Preprod): the treasury +
-   dispute validators and the G2 setup ladder that `build-head-config` falls back to when a head has
-   no local `bootstrap/ref-utxos.json` (see
+   dispute + regime validators and the G2 setup ladder that `build-head-config` falls back to when a
+   head has no local `bootstrap/ref-utxos.json` (see
    [DEPLOYMENT.md § Step 4](docs/user-guide/DEPLOYMENT.md)). They sit at the unspendable burn
    address, so they never need redeploying **unless the compiled on-chain scripts changed** since
    they were last deployed.
@@ -44,7 +44,7 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
    - **If this release changes the compiled `cardanoOnchain` scripts** — either the validator/ladder
      source changed, or Scalus was bumped (a compiler bump can alter the compiled UPLC even with no
      source change) — the baked refs are **stale**: a head booting from the released image on those
-     networks fails with "invalid treasury/dispute script utxos".
+     networks fails with "invalid treasury/dispute/regime script utxos".
 
      First, re-export the scripts and rebuild the launcher (once):
 

@@ -114,7 +114,22 @@ trait RequestSequencer(
                               }
                           }
                   }
-                  screened.flatMap {
+                  // Two gates, both refusing before an id exists and both counting as screening:
+                  // the digest check is a stateless admission check like the rest, and its reason
+                  // string is what tells the two apart.
+                  //
+                  // The digest goes first — an end-to-end check that the request this head holds is
+                  // the request the client built, which fails exactly where a truncated payload or
+                  // a client-side encoding change otherwise passes silently. Nothing is persisted
+                  // and no RequestNumber is consumed, so the submitter retries with the request
+                  // they meant.
+                  val admitted: IO[Either[String, Unit]] =
+                      userRequest.checkRequestHash.fold(
+                        reason => IO.pure(Left(reason)),
+                        _ => screened
+                      )
+
+                  admitted.flatMap {
                       case Left(reason) =>
                           IO(metrics.onLocalRejected(RejectionKind.Screening)) *>
                               IO.pure(Left(UserRequest.Rejected(reason)))
@@ -271,7 +286,7 @@ object RequestSequencer {
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle],
         /** A hub's coil relay (§5.4) [doc-ref]: this peer's own requests are sent here so its coil
           * peers get the request content. `None` off a hub.
           */

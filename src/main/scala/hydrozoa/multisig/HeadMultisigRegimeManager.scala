@@ -56,13 +56,7 @@ trait HeadMultisigRegimeManager(
             // Every recovery marker this peer boots from, derived ONCE here and projected into
             // each child actor. Deriving per-actor let two paths interpret the same journal
             // independently, which is how a seeded store could satisfy one and not the other.
-            derived <- Markers.derive(persistence, config.ownPeerId)
-            // Adopting a store seeded from another peer: raise the trusted-history floor to the
-            // stack the transplant was tagged with. Applied to the ONE bundle, so the gate, the
-            // replay cursors, the in-flight handoff and the stack composer all move together — the
-            // alternative is the divergence that made this necessary. See `Markers.adopt` for the
-            // comparison and why it must be the same one `Serve`'s boot gate uses.
-            markers = Markers.adopt(derived, config.transplantStackNumber)
+            markers <- Markers.derive(persistence, config.ownPeerId)
             core <- spawnCoreActors(
               config,
               cardanoBackend,
@@ -181,7 +175,17 @@ trait HeadMultisigRegimeManager(
                         coilNum,
                         pendingConnections,
                         tracers.peerLiaison(PeerId.Coil(coilNum)),
-                        persistence
+                        persistence,
+                        // The start-point decision reads this hub's store AND its L2 ledger, so it
+                        // is closed over here rather than handed to the liaison as two more
+                        // dependencies it would otherwise have no use for.
+                        connected =>
+                            CoilStartPoint.decide(
+                              PeerId.Coil(coilNum),
+                              connected,
+                              persistence,
+                              l2Ledger
+                            )(using config)
                       )
                     )
                 )
@@ -191,7 +195,7 @@ trait HeadMultisigRegimeManager(
             // `remoteHeadProxies` wiring above. Errors loudly if a hub is missing its transport.
             remoteCoilLiaisons <-
                 if hubbedCoilPeers.isEmpty then
-                    IO.pure(Map.empty[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle])
+                    IO.pure(Map.empty[CoilPeerNumber, liaison.LiaisonProtocol.CoilLiaisonHandle])
                 else
                     hubCoilTransport match {
                         case None =>
@@ -352,11 +356,11 @@ object HeadMultisigRegimeManager {
           * broadcast their own artifacts here. `ActorRef` is contravariant in its message type, so
           * a handle is usable as `ActorRef[IO, <any artifact in its Request>]`.
           */
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle] = Nil,
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle] = Nil,
         /** A coil peer's single uplink to its hub; `None` on a head peer. `SlowConsensusActor`
           * broadcasts its own hard-ack to `headPeerLiaisons ++ coilUplink`.
           */
-        coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
+        coilUplink: Option[liaison.LiaisonProtocol.CoilLocalHandle] = None,
         /** Present only on a hub head peer (§5.4) [doc-ref]: the fan-out that relays the population
           * to its coil peers. Producers send only their own production here. `None` elsewhere.
           */
@@ -364,15 +368,17 @@ object HeadMultisigRegimeManager {
         // ---- Remote-handle resolution for spawned liaisons (in-process only) ----
         // Only the in-process harness (stage4 / unit tests) populates these; in a real deployment
         // the counterpart is another process reached over the transport, so they stay empty.
-        remoteHeadLiaisons: Map[HeadPeerNumber, liaison.PeerLiaisonHeadToHead.Handle] = Map.empty,
-        remoteCoilLiaisons: Map[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle] = Map.empty,
-        remoteHubLiaison: Option[liaison.PeerLiaisonHubToCoil.Handle] = None,
+        remoteHeadLiaisons: Map[HeadPeerNumber, liaison.LiaisonProtocol.MeshLiaisonHandle] =
+            Map.empty,
+        remoteCoilLiaisons: Map[CoilPeerNumber, liaison.LiaisonProtocol.CoilLiaisonHandle] =
+            Map.empty,
+        remoteHubLiaison: Option[liaison.LiaisonProtocol.RemoteHubHandle] = None,
         /** Present only on a hub head peer (§5.3) [doc-ref]: re-sequences its coil peers' hard-acks
           * onto the `HubHardAckLane`. `None` elsewhere.
           */
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
         /** Hub→coil liaisons this hub runs (for `CoilRelay`'s fan-out); empty elsewhere. */
-        coilPeerLiaisons: List[liaison.PeerLiaisonHubToCoil.Handle] = Nil,
+        coilPeerLiaisons: List[liaison.LiaisonProtocol.HubLocalHandle] = Nil,
     )
 
     type PendingConnections = Deferred[IO, Either[Throwable, Connections]]

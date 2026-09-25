@@ -14,6 +14,18 @@ import scalus.cardano.ledger.Value
   */
 object EutxoDepositGates:
 
+    /** These gates, named, for `l2ParamsHash`'s rule list (`docs/spec/head-params-hash.md`).
+      *
+      * They belong in that digest for the same reason the submission-path rules do: they decide
+      * which deposits this ledger accepts, so a peer running different gates is running a different
+      * ledger. They are named by hand rather than read off a list, because they are plain functions
+      * — their semantics ride on the domain tag's version, as the rest of hydrozoa's own rules do.
+      */
+    val ruleNames: Vector[String] = Vector(
+      "EutxoDepositGates.validateSpawnedOutputs",
+      "EutxoDepositGates.validateDepositConservation"
+    )
+
     /** Each spawned L2 output must clear min-ada on its own — the same [[Payout.Obligation]] check
       * absorption applies. A sub-min-ada output that slipped past would otherwise fail only at
       * absorption (which cannot reject) and wedge the block on every recovery re-drive.
