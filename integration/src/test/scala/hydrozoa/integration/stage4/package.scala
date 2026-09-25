@@ -56,6 +56,7 @@ package hydrozoa.integration
   *   - [[Model]] — model state, mutator, per-command state advancement.
   *   - [[Sut]] — `Stage4Sut`, `Stage4PeerHandle`, capture observers.
   *   - [[Suite]] — `Stage4Suite` (extends `ModelBasedSuite`), `beforeFinalize`, properties.
-  *   - [[Runner]] — `Stage4Properties` (test entry point) and the `@main` print helper.
+  *   - [[Runner]] — `Stage4Properties` (test entry point), `Stage4WsProperties` (the real-clock WS
+  *     variants, at fewer cases) and the `@main` print helper.
   */
 package object stage4 {}
