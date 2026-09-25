@@ -441,7 +441,7 @@ ThisBuild / scalaVersion := "3.3.7"
 // ++=`, each per-subproject addition would append to the *shared* ThisBuild scope, so the flags
 // accumulate once per subproject (4×) and `-Werror` then fails on "flag set repeatedly". Keep it
 // bare (no `ThisBuild /`): each subproject gets exactly one copy.
-scalacOptions ++= Seq(
+scalacOptions ++= Def.uncached(Seq(
   "-feature",
   "-deprecation",
   "-unchecked",
@@ -454,7 +454,7 @@ scalacOptions ++= Seq(
   // dedicated cleanup pass; demote to a warning/error once those sites are fixed.
   "-Wconf:msg=interpolation uses toString:s",
   "-Yretain-trees", // Essential for incremental compilation
-) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil)
+) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil))
 
 // Custom commands to format and lint all subprojects
 addCommandAlias(
