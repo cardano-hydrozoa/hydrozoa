@@ -317,9 +317,9 @@ abstract class PeerLiaisonHubToCoil(
 
     // ---- Composed halves ------------------------------------------------------------------------
     /** The serve / pull engines, wired to the coil peer over the post-barrier `connections`. Both
-      * carry per-link `Ref` state, so they are built exactly once (in `PreStart`, after the barrier)
-      * and threaded through [[regular]] and [[joining]] alike: this actor cycles between the two
-      * modes on every coil redial, and each mode must see the same engines.
+      * carry per-link `Ref` state, so they are built exactly once (in `PreStart`, after the
+      * barrier) and threaded through [[regular]] and [[joining]] alike: this actor cycles between
+      * the two modes on every coil redial, and each mode must see the same engines.
       */
     private final class Engines(using val env: Env.Connected) {
         val server: Server[Population.Get, Population.New] =
@@ -357,7 +357,7 @@ abstract class PeerLiaisonHubToCoil(
 
     private def joiningTotal(engines: Engines)(req: HubLiaisonMessage): IO[Unit] = req match {
         // PreStart is handled once, before the barrier; join mode is only ever entered after it.
-        case PreStart                  => IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
+        case PreStart => IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
         case connected: Join.Connected => handleConnected(engines)(connected)
         case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId | _: SoftAck |
             _: HardAck | _: HardAckWithId) =>
