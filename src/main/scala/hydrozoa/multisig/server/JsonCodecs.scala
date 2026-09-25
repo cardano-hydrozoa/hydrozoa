@@ -4,7 +4,7 @@ import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody}
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import hydrozoa.multisig.server.ApiResponse.RequestAccepted
 import io.bullet.borer.Cbor
@@ -65,18 +65,26 @@ object JsonCodecs {
     case class UserRequestDecoder() extends Decoder[UserRequest] {
 
         // The request is internally tagged: a `type` field (`deposit` / `transaction`) selects the
-        // kind, with the body fields (`l1Payload` deposits only, `l2Payload` all) alongside it.
+        // kind, with the body fields (`l1Payload` deposits only, `l2Payload` all) and the
+        // submitter's `requestHash` alongside it.
         // Authentication is not done here: the L2 payload is a native, self-authenticating tx, and
         // the ledger's stateless screening verifies its signatures before a RequestId is assigned.
+        // Neither is the digest checked here — that is RequestSequencer's job, on the body it ends
+        // up holding.
         def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
-            c.downField("type").as[String].flatMap {
-                case "deposit" =>
-                    c.as[DepositRequestBody].map(UserRequest.DepositRequest(_))
-                case "transaction" =>
-                    c.as[TransactionRequestBody].map(UserRequest.TransactionRequest(_))
-                case other =>
-                    Left(DecodingFailure(s"unknown request type: $other", c.history))
-            }
+            for {
+                kind <- c.downField("type").as[String]
+                requestHash <- c.downField("requestHash").as[RequestHash]
+                request <- kind match {
+                    case "deposit" =>
+                        c.as[DepositRequestBody].map(UserRequest.DepositRequest(_, requestHash))
+                    case "transaction" =>
+                        c.as[TransactionRequestBody]
+                            .map(UserRequest.TransactionRequest(_, requestHash))
+                    case other =>
+                        Left(DecodingFailure(s"unknown request type: $other", c.history))
+                }
+            } yield request
     }
 
     given Decoder[UserRequest] = UserRequestDecoder()

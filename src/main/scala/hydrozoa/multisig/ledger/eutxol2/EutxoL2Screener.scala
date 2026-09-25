@@ -5,14 +5,19 @@ import cats.effect.IO
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.l2.{L2ScreenError, L2Screener}
 import scala.util.Try
+import scalus.cardano.ledger.ProtocolParams
 import scalus.uplc.builtin.ByteString
 
 /** Stateless EUTXO screening (docs/spec/l2-isomorphism.md), split from [[EutxoL2Ledger]] so it
   * shares no mutable state with the state-mutating command stream and can ride its own connection —
   * mirroring the remote side ([[hydrozoa.multisig.ledger.remote.RemoteL2Screener]]). Needs only
-  * `config`; the two deposit gates it shares with the command path live in [[EutxoDepositGates]].
+  * `config` and the L2 protocol parameters; the two deposit gates it shares with the command path
+  * live in [[EutxoDepositGates]].
   */
-final class EutxoL2Screener(config: EutxoL2Ledger.Config) extends L2Screener[IO]:
+final class EutxoL2Screener(
+    config: EutxoL2Ledger.Config,
+    protocolParams: ProtocolParams
+) extends L2Screener[IO]:
 
     override def screenTx(l2Payload: ByteString): EitherT[IO, L2ScreenError, Unit] =
         // The native L2 tx must parse, carry this head's headId pin, and have valid vkey-witness
@@ -23,7 +28,7 @@ final class EutxoL2Screener(config: EutxoL2Ledger.Config) extends L2Screener[IO]
             l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2ScreenError(_))
             _ <- HeadIdPinValidator.validate(config, l2Tx.headId).left.map(L2ScreenError(_))
             _ <- HydrozoaTransactionMutator
-                .screenSignatures(config, l2Tx)
+                .screenSignatures(config, protocolParams, l2Tx)
                 .left
                 .map(e => L2ScreenError(e.toString))
         } yield ())

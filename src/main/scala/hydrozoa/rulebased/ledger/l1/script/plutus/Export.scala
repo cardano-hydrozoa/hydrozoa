@@ -2,7 +2,9 @@ package hydrozoa.rulebased.ledger.l1.script.plutus
 
 import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedRegimeValidator.RegimeRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
+import hydrozoa.rulebased.ledger.l1.state.RegimeState.RuleBasedRegimeDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import java.io.File
@@ -11,9 +13,10 @@ import scalus.cardano.blueprint.Blueprint
 
 object Export {
 
-    /** Creates a CIP-57 compliant Blueprint describing both Hydrozoa rule-based validators:
+    /** Creates a CIP-57 compliant Blueprint describing the Hydrozoa rule-based validators:
       *   - DisputeResolutionScript: Manages voting and tallying during dispute resolution
       *   - RuleBasedTreasuryScript: Manages treasury state transitions and evacuations
+      *   - RuleBasedRegimeScript: Guards the regime utxo, spendable only by the deinit tx
       */
     def createBlueprint(): Blueprint = {
         // Create DisputeResolution validator blueprint
@@ -37,7 +40,18 @@ object Export {
           compiled = RuleBasedTreasuryScript.compiledPlutusV3Program
         )
 
-        // Combine both validators into a single blueprint
+        // Create RuleBasedRegime validator blueprint
+        val regimeValidator = Blueprint.plutusV3[RuleBasedRegimeDatum, RegimeRedeemer](
+          title = "Rule-Based Regime Validator",
+          description = "Guards the Hydrozoa rule-based regime utxo. " +
+              "Allows spending only by a deinit transaction, which burns the regime utxo's HRWT " +
+              "beacon together with the treasury's beacon token.",
+          version = "1.0.0",
+          license = Some("Apache-2.0"),
+          compiled = RuleBasedRegimeScript.compiledPlutusV3Program
+        )
+
+        // Combine all validators into a single blueprint
         val preamble = scalus.cardano.blueprint.Preamble(
           title = "Hydrozoa Rule-Based Regime Validators",
           description = Some(
@@ -54,7 +68,8 @@ object Export {
           preamble = preamble,
           validators = Seq(
             disputeValidator.validators.head,
-            treasuryValidator.validators.head
+            treasuryValidator.validators.head,
+            regimeValidator.validators.head
           )
         )
     }
@@ -80,8 +95,11 @@ object Export {
             DisputeResolutionScript.address(Network.Mainnet).scriptHashOption.get
         val treasuryScriptHash =
             RuleBasedTreasuryScript.address(Network.Mainnet).scriptHashOption.get
+        val regimeScriptHash =
+            RuleBasedRegimeScript.address(Network.Mainnet).scriptHashOption.get
         println(s"- Dispute Resolution Script Hash: ${disputeScriptHash.toHex}")
         println(s"- Rule-Based Treasury Script Hash: ${treasuryScriptHash.toHex}")
+        println(s"- Rule-Based Regime Script Hash: ${regimeScriptHash.toHex}")
     }
 
     /** Main method for standalone execution.

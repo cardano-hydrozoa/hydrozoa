@@ -72,6 +72,7 @@ object RBRHlNet {
         case RegimeRef
         case DisputeScriptRef
         case TreasuryScriptRef
+        case RegimeScriptRef
         case Collateral
         case SetupLadder
         case Ambient
@@ -137,6 +138,7 @@ object RBRHlNet {
         regimeRef: PlaceRef[RBRPlaceId, Unit],
         disputeScriptRef: PlaceRef[RBRPlaceId, Unit],
         treasuryScriptRef: PlaceRef[RBRPlaceId, Unit],
+        regimeScriptRef: PlaceRef[RBRPlaceId, Unit],
         setupLadder: PlaceRef[RBRPlaceId, BigInt],
         collateral: PlaceRef[RBRPlaceId, HeadPeerNumber],
         votableVersions: PlaceRef[RBRPlaceId, BigInt],
@@ -387,6 +389,7 @@ object RBRHlNet {
                 regimeRef <- b.place(RegimeRef, RBRPlace(oneDot, Sort.Dot))
                 disputeScriptRef <- b.place(DisputeScriptRef, RBRPlace(oneDot, Sort.Dot))
                 treasuryScriptRef <- b.place(TreasuryScriptRef, RBRPlace(oneDot, Sort.Dot))
+                regimeScriptRef <- b.place(RegimeScriptRef, RBRPlace(oneDot, Sort.Dot))
                 setupLadder <- b.place(SetupLadder, RBRPlace(setupRungs, setupRungClass))
                 collateral <- b.place(Collateral, RBRPlace(allPeers, peerClass))
                 votableVersionsPlace <- b.place(VotableVersions, RBRPlace(votable, versionClass))
@@ -407,6 +410,7 @@ object RBRHlNet {
               regimeRef,
               disputeScriptRef,
               treasuryScriptRef,
+              regimeScriptRef,
               setupLadder,
               collateral,
               votableVersionsPlace,
@@ -680,8 +684,9 @@ object RBRHlNet {
                 _ <- input(_.regimeRef, t, dotToken)
                 // collateralUtxo.spend / collateralOutput.send
                 _ <- collateral(t, collateralPeerToken)
-                // config.referenceTreasury
+                // config.referenceTreasury / config.referenceRegime
                 _ <- readDot(_.treasuryScriptRef, t)
+                _ <- readDot(_.regimeScriptRef, t)
             } yield ()
 
         val transitions: TxB[Unit] = for {

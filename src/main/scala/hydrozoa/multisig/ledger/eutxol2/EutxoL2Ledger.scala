@@ -4,11 +4,14 @@ import cats.*
 import cats.data.*
 import cats.effect.{Async, IO, Ref}
 import cats.syntax.all.*
+import hydrozoa.BuildInfo
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.crypto.Preimage
+import hydrozoa.multisig.ledger.eutxol2.store.L2StoreCodecs.snapshotCodec
 import hydrozoa.multisig.ledger.eutxol2.store.{L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -20,13 +23,15 @@ import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
 import hydrozoa.multisig.ledger.l2.L2LedgerResponse.UnrecoverableError
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.bullet.borer.Cbor
+import io.circe.syntax.*
 import java.nio.charset.StandardCharsets.UTF_8
 import monocle.syntax.all.*
 import scala.collection.immutable.TreeMap
 import scala.util.Try
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
-import scalus.uplc.builtin.{ByteString, platform}
+import scalus.uplc.builtin.ByteString
+import upickle.default as upickle
 
 extension (ti: TransactionInput) {
     // Technically, this is partial -- but with the current cbor codec of TransactionInput
@@ -68,25 +73,85 @@ extension (em: EvacuationMap) {
 object EutxoL2Ledger {
     type Config = CardanoNetwork.Section & InitializationParameters.Section & HeadParameters.Section
 
-    /** This ledger's agreed-parameters digest, reported at every `restoreTo` anchor and pinned in
-      * the head config as `l2ParamsHash` (docs/spec/head-params-hash.md).
+    /** Mixed in first so this digest can never collide with a hash of the same bytes taken for
+      * another purpose.
       *
-      * A digest over the domain tag alone, because the built-in ledger has no negotiable
-      * parameters: its rules are the hydrozoa code, and its only agreed knobs —
-      * `identityIsomorphism` and the `headId` pin — already sit in [[HeadParameters]], so folding
-      * them in here would hash the configuration against itself. Following `EvacuationMap.digest`'s
-      * precedent for an empty input, an empty parameter set hashes to a defined value rather than
-      * an absence.
-      *
-      * The tag carries a version so it can move when this ledger's rules do: bumping it stops two
-      * peers on builds with divergent L2 semantics from booting against the same head. Nothing
-      * enforces the bump — it is a deliberate act.
+      * The tag carries a version so it can move when **this repo's** L2 rules do —
+      * `L2ConformanceValidator`, `HeadIdPinValidator`, the main-projection conservation run,
+      * `EvacuatingMutator` and [[EutxoDepositGates]]. No dependency version covers those: they are
+      * hydrozoa code and can change while `scalusVersion` stands still. Nothing enforces the bump;
+      * it is a deliberate act. (GUM-323's protocol version is the better hook once its bump line is
+      * settled.)
       */
-    val l2ParamsHash: Hash32 = Hash32.fromByteString(
-      platform.blake2b_256(
-        ByteString.fromArray("gummiworm-l2-params-cardano-eutxo-v1".getBytes(UTF_8))
-      )
-    )
+    private val domainTag: Array[Byte] = "gummiworm-l2-params-cardano-eutxo-v1".getBytes(UTF_8)
+
+    /** This ledger's agreed-parameters digest, reported at every `restoreTo` anchor and pinned in
+      * the head config as `l2ParamsHash` (`docs/spec/head-params-hash.md`).
+      *
+      * ```
+      * blake2b_256(
+      *      domainTag
+      *   || framed(scalusVersion) || framed(upickleVersion)
+      *   || framed(<l2ProtocolParams, as blockfrost JSON>)
+      *   || u32(ruleCount) || framed(ruleName)*
+      * )
+      * ```
+      *
+      * **The parameters go in whole**, not the subset the rules happen to read: which parameters a
+      * rule consults is a property of Scalus's implementation of that rule, so a hand-maintained
+      * subset would be a standing guess about Scalus internals that goes stale silently — the exact
+      * drift this digest exists to catch.
+      *
+      * **The rule names say which rules run, not what they do**, so the two library versions go in
+      * beside them. `scalusVersion` covers the upstream validators, whose behaviour can change
+      * without their names changing. `upickleVersion` covers the parameter encoding: hydrozoa pins
+      * upickle directly, so its formatting can move while Scalus stands still. Those two versions
+      * are also what makes borrowing `blockfrostParamsReadWriter` safe here rather than writing all
+      * 33 fields out by hand — an encoder change cannot arrive without a version change that
+      * already moves the digest.
+      *
+      * Hydrozoa's own rules are covered by neither; see [[domainTag]].
+      *
+      * **Not to be confused with `HeadParameters.l2ParamsHash`**, which is the value the peers
+      * agreed and the regime datum pins. This one is what the parameters in hand actually hash to,
+      * and reporting it is the whole of check 4: answering with the config's stored value instead
+      * would compare the config against itself and pass unconditionally. The digest is computed
+      * from the parameters rather than read off a `Config` so that the two can never be swapped by
+      * accident, and so bootstrap can call it while still building the `HeadParameters` that will
+      * carry both.
+      */
+    def mkL2ParamsHash(l2ProtocolParams: ProtocolParams): Hash32 = {
+        val out = Preimage()
+        out.raw(domainTag)
+        out.framed(BuildInfo.scalusVersion.getBytes(UTF_8))
+        out.framed(BuildInfo.upickleVersion.getBytes(UTF_8))
+        out.framed(
+          upickle
+              .write(l2ProtocolParams)(using ProtocolParams.blockfrostParamsReadWriter)
+              .getBytes(UTF_8)
+        )
+        val rules = HydrozoaTransactionMutator.ruleNames ++ EutxoDepositGates.ruleNames
+        out.u32(rules.size)
+        rules.foreach(rule => out.framed(rule.getBytes(UTF_8)))
+        out.mkDigest
+    }
+
+    /** The [[hydrozoa.multisig.ledger.l2.L2StateHash]] of the state this ledger opens a head in:
+      * `initialEvacuationMap` as its utxo set, both other compartments empty.
+      *
+      * Derivable from the bootstrap config alone, without a store or a running ledger, which is
+      * what lets the initialization transaction's treasury datum certify the opening L2 state and
+      * lets every peer check that datum while parsing the transaction. At a cold boot the ledger's
+      * own `digestsAt(0)` is compared against it — the same check `initialEvacuationMap` already
+      * gets, one layer down.
+      */
+    def initialStateHash(initialEvacuationMap: EvacuationMap): L2StateHash =
+        L2Snapshot(
+          commandNumber = L2CommandNumber.zero,
+          activeUtxos = initialEvacuationMap.toUtxos,
+          transientTokens = TransientTokens.empty,
+          pendingDeposits = Map.empty
+        ).stateHash
 
     case class State(
         activeUtxos: Utxos,
@@ -131,12 +196,31 @@ object EutxoL2Ledger {
       * any past commandNumber.
       */
     def apply(config: EutxoL2Ledger.Config, store: L2Store[IO]): IO[EutxoL2Ledger] =
-        for ref <- Ref[IO].of(State.genesis(config))
-        yield new EutxoL2Ledger(config, ref, store)
+        for {
+            protocolParams <- IO.fromEither(
+              protocolParamsOf(config).left.map(RuntimeException(_))
+            )
+            ref <- Ref[IO].of(State.genesis(config))
+        } yield new EutxoL2Ledger(config, protocolParams, ref, store)
+
+    /** The protocol parameters this ledger validates against, read off the head config's agreed
+      * [[hydrozoa.config.head.parameters.L2LedgerConfig]].
+      *
+      * A head configured for another backend cannot run this ledger, and says so here rather than
+      * failing somewhere downstream.
+      */
+    def protocolParamsOf(config: Config): Either[String, ProtocolParams] =
+        config.cardanoEutxoProtocolParams.toRight(
+          "the built-in EUTXO ledger needs l2Ledger = " +
+              " in the head config, but it is " +
+              ""
+        )
 }
 
 case class EutxoL2Ledger private (
     config: EutxoL2Ledger.Config,
+    /** The L2 protocol parameters this ledger validates against, fixed for the head's life. */
+    protocolParams: ProtocolParams,
     // Note: For now, I'm going to leave this as a `Ref`. Now that we have an `Initialize` command, it would
     // _probably_ make more sense to have this be an `Option[Ref[...]]`. But the initialize command will
     // go away in the future, so...
@@ -189,6 +273,7 @@ case class EutxoL2Ledger private (
                 compartments <- HydrozoaTransactionMutator
                     .transit(
                       config = config,
+                      protocolParams = protocolParams,
                       time = QuantizedInstant
                           .fromPlutusPosixTime(config.slotConfig, req.blockCreationStartTime),
                       state = Compartments(s.activeUtxos, s.transientTokens),
@@ -393,18 +478,150 @@ case class EutxoL2Ledger private (
       */
     private[multisig] def peekState: IO[EutxoL2Ledger.State] = state.get
 
-    /** Reconstruct the committed state as of `commandNumber`: load the latest snapshot
-      * `<= commandNumber` (or genesis), then re-fold the *logged* (applied) commands in
-      * `(snapshot.commandNumber, commandNumber]` through the same [[applyMutation]] the live path
-      * uses — no re-logging, no re-snapshot. The command number is a coordination index with gaps
-      * where commands were rejected, so `commandNumber` may land on a gap; the applied subset still
-      * yields the state at that point, and the target is adopted as the tip. Guarded against a
-      * target beyond the recorded tip (a corruption tripwire — the co-anchoring ordering prevents
-      * it).
+    /** Reconstruct the committed state as of `commandNumber` ([[reconstruct]]) and **adopt it**:
+      * publish it as the live state, move the store's tip to the target, and clear a freeze that
+      * happened after it. The command number is a coordination index with gaps where commands were
+      * rejected, so `commandNumber` may land on a gap; the applied subset still yields the state at
+      * that point, and the target is adopted as the tip.
       */
     override def restoreTo(
         commandNumber: L2CommandNumber
-    ): EitherT[IO, RestoreError, L2Ledger.Restored] =
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        for {
+            restored <- reconstruct(commandNumber)
+            // Respect the freeze: it survives only if it happened at or before the target — rewinding
+            // to before the freezing decision clears it.
+            frozenAt <- EitherT.right(
+              store.getFrozenAt.map(_.filter(Ordering[L2CommandNumber].lteq(_, commandNumber)))
+            )
+            _ <- EitherT.right(store.putTip(commandNumber))
+            _ <- EitherT.right(store.putFrozenAt(frozenAt))
+            _ <- EitherT.right(
+              state.set(
+                restored
+                    .focus(_.commandNumber)
+                    .replace(commandNumber)
+                    .focus(_.frozenAt)
+                    .replace(frozenAt)
+              )
+            )
+            // The digests of the state we just restored to. For this backend the caller's
+            // evacuation-map check is a tautology at a cold start — the ledger seeds its own
+            // genesis from the same `initialEvacuationMap` the caller compares against — but it
+            // keeps one boot path for every backend, and it is a real check against a remote ledger
+            // that owns its state.
+            digests <- digestsOf(restored)
+        } yield digests
+
+    /** Read-only counterpart of [[restoreTo]]: reconstruct the state as of `commandNumber`, digest
+      * it, and drop it. The live position, the store's tip and the freeze are all untouched, which
+      * is what lets the slow side ask about a partition boundary the fast side has already run past
+      * (`docs/spec/l2-state-certificate.md`).
+      *
+      * **At the tip this reads the live state and digests it** — no snapshot load, no re-fold, no
+      * store round trip. [[EutxoL2Ledger.State.commandNumber]] tracks the store's tip on both
+      * command paths ([[persist]] after an applied command, [[rejectAndAdvance]] after a rejected
+      * one), so the in-memory state at the tip *is* the reconstruction, and the partition boundary
+      * a stack closes at is the tip whenever no block has been cut since.
+      */
+    override def digestsAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT
+            .right(state.get)
+            .flatMap { live =>
+                if live.commandNumber == commandNumber then EitherT.rightT[IO, RestoreError](live)
+                else reconstruct(commandNumber)
+            }
+            .flatMap(digestsOf)
+
+    /** Serialize the state at `commandNumber` as the JSON encoding of its [[L2Snapshot]] — the same
+      * bytes the store already writes for a snapshot, and the same projection: `activeUtxos`,
+      * `transientTokens`, `pendingDeposits`, and the command number they stand at.
+      *
+      * Read-only, like [[digestsAt]] beside it, and reconstructed the same way — at the tip from
+      * the live state, otherwise through [[reconstruct]]. Exporting a past boundary therefore
+      * cannot disturb block production at the current one.
+      *
+      * ⚠️ **A full copy of the utxo set, in the store's own encoding.** That is what makes this a
+      * naive implementation and not the final one: GUM-324 replaces this representation with a
+      * structurally-shared map, and carries no framing — no backend tag, no format version — so a
+      * peer handed the wrong kind of blob fails inside a decoder rather than saying so. Both are
+      * fine while the only producer and consumer are two nodes of one head on one build, which
+      * `l2Ledger: L2LedgerKind` and the protocol version together already guarantee.
+      */
+    override def exportStateAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, L2StateExport] =
+        EitherT
+            .right(state.get)
+            .flatMap { live =>
+                if live.commandNumber == commandNumber then EitherT.rightT[IO, RestoreError](live)
+                else reconstruct(commandNumber)
+            }
+            .map(s =>
+                L2StateExport(
+                  commandNumber,
+                  IArray.from(
+                    // Label the snapshot with the boundary that was ASKED for, the way
+                    // [[restoreTo]] does. `reconstruct` folds the *logged* commands, and a
+                    // rejected one advances the ledger without being logged — so its result
+                    // carries the number of the last APPLIED command, not the boundary. The state
+                    // is right either way (a rejected command changes nothing); only the label
+                    // would be stale, and `importState` checks the label.
+                    L2Snapshot
+                        .fromState(s.focus(_.commandNumber).replace(commandNumber))
+                        .asJson
+                        .noSpaces
+                        .getBytes(UTF_8)
+                  )
+                )
+            )
+
+    /** Adopt an exported state, landing it as a snapshot at `exported.commandNumber` with an empty
+      * log behind it — the shape a peer seeded at a start point has, and one [[reconstruct]] reads
+      * without special-casing, since it loads the latest snapshot at or before its target and folds
+      * whatever log follows.
+      *
+      * **Only from genesis.** A ledger that has applied anything refuses rather than overwriting
+      * it: seeding happens at boot, before JointLedger exists to drive this class one message at a
+      * time, so a non-genesis ledger here means the call arrived somewhere it was not meant to.
+      * That also disposes of the freeze question — a genesis ledger cannot be frozen.
+      *
+      * **The store is written before the in-memory state.** A crash between the two leaves the
+      * snapshot durable and the next boot reconstructs from it; the reverse order would lose the
+      * adoption entirely. The digests are computed from the state actually reached, never read out
+      * of the blob, so the caller can check them against a signed certificate.
+      */
+    override def importState(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        for {
+            live <- EitherT.right[RestoreError](state.get)
+            _ <- EitherT.cond[IO](
+              live.commandNumber == L2CommandNumber.zero,
+              (),
+              RestoreError.StateImportRefused(
+                s"the ledger is at command number ${live.commandNumber}, not genesis; " +
+                    "a state may only be adopted into a ledger that has applied nothing"
+              )
+            )
+            snapshot <- decodeExport(exported)
+            restored = restoreFromSnapshot((exported.commandNumber, snapshot))
+            _ <- EitherT.right[RestoreError](store.putSnapshot(exported.commandNumber, snapshot))
+            _ <- EitherT.right[RestoreError](store.putTip(exported.commandNumber))
+            _ <- EitherT.right[RestoreError](state.set(restored))
+            digests <- digestsOf(restored)
+        } yield digests
+
+    /** Reconstruct the committed state as of `commandNumber` without publishing it: load the latest
+      * snapshot `<= commandNumber` (or genesis), then re-fold the *logged* (applied) commands in
+      * `(snapshot.commandNumber, commandNumber]` through the same [[applyMutation]] the live path
+      * uses — no re-logging, no re-snapshot. Guarded against a target beyond the recorded tip.
+      */
+    private def reconstruct(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, EutxoL2Ledger.State] =
         for {
             tip <- EitherT.right(store.getTip.map(_.getOrElse(L2CommandNumber.zero)))
             _ <- EitherT.cond[IO](
@@ -426,34 +643,93 @@ case class EutxoL2Ledger private (
                   .left
                   .map(RestoreError.OtherError(_))
             )
-            // Respect the freeze: it survives only if it happened at or before the target — rewinding
-            // to before the freezing decision clears it.
-            frozenAt <- EitherT.right(
-              store.getFrozenAt.map(_.filter(Ordering[L2CommandNumber].lteq(_, commandNumber)))
+        } yield restored
+
+    /** The three digests this ledger reports about a state: the evacuation map's, the L2 state's,
+      * and this backend's fixed parameter digest.
+      */
+    override def wipe: EitherT[IO, RestoreError, Unit] =
+        EitherT.right(store.wipe >> state.set(EutxoL2Ledger.State.genesis(config)))
+
+    override def evacuationMapAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, EvacuationMap] =
+        EitherT
+            .right(state.get)
+            .flatMap(live =>
+                if live.commandNumber == commandNumber then EitherT.rightT[IO, RestoreError](live)
+                else reconstruct(commandNumber)
             )
-            _ <- EitherT.right(store.putTip(commandNumber))
-            _ <- EitherT.right(store.putFrozenAt(frozenAt))
-            _ <- EitherT.right(
-              state.set(
-                restored
-                    .focus(_.commandNumber)
-                    .replace(commandNumber)
-                    .focus(_.frozenAt)
-                    .replace(frozenAt)
+            .flatMap(mapOf)
+
+    override def digestsOf(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        stateOf(exported).flatMap(digestsOf)
+
+    override def evacuationMapOf(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, EvacuationMap] =
+        stateOf(exported).flatMap(mapOf)
+
+    /** The state an export describes, without publishing it anywhere: decode the bytes, check the
+      * label, rebuild. Everything [[importState]] does before its first write, which is what makes
+      * the pre-adoption checks and the adoption itself answer about the same state.
+      */
+    private def stateOf(exported: L2StateExport): EitherT[IO, RestoreError, EutxoL2Ledger.State] =
+        decodeExport(exported).map(snapshot =>
+            restoreFromSnapshot((exported.commandNumber, snapshot))
+        )
+
+    /** Decode an export's opaque bytes as this backend's snapshot and check that it describes the
+      * boundary it is labelled with. A blob that decodes but describes another command number is
+      * refused rather than adopted at its own number: the caller is about to check it against a
+      * certificate for the boundary it asked for.
+      */
+    private def decodeExport(exported: L2StateExport): EitherT[IO, RestoreError, L2Snapshot] =
+        for {
+            snapshot <- EitherT.fromEither[IO](
+              io.circe.parser
+                  .decode[L2Snapshot](
+                    new String(IArray.genericWrapArray(exported.bytes).toArray, UTF_8)
+                  )
+                  .left
+                  .map(e =>
+                      RestoreError.StateImportRefused(
+                        s"exported state did not decode as an L2 snapshot: ${e.getMessage}"
+                      )
+                  )
+            )
+            _ <- EitherT.cond[IO](
+              snapshot.commandNumber == exported.commandNumber,
+              (),
+              RestoreError.StateImportRefused(
+                s"exported state is labelled command number ${exported.commandNumber} but " +
+                    s"describes ${snapshot.commandNumber}"
               )
             )
-            // The digest of the state we just restored to. For this backend the caller's check is
-            // a tautology at a cold start — the ledger seeds its own genesis from the same
-            // `initialEvacuationMap` the caller compares against — but it keeps one boot path for
-            // every backend, and it is a real check against a remote ledger that owns its state.
-            digest <- EitherT.fromEither[IO](
-              restored.activeUtxos
-                  .toEvacuationMap(config)
-                  .left
-                  .map(violation => RestoreError.OtherError(violation.toString))
-                  .map(_.digest)
+        } yield snapshot
+
+    /** The evacuation map a state projects to — the one derivation every caller shares, whether it
+      * reached the state through a command number or through an export, so a digest can never
+      * describe a different map than the one handed out.
+      */
+    private def mapOf(s: EutxoL2Ledger.State): EitherT[IO, RestoreError, EvacuationMap] =
+        EitherT.fromEither[IO](
+          s.activeUtxos
+              .toEvacuationMap(config)
+              .left
+              .map(violation => RestoreError.OtherError(violation.toString))
+        )
+
+    private def digestsOf(s: EutxoL2Ledger.State): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        mapOf(s).map(map =>
+            L2Ledger.Digests(
+              evacuationMapHash = map.digest,
+              l2StateHash = L2Snapshot.fromState(s).stateHash,
+              l2ParamsHash = EutxoL2Ledger.mkL2ParamsHash(protocolParams)
             )
-        } yield L2Ledger.Restored(digest, Some(EutxoL2Ledger.l2ParamsHash))
+        )
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
       * `transientTokens`, `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).

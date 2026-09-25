@@ -15,7 +15,7 @@ import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
-import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
+import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.{genCollateralUtxo, testL2StateHash}
 import hydrozoa.rulebased.ledger.l1.tx.{ResolutionTx, TallyTx, VoteTx}
 import hydrozoa.rulebased.ledger.l1.utxo.BallotBox
 import org.scalacheck.rng.Seed
@@ -119,7 +119,8 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
       headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
       versionMajor = versionMajor,
       versionMinor = x2Minor,
-      commitment = x2Commitment
+      commitment = x2Commitment,
+      l2StateHash = testL2StateHash
     )
     private val signatures = env.multisignHeader(sec).toList
     private val coilSignatures = env.multisignHeaderCoil(sec)

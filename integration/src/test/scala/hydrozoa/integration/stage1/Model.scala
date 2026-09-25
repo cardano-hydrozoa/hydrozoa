@@ -21,11 +21,11 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
-import hydrozoa.multisig.ledger.eutxol2.{Compartments, HydrozoaTransactionMutator, TransientTokens}
+import hydrozoa.multisig.ledger.eutxol2.{Compartments, EutxoL2Ledger, HydrozoaTransactionMutator, TransientTokens}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import monocle.Lens
@@ -333,8 +333,12 @@ object Model:
                 state <- StateT.get[M, State]
                 brief <- state.blockCycle match {
                     case BlockCycle.InProgress(_, _, prevVersion, accumulator) =>
-                        val events: List[(RequestId, ValidityFlag)] =
-                            accumulator.map((le, _, flag) => le.requestId -> flag)
+                        // The digest comes from the request body the model holds, the way a peer
+                        // derives it from the body it received (docs/spec/block-hash.md).
+                        val events: List[(RequestId, RequestHash, ValidityFlag)] =
+                            accumulator.map((le, _, flag) =>
+                                (le.requestId, le.request.body.mkHash, flag)
+                            )
                         for
                             _ <- StateT.liftF(
                               log.debug(
@@ -392,7 +396,7 @@ object Model:
           *   a tuple of (registeredEvents, rejectedEvents)
           */
         private def registerOrReject[M[_]: Monad](
-            events: List[(RequestId, ValidityFlag)]
+            events: List[(RequestId, RequestHash, ValidityFlag)]
         ): StateT[M, State, (Queue[Registered], Queue[Rejected])] = for {
             state <- StateT.get[M, State]
             // FIXME: this could be done probably in a single fold, and perhaps more performant for large
@@ -406,9 +410,9 @@ object Model:
                 state.deposits.depositsEnqueued
                     // map them with the validity flag, if its in the accumulator
                     .map(cmd =>
-                        val thisEvent: Option[(RequestId, ValidityFlag)] =
+                        val thisEvent: Option[(RequestId, RequestHash, ValidityFlag)] =
                             events.find(event => event._1 == cmd.request.requestId)
-                        thisEvent.map((_, validityFlag) => (validityFlag, cmd))
+                        thisEvent.map((_, _, validityFlag) => (validityFlag, cmd))
                     )
                     // Then filter out all the requests not in the accumulator
                     .filter(_.isDefined)
@@ -504,7 +508,7 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            events: List[(RequestId, ValidityFlag)],
+            events: List[(RequestId, RequestHash, ValidityFlag)],
             absorbedThisBlock: Queue[Absorbed],
             refundedThisBlock: Queue[Refunded]
         ): StateT[M, State, BlockBrief.Major] =
@@ -548,7 +552,7 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            events: List[(RequestId, ValidityFlag)],
+            events: List[(RequestId, RequestHash, ValidityFlag)],
             refundedThisBlock: Queue[Refunded]
         ): StateT[M, State, BlockBrief.Minor] = for {
             state <- StateT.get[M, State]
@@ -581,7 +585,7 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            events: List[(RequestId, ValidityFlag)],
+            events: List[(RequestId, RequestHash, ValidityFlag)],
             refundedThisBlock: Queue[Refunded]
         ): StateT[M, State, BlockBrief.Final] = for {
             _ <- StateT.modify[M, State](_.copy(blockCycle = BlockCycle.HeadFinalized))
@@ -613,7 +617,9 @@ object Model:
             for {
                 state <- StateT.get[M, State]
 
-                events = accumulator.map((req, _, flag) => (req.requestId, flag))
+                events = accumulator.map((req, _, flag) =>
+                    (req.requestId, req.request.body.mkHash, flag)
+                )
 
                 // Construct, but don't execute the state transitions -- we decide which one we need below
                 doMajorBlock = majorBlock[M](
@@ -700,6 +706,11 @@ object Model:
                     // transient outputs, so the overlay stays empty throughout.
                     ret = HydrozoaTransactionMutator.transit(
                       config = state.multiNodeConfig.headConfig,
+                      protocolParams = EutxoL2Ledger
+                          .protocolParamsOf(state.multiNodeConfig.headConfig)
+                          .getOrElse(
+                            throw RuntimeException("stage1 model needs a cardano-eutxo head")
+                          ),
                       time = state.getCurrentTime.instant,
                       state = Compartments(state.utxosL2Active, TransientTokens.empty),
                       l2Tx = l2Tx

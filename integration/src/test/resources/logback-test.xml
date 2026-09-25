@@ -105,6 +105,7 @@
     <logger name="CoilPeerWsTransport" level="debug"/>
     <logger name="HubWsTransport" level="debug"/>
     <logger name="CoilAckSequencer" level="info"/>
+    <logger name="CoilJoin" level="info"/>
     <!-- The only record of why a supervised actor failed; never quiet it. -->
     <logger name="Supervision" level="error"/>
     <logger name="HydrozoaHttp" level="info"/>

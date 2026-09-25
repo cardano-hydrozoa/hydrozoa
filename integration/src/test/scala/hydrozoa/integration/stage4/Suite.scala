@@ -380,9 +380,11 @@ case class Stage4Suite(
       *      counted from each stack's partitions (mirroring `StackComposer.committedBlockNums`) —
       *      plus one for `Initial` (stack 0), whose block-0 map `persistInitialStackClose` writes
       *      so the slow side can recover stack 0.
-      *   4. The fast side wrote: `Cf.BlockResult` / `Cf.SoftConfirmation` non-empty and
-      *      `Cf.DepositMap` a singleton — a peer that hard-confirmed necessarily produced and
-      *      soft-confirmed blocks first (sanity lower bounds, not exact counts).
+      *   4. The fast side wrote: `Cf.BlockResult` / `Cf.SoftConfirmation` non-empty — a peer that
+      *      hard-confirmed necessarily produced and soft-confirmed blocks first (sanity lower
+      *      bounds, not exact counts) — and `Cf.DepositMap` holds **exactly as many entries as**
+      *      `Cf.BlockResult`, since `snapshotBundleBatch` writes the two in one atomic bundle, so a
+      *      count that drifts means the bundle was split.
       *   5. The satellite lanes are non-empty: `Cf.SoftAck` (every block) and `Cf.HardAck` (every
       *      confirmed stack), and `Cf.Request` (own assignments + inbound). The `Block` / `Stack`
       *      spine lanes get both own (leader) and inbound (follower) writes but are per-peer
@@ -454,9 +456,12 @@ case class Stage4Suite(
                         val evacOk = evacuationMaps == expectedEvac
                         // Fast-side producer writes: a peer that hard-confirmed has necessarily
                         // produced blocks (JL's `BlockResult`) and soft-confirmed them (FCA's
-                        // `SoftConfirmation`), and the deposits snapshot is a singleton.
+                        // `SoftConfirmation`). The deposits map is written per block in the same
+                        // atomic bundle as the `BlockResult`, so the two counts must agree exactly
+                        // — a drift means the bundle was split.
                         val fastOk =
-                            blockResults >= 1 && softConfirmations >= 1 && depositMaps == 1
+                            blockResults >= 1 && softConfirmations >= 1 &&
+                                depositMaps == blockResults
                         // Lane writes (own + inbound): every peer soft-acks every block (JL) and
                         // hard-acks each stack it confirmed (SC); requests flow into the Request
                         // lane (RequestSequencer own + PeerLiaison inbound, CR1/CR8). All non-empty.
@@ -468,7 +473,8 @@ case class Stage4Suite(
                               s"evacuationMaps=$evacuationMaps (expected $expectedEvac), " +
                               s"blockResults=$blockResults softConfirmations=$softConfirmations " +
                               s"depositMaps=$depositMaps softAcks=$softAcks hardAcks=$hardAcks " +
-                              s"requests=$requests (fast >=1/>=1/==1, lanes >=1/>=1/>=1)"
+                              s"requests=$requests (fast >=1/>=1/==blockResults, " +
+                              "lanes >=1/>=1/>=1)"
                         )
                     }
                 }
@@ -599,8 +605,10 @@ case class Stage4Suite(
         val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid).toLong
         val modelTotal = l2TxReqIds.size.toLong
         val sutL2Events =
-            canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) => depositIds.contains(r) }
-        val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid).toLong
+            canonicalBriefs.flatMap(_.requests).filterNot { case (r, _, _) =>
+                depositIds.contains(r)
+            }
+        val sutValid = sutL2Events.count(_._3 == ValidityFlag.Valid).toLong
         val sutTotal = sutL2Events.size.toLong
 
         // sutValid/sutTotal <= modelValid/modelTotal  iff  sutValid*modelTotal <= modelValid*sutTotal
@@ -664,7 +672,7 @@ case class Stage4Suite(
                 val vMaj = brief.blockVersion.major.convert
                 val vMin = brief.blockVersion.minor.convert
                 val leader = (brief.blockNum: Int) % nPeers
-                val evs = brief.requests.map { case (reqId, flag) =>
+                val evs = brief.requests.map { case (reqId, _, flag) =>
                     val f = if flag == ValidityFlag.Valid then "V" else "I"
                     s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
                 }
@@ -691,10 +699,10 @@ case class Stage4Suite(
             val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
             val modelTotal = l2TxReqIds.size
             val sutL2Events =
-                canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) =>
+                canonicalBriefs.flatMap(_.requests).filterNot { case (r, _, _) =>
                     depositIds.contains(r)
                 }
-            val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
+            val sutValid = sutL2Events.count(_._3 == ValidityFlag.Valid)
             val sutTotal = sutL2Events.size
 
             val peersLine =

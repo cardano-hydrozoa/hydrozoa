@@ -12,6 +12,7 @@ import hydrozoa.config.head.HeadConfig.Bootstrap.HeadConfigBootstrapError
 import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.coil.CoilPeers.coilPeersDecoder
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.HeadParameters
@@ -29,6 +30,7 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import io.circe.syntax.*
 import io.circe.{Encoder, *}
 import scala.collection.immutable.SortedSet
@@ -44,6 +46,7 @@ final case class HeadConfig private (
     override val headPeers: HeadPeers,
     override val coilPeers: CoilPeers,
     _initialEvacuationMap: EvacuationMap,
+    _initialL2StateHash: L2StateHash,
     _initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     override val scriptReferenceUtxos: ScriptReferenceUtxos,
     override val initialBlockSection: InitialBlock,
@@ -59,6 +62,7 @@ final case class HeadConfig private (
         // The head id is presented explicitly; recover it from the parsed init tx's token names.
         val initializationParameters: InitializationParameters = InitializationParameters(
           initialEvacuationMap = _initialEvacuationMap,
+          initialL2StateHash = _initialL2StateHash,
           initialEquityContributions = _initialEquityContributions,
           headId = InitializationParameters.HeadId(initTx.headTokenNames.treasuryTokenName)
         )
@@ -110,14 +114,14 @@ object HeadConfig {
     }
 
     given headConfigEncoder: Encoder[HeadConfig] with {
-        override def apply(hc: HeadConfig): Json = {
-            given HeadConfig.Section = hc
+        override def apply(hc: HeadConfig): Json =
             Json.obj(
               "cardanoNetwork" -> hc.cardanoNetwork.asJson,
               "headParams" -> hc.headParameters.asJson,
               "headPeers" -> hc.headPeers.asJson,
               "coilPeers" -> hc.coilPeers.asJson,
               "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
+              "initialL2StateHash" -> hc.initialL2StateHash.asJson,
               "initialEquityContributions" -> hc._initialEquityContributions.asJson,
               "headId" -> hc.headId.asJson,
               "scriptReferenceUtxos" -> hc.scriptReferenceUtxos.unresolved.asJson,
@@ -129,7 +133,6 @@ object HeadConfig {
               "initializationTx" -> hc.initializationTx.asJson,
               "resolvedUtxos" -> hc.initializationTx.resolvedUtxos.utxos.asJson
             )
-        }
     }
 
     given headConfigDecoder(using resolved: ScriptReferenceUtxos): Decoder[HeadConfig] =
@@ -141,9 +144,14 @@ object HeadConfig {
                 hc <- {
                     given CardanoNetwork = network
                     for {
-                        brief <- c
-                            .downField("blockBrief")
-                            .as[BlockBrief.Initial]
+                        hcBootstrap <- c.as[HeadConfig.Bootstrap]
+
+                        // Block zero's brief carries its end time and nothing else; the head
+                        // params' tx timing rebuilds the rest of the header.
+                        brief <- {
+                            given TxTiming = hcBootstrap.txTiming
+                            c.downField("blockBrief").as[BlockBrief.Initial]
+                        }
                         initTx <- c
                             .downField("initializationTx")
                             .as[Transaction]
@@ -151,7 +159,6 @@ object HeadConfig {
                             .downField("resolvedUtxos")
                             .as[Utxos]
                             .map(ResolvedUtxos(_))
-                        hcBootstrap <- c.as[HeadConfig.Bootstrap]
 
                         // Parse the stored init tx (honouring its bytes) rather than re-building it.
                         // The fallback is protocol-derived, so we build it from the parsed init tx.
@@ -219,6 +226,7 @@ object HeadConfig {
             headPeers = headConfigBootstrap.headPeers,
             coilPeers = headConfigBootstrap.coilPeers,
             _initialEvacuationMap = headConfigBootstrap.initialEvacuationMap,
+            _initialL2StateHash = headConfigBootstrap.initialL2StateHash,
             _initialEquityContributions = headConfigBootstrap.initialEquityContributions,
             scriptReferenceUtxos = headConfigBootstrap.scriptReferenceUtxos,
             initialBlock
@@ -399,6 +407,7 @@ object HeadConfig {
                   "headPeers" -> hc.headPeers.asJson,
                   "coilPeers" -> hc.coilPeers.asJson,
                   "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
+                  "initialL2StateHash" -> hc.initialL2StateHash.asJson,
                   "initialEquityContributions" -> hc.initialEquityContributions.toSortedMap.asJson,
                   "headId" -> hc.headId.asJson,
                   "scriptReferenceUtxos" -> hc.scriptReferenceUtxos.scriptReferenceUtxosUnresolved.asJson
