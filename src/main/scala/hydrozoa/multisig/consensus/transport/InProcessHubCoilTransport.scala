@@ -1,8 +1,10 @@
 package hydrozoa.multisig.consensus.transport
 
 import cats.effect.{IO, Ref}
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
+import scala.concurrent.duration.DurationInt
 
 /** In-process pair of [[HubTransport]] / [[CoilTransport]] for test harnesses (e.g.
   * `integration/stage4`): hub-coil sends route directly to the destination's local liaison actor
@@ -19,8 +21,8 @@ object InProcessHubCoilTransport {
       * each spawn and register their liaisons.
       */
     final case class Endpoints(
-        hubInbound: Option[PeerLiaisonHubToCoil.Handle],
-        coilInbound: Option[PeerLiaisonCoilToHub.Handle],
+        hubInbound: Option[LiaisonProtocol.HubLiaisonHandle],
+        coilInbound: Option[LiaisonProtocol.CoilLiaisonHandle],
     )
 
     object Endpoints:
@@ -38,7 +40,7 @@ object InProcessHubCoilTransport {
     final class Hub private (registry: Registry) extends HubTransport {
         override def register(
             coil: CoilPeerNumber,
-            localLiaison: PeerLiaisonHubToCoil.Handle
+            localLiaison: LiaisonProtocol.HubLiaisonHandle
         ): IO[Unit] =
             registry.update(m =>
                 m.updated(
@@ -49,16 +51,25 @@ object InProcessHubCoilTransport {
 
         override def send(
             coil: CoilPeerNumber,
-            request: LiaisonProtocol.CoilToHubRequest
+            request: Join.Answer | LiaisonProtocol.HubEmitted
         ): IO[Unit] =
             registry.get.flatMap { m =>
-                m.get(coil).flatMap(_.coilInbound) match {
-                    case Some(liaison) => liaison ! request
-                    // Unregistered destination — a wiring bug. Silently drop; the test will hang on
-                    // whatever message was expected to flow, surfacing the misconfiguration. Same
-                    // policy as InProcessPeerTransport.
-                    case None => IO.unit
-                }
+                val endpoints = m.get(coil)
+                // Everything a hub emits, the answer included, goes to the coil liaison: it is in
+                // join mode waiting for exactly that.
+                toCoil(endpoints, request)
+            }
+
+        private def toCoil(
+            endpoints: Option[Endpoints],
+            request: Join.Answer | LiaisonProtocol.HubEmitted
+        ): IO[Unit] =
+            endpoints.flatMap(_.coilInbound) match {
+                case Some(liaison) => liaison ! request
+                // Unregistered destination — a wiring bug. Silently drop; the test will hang on
+                // whatever message was expected to flow, surfacing the misconfiguration. Same
+                // policy as InProcessPeerTransport.
+                case None => IO.unit
             }
     }
 
@@ -66,9 +77,12 @@ object InProcessHubCoilTransport {
         def create(registry: Registry): IO[Hub] = IO(new Hub(registry))
 
     /** Coil-side transport: one per coil peer, talks to its single hub. */
-    final class Coil private (ownCoilNum: CoilPeerNumber, registry: Registry)
-        extends CoilTransport {
-        override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
+    final class Coil private (
+        ownCoilNum: CoilPeerNumber,
+        registry: Registry,
+        marks: Ref[IO, Join.Connected]
+    ) extends CoilTransport {
+        override def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit] =
             registry.update(m =>
                 m.updated(
                   ownCoilNum,
@@ -76,16 +90,34 @@ object InProcessHubCoilTransport {
                 )
             )
 
-        override def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit] =
+        override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
             registry.get.flatMap { m =>
                 m.get(ownCoilNum).flatMap(_.hubInbound) match {
                     case Some(liaison) => liaison ! request
                     case None          => IO.unit
                 }
             }
+
+        /** Hand the hub this coil's marks, retrying until its liaison is registered.
+          *
+          * The retry is what a dialer does over a socket — a coil that comes up before its hub
+          * keeps trying until the hub is there. Forked, because the caller is the coil liaison's
+          * join mode and it must stay free to receive the answer this announcement provokes.
+          */
+        override def announceMarks(m: Join.Connected): IO[Unit] =
+            def announce: IO[Unit] =
+                registry.get.flatMap { reg =>
+                    reg.get(ownCoilNum).flatMap(_.hubInbound) match {
+                        case Some(hub) => hub ! m
+                        case None      => IO.sleep(100.millis) >> announce
+                    }
+                }
+            marks.set(m) >> announce.start.void
     }
 
     object Coil:
         def create(ownCoilNum: CoilPeerNumber, registry: Registry): IO[Coil] =
-            IO(new Coil(ownCoilNum, registry))
+            Ref[IO]
+                .of(Join.Connected(None, None))
+                .map(marks => new Coil(ownCoilNum, registry, marks))
 }

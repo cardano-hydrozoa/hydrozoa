@@ -17,17 +17,22 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.ReferenceOutput
 final case class ScriptReferenceUtxos(
     override val rulebasedTreasuryScriptUtxo: ScriptReferenceUtxos.TreasuryScriptUtxo,
     override val disputeResolutionScriptUtxo: ScriptReferenceUtxos.DisputeScriptUtxo,
+    override val rulebasedRegimeScriptUtxo: ScriptReferenceUtxos.RegimeScriptUtxo,
     override val setupLadderUtxos: ScriptReferenceUtxos.SetupLadderUtxos
 ) extends ScriptReferenceUtxos.Section {
     override val scriptReferenceUtxos: ScriptReferenceUtxos = this
     def toList: List[Utxo] =
-        List(rulebasedTreasuryScriptUtxo.utxo, disputeResolutionScriptUtxo.utxo)
-            ++ setupLadderUtxos.utxos
+        List(
+          rulebasedTreasuryScriptUtxo.utxo,
+          disputeResolutionScriptUtxo.utxo,
+          rulebasedRegimeScriptUtxo.utxo
+        ) ++ setupLadderUtxos.utxos
 
     def unresolved: ScriptReferenceUtxos.Unresolved =
         ScriptReferenceUtxos.Unresolved(
           rulebasedTreasuryScriptInput,
           disputeResolutionScriptInput,
+          rulebasedRegimeScriptInput,
           setupLadderInputs
         )
 }
@@ -36,6 +41,7 @@ object ScriptReferenceUtxos {
     case class Unresolved(
         override val rulebasedTreasuryScriptInput: TransactionInput,
         override val disputeResolutionScriptInput: TransactionInput,
+        override val rulebasedRegimeScriptInput: TransactionInput,
         override val setupLadderInputs: List[TransactionInput]
     ) extends Unresolved.Section {
         override val scriptReferenceUtxosUnresolved: Unresolved = this
@@ -61,9 +67,11 @@ object ScriptReferenceUtxos {
                 treasuryUtxo <- EitherT.fromEither(TreasuryScriptUtxo(network, treasury))
                 dispute <- r(disputeResolutionScriptInput)
                 disputeUtxo <- EitherT.fromEither(DisputeScriptUtxo(network, dispute))
+                regime <- r(rulebasedRegimeScriptInput)
+                regimeUtxo <- EitherT.fromEither(RegimeScriptUtxo(network, regime))
                 ladder <- setupLadderInputs.traverse(r)
                 ladderUtxos <- EitherT.fromEither(SetupLadderUtxos(network, ladder))
-            } yield ScriptReferenceUtxos(treasuryUtxo, disputeUtxo, ladderUtxos)
+            } yield ScriptReferenceUtxos(treasuryUtxo, disputeUtxo, regimeUtxo, ladderUtxos)
         }.value
 
         def isValidResolution(scriptReferenceUtxos: ScriptReferenceUtxos): Boolean =
@@ -75,6 +83,7 @@ object ScriptReferenceUtxos {
             def scriptReferenceUtxosUnresolved: Unresolved
             def rulebasedTreasuryScriptInput: TransactionInput
             def disputeResolutionScriptInput: TransactionInput
+            def rulebasedRegimeScriptInput: TransactionInput
             def setupLadderInputs: List[TransactionInput]
         }
     }
@@ -86,6 +95,8 @@ object ScriptReferenceUtxos {
             scriptReferenceUtxos.rulebasedTreasuryScriptUtxo
         def disputeResolutionScriptUtxo: ScriptReferenceUtxos.DisputeScriptUtxo =
             scriptReferenceUtxos.disputeResolutionScriptUtxo
+        def rulebasedRegimeScriptUtxo: ScriptReferenceUtxos.RegimeScriptUtxo =
+            scriptReferenceUtxos.rulebasedRegimeScriptUtxo
         def setupLadderUtxos: ScriptReferenceUtxos.SetupLadderUtxos =
             scriptReferenceUtxos.setupLadderUtxos
 
@@ -94,6 +105,9 @@ object ScriptReferenceUtxos {
         )
         final def referenceDispute: ReferenceOutput = ReferenceOutput(
           disputeResolutionScriptUtxo.utxo
+        )
+        final def referenceRegime: ReferenceOutput = ReferenceOutput(
+          rulebasedRegimeScriptUtxo.utxo
         )
 
         /** The setup-ladder utxo for the smallest rung covering `k` evacuations. The caller needs
@@ -113,6 +127,7 @@ object ScriptReferenceUtxos {
             Unresolved(
               rulebasedTreasuryScriptInput,
               disputeResolutionScriptInput,
+              rulebasedRegimeScriptInput,
               setupLadderInputs
             )
 
@@ -122,6 +137,9 @@ object ScriptReferenceUtxos {
         override transparent inline def disputeResolutionScriptInput: TransactionInput =
             scriptReferenceUtxos.disputeResolutionScriptUtxo.utxo.input
 
+        override transparent inline def rulebasedRegimeScriptInput: TransactionInput =
+            scriptReferenceUtxos.rulebasedRegimeScriptUtxo.utxo.input
+
         override transparent inline def setupLadderInputs: List[TransactionInput] =
             scriptReferenceUtxos.setupLadderUtxos.utxos.map(_.input)
     }
@@ -129,6 +147,7 @@ object ScriptReferenceUtxos {
     enum Error extends RuntimeException:
         case InvalidTreasuryScriptUtxo
         case InvalidDisputeScriptUtxo
+        case InvalidRegimeScriptUtxo
         case InvalidSetupLadderUtxo(detail: String)
         case UnresolvableScriptUtxo(ti: TransactionInput)
         case CardanoBackendError(e: CardanoBackend.Error)
@@ -136,6 +155,7 @@ object ScriptReferenceUtxos {
         override def toString: String = this match
             case InvalidTreasuryScriptUtxo      => "InvalidTreasuryScriptUtxo"
             case InvalidDisputeScriptUtxo       => "InvalidDisputeScriptUtxo"
+            case InvalidRegimeScriptUtxo        => "InvalidRegimeScriptUtxo"
             case InvalidSetupLadderUtxo(detail) => s"InvalidSetupLadderUtxo($detail)"
             case UnresolvableScriptUtxo(ti)     => s"UnresolvableScriptUtxo($ti)"
             case CardanoBackendError(e)         => s"CardanoBackendError: $e"
@@ -145,6 +165,8 @@ object ScriptReferenceUtxos {
                 "The provided UTXO is not a valid treasury script reference UTXO"
             case InvalidDisputeScriptUtxo =>
                 "The provided UTXO is not a valid dispute resolution script reference UTXO"
+            case InvalidRegimeScriptUtxo =>
+                "The provided UTXO is not a valid rule-based regime script reference UTXO"
             case InvalidSetupLadderUtxo(detail) =>
                 s"The provided UTXOs are not a valid G2 setup ladder: $detail"
             case UnresolvableScriptUtxo(ti) =>
@@ -213,6 +235,36 @@ object ScriptReferenceUtxos {
                   ScriptReferenceUtxos.Error.InvalidDisputeScriptUtxo
                 )
             } yield DisputeScriptUtxo(utxo)
+    }
+
+    case class RegimeScriptUtxo private (utxo: Utxo)
+
+    object RegimeScriptUtxo {
+        // TODO: Once we have a version script setup, we need to adjust this apply method
+        def apply(
+            network: CardanoNetwork.Section,
+            utxo: Utxo
+        ): Either[ScriptReferenceUtxos.Error, RegimeScriptUtxo] =
+            for {
+                actualNetwork <- utxo.output.address.getNetwork
+                    .toRight(ScriptReferenceUtxos.Error.InvalidRegimeScriptUtxo)
+                _ <- Either.cond(
+                  actualNetwork == network.network,
+                  (),
+                  ScriptReferenceUtxos.Error.InvalidRegimeScriptUtxo
+                )
+
+                scriptRef <- utxo.output.scriptRef.toRight(
+                  ScriptReferenceUtxos.Error.InvalidRegimeScriptUtxo
+                )
+
+                actualHash = scriptRef.script.scriptHash
+                _ <- Either.cond(
+                  actualHash == hydrozoa.config.HydrozoaBlueprint.regimeScriptHash,
+                  (),
+                  ScriptReferenceUtxos.Error.InvalidRegimeScriptUtxo
+                )
+            } yield RegimeScriptUtxo(utxo)
     }
 
     case class SetupLadderUtxos private (utxos: List[Utxo])
@@ -303,6 +355,18 @@ object ScriptReferenceUtxos {
         )
 
     given Encoder[DisputeScriptUtxo] = transactionInputAlternateEncoder.contramap(_.utxo.input)
+
+    given Encoder[RegimeScriptUtxo] = transactionInputAlternateEncoder.contramap(_.utxo.input)
+
+    given regimeScriptUtxoDecoder(using
+        network: CardanoNetwork.Section
+    ): Decoder[RegimeScriptUtxo] =
+        utxoDecoder.emap(utxo =>
+            RegimeScriptUtxo(network, utxo).left.map(e =>
+                "Failed to construct rule-based regime script utxo." +
+                    s"Failure: $e"
+            )
+        )
 
     given Encoder[SetupLadderUtxos] =
         Encoder.encodeList(using transactionInputAlternateEncoder).contramap(_.utxos.map(_.input))

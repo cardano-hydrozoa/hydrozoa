@@ -14,6 +14,7 @@ class LaneOutboundTest extends AnyFunSuite {
 
     // Wide enough that nothing is evicted: the tests that are not about the cap should not have to
     // think about it.
+    // Depth is in replies, so this is 1024 replies' worth on any lane — far past any test fixture.
     private val noEviction = 1024
 
     // A lane with an empty durable backing: a reply below the in-memory floor finds nothing.
@@ -38,7 +39,7 @@ class LaneOutboundTest extends AnyFunSuite {
     private def contiguousFrom(
         first: Int,
         maxPerReply: Int = 1,
-        outboxCap: Int = noEviction,
+        outboxDepth: Int = noEviction,
         serveFromJournal: (Int, Int) => IO[List[Int]] = emptyJournal
     ): LaneOutbound[Int, Int] =
         LaneOutbound.contiguous[Int, Int](
@@ -46,7 +47,7 @@ class LaneOutboundTest extends AnyFunSuite {
           first = first,
           increment = _ + 1,
           maxPerReply,
-          outboxCap = outboxCap,
+          outboxDepth = outboxDepth,
           serveFromJournal = serveFromJournal
         )
 
@@ -57,7 +58,7 @@ class LaneOutboundTest extends AnyFunSuite {
           numberOf = identity,
           zero = 0,
           next = after => Some(if after % 2 == 0 then after + 2 else after + 1),
-          outboxCap = noEviction,
+          outboxDepth = noEviction,
           serveFromJournal = emptyJournal
         )
 
@@ -172,11 +173,11 @@ class LaneOutboundTest extends AnyFunSuite {
 
     // ---- The cap ----------------------------------------------------------------------------
 
-    test("a cap below maxPerReply is floored, so a full batch is still servable from memory") {
-        // maxPerReply 4 against a cap of 1: without the floor the outbox would hold one item and
-        // every pull — even from a perfectly current remote — would go to the store. The empty
-        // journal makes that visible: anything not in memory comes back empty.
-        val lane = contiguousFrom(0, maxPerReply = 4, outboxCap = 1)
+    test("a depth of one reply holds exactly one full batch") {
+        // Capacity is depth * maxPerReply, so depth 1 against maxPerReply 4 holds four items — one
+        // reply's worth, whatever that lane's reply width happens to be. The empty journal makes
+        // the boundary visible: anything not in memory comes back empty.
+        val lane = contiguousFrom(0, maxPerReply = 4, outboxDepth = 1)
         (0 to 3).foreach(n => lane.append(n).unsafeRunSync())
         assert(lane.reply(0).unsafeRunSync() == Items(List(0, 1, 2, 3)))
     }
@@ -185,7 +186,7 @@ class LaneOutboundTest extends AnyFunSuite {
         val items = mutable.ArrayBuffer.empty[Int]
         val journal = StubJournal(items)
         // CR4: everything reaches the lane already durable, so the stub is written before append.
-        val lane = contiguousFrom(0, outboxCap = 3, serveFromJournal = journal.read)
+        val lane = contiguousFrom(0, outboxDepth = 3, serveFromJournal = journal.read)
         (0 to 5).foreach { n =>
             items += n; lane.append(n).unsafeRunSync()
         }
@@ -204,11 +205,16 @@ class LaneOutboundTest extends AnyFunSuite {
         val cappedJournal = StubJournal(items)
         val uncappedJournal = StubJournal(items)
         val capped =
-            contiguousFrom(0, maxPerReply = 2, outboxCap = 1, serveFromJournal = cappedJournal.read)
+            contiguousFrom(
+              0,
+              maxPerReply = 2,
+              outboxDepth = 1,
+              serveFromJournal = cappedJournal.read
+            )
         val uncapped = contiguousFrom(
           0,
           maxPerReply = 2,
-          outboxCap = noEviction,
+          outboxDepth = noEviction,
           serveFromJournal = uncappedJournal.read
         )
 
@@ -238,20 +244,32 @@ class LaneOutboundTest extends AnyFunSuite {
         val items = mutable.ArrayBuffer.empty[Int]
         val journal = StubJournal(items)
         val lane =
-            contiguousFrom(0, maxPerReply = 4, outboxCap = 1, serveFromJournal = journal.read)
+            contiguousFrom(0, maxPerReply = 4, outboxDepth = 1, serveFromJournal = journal.read)
         (0 to 9).foreach { n =>
             items += n; lane.append(n).unsafeRunSync()
         }
         // #2 is evicted, so this is a journal serve — the ceiling must apply to it too.
-        val _ = assert(lane.reply(2, ceiling = Some(4)).unsafeRunSync() == Items(List(2, 3, 4)))
+        val _ = assert(lane.reply(2, servable = _ <= 4).unsafeRunSync() == Items(List(2, 3, 4)))
         assert(journal.reads == 1)
+    }
+
+    test("a ceiling read off a non-monotonic dimension truncates short, never across a gap") {
+        // The coil-hard-ack case: the lane numbers contiguously, but the dimension the ceiling
+        // reads (a stack number carried on the item) does not rise with that numbering, because a
+        // hub stamps arrivals from many coil peers in arrival order. `takeWhile` stops at the first
+        // item above the ceiling; the later qualifying items are deferred to the next pull rather
+        // than served across the hole they would leave.
+        val lane = contiguousFrom(0, maxPerReply = 4)
+        (0 to 3).foreach(n => lane.append(n).unsafeRunSync())
+        val stackOf = Map(0 -> 1, 1 -> 9, 2 -> 1, 3 -> 1)
+        assert(lane.reply(0, servable = n => stackOf(n) <= 1).unsafeRunSync() == Items(List(0)))
     }
 
     test("an evicted entry the journal cannot serve raises instead of replying empty") {
         // The failure the cap could introduce: evict an item whose backing cannot produce it, and a
         // silently empty reply leaves the remote's lane stalled forever with nothing logged. The
         // journal here is empty, so #0 is gone the moment #1 pushes it out.
-        val lane = contiguousFrom(0, outboxCap = 1)
+        val lane = contiguousFrom(0, outboxDepth = 1)
         lane.append(0).unsafeRunSync()
         lane.append(1).unsafeRunSync()
         val thrown = intercept[EvictedButUnservable](lane.reply(0).unsafeRunSync())

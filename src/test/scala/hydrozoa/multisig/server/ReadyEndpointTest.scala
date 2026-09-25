@@ -53,6 +53,7 @@ class ReadyEndpointTest extends AnyFunSuite:
                       IO.pure(status),
                       ConsensusStoreReader.empty,
                       None,
+                      None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
                       PeerMetrics.create(0L, Vector.empty),

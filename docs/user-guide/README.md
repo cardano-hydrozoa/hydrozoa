@@ -8,6 +8,7 @@ Task-oriented how-tos for running and using a Hydrozoa head.
 | [DEPOSIT.md](DEPOSIT.md) | Build a deposit: the L2 payload (EUTXO ledger) and the L1 deposit tx whose metadata pins the payload's hash. |
 | [L2TXS.md](L2TXS.md) | Build a basic L2 transaction (no mint/burn), including withdrawals and the mandatory tx metadata. |
 | [L2MINTING.md](L2MINTING.md) | Mint and burn tokens on L2: the transient-token declarations and the metadata a minting tx must carry. |
+| [REQUEST-HASH.md](REQUEST-HASH.md) | Compute the `requestHash` every submission carries: the preimage layout, the pinned vectors, and what a mismatch means. |
 
 Each of DEPOSIT / L2TXS / L2MINTING has a matching CLI subcommand of the packaged `hydrozoa`
 launcher (`submit-deposit`, `submit-l2-tx`) that serves as a runnable worked example; the guides

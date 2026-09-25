@@ -222,9 +222,9 @@ pipeline turns operator-authored files into the two runtime files each node need
                                       │
    deploy-scripts-and-g2-setup        │
    (head-0 wallet, Blockfrost)        │
-   └─ bootstrap/ref-utxos.json ───────┤  the on-chain reference UTxOs: treasury + dispute
-                                      │  validators and the G2 setup ladder (falls back to the
-                                      │  per-network default baked into the image)
+   └─ bootstrap/ref-utxos.json ───────┤  the on-chain reference UTxOs: treasury + dispute +
+                                      │  regime validators and the G2 setup ladder (falls back to
+                                      │  the per-network default baked into the image)
                                       │
                                       │  + head-0 UTxOs + protocol params   (Blockfrost)
                                       ▼
@@ -327,15 +327,16 @@ just deploy-scripts-and-g2-setup        # local
 # -> $HYDROZOA_HOME/bootstrap/ref-utxos.json (funded by head-0's wallet under the head dir)
 ```
 
-The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators — and
-the G2 setup ladder — as **reference UTxOs** at startup. This target deploys the currently
+The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute + regime
+validators — and the G2 setup ladder — as **reference UTxOs** at startup. This target deploys the currently
 compiled scripts, funded from head-0's wallet (change returns): one chained tx per validator
 plus, unless an existing ladder is reused (the `LADDER_REFS` argument), one tx carrying the seven
 setup-ladder rungs — all locked at the unspendable burn address — then writes the reference
 inputs to `ref-utxos.json`; the bootstrap directory's own refs take precedence over the
 committed defaults. Because the burn address can never be spent from, **one deployment serves
 every head and every restart** — redeploy the validators only when the compiled scripts change
-(symptom: step 5 or node start fails complaining about invalid treasury/dispute script utxos);
+(symptom: step 5 or node start fails complaining about invalid treasury/dispute/regime script
+utxos);
 the ladder never changes.
 
 ### Step 5 — Build the shared head config

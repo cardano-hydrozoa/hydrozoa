@@ -6,12 +6,13 @@ import hydrozoa.BuildInfo
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
+import hydrozoa.multisig.consensus.transport.ProtocolVersion
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.metrics.{PeerMetrics, PrometheusFormat}
-import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry}
+import hydrozoa.multisig.persistence.{ArchiveWatermarks, Cf, ConsensusStoreReader, RequestBlockEntry, StoreVersion}
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.TapirJson.*
@@ -49,6 +50,14 @@ class HydrozoaRoutes(
     nodeStatus: IO[NodeStatus],
     consensusReader: ConsensusStoreReader[IO],
     l2QueryReader: Option[EutxoL2LedgerReader[IO]],
+    /** `None` when this node's private config declares no archiver, which removes the
+      * watermark-reporting route. Same idiom as [[requestSequencer]] and [[l2QueryReader]]: an
+      * absent capability removes its routes rather than mounting one that fails at request time.
+      *
+      * Gated on the declaration rather than on head-versus-coil: a coil peer has a store and may
+      * well have an archiver, and a head peer may have none.
+      */
+    archiveWatermarks: Option[ArchiveWatermarks],
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config,
     metrics: PeerMetrics,
@@ -95,12 +104,16 @@ class HydrozoaRoutes(
               jsonBody[SubmitRequestView].examples(
                 List(
                   EndpointIO.Example.of(
-                    SubmitRequestView.SubmitTransactionView("84a400d9010281825820…"),
+                    SubmitRequestView.SubmitTransactionView("84a400d9010281825820…", "58828159…"),
                     name = Some("transaction"),
                     summary = Some("Submit an L2 transaction")
                   ),
                   EndpointIO.Example.of(
-                    SubmitRequestView.SubmitDepositView("84a400d9010281825820…", "a1024568656164…"),
+                    SubmitRequestView.SubmitDepositView(
+                      "84a400d9010281825820…",
+                      "a1024568656164…",
+                      "ac596c7f…"
+                    ),
                     name = Some("deposit"),
                     summary = Some("Register an L1 deposit")
                   )
@@ -244,6 +257,25 @@ class HydrozoaRoutes(
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
+    /** `GET /head/blocks/<n>/effects/settlement` — the block's settlement in full, with the L2
+      * state digest it certifies, or a 404.
+      */
+    private val blockSettlementEffectEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects" / "settlement")
+            .name("getHeadBlockEffect_settlement")
+            .tag("Blocks")
+            .out(jsonBody[SettlementEffectView])
+            .errorOut(errorOut)
+            .description(
+              "The block's settlement effect in full, with the L2 state digest its treasury " +
+                  "datum certifies, or 404 if it has none."
+            )
+            .serverLogic(num =>
+                blockSettlementEffect(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
     /** `GET /head/blocks/<n>/effects/sec` — the block's SEC in full, or a 404. */
     private val blockSecEffectEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -292,11 +324,13 @@ class HydrozoaRoutes(
     /** The per-kind effect sub-resources, one endpoint each. */
     private val blockEffectKindEndpoints: List[ServerEndpoint[Any, IO]] =
         List(
-          "initialization" -> EffectKind.Initialization,
-          "settlement" -> EffectKind.Settlement,
-          "fallback" -> EffectKind.Fallback,
-          "finalization" -> EffectKind.Finalization
-        ).map(blockTxEffectEndpoint) :+ blockSecEffectEndpoint
+          blockTxEffectEndpoint("initialization", EffectKind.Initialization),
+          // The settlement has its own view: it also carries the L2 state digest it certifies.
+          blockSettlementEffectEndpoint,
+          blockTxEffectEndpoint("fallback", EffectKind.Fallback),
+          blockTxEffectEndpoint("finalization", EffectKind.Finalization),
+          blockSecEffectEndpoint
+        )
 
     private val transactionDetailExample: RequestDetailsView =
         RequestDetailsView.TransactionView(
@@ -438,11 +472,19 @@ class HydrozoaRoutes(
             .name("getVersion")
             .out(jsonBody[VersionResponse])
             .description(
-              "The build identity (version, git commit, build time) baked in at compile."
+              "The three versions this build carries: the build identity (version, git commit, " +
+                  "build time) baked in at compile, the protocol version its peers must match at " +
+                  "the handshake, and the schema version its store must match at every open."
             )
             .serverLogicSuccess(_ =>
                 IO.pure(
-                  VersionResponse(BuildInfo.version, BuildInfo.gitCommit, BuildInfo.builtAtString)
+                  VersionResponse(
+                    BuildInfo.version,
+                    BuildInfo.gitCommit,
+                    BuildInfo.builtAtString,
+                    ProtocolVersion.current,
+                    StoreVersion.current
+                  )
                 )
             )
 
@@ -549,6 +591,138 @@ class HydrozoaRoutes(
                     )
             )
 
+    /** This store's column families, by the name they are spelled with on disk.
+      *
+      * Derived from the head's own membership exactly as the store's own family set is
+      * (`Cf.mkAll`), so a name resolves only if this node actually has that family. An archiver
+      * pointed at the wrong node then gets a 400 naming the family, rather than a 200 and a
+      * watermark nobody will ever read.
+      */
+    private val familiesByName: Map[String, Cf] =
+        Cf.mkAll(
+          headPeers = headConfig.headPeerNums.toList,
+          coilPeers = headConfig.coilPeers.coilPeerNumbers,
+          hubs = headConfig.coilPeers.hubHeadPeerNumbers
+        ).map(cf => cf.name -> cf)
+            .toMap
+
+    /** Accept an attached archiver's report of how far it has durably copied each family.
+      *
+      * The node never dials the archiver, so this is the whole of what it hears from one, and the
+      * only reason it may delete anything. Recording is all that happens here: taking the minimum
+      * with what consensus still needs, and trimming on the result, is retention's job.
+      */
+    private def archiveWatermarkEndpoint(
+        watermarks: ArchiveWatermarks
+    ): ServerEndpoint[Any, IO] =
+        endpoint.post
+            // Optional credentials, as finalize does it, so the security logic runs (and logs) on
+            // a missing header rather than tapir short-circuiting it.
+            .securityIn(auth.basic[Option[UsernamePassword]](adminChallenge))
+            .in("api" / "admin" / "archive" / "watermark")
+            .name("postAdminArchiveWatermark")
+            .tag("Governance")
+            .in(jsonBody[ArchiveWatermarkRequest])
+            .out(jsonBody[ArchiveWatermarkResponse])
+            .errorOut(finalizeErrorOut)
+            .description("Report how far an attached archiver has durably copied (admin only).")
+            .serverSecurityLogic {
+                case Some(credentials)
+                    if credentials.username == serverConfig.adminUsername
+                        && credentials.password.contains(serverConfig.adminPassword) =>
+                    IO.pure(Right(()))
+                case _ =>
+                    tracer
+                        .traceWith(UnauthorizedAdmin("POST /api/admin/archive/watermark"))
+                        .as(
+                          Left(
+                            (
+                              StatusCode.Unauthorized,
+                              Some(adminChallenge.toString),
+                              ErrorResponse("Unauthorized")
+                            )
+                          )
+                        )
+            }
+            .serverLogic(_ =>
+                request =>
+                    val unknown = request.watermarks.keySet -- familiesByName.keySet
+                    if unknown.nonEmpty then
+                        tracer
+                            .traceWith(
+                              RequestRejected(
+                                "POST /api/admin/archive/watermark",
+                                s"unknown column families: ${unknown.toList.sorted.mkString(", ")}"
+                              )
+                            )
+                            .as(
+                              Left(
+                                (
+                                  StatusCode.BadRequest,
+                                  None,
+                                  ErrorResponse(
+                                    "This node has no column families named " +
+                                        unknown.toList.sorted.mkString(", ") +
+                                        " — the archiver may be reading a different node's store."
+                                  )
+                                )
+                              )
+                            )
+                    else
+                        (for {
+                            now <- IO.realTimeInstant
+                            reported = request.watermarks
+                                .map((name, index) => familiesByName(name) -> index)
+                            report = watermarks.record(reported, now)
+                            _ <- tracer.traceWith(
+                              ArchiveWatermarkRecorded(
+                                advanced = report.advanced.size,
+                                regressed = report.regressed.size
+                              )
+                            )
+                            // An archive reporting less than it once did has lost ground -- usually
+                            // rebuilt, now holding less than the node assumed when it last deleted.
+                            // The node cannot un-delete, so the earlier figure stands; saying so is
+                            // the only thing left to do about it.
+                            _ <- report.regressed.toList.sortBy(_._1.name).traverse {
+                                (cf, reportedIndex) =>
+                                    tracer.traceWith(
+                                      ArchiveWatermarkRegressed(
+                                        family = cf.name,
+                                        reported = reportedIndex,
+                                        held = report.accepted.getOrElse(cf, reportedIndex)
+                                      )
+                                    )
+                            }
+                            // Until retention exists there is nothing to take a minimum against, so
+                            // what the node will allow IS what it accepted. The field carries the
+                            // distinction from the start: adding it later would leave an archiver
+                            // unable to tell "I am ahead of the head" from "I am holding it back".
+                        } yield Right(
+                          ArchiveWatermarkResponse(
+                            effectiveFloor = report.accepted.map((cf, index) => cf.name -> index)
+                          )
+                        )).handleErrorWith(err =>
+                            tracer
+                                .traceWith(
+                                  RequestFailed("POST /api/admin/archive/watermark", err)
+                                )
+                                .as(
+                                  Left(
+                                    (
+                                      StatusCode.InternalServerError,
+                                      None,
+                                      ErrorResponse(err.getMessage)
+                                    )
+                                  )
+                                )
+                        )
+            )
+
+    /** Mounted only where an archiver is declared — on any node type. */
+    private val archiveWatermarkEndpoints: List[ServerEndpoint[Any, IO]] =
+        archiveWatermarks.fold(List.empty)(w => List(archiveWatermarkEndpoint(w)))
+
     /** The two mutating endpoints, mounted only on a node that accepts submissions.
       *
       * They stay at the head and tail of `coreEndpoints` below so that on a head node the endpoint
@@ -584,7 +758,7 @@ class HydrozoaRoutes(
           statsEndpoint,
           metricsEndpoint,
           versionEndpoint
-        ) ++ finalizeEndpoints ++ blockEffectKindEndpoints
+        ) ++ finalizeEndpoints ++ blockEffectKindEndpoints ++ archiveWatermarkEndpoints
 
     /** OpenAPI doc options:
       *   - drop the `View` suffix from every DTO's component-schema name (the Scala types keep it
@@ -765,6 +939,26 @@ class HydrozoaRoutes(
                         Left(fail(StatusCode.NotFound, s"Block ${num.convert} has no $kind effect"))
         }
 
+    /** The block's settlement in full, or a 404 (block missing, or no settlement on this block). */
+    private def blockSettlementEffect(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), SettlementEffectView]] =
+        effectsResolver.blockEffects(num).map {
+            case None => Left(blockNotFound(num))
+            case Some(effects) =>
+                effects.collectFirst {
+                    case e: ResolvedEffect.Tx if e.kind == EffectKind.Settlement => e
+                } match
+                    case Some(e) => Right(ApiDto.mkSettlementEffectView(e))
+                    case None =>
+                        Left(
+                          fail(
+                            StatusCode.NotFound,
+                            s"Block ${num.convert} has no settlement effect"
+                          )
+                        )
+        }
+
     /** The block's SEC in full, or a 404 (block missing, or no SEC on this block). */
     private def blockSecEffect(
         num: BlockNumber
@@ -813,20 +1007,20 @@ class HydrozoaRoutes(
     private def blockConfirmation(num: BlockNumber): IO[BlockConfirmationView] =
         confirmationTimes(num).map((soft, hard) => ApiDto.mkBlockConfirmationView(soft, hard))
 
-    /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants derived
-      * from the records' arrival stamps: the soft-confirmation record, and — through the block →
-      * stack index — the hard-confirmation record. Each moment is present exactly when this peer
-      * holds that record (`wallClockOf` is total), so it also serves as the rung discriminant.
+    /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants: the
+      * soft-confirmation moment the reader resolves (derived for block zero, which never writes a
+      * `SoftConfirmation` record), and — through the block → stack index — the hard-confirmation
+      * record's. Each is present exactly when this peer holds that confirmation, so the pair also
+      * serves as the rung discriminant.
       */
     private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
         for {
-            soft <- consensusReader.softConfirmation(num)
+            softAt <- consensusReader.softConfirmedAt(num)
             stack <- consensusReader.stackOf(num)
             hard <- stack match {
                 case None    => IO.pure(None)
                 case Some(s) => consensusReader.hardConfirmation(s)
             }
-            softAt <- soft.traverse(t => consensusReader.wallClockOf(t.stamp))
             hardAt <- hard.traverse(t => consensusReader.wallClockOf(t.stamp))
         } yield (softAt, hardAt)
 
@@ -917,9 +1111,9 @@ object HydrozoaRoutes {
       */
     private[server] def decodedEvent(path: String, request: UserRequest): RequestDecoded =
         request match
-            case UserRequest.DepositRequest(body) =>
+            case UserRequest.DepositRequest(body, _) =>
                 RequestDecoded(path, "Deposit", body.l1Payload.size + body.l2Payload.size)
-            case UserRequest.TransactionRequest(body) =>
+            case UserRequest.TransactionRequest(body, _) =>
                 RequestDecoded(path, "Transaction", body.l2Payload.size)
 
     val apiTitle: String = "Hydrozoa node API"
@@ -932,6 +1126,7 @@ object HydrozoaRoutes {
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
+        archiveWatermarks: Option[ArchiveWatermarks],
         headConfig: HeadConfig,
         serverConfig: HydrozoaServer.Config,
         metrics: PeerMetrics,
@@ -944,6 +1139,7 @@ object HydrozoaRoutes {
             nodeStatus,
             consensusReader,
             l2QueryReader,
+            archiveWatermarks,
             headConfig,
             serverConfig,
             metrics,

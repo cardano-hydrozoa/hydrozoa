@@ -6,11 +6,12 @@ import cats.effect.std.{Mutex, Queue}
 import cats.effect.{Async, Deferred, FiberIO, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.ledger.joint.EvacuationMapHash
-import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, RegisterDepositResponse, RestoreError}
-import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse}
+import hydrozoa.multisig.ledger.joint.{EvacuationMap, EvacuationMapHash}
+import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, L2StateExport, L2StateHash, RegisterDepositResponse, RestoreError}
+import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, RestoreResponse, StateAtResponse}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.parser.*
 import io.circe.syntax.*
@@ -159,15 +160,131 @@ class RemoteL2Ledger private (
       */
     override def restoreTo(
         commandNumber: L2CommandNumber
-    ): EitherT[IO, RestoreError, L2Ledger.Restored] =
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
         EitherT(sendRestoreRequest(Request.Restore(commandNumber)).map {
             case r: RestoreResponse.Restored =>
-                Right(L2Ledger.Restored(r.evacuationMapHash, r.l2ParamsHash))
+                Right(
+                  L2Ledger.Digests(
+                    r.evacuationMapHash,
+                    r.l2StateHash,
+                    r.l2ParamsHash
+                  )
+                )
             case RestoreResponse.RestoreFailed(requested, tip, reason) =>
                 if requested.value > tip.value then
                     Left(RestoreError.CommandNumberTooHigh(requested, tip))
                 else Left(RestoreError.OtherError(reason))
         })
+
+    /** Ask the remote for the digests of its state at `commandNumber` — a [[Request.StateAt]], the
+      * read-only sibling of [[restoreTo]]. The remote does not move; nothing here is co-anchoring.
+      *
+      * Bounded by [[restoreTimeout]] for the same reason a restore is: a remote with no snapshot at
+      * the asked-for number answers by re-folding its log. It is retried on timeout, unlike a
+      * restore — a read changes nothing, so a second attempt cannot compound the first.
+      */
+    override def digestsAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT(sendStateAtRequest(Request.StateAt(commandNumber)).map {
+            case r: StateAtResponse.StateReported =>
+                Right(
+                  L2Ledger.Digests(
+                    r.evacuationMapHash,
+                    r.l2StateHash,
+                    r.l2ParamsHash
+                  )
+                )
+            case StateAtResponse.StateAtFailed(requested, tip, reason) =>
+                if requested.value > tip.value then
+                    Left(RestoreError.CommandNumberTooHigh(requested, tip))
+                else Left(RestoreError.OtherError(reason))
+        })
+
+    /** **Not implemented — the coordination protocol has no frame for it.**
+      *
+      * Adding one is a two-repo change, not a hydrozoa change:
+      * `docs/spec/l2-ledger-command-coordination.md` is the normative contract, and Sugar Rush's
+      * `types/src/types/coordination/` is the other half of the same API. An `ExportState` /
+      * `ImportState` pair has to land on both sides in one work item, with the golden pins on both
+      * sides updated together — adding the frames here alone would break the interop tests that
+      * exist to catch exactly that.
+      *
+      * There is a prior question for whoever does it: a remote black box owns its own state and its
+      * own recovery, so it may be the wrong party to ask for a transferable blob at all. The
+      * alternative is that a joining coil's remote ledger is seeded out of band, by whatever
+      * mechanism that vendor already has, and the head only checks the digests afterwards.
+      */
+    override def exportStateAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, L2StateExport] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** **Not implemented — the counterpart of [[exportStateAt]], blocked on the same two-repo
+      * frame.** See its scaladoc, including the question of whether a remote ledger should be
+      * seeded through this protocol at all.
+      */
+    override def importState(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** **Not implemented.** The coordination protocol reports digests, not the map behind them
+      * (`docs/spec/l2-ledger-command-coordination.md`), so there is no frame to ask on. It is only
+      * reachable through the same coil-peer join path [[importState]] already refuses, so adding a
+      * frame for it before that path works on a remote would be building to nothing.
+      */
+    override def evacuationMapAt(
+        commandNumber: L2CommandNumber
+    ): EitherT[IO, RestoreError, EvacuationMap] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** **Not implemented.** A remote black box owns its own state; wiping it is not this head's
+      * call to make, and the seeding path that would need it is refused anyway.
+      */
+    override def wipe: EitherT[IO, RestoreError, Unit] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** **Not implemented.** The blob these read is one only [[importState]] could have been handed,
+      * and that path is refused on this backend. There is no frame to ask on either: the
+      * coordination protocol reports digests at a command number, never about a transferable state.
+      */
+    override def digestsOf(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, L2Ledger.Digests] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** **Not implemented**, for the reasons [[digestsOf]] is not.
+      */
+    override def evacuationMapOf(
+        exported: L2StateExport
+    ): EitherT[IO, RestoreError, EvacuationMap] =
+        EitherT.leftT(RestoreError.StateTransferNotSupported(L2LedgerKind.AnyRemote.configString))
+
+    /** Send a [[Request.StateAt]] and return the remote's [[StateAtResponse]]. Mirrors
+      * [[sendRestoreRequest]]: transport failure is retried through by [[exchange]], and an
+      * undecodable frame or a mismatched echoed command number is a protocol violation that
+      * fail-stops.
+      */
+    private def sendStateAtRequest(request: Request.StateAt): IO[StateAtResponse] =
+        exchange(request, restoreTimeout, retryOnTimeout = true).flatMap { text =>
+            decode[StateAtResponse](text) match {
+                case Left(err) =>
+                    IO.raiseError(
+                      RemoteL2LedgerError(
+                        s"remote L2 ledger sent an undecodable state-at response: ${err.getMessage}"
+                      )
+                    )
+                case Right(response) if response.commandNumber != request.commandNumber =>
+                    IO.raiseError(
+                      RemoteL2LedgerError(
+                        s"remote L2 ledger answered state-at ${response.commandNumber} " +
+                            s"but we asked ${request.commandNumber}"
+                      )
+                    )
+                case Right(response) => IO.pure(response)
+            }
+        }
 
     /** Send a [[Request.Restore]] and return the remote's [[RestoreResponse]]. Like
       * [[sendRequest]], transport failure is retried through by [[exchange]] and never seen here;
@@ -454,6 +571,13 @@ object RemoteL2Ledger {
           * restored JointLedger command number.
           */
         final case class Restore(commandNumber: L2CommandNumber) extends Request
+
+        /** Ask the remote what its state at `commandNumber` digests to, **without rewinding it**.
+          * Like [[Restore]] it carries no command payload and is un-numbered (it does not consume a
+          * command number); unlike [[Restore]] it is a read, issued at every partition boundary of
+          * a closed stack rather than once at boot. See [[RemoteL2Ledger.digestsAt]].
+          */
+        final case class StateAt(commandNumber: L2CommandNumber) extends Request
     }
 
     /** The remote's answer to a [[Request.Restore]]: it rewound to the requested command number
@@ -471,14 +595,15 @@ object RemoteL2Ledger {
 
         /** `evacuationMapHash` is the remote's [[EvacuationMapHash]] at `tip` — the digest the
           * caller checks its own evacuation map against.
-          */
-        /** @param l2ParamsHash
-          *   absent from a remote that does not report it yet; see [[L2Ledger.Restored]].
+          *
+          * `l2StateHash` and `l2ParamsHash` are mandatory: a remote that omits either is not a
+          * ledger this head can drive. See [[L2Ledger.Digests]].
           */
         final case class Restored(
             tip: L2CommandNumber,
             evacuationMapHash: EvacuationMapHash,
-            l2ParamsHash: Option[Hash32]
+            l2StateHash: L2StateHash,
+            l2ParamsHash: Hash32
         ) extends RestoreResponse {
             def commandNumber: L2CommandNumber = tip
         }
@@ -487,6 +612,46 @@ object RemoteL2Ledger {
             tip: L2CommandNumber,
             reason: String
         ) extends RestoreResponse {
+            def commandNumber: L2CommandNumber = requested
+        }
+    }
+
+    /** The remote's answer to a [[Request.StateAt]]: the digests of its state at the asked-for
+      * command number ([[StateAtResponse.StateReported]]), or a refusal
+      * ([[StateAtResponse.StateAtFailed]]). Deliberately its own frame rather than a case of
+      * [[RestoreResponse]] — the two requests differ in whether the remote *moves*, and a remote
+      * implementer should not have to read a field to tell which it was asked for.
+      * [[commandNumber]] echoes the request so [[RemoteL2Ledger.sendStateAtRequest]] can correlate.
+      */
+    sealed trait StateAtResponse {
+        def commandNumber: L2CommandNumber
+    }
+
+    object StateAtResponse {
+
+        /** `at` equals the requested command number. The digests are of the state the remote holds
+          * as of that number; its own position is unchanged.
+          *
+          * `l2StateHash` and `l2ParamsHash` are mandatory, as on [[RestoreResponse.Restored]].
+          */
+        final case class StateReported(
+            at: L2CommandNumber,
+            evacuationMapHash: EvacuationMapHash,
+            l2StateHash: L2StateHash,
+            l2ParamsHash: Hash32
+        ) extends StateAtResponse {
+            def commandNumber: L2CommandNumber = at
+        }
+
+        /** `requested` is the asked-for number, `tip` the remote's current durable tip. A remote
+          * that prunes its history far enough back answers this for an old boundary as legitimately
+          * as for one past its tip.
+          */
+        final case class StateAtFailed(
+            requested: L2CommandNumber,
+            tip: L2CommandNumber,
+            reason: String
+        ) extends StateAtResponse {
             def commandNumber: L2CommandNumber = requested
         }
     }

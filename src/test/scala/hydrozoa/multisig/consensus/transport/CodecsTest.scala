@@ -6,10 +6,10 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardA
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.{BatchNumber, LiaisonProtocol}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
+import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.ledger.stack.{StackNumber, StandaloneEvacuationCommitment}
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Round-trip tests for the wire codecs used by [[PeerTransport]] — the head ↔ head mesh batch
@@ -54,9 +54,96 @@ class CodecsTest extends AnyFunSuite {
         }
     }
 
-    test("Hello frame round-trips") {
-        val frame = HeadFrame.Hello(peerNum = 7)
+    test("Challenge frame round-trips, announcing this build's protocol version") {
+        val frame = HeadFrame.Challenge.own(HandshakeFixture.nonce)
+        val _ = assert(frame.protocolVersion.contains(ProtocolVersion.current))
         assert(roundTrip(frame) == frame)
+    }
+
+    test("a Challenge announcing no protocol version decodes to None, not a decode failure") {
+        // The accept side announces its version so the dialer reaches its own verdict; one that
+        // announces none must still parse, so the refusal names the real problem.
+        val text = s"""{"t":"challenge","nonce":${HandshakeFixture.nonceJson}}"""
+        HeadFrame.parse(text) match {
+            case Right(HeadFrame.Challenge(_, protocolVersion)) =>
+                val _ = assert(protocolVersion.isEmpty)
+                assert(
+                  ProtocolVersion.check(protocolVersion) ==
+                      ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
+                )
+            case other => fail(s"expected a Challenge, got $other")
+        }
+    }
+
+    test("a signed Handshake round-trips, proof intact") {
+        val frame = HeadFrame.Handshake.own(
+          peerNum = 1,
+          HandshakeFixture.headWallet(1),
+          HandshakeFixture.headParamsHash,
+          HandshakeFixture.nonce,
+          HandshakeFixture.ownHead
+        )
+        // The signature is an opaque IArray, so structural equality would compare array identities.
+        // JSON stability is the round-trip property that actually holds — as for every other
+        // signature-carrying frame in this suite.
+        assertJsonStable(frame)
+        roundTrip(frame) match {
+            case HeadFrame.Handshake(peerNum, protocolVersion, auth, _) =>
+                val _ = assert(peerNum == 1)
+                val _ = assert(protocolVersion.contains(ProtocolVersion.current))
+                assert(
+                  HandshakeProof.verify(
+                    HandshakeFixture.headPeers.headPeerVKey(HeadPeerNumber(1)).get,
+                    HandshakeProof.Link.HeadToHead,
+                    claimant = 1,
+                    ProtocolVersion.current,
+                    HandshakeFixture.headParamsHash,
+                    HandshakeFixture.nonce,
+                    auth
+                  ) == Right(())
+                )
+            case other => fail(s"expected a Handshake, got: $other")
+        }
+    }
+
+    test("a Handshake with no protocol version decodes, so the version check can refuse it") {
+        // Proof and all, only the version missing: a counterpart that announces none must reach the
+        // version check with a legible reason, not die in the decoder as a malformed frame.
+        val auth =
+            HandshakeFixture.authJson(
+              HandshakeProof.Link.HeadToHead,
+              HandshakeFixture.headWallet(0),
+              claimant = 7
+            )
+        val text = s"""{"t":"handshake","peerNum":7,"auth":$auth}"""
+        HeadFrame.parse(text) match {
+            case Right(HeadFrame.Handshake(peerNum, protocolVersion, _, _)) =>
+                val _ = assert(peerNum == 7)
+                val _ = assert(protocolVersion.isEmpty)
+                assert(
+                  ProtocolVersion.check(protocolVersion) ==
+                      ProtocolVersion.Check.Incompatible(None, ProtocolVersion.current)
+                )
+            case other => fail(s"expected a Handshake, got: $other")
+        }
+    }
+
+    test("a Refused frame round-trips every refusal") {
+        List(
+          HandshakeRefusal.ProtocolVersionMismatch(Some(2), 1),
+          HandshakeRefusal.ProtocolVersionMismatch(None, 1),
+          HandshakeRefusal.NotHubbed(4),
+          HandshakeRefusal.NotInRoster(4),
+          HandshakeRefusal.WrongDialDirection(3, 1),
+          HandshakeRefusal.HeadParamsMismatch(
+            HandshakeFixture.otherHeadParamsHash,
+            HandshakeFixture.headParamsHash
+          ),
+          HandshakeRefusal.BadSignature
+        ).foreach { refusal =>
+            val frame = HeadFrame.Refused(refusal)
+            assert(roundTrip(frame) == frame, s"failed for $refusal")
+        }
     }
 
     test("HeadFrame.Msg(Mesh.Get initial cursors) round-trips") {
@@ -110,7 +197,7 @@ class CodecsTest extends AnyFunSuite {
         val ack = SoftAck(
           ackId = SoftAckId(HeadPeerNumber(2), SoftAckNumber(5)),
           blockNum = BlockNumber(11),
-          headerSignature = BlockHeader.Minor.HeaderSignature(
+          signature = SoftAck.Signature(
             IArray[Byte](1.toByte, 2.toByte, 3.toByte, 4.toByte, 5.toByte)
           ),
           finalizationRequested = true,
@@ -125,8 +212,8 @@ class CodecsTest extends AnyFunSuite {
                         val _ = assert(decodedAck.ackId == ack.ackId)
                         val _ = assert(decodedAck.blockNum == ack.blockNum)
                         val _ = assert(
-                          (decodedAck.headerSignature: IArray[Byte]).toList ==
-                              (ack.headerSignature: IArray[Byte]).toList
+                          (decodedAck.signature: IArray[Byte]).toList ==
+                              (ack.signature: IArray[Byte]).toList
                         )
                         assert(decodedAck.finalizationRequested == ack.finalizationRequested)
                     case other => fail(s"Expected Some(SoftAck), got: $other")
@@ -181,7 +268,7 @@ class CodecsTest extends AnyFunSuite {
                 rollouts = List(sig(6, 7, 8)),
                 refunds = List(sig(9), sig(10, 11)),
                 sec = Some(
-                  BlockHeader.Minor.HeaderSignature(IArray[Byte](12.toByte, 13.toByte))
+                  StandaloneEvacuationCommitment.Signature(IArray[Byte](12.toByte, 13.toByte))
                 )
               ),
               completes = NonEmptyList.of(
@@ -200,7 +287,7 @@ class CodecsTest extends AnyFunSuite {
           hardAckFrame(
             HardAck.Round1Payload.Regular.MinorThenPartial(
               minor = HardAck.Round1Payload.PartitionSigs.Minor(
-                sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](14.toByte)),
+                sec = StandaloneEvacuationCommitment.Signature(IArray[Byte](14.toByte)),
                 refunds = List(sig(15, 16))
               ),
               partial = HardAck.Round1Payload.PartitionSigs.MajorPartial(
@@ -222,14 +309,14 @@ class CodecsTest extends AnyFunSuite {
           hardAckFrame(
             HardAck.Round1Payload.Regular.MinorThenPartialThenCompletes(
               minor = HardAck.Round1Payload.PartitionSigs.Minor(
-                sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](60.toByte)),
+                sec = StandaloneEvacuationCommitment.Signature(IArray[Byte](60.toByte)),
                 refunds = Nil
               ),
               partial = HardAck.Round1Payload.PartitionSigs.MajorPartial(
                 fallback = sig(61),
                 rollouts = Nil,
                 refunds = Nil,
-                sec = Some(BlockHeader.Minor.HeaderSignature(IArray[Byte](62.toByte)))
+                sec = Some(StandaloneEvacuationCommitment.Signature(IArray[Byte](62.toByte)))
               ),
               completes = NonEmptyList.of(
                 HardAck.Round1Payload.PartitionSigs.FinalComplete(
@@ -254,7 +341,7 @@ class CodecsTest extends AnyFunSuite {
         assertJsonStable(
           hardAckFrame(
             HardAck.SolePayload(
-              sec = BlockHeader.Minor.HeaderSignature(IArray[Byte](42.toByte)),
+              sec = StandaloneEvacuationCommitment.Signature(IArray[Byte](42.toByte)),
               refunds = List(sig(40, 41))
             )
           )

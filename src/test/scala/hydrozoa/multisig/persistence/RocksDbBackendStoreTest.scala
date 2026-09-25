@@ -3,6 +3,7 @@ package hydrozoa.multisig.persistence
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
+import hydrozoa.lib.StartupRefusal
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -209,10 +210,15 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
                     .use(_ => IO.unit)
                     .attempt
                     .unsafeRunSync()
+            // A `StartupRefusal`, not a generic failure: what is on disk does not change while
+            // the node waits, so a supervisor must not restart into the same verdict forever.
             assert(
               outcome.left.toOption
-                  .exists(_.getMessage.contains("schema version mismatch")),
-              s"expected version-mismatch failure, got $outcome"
+                  .exists(e =>
+                      e.isInstanceOf[StartupRefusal] &&
+                          e.getMessage.contains("schema version mismatch")
+                  ),
+              s"expected a StartupRefusal naming a version mismatch, got $outcome"
             )
         finally recursivelyDelete(tempDir)
     }
@@ -279,10 +285,11 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
                 .unsafeRunSync()
             assert(
               outcome.left.toOption.exists(e =>
-                  e.getMessage.contains("belongs to a different head") &&
+                  e.isInstanceOf[StartupRefusal] &&
+                      e.getMessage.contains("belongs to a different head") &&
                       e.getMessage.contains(expectedField)
               ),
-              s"expected an identity-mismatch failure naming $expectedField, got $outcome"
+              s"expected a StartupRefusal naming $expectedField, got $outcome"
             )
         finally recursivelyDelete(tempDir)
 

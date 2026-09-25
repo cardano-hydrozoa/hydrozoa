@@ -6,13 +6,14 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.QuietRelease
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub}
-import hydrozoa.multisig.consensus.peer.CoilPeerNumber
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, PeerWallet}
 import hydrozoa.multisig.consensus.transport.CoilPeerWsTransportEvent.*
 import org.http4s.Uri
 import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
 import scala.concurrent.duration.*
+import scalus.cardano.ledger.Hash32
 
 /** The coil side of a hub↔coil link, in the abstract. Concrete impls: [[CoilPeerWsTransport]] (real
   * WS) and [[InProcessHubCoilTransport.Coil]] (test harness).
@@ -22,54 +23,86 @@ trait CoilTransport {
     /** Wire the local [[PeerLiaisonCoilToHub]] as the inbound dispatch target. Must be called
       * before the link starts receiving traffic.
       */
-    def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit]
+    def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit]
 
     /** Enqueue a coil→hub batch for delivery to the hub. */
-    def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit]
+    def send(request: LiaisonProtocol.CoilEmitted): IO[Unit]
+
+    /** Announce where this coil stands, as its liaison enters join mode.
+      *
+      * A dialing transport sends its marks in the handshake on every dial and has nothing to learn
+      * here. A directly-wired one never dials, so this is the only point at which it can be told.
+      */
+    def announceMarks(marks: Join.Connected): IO[Unit]
 }
 
 /** The coil side of the hub→coil WS link: a coil peer runs no server, it dials its single hub's
-  * `/hub` endpoint and keeps the link alive with reconnect-on-drop. It identifies itself with
-  * [[CoilFrame.Hello]] so the hub binds the socket to this coil's [[CoilPeerNumber]].
+  * `/hub` endpoint and keeps the link alive with reconnect-on-drop. It answers the hub's
+  * [[CoilFrame.Challenge]] with a [[CoilFrame.Handshake]] proving this coil's [[CoilPeerNumber]]
+  * under `ownWallet`, and the hub binds the socket to that number.
   *
   * Outbound is the coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]); inbound is the
-  * hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]), routed to the local
+  * hub-emitted subset ([[Join.Offer]], [[Population.New]], [[OwnHardAck.Get]]), routed to the local
   * [[PeerLiaisonCoilToHub]].
   */
 final class CoilPeerWsTransport private (
     private val ownCoilNum: CoilPeerNumber,
+    private val ownWallet: PeerWallet,
+    private val headParamsHash: Hash32,
+    private val ownMarks: IO[Join.Connected],
+    private val ownHead: HeadIdentity,
     private val outbox: Queue[IO, String],
-    private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
+    private val inboundRef: Ref[IO, Option[LiaisonProtocol.CoilLiaisonHandle]],
     private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
 )(using CardanoNetwork.Section)
     extends CoilTransport {
 
-    override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
+    override def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit] =
         inboundRef.set(Some(localLiaison))
 
-    override def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit] =
-        CoilFrame.fromWire(request) match {
-            case Some(wire) => outbox.offer(CoilFrame.encode(CoilFrame.Msg(wire)))
-            case None       => tracer.traceWith(DroppingNonWireRequest(request))
+    override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
+        outbox.offer(CoilFrame.encode(CoilFrame.Msg(request)))
+
+    /** No-op: this transport announces its marks in the handshake it sends on every dial, read
+      * fresh from the store at that moment ([[ownMarks]]), which is strictly better than a value
+      * captured earlier by a caller.
+      */
+    override def announceMarks(marks: Join.Connected): IO[Unit] = IO.unit
+
+    private def toLiaison(request: LiaisonProtocol.FromHub): IO[Unit] =
+        inboundRef.get.flatMap {
+            case Some(liaison) => liaison ! request
+            case None          => tracer.traceWith(NoLiaisonForInbound)
         }
 
     private def dispatchInbound(payload: CoilFrame.Wire): IO[Unit] =
         payload match {
+            // The answer goes to the liaison like any other inbound frame: it is in join mode
+            // waiting for exactly this, and a later one reaching it in regular mode is a late
+            // redial it declines.
+            case a @ (_: Join.Offer | _: Join.NoOffer) => toLiaison(a)
             // Only the hub-emitted subset is valid inbound here.
-            case p @ (_: Population.New | _: OwnHardAck.Get) =>
-                inboundRef.get.flatMap {
-                    case Some(liaison) => liaison ! p
-                    case None          => tracer.traceWith(NoLiaisonForInbound)
-                }
+            case p @ (_: Population.New | _: OwnHardAck.Get) => toLiaison(p)
             case other => tracer.traceWith(UnexpectedInboundWire(other))
         }
 
     private def onLine(s: String): IO[Unit] =
         CoilFrame.parse(s) match {
             case Right(CoilFrame.Msg(payload)) => dispatchInbound(payload)
-            case Right(CoilFrame.Hello(_))     => IO.unit
+            // The hub's verdict on the handshake this attempt just sent: it refused, and the socket
+            // is about to close. The dialer redials regardless — a refusal describes this attempt,
+            // not the hub — so the trace is what tells an operator to go fix a config.
+            case Right(CoilFrame.Refused(refusal)) => tracer.traceWith(DialerRefused(refusal))
+            // A challenge is answered before the duplex starts, and a hub sends exactly one; a
+            // second is the hub misbehaving, not a renegotiation.
+            case Right(_: CoilFrame.Challenge) => tracer.traceWith(DialerLateChallenge)
+            case Right(_: CoilFrame.Handshake) => IO.unit
             case Left(err)                     => tracer.traceWith(DecodeError(err))
         }
+
+    /** The hub's opening challenge, or `None` if the hub opened with something else. */
+    private def challenge(line: String): Option[CoilFrame.Challenge] =
+        CoilFrame.parse(line).toOption.collect { case c: CoilFrame.Challenge => c }
 
     /** How long one dial attempt may sit in the WebSocket **handshake** before it is abandoned.
       * Long enough not to give up on an ordinarily slow hub, short enough that a stalled one does
@@ -77,6 +110,16 @@ final class CoilPeerWsTransport private (
       * unbounded, and [[WsDuplex.defaultReadIdleTimeout]] is what catches a half-open one.
       */
     private val handshakeBudget: FiniteDuration = 30.seconds
+
+    /** How long one dial attempt waits for the hub's [[CoilFrame.Challenge]] once the WebSocket
+      * handshake has completed.
+      *
+      * The hub emits the challenge as the first frame of an accepted socket, so anything past a
+      * round trip means it is not answering. Must stay **under** [[handshakeBudget]]: this wait
+      * happens after the claim on `handshook` is still open, so an attempt that outlived the budget
+      * would sit here holding an open socket while the loop had already redialed.
+      */
+    private val challengeBudget: FiniteDuration = 10.seconds
 
     /** How long teardown waits for the dialer to acknowledge cancellation before proceeding. */
     private val dialerCancelBudget: FiniteDuration = 5.seconds
@@ -89,18 +132,57 @@ final class CoilPeerWsTransport private (
         // `handshook` arbitrates between this attempt and the loop's budget: whoever completes it
         // first decides whether the socket is used or dropped. `complete` has exactly one winner,
         // so a handshake landing on the deadline cannot leave both a live connection and a redial.
+        //
+        // The hub speaks first: its challenge is what this attempt's proof is signed over, so the
+        // socket is claimed only once there is a nonce to answer. An attempt that never gets one
+        // returns and `use` closes the socket — which is also what reclaims the demand
+        // `WsDuplex.firstLine` leaks when its deadline cancels a read.
         def once(handshook: Deferred[IO, Unit]): IO[Unit] =
             QuietRelease(client.connect(request)).use { conn =>
-                val helloLine = CoilFrame.encode(CoilFrame.Hello(ownCoilNum.convert))
-                handshook.complete(()).flatMap {
-                    case true =>
-                        tracer.traceWith(DialerConnected(hubUri)) >>
-                            conn.send(WSFrame.Text(helloLine)) >>
-                            WsDuplex.run(conn, outbox, onLine)
-                    // Lost the claim: the budget expired and the loop has already redialed. Return
-                    // instead, so `use` closes this socket rather than leaving a second live
-                    // connection draining the shared outbox.
-                    case false => tracer.traceWith(DialerHandshakeLate(hubUri))
+                WsDuplex.firstLine(conn, challengeBudget).map(_.flatMap(challenge)).flatMap {
+                    case None => tracer.traceWith(DialerNoChallenge(hubUri, challengeBudget))
+                    case Some(CoilFrame.Challenge(nonce, protocolVersion)) =>
+                        ProtocolVersion.check(protocolVersion) match {
+                            // Refuse before answering. Signing a proof for a hub this coil cannot
+                            // talk to is wasted work, and deciding here is what lets the coil name
+                            // both versions against a hub that never says why — which is what a
+                            // hub too old to send `Refused` does.
+                            case ProtocolVersion.Check.Incompatible(found, expected) =>
+                                tracer.traceWith(
+                                  DialerRefusedChallenge(
+                                    HandshakeRefusal.ProtocolVersionMismatch(found, expected)
+                                  )
+                                )
+                            case ProtocolVersion.Check.Compatible =>
+                                handshook.complete(()).flatMap {
+                                    case true =>
+                                        // Read the marks per dial, not once at construction: a
+                                        // redial after a long drop must claim where the coil
+                                        // stands NOW, or the hub decides the start point from a
+                                        // stale position.
+                                        tracer.traceWith(DialerConnected(hubUri)) >>
+                                            ownMarks
+                                                .map(marks =>
+                                                    CoilFrame.encode(
+                                                      CoilFrame.Handshake.own(
+                                                        ownCoilNum.convert,
+                                                        ownWallet,
+                                                        headParamsHash,
+                                                        nonce,
+                                                        marks,
+                                                        ownHead
+                                                      )
+                                                    )
+                                                )
+                                                .flatMap(line => conn.send(WSFrame.Text(line))) >>
+                                            WsDuplex.run(conn, outbox, onLine)
+                                    // Lost the claim: the budget expired and the loop has already
+                                    // redialed. Return instead, so `use` closes this socket rather
+                                    // than leaving a second live connection draining the shared
+                                    // outbox.
+                                    case false => tracer.traceWith(DialerHandshakeLate(hubUri))
+                                }
+                        }
                 }
             }
 
@@ -171,12 +253,34 @@ final class CoilPeerWsTransport private (
 
 object CoilPeerWsTransport {
 
+    /** @param ownWallet
+      *   this coil peer's signing wallet — the same key `coilPeers` lists for `ownCoilNum`, and the
+      *   one its hard acks are signed with.
+      * @param headParamsHash
+      *   this node's digest over the whole head config, asserted in every handshake so the hub
+      *   refuses a coil from another head, or one that disagrees about this one, at connect.
+      * @param ownMarks
+      *   where this coil stands, re-read on every dial. See [[CoilFrame.Handshake]].
+      */
     def create(
         ownCoilNum: CoilPeerNumber,
+        ownWallet: PeerWallet,
+        headParamsHash: Hash32,
+        ownMarks: IO[Join.Connected],
+        ownHead: HeadIdentity,
         tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
-            inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
-        } yield new CoilPeerWsTransport(ownCoilNum, outbox, inboundRef, tracer)
+            inboundRef <- Ref[IO].of(Option.empty[LiaisonProtocol.CoilLiaisonHandle])
+        } yield new CoilPeerWsTransport(
+          ownCoilNum,
+          ownWallet,
+          headParamsHash,
+          ownMarks,
+          ownHead,
+          outbox,
+          inboundRef,
+          tracer
+        )
 }
