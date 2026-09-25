@@ -7,6 +7,7 @@ import com.monovore.decline.{Command, Opts}
 import hydrozoa.bootstrap.Bootstrap
 import hydrozoa.config.ScriptReferenceUtxos.given
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.config.node.PrivateSecrets
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
@@ -318,10 +319,13 @@ object DeployScriptsAndG2Setup:
 
     /** Load the signing wallet from a keygen private config, reading only the `ownHeadWallet`
       * fields — a full [[hydrozoa.config.node.NodePrivateConfig]] decode would require the head
-      * config, which does not exist yet at deployment time.
+      * config, which does not exist yet at deployment time. The signing key comes from the
+      * environment or the `private.env` beside the config, as the node reads it
+      * ([[PrivateSecrets.overlayOwnSigningKey]]).
       */
-    private def readWallet(path: Path): IO[PeerWallet] = for {
-        json <- IO.blocking(Files.readString(path)).flatMap(s => IO.fromEither(parser.parse(s)))
+    private[app] def readWallet(path: Path): IO[PeerWallet] = for {
+        fileJson <- IO.blocking(Files.readString(path)).flatMap(s => IO.fromEither(parser.parse(s)))
+        json <- PrivateSecrets.overlayOwnSigningKey(path, fileJson)
         wallet <- IO.fromEither(
           (for {
               obj <- json.hcursor.downField("ownPeerPrivate").downField("ownHeadWallet").focus
