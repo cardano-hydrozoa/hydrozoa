@@ -168,18 +168,6 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Twenty-peers head works") =
         Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
 
-    // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
-    // takeoff trick — `genInitialState` anchors `startTime` at `Instant.now() + 60s` when
-    // `useTestControl = false`, and `sutResource` sleeps the wall clock until that anchor, so
-    // model time and wall clock coincide at command 1. Inter-arrival delays from the
-    // superposition generator now elapse in real time.
-    val _ = property("Two-peers head works WS") = Stage4Suite(
-      label = "stage4-ws-two-peers",
-      nPeers = 2,
-      transportMode = TransportMode.WebSocket,
-      backendMode = BackendMode.RocksDb()
-    ).property()
-
     // Extended variants: large command sequences or high peer counts
     val _ = property("Two-peers head works (extended)") =
         Stage4Suite(label = "stage4-two-peers-extended", nPeers = 2, nCommands = 500).property()
@@ -197,6 +185,38 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Twenty-peers head works (extended)") =
         Stage4Suite(label = "stage4-twenty-peers-extended", nPeers = 20, nCommands = 500).property()
 
+// WebSocket variants run on the real clock: each case waits out a 60 s takeoff (sized for the
+// 20-peer Direct run) and real inter-arrival delays, so one case costs about two minutes where a
+// Direct case costs seconds. The command model is exercised by the Direct properties above at the
+// default 10 cases; these exist for the transport, which every case drives end to end over real WS
+// connections, so 3 cases each keep that coverage at a third of the wall-clock.
+object Stage4WsProperties extends YetAnotherProperties("Integration Stage 4 WS"):
+
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withWorkers(1).withMinSuccessfulTests(3)
+
+    // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
+    // takeoff trick — `genInitialState` anchors `startTime` at `Instant.now() + 60s` when
+    // `useTestControl = false`, and `sutResource` sleeps the wall clock until that anchor, so
+    // model time and wall clock coincide at command 1. Inter-arrival delays from the
+    // superposition generator now elapse in real time.
+    val _ = property("Two-peers head works WS") = Stage4Suite(
+      label = "stage4-ws-two-peers",
+      nPeers = 2,
+      transportMode = TransportMode.WebSocket,
+      backendMode = BackendMode.RocksDb()
+    ).property()
+
+    // WebSocket transport variant of the two-heads-one-coil run: the hub↔coil link runs over the
+    // shared per-peer WS server (`/hub` route) instead of in-process handles, exercising the
+    // HubWsTransport / CoilPeerWsTransport / CoilFrame path end-to-end.
+    val _ = property("Two-heads-one-coil works WS") = Stage4Suite(
+      label = "stage4-ws-2h1c",
+      nPeers = 2,
+      nCoilPeers = 1,
+      transportMode = TransportMode.WebSocket,
+    ).property()
+
     val _ = property("Two-peers head works WS (extended)") = Stage4Suite(
       label = "stage4-ws-two-peers-extended",
       nPeers = 2,
@@ -211,16 +231,6 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       nCommands = 500,
       transportMode = TransportMode.WebSocket,
       backendMode = BackendMode.RocksDb()
-    ).property()
-
-    // WebSocket transport variant of the two-heads-one-coil run: the hub↔coil link runs over the
-    // shared per-peer WS server (`/hub` route) instead of in-process handles, exercising the
-    // HubWsTransport / CoilPeerWsTransport / CoilFrame path end-to-end.
-    val _ = property("Two-heads-one-coil works WS") = Stage4Suite(
-      label = "stage4-ws-2h1c",
-      nPeers = 2,
-      nCoilPeers = 1,
-      transportMode = TransportMode.WebSocket,
     ).property()
 
 // ===================================
