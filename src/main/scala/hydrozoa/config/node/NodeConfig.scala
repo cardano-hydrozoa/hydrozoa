@@ -123,7 +123,6 @@ object NodeConfig {
         adminPassword: String,
         httpHost: String,
         httpPort: String,
-        blockfrostApiUrl: Option[String] = None,
     ): Option[NodeConfig] = for {
         ownHeadPeerPrivate <- OwnHeadPeerPrivate(ownHeadWallet, headConfig.headPeers)
         nodePrivateConfig = NodePrivateConfig(
@@ -137,7 +136,6 @@ object NodeConfig {
           adminPassword,
           httpHost,
           httpPort,
-          blockfrostApiUrl,
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 
@@ -157,7 +155,6 @@ object NodeConfig {
         adminPassword: String,
         httpHost: String,
         httpPort: String,
-        blockfrostApiUrl: Option[String] = None,
     ): Option[NodeConfig] = for {
         ownCoilPeerPrivate <- OwnCoilPeerPrivate(ownCoilWallet, headConfig.coilPeers)
         nodePrivateConfig = NodePrivateConfig(
@@ -171,7 +168,6 @@ object NodeConfig {
           adminPassword,
           httpHost,
           httpPort,
-          blockfrostApiUrl,
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 
