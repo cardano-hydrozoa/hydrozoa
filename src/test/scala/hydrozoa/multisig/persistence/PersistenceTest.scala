@@ -74,7 +74,7 @@ class PersistenceTest extends AnyFunSuite:
 
     test("typed delete removes a typed entry") {
         withTypedStore { p =>
-            val key = StoreKey.DepositMap
+            val key = StoreKey.DepositMap(BlockNumber(1))
             for
                 _ <- p.put(key)(DepositsMap.empty)
                 _ <- p.delete(key)
@@ -91,13 +91,13 @@ class PersistenceTest extends AnyFunSuite:
             val treasury = TreasuryFixture.sampleTreasury
             val evacKey = StoreKey.EvacuationMap(BlockNumber(1))
             val batch = WriteBatch.start
-                .put(StoreKey.DepositMap)(DepositsMap.empty)
+                .put(StoreKey.DepositMap(BlockNumber(1)))(DepositsMap.empty)
                 .put(StoreKey.Treasury)(treasury)
                 .put(evacKey)(EvacuationMap.empty)
                 .put(StoreKey.Meta("schema-version"))(Array[Byte](0xcc.toByte))
             for
                 _ <- p.write(batch)
-                a <- p.get(StoreKey.DepositMap)
+                a <- p.get(StoreKey.DepositMap(BlockNumber(1)))
                 b <- p.get(StoreKey.Treasury)
                 c <- p.get(evacKey)
                 d <- p.get(StoreKey.Meta("schema-version"))
@@ -112,7 +112,7 @@ class PersistenceTest extends AnyFunSuite:
 
     test("typed WriteBatch + delete in the same batch") {
         withTypedStore { p =>
-            val key = StoreKey.DepositMap
+            val key = StoreKey.DepositMap(BlockNumber(1))
             for
                 _ <- p.put(key)(DepositsMap.empty)
                 _ <- p.write(WriteBatch.start.delete(key))

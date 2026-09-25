@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.eutxol2.store
 
 import cats.effect.{IO, Resource}
+import cats.syntax.all.*
 import hydrozoa.multisig.ledger.eutxol2.store.L2StoreCodecs.{commandCodec, snapshotCodec}
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import io.circe.syntax.*
@@ -8,7 +9,7 @@ import io.circe.{Decoder, Encoder}
 import java.nio.ByteBuffer
 import java.nio.file.{Files, Path}
 import java.util.ArrayList as JArrayList
-import org.rocksdb.{ColumnFamilyDescriptor, ColumnFamilyHandle, ColumnFamilyOptions, DBOptions, ReadOptions, RocksDB, WriteOptions}
+import org.rocksdb.{ColumnFamilyDescriptor, ColumnFamilyHandle, ColumnFamilyOptions, DBOptions, ReadOptions, RocksDB, WriteBatch as RWriteBatch, WriteOptions}
 import scala.jdk.CollectionConverters.*
 
 /** RocksDB-backed [[L2Store]] — the durable form of the `EutxoL2Ledger` recovery store (§R2b).
@@ -34,6 +35,24 @@ final class RocksDbL2Store private (
 ) extends L2Store[IO]:
 
     import RocksDbL2Store.{keyToCommandNumber, commandNumberToKey}
+
+    override def wipe: IO[Unit] =
+        List(metaCf, logCf, snapshotCf).traverse_ { cf =>
+            // Collect then delete: RocksDB forbids mutating a CF through an open iterator.
+            IO.blocking {
+                val it = db.newIterator(cf, readOptions)
+                try
+                    val wb = new RWriteBatch()
+                    try
+                        it.seekToFirst()
+                        while it.isValid do
+                            wb.delete(cf, it.key())
+                            it.next()
+                        db.write(writeOptions, wb)
+                    finally wb.close()
+                finally it.close()
+            }
+        }
 
     override def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand): IO[Unit] =
         IO.blocking(db.put(logCf, writeOptions, commandNumberToKey(commandNumber), encode(command)))

@@ -32,6 +32,10 @@ Global / excludeLintKeys ++= Set(
 )
 
 val scalusVersion = "1.0.0"
+// A val, not an inline literal, because `hydrozoa.BuildInfo` bakes it in: it is part of the
+// `l2ParamsHash` preimage, which serializes ProtocolParams with scalus's upickle writer and so
+// depends on upickle's formatting as well as scalus's (docs/spec/head-params-hash.md).
+val upickleVersion = "4.4.3"
 val bloxbeanVersion = "0.7.1"
 val http4sVersion = "0.23.32"
 val tapirVersion = "1.13.25"
@@ -257,7 +261,7 @@ lazy val core: Project = (project in file("."))
         "io.circe" %% "circe-generic" % "0.14.10",
         "io.circe" %% "circe-parser" % "0.14.10",
         // upickle, to wrap scalus's blockfrost encoding
-        "com.lihaoyi" %% "upickle" % "4.4.3",
+        "com.lihaoyi" %% "upickle" % upickleVersion,
         // scodec for hex encoding
         "org.scodec" %% "scodec-bits" % "1.2.1",
         "io.github.cdimascio" % "dotenv-java" % "3.0.0",
@@ -284,9 +288,17 @@ lazy val core: Project = (project in file("."))
       addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
       // Bake the version, git revision, and build time into `hydrozoa.BuildInfo` so they can be
       // logged at startup, served from `GET /version`, and stamped onto the Docker image labels.
+      //
+      // `scalusVersion` and `upickleVersion` are here for a different reason: they are preimage
+      // elements of `l2ParamsHash` (docs/spec/head-params-hash.md). Scalus supplies the L2 ledger's
+      // validators, whose behaviour can change without their names changing, and both libraries
+      // decide the bytes ProtocolParams serializes to. Reading them from the same vals the
+      // dependencies use is what stops the digest and the build disagreeing.
       buildInfoPackage := "hydrozoa",
       buildInfoKeys := Seq[BuildInfoKey](
         version,
+        "scalusVersion" -> scalusVersion,
+        "upickleVersion" -> upickleVersion,
         BuildInfoKey.action("gitCommit") {
             scala.util
                 .Try(

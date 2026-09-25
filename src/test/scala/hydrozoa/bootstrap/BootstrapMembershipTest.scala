@@ -79,7 +79,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
           decoded.cardanoNetwork == CardanoNetwork.Preview &&
               decoded.headParams.coilQuorum == 2 &&
               decoded.initialEquityContributions.size == 2 &&
-              decoded.blockZeroStartTime.isEmpty
+              decoded.blockZeroEndTime.isEmpty
         )
     }
 
@@ -105,6 +105,19 @@ class BootstrapMembershipTest extends AnyFunSuite {
         given CardanoNetwork.Section = CardanoNetwork.Preview
         val json = mkDefaults(CardanoNetwork.Preview, coilQuorum = 2).asJson
         assert(json.hcursor.get[String]("cardanoNetwork") == Right("preview"))
+    }
+
+    test("a defaults.json carrying blockZeroStartTime still decodes; the field is ignored") {
+        // Block zero's start time is its end time now, so `defaults.json` no longer offers it.
+        // A bootstrap directory written before that must still assemble.
+        val network = CardanoNetwork.Preview
+        given CardanoNetwork.Section = network
+        val stale = Json.obj("blockZeroStartTime" -> 1_767_225_600_000L.asJson)
+        val withStartTime = mkPreviewDefaults(coilQuorum = 2).asJson.deepMerge(stale)
+        val decoded = withStartTime
+            .as[Bootstrap.BootstrapDefaults]
+            .fold(e => fail(s"decode failed: $e"), identity)
+        assert(decoded.cardanoNetwork == network && decoded.blockZeroEndTime.isEmpty)
     }
 
     test(
@@ -135,6 +148,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
           """{
             |  "rulebasedTreasuryScriptInput": "d17362c69150ccf4cf0974ee4223f5f8c84b9171d74cd210aa042860a1a32ecd#0",
             |  "disputeResolutionScriptInput": "83ec7059e234a2d21b059ae81da478a2be994916675c7cede4617a8267a8e1ff#0",
+            |  "rulebasedRegimeScriptInput": "1c7b0b1a9e5c1a54ec6f9f4be6a4f2f9cf6c2f4b80bbbd7e6f0b0e2d5a3c8f11#0",
             |  "setupLadderInputs": [
             |    "4435067f019b0c9aff7d83fae994be66860b494fa37b0d4e35a8f50e59d5382c#0",
             |    "4435067f019b0c9aff7d83fae994be66860b494fa37b0d4e35a8f50e59d5382c#1"
@@ -149,7 +163,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
               config.headPeers.size == 1 &&
               config.initialEquityContributions.get(HeadPeerNumber(0)).contains(Coin.ada(100)) &&
               config.initialL2State.isEmpty &&
-              config.blockZeroStartTime.isEmpty
+              config.blockZeroEndTime.isEmpty
         )
     }
 
@@ -210,7 +224,6 @@ class BootstrapMembershipTest extends AnyFunSuite {
           headParams = headParams,
           initialEquityContributions =
               Map(HeadPeerNumber(0) -> Coin.ada(100), HeadPeerNumber(1) -> Coin.zero),
-          blockZeroStartTime = None,
           blockZeroEndTime = None
         )
     }

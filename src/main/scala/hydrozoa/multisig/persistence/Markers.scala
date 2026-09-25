@@ -48,35 +48,6 @@ object Markers:
       */
     val cold: Markers = Markers(None, None, None, None, RequestNumber(0), None, None)
 
-    /** Apply a `transplantStackNumber` to a freshly derived marker bundle, raising this peer's
-      * trusted-history floor to the stack the transplant was tagged with.
-      *
-      * ⛔ The comparison is **`hardConfirmed >= tag`**, deliberately the same one `Serve`'s boot
-      * gate uses. It used to be exact equality here while the gate accepted `>=`, so a tag naming
-      * any stack BELOW the store's tip passed the gate and was then **silently dropped** — the
-      * operator got no adoption and no error. A tag is a partition of the store chosen by the
-      * operator, and any stack the store actually holds is a legitimate choice, so below-tip must
-      * adopt. (George's ruling, 2026-09-02.)
-      *
-      * It RAISES the floor and never lowers it: a peer mid-flight has acked one stack beyond its
-      * confirmation, and clamping that down to the tag would discard the in-flight handoff
-      * `ReplayActor` rebuilds from it. So once the peer has moved past the tag the `max` is a
-      * no-op, which is what keeps a tag left in the config after adoption harmless.
-      *
-      * Applied to the ONE bundle, so the gate, the replay cursors, the in-flight handoff and the
-      * stack composer all move together — the alternative is the divergence that made this
-      * necessary. Lives here rather than in each regime manager because it was duplicated verbatim
-      * in both, which is how the comparison came to disagree with the gate in the first place.
-      */
-    def adopt(derived: Markers, tag: Option[StackNumber]): Markers =
-        tag
-            .filter(t => derived.hardConfirmed.exists(Ordering[StackNumber].gteq(_, t)))
-            .fold(derived)(t =>
-                derived.copy(hardAckedStack = Some(derived.hardAckedStack.fold(t) { own =>
-                    if Ordering[StackNumber].gteq(own, t) then own else t
-                }))
-            )
-
     /** Read all five markers from `backend`, scoping the `hardAcked` and `nextRequestNumber`
       * derivations to `own`. With the per-author CF split each satellite CF holds exactly one
       * author's journal, so the own `hardAcked` mark is just `lastKey` of the own-author `HardAck`
@@ -104,7 +75,31 @@ object Markers:
             ackedStack <- hardAck.traverse(n =>
                 persistence.getOrFail(JournalKey.HardAck(own, n)).map(_.payload.stackNum)
             )
-        } yield Markers(soft, fast, hardConf, hardAck, nextReq, evacMark, ackedStack)
+            // A seeded coil peer authored no `BlockResult`, so the scan above finds nothing — but
+            // it does hold a block, durably, adopted rather than produced. `fastBlockMark` means
+            // "the highest block this peer durably holds", and that is exactly what a start point
+            // establishes, so it stands in when there is no own production to derive it from.
+            //
+            // This is not cosmetic. The mark is the fast-side REPLAY FLOOR: leave it empty and
+            // `ReplayActor` rescans the block spine from the start and re-feeds the adopted anchor
+            // to `BlockWeaver` as though it had just arrived. `JointLedger` is already positioned
+            // on that block, so it builds the next one and compares it against the anchor —
+            // reporting consensus as broken on its first tick after a join.
+            //
+            // Only this marker takes the start point. `hardAckedStack` must NOT: a seeded peer
+            // signed nothing, and saying otherwise would put an ack it never made behind the one
+            // journal its hub pulls from. That anchor is read straight from `StoreKey.StartPoint`
+            // by the seams that need it.
+            startPoint <- persistence.get(StoreKey.StartPoint)
+        } yield Markers(
+          soft,
+          fast.orElse(startPoint.map(_.lastBlockNum)),
+          hardConf,
+          hardAck,
+          nextReq,
+          evacMark,
+          ackedStack
+        )
 
     /** The next request number this peer will assign after recovery: `max(own Request) + 1`, or
       * `RequestNumber(0)` for an empty store — the last key of the own-author `Request` CF (an

@@ -21,8 +21,8 @@ import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.metrics.PeerMetrics
@@ -32,7 +32,6 @@ import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Gen, Properties, PropertyM, Test}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.uplc.builtin.ByteString
-import test.Generators.Hydrozoa.genRequestId
 import test.TestPeerName.{Bob, Carol}
 import test.{PeersNumberSpec, TestM, TestMFixedEnv, TestPeersSpec}
 
@@ -94,16 +93,39 @@ object BlockWeaverTestHelpers {
     /** A dummy user request whose content is not interesting to the block weaver — only the request
       * id matters.
       */
+    def mkUserRequest(requestId: RequestId): UserRequestWithId = UserRequestWithId(
+      userRequest = TransactionRequest(body = TransactionRequestBody(ByteString.empty)),
+      requestId = requestId
+    )
+
+    /** One request, opening its author's stream. The weaver refuses a request that does not
+      * continue its author's stream ([[RequestCursors]]), so a lone request can only be that
+      * author's first.
+      */
     def genUserRequest: Gen[UserRequestWithId] =
+        genAuthor.map(peerNum => mkUserRequest(RequestId(peerNum, RequestNumber.zero)))
+
+    /** Exactly `count` requests whose per-author streams run contiguously from zero, interleaved
+      * across authors in an arbitrary order — what the request lanes deliver, and the only shape
+      * the weaver's contiguity gate admits. Ids are distinct by construction.
+      */
+    def genUserRequests(count: Int): Gen[List[UserRequestWithId]] =
         for {
-            requestId <- genRequestId
-            userRequest = TransactionRequest(
-              body = TransactionRequestBody(ByteString.empty)
-            )
-        } yield UserRequestWithId(
-          userRequest = userRequest,
-          requestId = requestId
-        )
+            authors <- Gen.nonEmptyListOf(genAuthor).map(_.distinct)
+            arrivals <- Gen.listOfN(count, Gen.oneOf(authors))
+        } yield arrivals
+            .foldLeft((Map.empty[Int, Long], Vector.empty[UserRequestWithId])) {
+                case ((nextNums, acc), peerNum) =>
+                    val requestNum = nextNums.getOrElse(peerNum, 0L)
+                    (
+                      nextNums.updated(peerNum, requestNum + 1),
+                      acc :+ mkUserRequest(RequestId(peerNum, requestNum))
+                    )
+            }
+            ._2
+            .toList
+
+    private def genAuthor: Gen[Int] = Gen.choose(0, 4)
 
     /** Like [[mkBlockWeaverActor]] but also returns the weaver's event stream.
       *
@@ -173,7 +195,7 @@ object BlockWeaverTestHelpers {
         })
             .map(brief =>
                 Block.SoftConfirmed
-                    .Minor(brief, headerMultiSigned = List.empty, finalizationRequested = false)
+                    .Minor(brief, softAckSignatures = List.empty, finalizationRequested = false)
             )
 
     def mkBlockWeaverActor(peerNumber: HeadPeerNumber): BWTest[BlockWeaver.Handle] =
@@ -250,7 +272,7 @@ object BlockWeaverTestHelpers {
     def mkMinorBriefWith(
         blockNum: BlockNumber,
         config: HeadConfig,
-        requests: List[(RequestId, ValidityFlag)]
+        requests: List[(RequestId, RequestHash, ValidityFlag)]
     ): BWTest[BlockBrief.Minor] =
         lift(for {
             now <- realTimeQuantizedInstant(config.slotConfig)
@@ -487,7 +509,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- lift(
             weaver ! Block.SoftConfirmed.Minor(
               brief,
-              headerMultiSigned = List.empty,
+              softAckSignatures = List.empty,
               finalizationRequested = false
             )
           )
@@ -509,10 +531,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       testM = for {
           env <- ask
           requests <- pick(
-            Gen
-                .nonEmptyListOf(genUserRequest)
-                .map(_.distinctBy(_.requestId))
-                .label("random user requests")
+            Gen.choose(1, 20).flatMap(genUserRequests).label("random user requests")
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
@@ -557,12 +576,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           cap = config.maxRequestsPerBlock
           // More than one block's worth, but at most two, so block 2 fills to the cap and the
           // remainder must roll into block 3.
-          requests <- pick(
-            Gen
-                .listOfN(2 * smallCap, genUserRequest)
-                .map(_.distinctBy(_.requestId))
-                .retryUntil(reqs => reqs.sizeIs > cap)
-          )
+          requests <- pick(genUserRequests(2 * smallCap))
           // The leader packs its own author's requests first: block 2 takes the cap, the rest spill.
           partitioned = requests.partition(_.requestId.peerNum == Carol.headPeerNumber)
           ordered = partitioned._1 ++ partitioned._2
@@ -579,7 +593,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- lift(
             (weaver ! Block.SoftConfirmed.Minor(
               brief1,
-              headerMultiSigned = List.empty,
+              softAckSignatures = List.empty,
               finalizationRequested = false
             )) >> env.system.waitForIdle()
           )
@@ -588,7 +602,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           brief3 <- mkMinorBriefWith(
             BlockNumber(3),
             config.headConfig,
-            overflowExpected.map(r => (r.requestId, ValidityFlag.Valid))
+            overflowExpected.map(r => (r.requestId, r.request.body.mkHash, ValidityFlag.Valid))
           )
           _ <- lift((weaver ! brief3) >> env.system.waitForIdle())
           _ <- settle(env.jointLedgerMock.events.get == ordered)
@@ -611,11 +625,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
           // Feed at most one block's worth so every event is forwarded rather than held back by the
           // cap — this property is about immediate pass-through, not the overflow behaviour.
-          events <- pick(
-            Gen
-                .nonEmptyListOf(genUserRequest)
-                .map(_.distinctBy(_.requestId).take(config.maxRequestsPerBlock))
-          )
+          events <- pick(Gen.choose(1, config.maxRequestsPerBlock: Int).flatMap(genUserRequests))
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           brief <- mkDummyBlockBrief1(config.headConfig)
           _ <- lift(weaver ! brief)
@@ -717,7 +727,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               ()
           })
           _ <- lift(
-            (weaver ! Block.SoftConfirmed.Final(finalBrief, headerMultiSigned = List.empty)) >>
+            (weaver ! Block.SoftConfirmed.Final(finalBrief, softAckSignatures = List.empty)) >>
                 env.system.waitForIdle()
           )
           // Give the event-stream drainer a beat to observe a panic before reading.

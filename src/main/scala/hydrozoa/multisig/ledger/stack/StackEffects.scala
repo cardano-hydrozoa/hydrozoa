@@ -27,6 +27,17 @@ import scalus.crypto.ed25519.VerificationKey
   * **Never wire-broadcast** — only [[StackBrief]] travels on the wire. Each peer derives the
   * effects from its own [[hydrozoa.multisig.ledger.block.BlockResult]] stream + the leader's brief;
   * deterministic derivation makes the resulting bytes byte-identical across peers.
+  *
+  * ⛔ **One exception: a coil peer joining at a start point** (GUM-312). It has no `BlockResult`
+  * stream below that point, so it can derive nothing there — the premise the rule rests on does not
+  * hold for it. A hub therefore sends it **two signed artifacts and no more**: the
+  * [[hydrozoa.multisig.ledger.l1.tx.SettlementTx]] the treasury comes from, and — only at a minor
+  * start point — that minor's [[StandaloneEvacuationCommitment.MultiSigned]]. Both are multisigned,
+  * so the coil validates them rather than trusting the donor.
+  *
+  * No `StackEffects` value crosses the wire even then, which is what keeps the exception narrow: it
+  * is two artifacts a coil can check, not a channel for effects in general. See
+  * `BatchMessages.Join.Offer`.
   */
 sealed trait StackEffects
 

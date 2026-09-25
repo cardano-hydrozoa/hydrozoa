@@ -6,7 +6,6 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.multisig.consensus.SlowConsensusActor.CellError
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StandaloneEvacuationCommitment}
 import scala.util.control.NonFatal
@@ -107,7 +106,7 @@ final class HardAckSignatureVerifier(config: HeadConfig.Bootstrap.Section) {
             r.partitions.head match {
                 case PartitionEffects.Minor(sec, refunds) if r.partitions.tail.isEmpty =>
                     resolvePeerVKey(peer).flatMap(vk =>
-                        verifyHeader(vk, sec.header, p.sec) >>
+                        verifySec(vk, sec.header, p.sec) >>
                             verifyTxList(vk, "sole.refunds", refunds.map(_.tx), p.refunds)
                     )
                 case _ =>
@@ -260,7 +259,7 @@ final class HardAckSignatureVerifier(config: HeadConfig.Bootstrap.Section) {
               PartitionEffects.Minor(sec, refunds),
               HardAck.Round1Payload.PartitionSigs.Minor(sSec, sRefunds)
             ) =>
-            verifyHeader(vk, sec.header, sSec) >>
+            verifySec(vk, sec.header, sSec) >>
                 verifyTxList(vk, "partition.refunds", refunds.map(_.tx), sRefunds)
         case _ =>
             IO.raiseError(
@@ -275,10 +274,10 @@ final class HardAckSignatureVerifier(config: HeadConfig.Bootstrap.Section) {
     private def verifySecOpt(
         vk: VerificationKey,
         eSec: Option[StandaloneEvacuationCommitment],
-        sSec: Option[BlockHeader.HeaderSignature]
+        sSec: Option[StandaloneEvacuationCommitment.Signature]
     ): IO[Unit] = (eSec, sSec) match {
         case (None, None)            => IO.unit
-        case (Some(sec), Some(hsig)) => verifyHeader(vk, sec.header, hsig)
+        case (Some(sec), Some(hsig)) => verifySec(vk, sec.header, hsig)
         case (e, s) =>
             IO.raiseError(
               CellError.KeysetMismatch(
@@ -299,10 +298,10 @@ final class HardAckSignatureVerifier(config: HeadConfig.Bootstrap.Section) {
           CellError.KeysetMismatch(label, txs.length.toString, sigs.length.toString)
         ) >> txs.zip(sigs).traverse_ { case (tx, sg) => verifyTx(vk, tx, sg) }
 
-    private def verifyHeader(
+    private def verifySec(
         vk: VerificationKey,
         msg: ByteString,
-        sig: BlockHeader.HeaderSignature
+        sig: StandaloneEvacuationCommitment.Signature
     ): IO[Unit] =
         IO.delay(platform.verifyEd25519Signature(vk, msg, sig))
             .handleErrorWith {

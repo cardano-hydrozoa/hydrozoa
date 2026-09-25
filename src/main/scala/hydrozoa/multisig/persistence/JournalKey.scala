@@ -134,9 +134,10 @@ object JournalKey:
             requireLen(cf, bytes, 4)
             HubHardAck(hub, HubHardAckNumber(readIntBE(bytes, 0)))
         case Cf.BlockResult | Cf.SoftConfirmation | Cf.HardConfirmation | Cf.DepositMap |
-            Cf.Treasury | Cf.EvacuationMap | Cf.RequestHighWater | Cf.CoilStampMark |
-            Cf.L2CommandNumber | Cf.UnsignedStack | Cf.RequestBlockIndex | Cf.DepositDecisionIndex |
-            Cf.WithdrawalEffectIndex | Cf.BlockStackIndex | Cf.EffectStackIndex | Cf.Meta =>
+            Cf.Treasury | Cf.StartPoint | Cf.EvacuationMap | Cf.RequestHighWater |
+            Cf.CoilStampMark | Cf.L2CommandNumber | Cf.UnsignedStack | Cf.RequestBlockIndex |
+            Cf.DepositDecisionIndex | Cf.WithdrawalEffectIndex | Cf.BlockStackIndex |
+            Cf.EffectStackIndex | Cf.Meta =>
             throw new IllegalArgumentException(
               s"$cf is not a journal CF; JournalKey.decode is undefined for it"
             )
