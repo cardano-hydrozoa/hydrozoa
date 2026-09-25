@@ -399,7 +399,11 @@ class EvacuationAttackTest extends AnyFunSuite {
             case Right((_, e)) => e
             case Left(err)     => fail(s"tx1 submit failed: $err")
         }
-        val residual = evac1.treasuryUtxoProduced.copy(utxoId = currentTreasuryInput(emu2))
+        val residual = evac1.treasuryUtxoProduced
+        val _ = assert(
+          residual.utxoId == currentTreasuryInput(emu2),
+          "treasuryUtxoProduced does not name the on-chain treasury"
+        )
 
         // tx2: try to drain `key` AGAIN from the residual treasury. Its funds for `key` are gone, so
         // the value invariant (treasuryInput = treasuryOutput + Σ evacuated) makes the obligation

@@ -60,6 +60,7 @@ private object EvacuationTxOps {
             case MembershipError(wrapped: Membership.MembershipCheckError)
             case SetupLadderError(wrapped: SetupLadder.UncoveredEvacuationCount)
             case BuilderError(wrapped: (SomeBuildError, String))
+            case TreasuryOutputMissing(txId: TransactionHash)
 
             override def toString: String = getMessage
 
@@ -82,6 +83,8 @@ private object EvacuationTxOps {
                     s"Setup ladder error: ${wrapped.getMessage}"
                 case BuilderError((buildError, explanation)) =>
                     s"Builder error: $explanation - $buildError"
+                case TreasuryOutputMissing(txId) =>
+                    s"Finalized evacuation tx $txId does not carry the residual treasury output"
     }
 
     /** @param evacuateesToTryNext
@@ -248,11 +251,20 @@ private object EvacuationTxOps {
 
                 finalized <- finalize
 
+                // The residual treasury is sent after the collateral return, so it sits at index
+                // 1 — the position the treasury script's Evacuate branch requires. Locate it in
+                // the finalized tx rather than hard-coding the index, so the produced utxo always
+                // names the output that actually carries the treasury; if finalization ever
+                // altered or dropped it, the build fails here instead of recording a wrong utxo.
+                treasuryOutputIx <- finalized.transaction.body.value.outputs
+                    .indexWhere(_.value == residualTreasury.toOutput) match {
+                    case -1 =>
+                        Left(Build.Error.TreasuryOutputMissing(finalized.transaction.id))
+                    case ix => Right(ix)
+                }
+
                 newTreasuryUtxo = RuleBasedTreasuryUtxo(
-                  utxoId = TransactionInput(
-                    finalized.transaction.id,
-                    0
-                  ),
+                  utxoId = TransactionInput(finalized.transaction.id, treasuryOutputIx),
                   residualTreasury
                 )
 

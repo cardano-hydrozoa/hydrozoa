@@ -139,11 +139,13 @@ class EvacuationDrainTest extends AnyFunSuite {
                 case Right((_, e)) => e
                 case Left(err)     => fail(s"evacuation submit failed at step $depth: $err")
             }
-            // EvacuationTx hard-codes treasuryUtxoProduced.utxoId to output index 0, but the residual
-            // treasury is not at index 0 (the collateral-return output precedes it), so re-read the
-            // real treasury input from the emulator before chaining.
-            val newTreasury =
-                evac.treasuryUtxoProduced.copy(utxoId = currentTreasuryInput(nextEmulator))
+            // Chain on the builder's own record of the residual treasury: it must name the utxo
+            // the ledger actually holds at the treasury address.
+            val newTreasury = evac.treasuryUtxoProduced
+            val _ = assert(
+              newTreasury.utxoId == currentTreasuryInput(nextEmulator),
+              s"treasuryUtxoProduced does not name the on-chain treasury at step $depth"
+            )
             // The returned collateral (fee-subtracted) sits at output index 0 of the just-submitted
             // evacuation tx; parse it back into a CollateralUtxo for the next step.
             val newCollateralInput = TransactionInput(evac.tx.id, 0)
