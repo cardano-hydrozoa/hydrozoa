@@ -470,14 +470,15 @@ script refs) and talks to L1: it fetches head peer 0's UTxOs (to select funding 
 the balance) and the protocol parameters via Blockfrost, then pre-builds the initialization tx
 into the config (each node derives the fallback tx from it when reading the config). The
 Blockfrost key comes from the `.local` template (step 1); the build fails fast if the key's
-network does not match the bootstrap config's `cardanoNetwork`.
+network does not match the bootstrap config's `cardanoNetwork`, unless a `blockfrostApiUrl` names
+another endpoint, since only blockfrost.io scopes a key to one network.
 
 > **On a devnet:** same host-side override, so the build reaches the devnet at its host-mapped port
 > while the peers keep the in-mesh URL:
 >
 > ```bash
-> hydrozoa build-head-config --blockfrost-url "$YACI_HOST_URL"           # Docker
-> just build-head-config --blockfrost-url "$YACI_HOST_URL"               # local
+> hydrozoa build-head-config --l2-ledger cardano-eutxo --blockfrost-url "$YACI_HOST_URL"   # Docker
+> just build-head-config cardano-eutxo --blockfrost-url "$YACI_HOST_URL"                 # local
 > ```
 
 At this point every node has its two files, and the composition (§5) mounts
