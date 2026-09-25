@@ -37,7 +37,16 @@ type MockStateF[A] = State[MockState, A]
 // It should be ReaderT over those vals, though I don't think it buys anything but extra lifts.
 class CardanoBackendMock private (
     private val mutator: Mutator,
-    private val mkContext: Long => Context
+    private val mkContext: Long => Context,
+    /** What this mock reports as the chain's protocol parameters.
+      *
+      * ⛔ Defaults to the context's, which is scalus's `UtxoEnv.testMainnet` FIXTURE — unrelated to
+      * the `CardanoInfo` parameters a head's config asserts, for ANY network. A node now refuses to
+      * start when those two disagree, so a test booting a real node must hand the mock the config's
+      * parameters; otherwise the fixture is claiming the chain runs parameters the head was never
+      * configured for, and the refusal is correct rather than a bug.
+      */
+    private val reportedParams: Option[ProtocolParams]
 ) extends CardanoBackend[MockStateF] {
     import State.*
 
@@ -203,7 +212,7 @@ class CardanoBackendMock private (
 
     def fetchLatestParams: MockStateF[Either[Error, ProtocolParams]] = {
         // As long as paramters don't depend on the slot number it's fine
-        State.pure(Right(mkContext(0).env.params))
+        State.pure(Right(reportedParams.getOrElse(mkContext(0).env.params)))
     }
 
     def setSlot(currentSlot: Slot): MockStateF[Unit] = {
@@ -221,9 +230,10 @@ object CardanoBackendMock {
     def mockIO(
         initialState: MockState,
         mutator: Mutator = CardanoMutator,
-        mkContext: Long => Context = Context.testMainnet
+        mkContext: Long => Context = Context.testMainnet,
+        reportedParams: Option[ProtocolParams] = None
     ): IO[CardanoBackend[IO]] =
-        mockIOWithSnapshot(initialState, mutator, mkContext).map(_._1)
+        mockIOWithSnapshot(initialState, mutator, mkContext, reportedParams).map(_._1)
 
     /** Like [[mockIO]] but also returns an `IO[Utxos]` that reads the current UTxO set from the
       * shared state ref. Useful for inspecting the terminal ledger state after actors finish.
@@ -231,7 +241,8 @@ object CardanoBackendMock {
     def mockIOWithSnapshot(
         initialState: MockState,
         mutator: Mutator = CardanoMutator,
-        mkContext: Long => Context = Context.testMainnet
+        mkContext: Long => Context = Context.testMainnet,
+        reportedParams: Option[ProtocolParams] = None
     ): IO[(CardanoBackend[IO], IO[Utxos])] = {
         val ioLog: ContraTracer[IO, CardanoBackendEvent] =
             Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
@@ -243,7 +254,7 @@ object CardanoBackendMock {
             )
             stateRef <- Ref.of[IO, MockState](initialState)
         } yield {
-            val mock = new CardanoBackendMock(mutator, mkContext)
+            val mock = new CardanoBackendMock(mutator, mkContext, reportedParams)
             // TODO: this is awkward, but this requires the mending of Scalus
             //  - Context is not a case class
             //  - Context is not returned by CardanoMutator

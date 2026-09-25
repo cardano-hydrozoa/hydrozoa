@@ -61,8 +61,12 @@
     <logger name="RemoteL2Screener" level="trace"/>
     <logger name="HydrozoaHttp" level="trace"/>
     <logger name="CoilPeerWsTransport" level="trace"/>
+    <logger name="PeerTransport" level="trace"/>
     <logger name="HubWsTransport" level="trace"/>
     <logger name="CoilAckSequencer" level="trace"/>
+    <logger name="CoilJoin" level="trace"/>
+    <!-- The only record of why a supervised actor failed; never quiet it. -->
+    <logger name="Supervision" level="error"/>
     <logger name="Persistence" level="info"/>
     <logger name="BlockHeader" level="info"/>
     <logger name="TxTiming" level="info"/>

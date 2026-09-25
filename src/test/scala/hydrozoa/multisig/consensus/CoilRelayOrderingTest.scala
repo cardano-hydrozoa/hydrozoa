@@ -64,15 +64,17 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
         )
     }
 
-    /** The real hub→coil block lane, built exactly as `PeerLiaisonHubToCoil` builds it (`:93`).
-      * `backfill` is unused here — nothing in this scenario reads below the outbox floor.
+    /** The real hub→coil block lane, built exactly as `PeerLiaisonHubToCoil` builds it (`:93`). The
+      * journal read is unused here — the cap is far above what this scenario appends, so nothing is
+      * ever evicted and no reply falls below the outbox floor.
       */
     private def blockLane: LaneOutbound[BlockBrief.Next, BlockNumber] =
         LaneOutbound.contiguous[BlockBrief.Next, BlockNumber](
           _.blockNum,
           BlockNumber(1),
           _.increment,
-          backfill = (_, _) => IO.pure(Nil)
+          outboxDepth = 1024,
+          serveFromJournal = (_, _) => IO.pure(Nil)
         )
 
     /** Stands in for `PeerLiaisonHubToCoil`, doing what its `appendArtifact` does for a block brief
@@ -82,8 +84,8 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
         lane: LaneOutbound[BlockBrief.Next, BlockNumber],
         raised: cats.effect.Ref[IO, Vector[Throwable]],
         appended: cats.effect.Ref[IO, Int]
-    ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
-        override def receive: Receive[IO, LiaisonProtocol.HubToCoilRequest] = {
+    ) extends Actor[IO, LiaisonProtocol.HubLiaisonMessage] {
+        override def receive: Receive[IO, LiaisonProtocol.HubLiaisonMessage] = {
             // Record and re-raise: the raise is the incident (it kills the actor system), and the
             // record is how the harness observes it afterwards. `appended` counts briefs the lane
             // has finished with either way, which is what [[run]] waits on.

@@ -24,8 +24,8 @@ final class LaneBidirectional[T, N] private (
 ) {
     // ---- Outbound ----
     def append(item: T): IO[Unit] = out.append(item)
-    def reply(remoteCursor: N, ceiling: Option[N] = None): IO[LaneOutbound.Reply[T]] =
-        out.reply(remoteCursor, ceiling)
+    def reply(remoteCursor: N, servable: T => Boolean = _ => true): IO[LaneOutbound.Reply[T]] =
+        out.reply(remoteCursor, servable)
     def outboxIsEmpty: IO[Boolean] = out.outboxIsEmpty
     def seedHighWaterOutbox(highWater: Option[N]): IO[Unit] = out.seedHighWater(highWater)
 
@@ -40,34 +40,50 @@ final class LaneBidirectional[T, N] private (
 object LaneBidirectional {
 
     /** A contiguous bidirectional lane: both directions start at `first`, successor `+1`.
-      * `backfill` reads the outbound prefix below the in-memory outbox floor from the store on a
-      * reply.
+      * `serveFromJournal` reads the outbound entries below the in-memory outbox floor from the
+      * store on a reply; `outboxDepth` bounds how many replies that floor leaves in memory.
       */
     def contiguous[T, N: Ordering](
         numberOf: T => N,
         first: N,
         increment: N => N,
         maxPerReply: Int = 1,
-        backfill: (N, Int) => IO[List[T]]
+        outboxDepth: Int,
+        serveFromJournal: (N, Int) => IO[List[T]]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.contiguous(numberOf, first, increment, maxPerReply, backfill),
+          LaneOutbound.contiguous(
+            numberOf,
+            first,
+            increment,
+            maxPerReply,
+            outboxDepth = outboxDepth,
+            serveFromJournal = serveFromJournal
+          ),
           LaneInbound.contiguous(numberOf, first, increment)
         )
 
     /** A sparse bidirectional lane: outbound follows this side's leader schedule (`outboundNext`),
-      * inbound the remote's (`inboundNext`). `zero` is "before the first" for both. `backfill`
-      * reads the outbound prefix below the in-memory outbox floor from the store on a reply.
+      * inbound the remote's (`inboundNext`). `zero` is "before the first" for both.
+      * `serveFromJournal` reads the outbound entries below the in-memory outbox floor from the
+      * store on a reply; `outboxDepth` bounds how many replies that floor leaves in memory.
       */
     def sparse[T, N: Ordering](
         numberOf: T => N,
         zero: N,
         outboundNext: N => Option[N],
         inboundNext: N => Option[N],
-        backfill: (N, Int) => IO[List[T]]
+        outboxDepth: Int,
+        serveFromJournal: (N, Int) => IO[List[T]]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.sparse(numberOf, zero, outboundNext, backfill),
+          LaneOutbound.sparse(
+            numberOf,
+            zero,
+            outboundNext,
+            outboxDepth = outboxDepth,
+            serveFromJournal = serveFromJournal
+          ),
           LaneInbound.sparse(numberOf, zero, inboundNext)
         )
 }

@@ -11,7 +11,9 @@
   "nodeOperationMultisigConfig": {
     "cardanoLiaisonPollingPeriod": 20000,
     "peerLiaisonMaxRequestsPerBatch": 500,
+    "peerLiaisonOutboxDepth": 2,
     "peerLiaisonResendInterval": 5000,
+    "coilCatchUpStacks": 16,
     "rateLimits": {
       "softBlockMinPeriod": 100,
       "hardStackMinPeriod": 30000

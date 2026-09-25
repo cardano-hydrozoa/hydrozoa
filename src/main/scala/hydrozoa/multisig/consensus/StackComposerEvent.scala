@@ -29,6 +29,21 @@ object StackComposerEvent:
         isLeader: Boolean
     ) extends StackComposerEvent
 
+    /** The single-flight gate OPENED: `Stack.HardConfirmed` for the previous stack reached the
+      * composer, so the next stack may close.
+      *
+      * Paired with [[SingleFlightGateClosed]], these make the gate's transitions observable. A
+      * composer parked in `WaitingForPreviousHardConfirmation` otherwise gives no way to tell a
+      * confirmation that never arrived from one that arrived and was then overwritten.
+      */
+    final case class PreviousStackHardConfirmed(stackNum: StackNumber) extends StackComposerEvent
+
+    /** The single-flight gate CLOSED: a stack was closed, so the composer will not close another
+      * until that one hard-confirms. Emitted from `afterClose`, i.e. after the brief and hard-acks
+      * have already left this node.
+      */
+    final case class SingleFlightGateClosed(stackNum: StackNumber) extends StackComposerEvent
+
     /** Follower detected a structural inconsistency between the leader's brief and the local
       * single-flight position — unrecoverable; node will panic.
       */

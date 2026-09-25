@@ -8,7 +8,7 @@ import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.ConsensusStoreReader
+import hydrozoa.multisig.persistence.{ArchiveWatermarks, ConsensusStoreReader}
 import hydrozoa.multisig.server.HydrozoaHttpEvent.ServerStarted
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
@@ -31,7 +31,8 @@ object HydrozoaServer {
     /** Create and start the HTTP server.
       *
       * @param requestSequencer
-      *   Handle to the RequestSequencer actor
+      *   Handle to the RequestSequencer actor, or `None` on a coil peer. See [[HydrozoaRoutes]] for
+      *   what its absence removes.
       * @param blockWeaver
       *   Handle to the BlockWeaver actor
       * @param nodeStatus
@@ -53,11 +54,12 @@ object HydrozoaServer {
       *   Resource that manages the server lifecycle
       */
     def create(
-        requestSequencer: RequestSequencer.Handle,
+        requestSequencer: Option[RequestSequencer.Handle],
         blockWeaver: BlockWeaver.Handle,
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
+        archiveWatermarks: Option[ArchiveWatermarks],
         headConfig: HeadConfig,
         config: Config,
         metrics: PeerMetrics,
@@ -71,6 +73,7 @@ object HydrozoaServer {
                 nodeStatus,
                 consensusReader,
                 l2QueryReader,
+                archiveWatermarks,
                 headConfig,
                 config,
                 metrics,
@@ -91,11 +94,12 @@ object HydrozoaServer {
       * Note: In production, this would be integrated into HydrozoaNode
       */
     def run(
-        requestSequencer: RequestSequencer.Handle,
+        requestSequencer: Option[RequestSequencer.Handle],
         blockWeaver: BlockWeaver.Handle,
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
+        archiveWatermarks: Option[ArchiveWatermarks],
         headConfig: HeadConfig,
         config: Config,
         metrics: PeerMetrics,
@@ -107,6 +111,7 @@ object HydrozoaServer {
           nodeStatus,
           consensusReader,
           l2QueryReader,
+          archiveWatermarks,
           headConfig,
           config,
           metrics,

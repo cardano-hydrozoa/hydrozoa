@@ -15,10 +15,11 @@ import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
-import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l2.L2StateHash
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, DepositDecision, RequestBlockEntry, Timestamped}
@@ -79,17 +80,19 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
             blockNum = BlockNumber(1),
             blockVersion = BlockVersion.Full(1, 0),
             kzgCommitment = EvacuationMap.empty.kzgCommitment,
+            l2StateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
             header = StandaloneEvacuationCommitmentOnchain(
               StandaloneEvacuationCommitmentOnchain(
                 headId = headConfig.headTokenNames.treasuryTokenName.bytes,
                 versionMajor = BigInt(1),
                 versionMinor = BigInt(0),
-                commitment = EvacuationMap.empty.kzgCommitment
+                commitment = EvacuationMap.empty.kzgCommitment,
+                l2StateHash = ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))
               )
             )
           ),
-          headerMultiSigned = List.tabulate(nHeadPeers + 1)(i =>
-              Some(BlockHeader.Minor.HeaderSignature(IArray(i.toByte, (i + 1).toByte)))
+          signatures = List.tabulate(nHeadPeers + 1)(i =>
+              Some(StandaloneEvacuationCommitment.Signature(IArray(i.toByte, (i + 1).toByte)))
           )
         )
 
@@ -111,9 +114,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
             def blockBriefs: IO[List[BlockBrief.Next]] = IO.pure(List(brief))
             def blockBrief(num: BlockNumber): IO[Option[BlockBrief.Next]] =
                 IO.pure(Option.when(num == BlockNumber(1))(brief))
-            def softConfirmation(
-                num: BlockNumber
-            ): IO[Option[Timestamped[Block.SoftConfirmed.Next]]] = IO.pure(None)
+            def softConfirmedAt(num: BlockNumber): IO[Option[Instant]] = IO.pure(None)
             def stackOf(num: BlockNumber): IO[Option[StackNumber]] =
                 IO.pure(Option.when(num == BlockNumber(1))(StackNumber(1)))
             def hardConfirmation(
@@ -169,10 +170,11 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                                 _ => IO.pure(())
                         })
                         routes <- HydrozoaRoutes(
-                          reqStub,
+                          Some(reqStub),
                           bwStub,
                           IO.pure(NodeStatus.Active),
                           stubReader(brief),
+                          None,
                           None,
                           headConfig,
                           HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
@@ -215,6 +217,13 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                 val _ = assert(c.get[String]("l1TxId") == Right(secId.toHex))
                 val _ = assert(c.get[Int]("blockNumber") == Right(1))
                 val _ = assert(c.downField("secOnchainSerialized").as[String].isRight)
+                // The certificate's two commitments, decoded so a reader needs no Plutus decoder.
+                val _ = assert(
+                  c.get[String]("l2StateHash") == Right(sec.commitment.l2StateHash.toHex)
+                )
+                val _ = assert(
+                  c.get[String]("kzgCommitment") == Right(sec.commitment.kzgCommitment.toHex)
+                )
                 // nHeadPeers head signatures, the remaining tail as coil signatures.
                 val _ = assert(c.get[List[String]]("headSignatures").exists(_.size == nHeadPeers))
                 val _ = assert(c.get[List[String]]("coilSignatures").exists(_.size == 1))
@@ -230,6 +239,9 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                 // The by-id response is type-tagged by kind and omits l1TxId (it is the queried path).
                 val _ = assert(body.hcursor.get[String]("type") == Right("sec"))
                 val _ = assert(body.hcursor.downField("secOnchainSerialized").as[String].isRight)
+                val _ = assert(
+                  body.hcursor.get[String]("l2StateHash") == Right(sec.commitment.l2StateHash.toHex)
+                )
                 ()
             }
         }

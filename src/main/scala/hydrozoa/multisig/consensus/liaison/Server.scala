@@ -2,7 +2,7 @@ package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.{IO, Ref}
 import cats.implicits.*
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error}
 import hydrozoa.multisig.consensus.liaison.Server.Served
 
 /** The serve half of one liaison link (§5.5 of `docs/spec/coil-network.md`) [doc-ref]: answer the
@@ -33,7 +33,8 @@ final class Server[G, N](
 )(send: N => IO[Unit]) {
 
     private val sendImmediately = Ref.unsafe[IO, Option[G]](None)
-    private val logger = Logging.loggerIO("PeerLiaison")
+    private val logger: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("PeerLiaison"))
 
     /** Answer a pull, or stash it if there is nothing new yet. */
     def handleGet(get: G): IO[Unit] =

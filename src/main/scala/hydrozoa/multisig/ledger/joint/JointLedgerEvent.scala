@@ -3,9 +3,9 @@ package hydrozoa.multisig.ledger.joint
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.head.multisig.timing.TxTimingEvent
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockHeaderEvent, BlockNumber}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
-import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMapEvent
+import hydrozoa.multisig.ledger.event.{RequestHash, RequestId}
+import hydrozoa.multisig.ledger.l1.deposits.map.{DepositsMap, DepositsMapEvent}
 
 /** Typed events emitted by [[JointLedger]]. Pure data; formatters in [[JointLedgerEventFormat]]
   * decide how each variant is rendered to a particular sink (SLF4J text, JSONL protocol trace,
@@ -56,7 +56,7 @@ object JointLedgerEvent:
         blockNum: BlockNumber,
         endTime: BlockCreationEndTime,
         competingFallbackTxTime: FallbackTxStartTime,
-        splitDescription: String
+        split: DepositsMap.Split
     ) extends JointLedgerEvent
 
     /** Verbose debug dump of the inputs to brief construction. */
@@ -64,7 +64,7 @@ object JointLedgerEvent:
         previousHeader: BlockHeader,
         blockCreationStartTime: BlockCreationStartTime,
         competingFallbackTxTime: FallbackTxStartTime,
-        events: List[(RequestId, ValidityFlag)],
+        events: List[(RequestId, RequestHash, ValidityFlag)],
         decisionsAbsorbed: List[RequestId],
         decisionsRejected: List[RequestId]
     ) extends JointLedgerEvent

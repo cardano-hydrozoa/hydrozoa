@@ -69,13 +69,17 @@ object Cf:
     case object UnsignedStack extends Cf:
         def name = "UnsignedStack"
 
-    /** JL fast-side deposits snapshot — single keyed blob. */
+    /** JL fast-side deposits snapshot, keyed per committed `blockNum`. */
     case object DepositMap extends Cf:
         def name = "DepositMap"
 
     /** SC slow-side treasury snapshot — single keyed blob. */
     case object Treasury extends Cf:
         def name = "Treasury"
+
+    /** Where a coil peer was seeded on joining — single keyed blob, absent on every other peer. */
+    case object StartPoint extends Cf:
+        def name = "StartPoint"
 
     /** SC cumulative evacuation map, keyed per committed `blockNum`. */
     case object EvacuationMap extends Cf:
@@ -156,6 +160,7 @@ object Cf:
       UnsignedStack,
       DepositMap,
       Treasury,
+      StartPoint,
       EvacuationMap,
       RequestBlockIndex,
       DepositDecisionIndex,

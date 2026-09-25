@@ -13,12 +13,21 @@ import scalus.uplc.builtin.ByteString
   */
 object Codecs {
 
-    given protocolParamsDecoder: Decoder[ProtocolParams] = Decoder.decodeString.emap(rawString =>
-        Try(ProtocolParams.fromBlockfrostJson(rawString)).toEither.left.map(e =>
-            "ProtocolParams decoding failed. NOTE: we wrap the scalus blockfrost codec," +
-                s"which uses the upickle JSON library instead of circe. The message from upickle is: $e"
+    /** Reads what [[protocolParamsEncoder]] writes: scalus's blockfrost JSON as an **object**. A
+      * JSON string holding the same text is accepted too, since `fromBlockfrostJson` takes raw text
+      * either way.
+      */
+    given protocolParamsDecoder: Decoder[ProtocolParams] = Decoder.instance { cursor =>
+        val raw = cursor.value.asString.getOrElse(cursor.value.noSpaces)
+        Try(ProtocolParams.fromBlockfrostJson(raw)).toEither.left.map(e =>
+            DecodingFailure(
+              "ProtocolParams decoding failed. NOTE: we wrap the scalus blockfrost codec, " +
+                  "which uses the upickle JSON library instead of circe. The message from " +
+                  s"upickle is: $e",
+              cursor.history
+            )
         )
-    )
+    }
 
     given protocolParamsEncoder: Encoder[ProtocolParams] with {
         override def apply(pp: ProtocolParams): Json = {

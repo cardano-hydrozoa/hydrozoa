@@ -2,6 +2,7 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import cats.syntax.parallel.*
+import cats.syntax.traverse.*
 import hydrozoa.multisig.consensus.ack.HardAckNumber
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -30,10 +31,23 @@ final case class Markers(
     fastBlockMark: Option[BlockNumber],
     hardConfirmed: Option[StackNumber],
     hardAcked: Option[HardAckNumber],
-    nextRequestNumber: RequestNumber
+    nextRequestNumber: RequestNumber,
+    evacuationMapMark: Option[BlockNumber],
+    /** The stack this peer's last own hard-ack covers — `hardAcked` dereferenced into the journal
+      * and unpacked. Unlike the six marks around it this is an *interpretation*, not a `lastKey`,
+      * which is exactly why it belongs here: derived twice it can be adjusted once and disagree
+      * everywhere. `None` on an empty own-ack journal.
+      */
+    hardAckedStack: Option[StackNumber]
 )
 
 object Markers:
+    /** The marker set of an empty store: every anchor absent, the request counter at zero. What
+      * [[derive]] returns for a cold store, spelled out so a caller that has no store to derive
+      * from (a test wiring an actor against an empty backend) need not fabricate one.
+      */
+    val cold: Markers = Markers(None, None, None, None, RequestNumber(0), None, None)
+
     /** Read all five markers from `backend`, scoping the `hardAcked` and `nextRequestNumber`
       * derivations to `own`. With the per-author CF split each satellite CF holds exactly one
       * author's journal, so the own `hardAcked` mark is just `lastKey` of the own-author `HardAck`
@@ -41,17 +55,51 @@ object Markers:
       * covers both peer types, and `nextRequestNumber` is `RequestNumber(0)` on a coil peer (the
       * user-request surface is head-only).
       */
-    def derive(backend: BackendStore[IO], own: PeerId): IO[Markers] =
+    def derive(persistence: Persistence[IO], own: PeerId): IO[Markers] =
+        val backend = persistence.backend
         val nextRequest = own match
             case PeerId.Head(n) => recoverNextRequestNumber(backend, n)
             case PeerId.Coil(_) => IO.pure(RequestNumber(0))
-        (
-          backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum)),
-          recoverFastBlockMark(backend),
-          backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum)),
-          backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard)),
-          nextRequest
-        ).parMapN(Markers.apply)
+        for {
+            base <- (
+              backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum)),
+              recoverFastBlockMark(backend),
+              backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum)),
+              backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard)),
+              nextRequest,
+              recoverEvacuationMapMark(backend)
+            ).parTupled
+            (soft, fast, hardConf, hardAck, nextReq, evacMark) = base
+            // Sequenced after the parallel block: it is keyed BY `hardAcked`, so it cannot be read
+            // alongside the mark it depends on.
+            ackedStack <- hardAck.traverse(n =>
+                persistence.getOrFail(JournalKey.HardAck(own, n)).map(_.payload.stackNum)
+            )
+            // A seeded coil peer authored no `BlockResult`, so the scan above finds nothing — but
+            // it does hold a block, durably, adopted rather than produced. `fastBlockMark` means
+            // "the highest block this peer durably holds", and that is exactly what a start point
+            // establishes, so it stands in when there is no own production to derive it from.
+            //
+            // This is not cosmetic. The mark is the fast-side REPLAY FLOOR: leave it empty and
+            // `ReplayActor` rescans the block spine from the start and re-feeds the adopted anchor
+            // to `BlockWeaver` as though it had just arrived. `JointLedger` is already positioned
+            // on that block, so it builds the next one and compares it against the anchor —
+            // reporting consensus as broken on its first tick after a join.
+            //
+            // Only this marker takes the start point. `hardAckedStack` must NOT: a seeded peer
+            // signed nothing, and saying otherwise would put an ack it never made behind the one
+            // journal its hub pulls from. That anchor is read straight from `StoreKey.StartPoint`
+            // by the seams that need it.
+            startPoint <- persistence.get(StoreKey.StartPoint)
+        } yield Markers(
+          soft,
+          fast.orElse(startPoint.map(_.lastBlockNum)),
+          hardConf,
+          hardAck,
+          nextReq,
+          evacMark,
+          ackedStack
+        )
 
     /** The next request number this peer will assign after recovery: `max(own Request) + 1`, or
       * `RequestNumber(0)` for an empty store — the last key of the own-author `Request` CF (an

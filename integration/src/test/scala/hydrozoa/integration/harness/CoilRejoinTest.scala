@@ -1,0 +1,175 @@
+package hydrozoa.integration.harness
+
+import cats.effect.IO
+import cats.syntax.all.*
+import hydrozoa.integration.stage4.Stage4Suite
+import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.consensus.RequestSequencer
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.persistence.{Markers, StoreKey}
+import org.scalacheck.Gen
+import org.scalacheck.rng.Seed
+import org.scalatest.funsuite.AnyFunSuite
+import scala.concurrent.duration.*
+
+/** Wipe a coil peer's store and let it come back — the failure GUM-312 exists to close.
+  *
+  * Seen live twice: a coil crash-looped after its volume was recreated, and again when an operator
+  * removed a coil database and restarted. The store reads as cold, the coil re-derives stack 0 from
+  * config, and the head is long past it; the hub then asks for hard-acks the coil cannot produce
+  * and the link dead-ends at
+  * `OwnHardAck.Get cursor out of bounds — asked=4 bound=2 lastAppended=1`.
+  *
+  * ⚠️ **What makes this test non-vacuous is the head being past stack 0 when the wipe happens.** A
+  * coil wiped while the head is still at stack 0 bootstraps correctly on its own and proves nothing
+  * — the whole failure is the gap between where the coil restarts and where the head has got to. So
+  * the run waits for a hard-confirmation before wiping, and asserts on it afterwards.
+  */
+class CoilRejoinTest extends AnyFunSuite {
+
+    test("a coil peer whose store is wiped rejoins from a start point and acks again") {
+        val victim = CoilPeerNumber(0)
+        // Ceilings, not durations — see `kickUntil`. The run-up ends at the first major, which is
+        // all a start point needs; kick requests alone only ever make minor blocks. The clock is
+        // virtual and the seed fixed, so what each phase actually takes is deterministic and these
+        // only bound a phase that is not going to finish at all.
+        val runUpCap = 12.minutes
+        val rejoinCap = 2.minutes
+        val kickEvery = 10.seconds
+
+        val state = Stage4Suite
+            .genInitialState(nPeers = 2, nCoilPeers = 2)
+            .pureApply(Gen.Parameters.default, Seed(0L))
+
+        val inputs = MultiPeerHeadHarness.Inputs(
+          config = MultiPeerHeadHarness.Config(
+            label = "coil-rejoin",
+            backendMode = MultiPeerHeadHarness.StorageBackend.Mode.InMemory,
+            transportMode = MultiPeerHeadHarness.Transport.Mode.Direct,
+          ),
+          multiNodeConfig = state.params.multiNodeConfig,
+          coilNodeConfigs = state.params.coilNodeConfigs,
+          preinitPeerUtxosL1 = state.preinitPeerUtxosL1,
+          takeoffTime = state.takeoffTime,
+          startEpochMs = state.currentModelTime.getEpochSecond * 1000L,
+        )
+
+        val hooks = MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]](
+          tracer = ContraTracer.nullTracer[IO, MultiPeerHeadHarness.Event],
+          handle = MultiPeerHeadHarness.requestSequencerHandle,
+        )
+
+        /** Kick one head peer every `kickEvery` until `done`, giving up at `cap`.
+          *
+          * Bounded by the condition, not the horizon. Virtual time makes a long run cheap in wall
+          * clock but not in heap: every simulated minute journals real entries into four in-memory
+          * stores, and running past what the phase waits for buys only retained state. Each `cap`
+          * is wide enough that a head which never gets there fails on its own assertion below
+          * rather than hanging.
+          */
+        def kickUntil(
+            harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
+            cap: FiniteDuration
+        )(done: IO[Boolean]): IO[Unit] =
+            val rounds = (cap / kickEvery).toInt
+            def go(i: Int): IO[Unit] =
+                if i >= rounds then IO.unit
+                else
+                    IO.sleep(kickEvery)
+                        >> MultiPeerHeadHarness
+                            .submitKickRequest(harness, HeadPeerNumber(i % 2))
+                            .attempt
+                            .void
+                        >> done.flatMap(d => IO.unlessA(d)(go(i + 1)))
+            go(0)
+
+        // `Coil` exposes its backend, not a typed `Persistence`; build one to read the markers and
+        // the start point back.
+        given hydrozoa.config.head.network.CardanoNetwork.Section =
+            state.params.multiNodeConfig.headConfig
+        val persistenceTracer =
+            ContraTracer.nullTracer[IO, hydrozoa.multisig.persistence.PersistenceEvent]
+
+        /** Has the head made a major yet? Without one there is no settlement to seed from, and the
+          * hub answers `NoMajorYet` — a real limitation, but not what this test is about.
+          */
+        def sawMajor(store: hydrozoa.multisig.persistence.BackendStore[IO]): IO[Boolean] =
+            hydrozoa.multisig.persistence.Persistence
+                .fromBackend(store, persistenceTracer)
+                .flatMap { p =>
+                    Markers
+                        .derive(p, PeerId.Head(HeadPeerNumber(0)))
+                        .flatMap(m =>
+                            (0 to m.hardConfirmed.fold(0)(s => s: Int)).toList
+                                .traverse(n =>
+                                    p.get(
+                                      StoreKey.HardConfirmation(
+                                        hydrozoa.multisig.ledger.stack.StackNumber(n)
+                                      )
+                                    )
+                                )
+                                .map(_.flatten.exists(_.payload match {
+                                    case hydrozoa.multisig.ledger.stack.StackEffects.HardConfirmed
+                                            .Regular(ps) =>
+                                        ps.toList.exists(
+                                          _.isInstanceOf[
+                                            hydrozoa.multisig.ledger.stack.PartitionEffects.Major[?]
+                                          ]
+                                        )
+                                    case _ => false
+                                }))
+                        )
+                }
+
+        def readState(store: hydrozoa.multisig.persistence.BackendStore[IO]) =
+            hydrozoa.multisig.persistence.Persistence
+                .fromBackend(store, persistenceTracer)
+                .flatMap(p =>
+                    (Markers.derive(p, PeerId.Coil(victim)), p.get(StoreKey.StartPoint)).tupled
+                )
+
+        val program =
+            MultiPeerHeadHarness.resource(inputs, hooks).use { harness =>
+                for
+                    _ <- kickUntil(harness, runUpCap)(
+                      sawMajor(harness.peers(HeadPeerNumber(0)).backendStore)
+                    )
+                    // Where the coil stood before the wipe, and how far the head had got.
+                    majorMade <- sawMajor(harness.peers(HeadPeerNumber(0)).backendStore)
+                    before <- readState(harness.coils(victim).backendStore)
+                    (beforeWipe, _) = before
+                    rejoined <- harness.rejoinCoilPeer(victim)
+                    // The rejoin is done the moment the coil acks for the head again — that is
+                    // what it came back to do, and what the assertion below reads.
+                    _ <- kickUntil(harness, rejoinCap)(
+                      readState(rejoined.backendStore).map(_._1.hardAckedStack.isDefined)
+                    )
+                    errors <- harness.sutErrors.get
+                    afterPair <- readState(rejoined.backendStore)
+                    (after, startPoint) = afterPair
+                yield (errors, beforeWipe, after, startPoint, majorMade)
+            }
+
+        val (errors, beforeWipe, after, startPoint, majorMade) = TestControlDriver.run(program)
+
+        val problems = List(
+          Option.when(beforeWipe.hardConfirmed.isEmpty)(
+            "the head never hard-confirmed before the wipe, so the coil would have bootstrapped " +
+                "stack 0 correctly on its own and this run proves nothing"
+          ),
+          Option.when(!majorMade)(
+            "the head made no major block in the run-up, so there was no settlement to seed " +
+                "from and the hub could only answer NoMajorYet — lengthen `runUp`"
+          ),
+          Option.when(errors.nonEmpty)(s"uncaught actor errors after the rejoin: $errors"),
+          Option.when(startPoint.isEmpty)(
+            "the wiped coil adopted no start point — it re-derived stack 0 instead, which is the " +
+                "original failure"
+          ),
+          Option.when(after.hardAckedStack.isEmpty)(
+            "the rejoined coil produced no hard-ack of its own, so it is not acking for the head"
+          ),
+        ).flatten
+        assert(problems.isEmpty, problems.mkString("; "))
+    }
+}

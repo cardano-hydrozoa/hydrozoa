@@ -75,11 +75,13 @@ trait CoilAckSequencer(
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: HeadMultisigRegimeManager.PendingConnections =>
-            x.get.flatMap(c =>
-                connections.set(
-                  Some(Connections(liaisons = c.headPeerLiaisons, coilRelay = c.coilRelay))
+            x.get
+                .flatMap(IO.fromEither)
+                .flatMap(c =>
+                    connections.set(
+                      Some(Connections(liaisons = c.headPeerLiaisons, coilRelay = c.coilRelay))
+                    )
                 )
-            )
         case x: CoilAckSequencer.Connections => connections.set(Some(x))
     }
 
@@ -208,7 +210,7 @@ object CoilAckSequencer {
         HubHardAckNumber(ByteBuffer.wrap(bytes).getInt)
 
     final case class Connections(
-        liaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        liaisons: List[liaison.LiaisonProtocol.MeshLocalHandle],
         coilRelay: Option[CoilRelay.Handle] = None
     )
 

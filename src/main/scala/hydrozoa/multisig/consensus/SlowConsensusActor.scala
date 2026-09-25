@@ -11,6 +11,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
+import hydrozoa.multisig.consensus.limiter.LimiterControl
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, Stack, StackBrief, StackEffects, StackNumber}
@@ -60,7 +61,11 @@ final case class SlowConsensusActor(
         SlowConsensusActor.Connections,
     tracer: ContraTracer[IO, SlowConsensusActorEvent],
     persistence: Persistence[IO],
-    metrics: PeerMetrics
+    metrics: PeerMetrics,
+    /** The boot markers, derived once by the regime manager (§5.2); this actor projects
+      * `hardConfirmed` rather than re-reading the spine `StackComposer` also reads.
+      */
+    markers: Markers
 ) extends Actor[IO, SlowConsensusActor.Request] {
     import SlowConsensusActor.*
 
@@ -117,8 +122,7 @@ final case class SlowConsensusActor(
                 // than dropped — orphans `clearOrphans` never reaches, since no cell is re-created
                 // for a confirmed stack. The hard-ack journals scan from key 0, so the buffer would
                 // retain every remote ack the head ever produced, on every restart.
-                hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
-                _ <- stateRef.update(_.withLastConfirmed(hardConfirmed))
+                _ <- stateRef.update(_.withLastConfirmed(markers.hardConfirmed))
             } yield ()
         case h: StackHandoff =>
             handleStackHandoff(h)
@@ -205,7 +209,7 @@ final case class SlowConsensusActor(
             round2Stash = Map.empty
           )
         )
-        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, "2-phase"))
+        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, twoPhase = true))
         _ <- broadcast(ownR1._1)
         _ <- replayOrphans(stackNum)
         _ <- tryAdvance(stackNum)
@@ -225,7 +229,7 @@ final case class SlowConsensusActor(
           stackNum,
           Cell.WaitingSole(unsigned = unsigned, sole = Map(ownPeer -> ownSole._2))
         )
-        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, "sole"))
+        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, twoPhase = false))
         _ <- broadcast(ownSole._1)
         _ <- replayOrphans(stackNum)
         _ <- tryAdvance(stackNum)
@@ -391,6 +395,14 @@ final case class SlowConsensusActor(
         _ <- persistHardConfirmation(stackNum, restricted.unsigned.brief, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! hardConfirmed
+        // Backpressure, coil peer only: the hub serves the whole population and can run far ahead
+        // of one coil peer, so the uplink anchors its stack and hard-ack pull ceilings on the stack
+        // this peer has actually hard-confirmed. `None` on a head peer
+        // (docs/spec/liaison-backpressure.md).
+        _ <- conn.coilUplink.traverse_(_ ! HardConfirmedHighWater(stackNum))
+        // Headroom signal for the block lane: the stack this peer just hard-confirmed is the
+        // backlog the block limiter released, now absorbed.
+        _ <- conn.blockRateGate.traverse_(_ ! LimiterControl.DownstreamDrained)
         _ <- stateRef.update(_.dropCell(stackNum))
         _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
         // Peer stats (docs/spec/peer-stats-endpoint.md): count the stack and the blocks it absorbed.
@@ -508,7 +520,7 @@ final case class SlowConsensusActor(
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
-                c <- x.get
+                c <- x.get.flatMap(IO.fromEither)
                 _ <- connections.set(
                   Some(
                     Connections(
@@ -518,7 +530,8 @@ final case class SlowConsensusActor(
                       cardanoLiaison = c.cardanoLiaison,
                       headPeerLiaisons = c.headPeerLiaisons,
                       coilUplink = c.coilUplink,
-                      coilRelay = c.coilRelay
+                      coilRelay = c.coilRelay,
+                      blockRateGate = c.blockRateGate
                     )
                   )
                 )
@@ -539,15 +552,21 @@ object SlowConsensusActor {
         /** Head-peer-mesh liaisons; this actor broadcasts its **own** hard-ack here (empty on a
           * coil peer).
           */
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle],
         /** A coil peer's single uplink to its hub; this actor's own hard-ack also goes here. `None`
           * on a head peer.
           */
-        coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
+        coilUplink: Option[liaison.LiaisonProtocol.CoilLocalHandle] = None,
         /** A hub's coil relay (§5.4) [doc-ref]: this actor's **own** hard-ack is sent here so the
           * hub's coil peers receive it. `None` off a hub.
           */
-        coilRelay: Option[CoilRelay.Handle] = None
+        coilRelay: Option[CoilRelay.Handle] = None,
+        /** The block lane's rate limiter, told each time a stack hard-confirms so it can reopen its
+          * downstream-backlog gate. `None` on a coil peer, which never leads and therefore runs no
+          * limiter at all. Hard confirmation is the signal rather than this peer's own hard ack;
+          * [[hydrozoa.multisig.consensus.limiter.LimiterControl.DownstreamDrained]] says why.
+          */
+        blockRateGate: Option[ActorRef[IO, LimiterControl]] = None
     )
 
     type Request = PreStart.type | StackHandoff | HardAck

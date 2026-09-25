@@ -33,7 +33,8 @@ class EutxoL2ScreenTest extends AnyFunSuite:
 
     private val nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
-    private val screener = EutxoL2Screener(nodeConfig)
+    private val screener =
+        EutxoL2Screener(nodeConfig, EutxoL2Ledger.protocolParamsOf(nodeConfig).toOption.get)
 
     private val garbage = ByteString.fromArray(Array[Byte](1, 2, 3))
 
