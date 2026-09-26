@@ -50,7 +50,10 @@ jobs:
 
       - name: Install Nix
         if: steps.plan.outputs.code == 'true'
-        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        # Nix's own installer, pinned and verified; see the script.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .github/scripts/install-nix.sh
 
       - name: Cache sbt / coursier / ivy
         if: steps.plan.outputs.code == 'true'

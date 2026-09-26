@@ -19,7 +19,10 @@ jobs:
           fetch-depth: 0 # full history + tags so BuildInfo's `git describe` resolves
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        # Nix's own installer, pinned and verified; see the script.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .github/scripts/install-nix.sh
 
       - name: Stage the Docker build context
         # Native-packager writes the Dockerfile + app under target/docker/stage (no daemon needed).
