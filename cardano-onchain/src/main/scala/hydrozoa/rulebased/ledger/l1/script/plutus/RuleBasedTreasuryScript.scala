@@ -1,7 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
-import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.multisig.ledger.joint.EvacuationKey
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Evacuate, Resolve}
@@ -157,7 +156,8 @@ object RuleBasedTreasuryValidator extends Validator {
             )
             .getOrFail(RegimeReferenceNotFound)
             .resolved
-            .inlineDatumOfType[RuleBasedRegimeDatum]
+            .datum
+            .inlineOrFail[RuleBasedRegimeDatum]
 
     // Entry point
     override inline def spend(
@@ -229,11 +229,11 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 val treasuryOutputDatum =
-                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatum] match
+                    treasuryOutput.datum.inlineOrFail[RuleBasedTreasuryDatum] match
                         case _: Unresolved => fail(ResolveNeedsResolvedDatumInOutput)
                         case d: Resolved   => d
 
-                val voteDatum = voteInput.inlineDatumOfType[VoteDatum]
+                val voteDatum = voteInput.datum.inlineOrFail[VoteDatum]
 
                 // 7. If voteStatus is Vote...
                 voteDatum.voteStatus match
@@ -370,7 +370,7 @@ object RuleBasedTreasuryValidator extends Validator {
                   EvacuateSetupNotAuthenticated
                 )
                 val setupG2 =
-                    setupRefInput.resolved.inlineDatumOfType[List[ByteString]]
+                    setupRefInput.resolved.datum.inlineOrFail[List[ByteString]]
 
                 require(
                   setupG2.length > evacuatedUtxos.length,
@@ -393,7 +393,7 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Accumulator updated commitment
                 val outputResolvedDatum =
-                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatum] match
+                    treasuryOutput.datum.inlineOrFail[RuleBasedTreasuryDatum] match
                         case _: Unresolved => fail(ResolveNeedsResolvedDatumInOutput)
                         case d: Resolved   => d
 

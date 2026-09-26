@@ -60,7 +60,7 @@ object VoteState:
 
     // Explicit givens (rather than `derives` clauses on the types) so the derived instances are
     // direct members of this `@Compile` object and their SIR is emitted for on-chain use
-    // (`inlineDatumOfType[VoteDatum]`, `voteStatus ===` in the rule-based validators). A
+    // (`datum.inlineOrFail[VoteDatum]`, `voteStatus ===` in the rule-based validators). A
     // clause-derived instance lands in the type's companion, whose SIR the on-chain linker cannot
     // resolve (fails at script-build time, not Scala compile time).
     given FromData[VoteDatum] = FromData.derived
