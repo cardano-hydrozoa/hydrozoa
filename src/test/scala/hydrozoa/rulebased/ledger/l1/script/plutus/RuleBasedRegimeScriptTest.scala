@@ -63,8 +63,8 @@ class RuleBasedRegimeScriptTest extends AnyFunSuite {
       */
     private def runSpend(mint: Value): scala.util.Try[Unit] = {
         val txInfo = TxInfo(
-          inputs = List.single(regimeInput),
-          outputs = List.single(TxOut(sweeperAddr, Value.lovelace(BigInt(2_000_000)))),
+          inputs = List.singleton(regimeInput),
+          outputs = List.singleton(TxOut(sweeperAddr, Value.lovelace(BigInt(2_000_000)))),
           mint = mint,
           id = TxId(ByteString.fromHex("cd" * 32))
         )
