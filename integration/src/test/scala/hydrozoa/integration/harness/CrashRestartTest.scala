@@ -77,7 +77,7 @@ class CrashRestartTest extends AnyFunSuite {
                           )
                       else persistence,
                 )
-                outcome <- MultiPeerHeadHarness.resource(inputs, hooks).use { harness =>
+                outcome <- MultiPeerHeadHarness.useGuarded(inputs, hooks) { harness =>
                     for
                         // Wait until head-1 actually crashes at write N — bounded so a mis-chosen N
                         // fails fast rather than spinning the virtual clock forever.
