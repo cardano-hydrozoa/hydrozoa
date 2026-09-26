@@ -135,7 +135,7 @@ jobs:
     # and properties, Stage 4's generators), so they run whenever the integration suites do.
     if: needs.plan.outputs.integration == 'true'
     runs-on: ubuntu-24.04
-    # Install, compile, and the Yaci step's own 20 minutes.
+    # Install (5), the shell, dependencies and compile, and the Yaci step's own 20 minutes.
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -159,8 +159,13 @@ jobs:
           key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
           restore-keys: sbt-${{ runner.os }}-
 
-      # Median about 7 minutes. It has hung until the job timeout three times; 20 minutes fails
-      # a hang fast and still leaves room for a slow image pull.
+      # A step of its own, so the Yaci step's timeout covers only the suites, and a compile error
+      # reads as one rather than as a Yaci failure.
+      - name: Compile
+        run: nix develop .#ci --command sbt integration/Test/compile
+
+      # Median about 7 minutes on a compiled tree. It has hung until the job timeout three times;
+      # 20 minutes fails a hang fast and still leaves room for a slow image pull.
       - name: Yaci integration tests (Docker)
         timeout-minutes: 20
         run: nix develop .#ci --command just integration-yaci-docker
