@@ -2,9 +2,10 @@ package hydrozoa.integration.harness
 
 import cats.data.ReaderT
 import cats.effect.std.Supervisor
-import cats.effect.{IO, Ref, Resource}
+import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.implicits.*
 import com.comcast.ip4s.{Port, host}
+import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.{ActorContext, ActorSystem}
@@ -701,6 +702,34 @@ object MultiPeerHeadHarness:
             }
         }
 
+    /** Stop `ref` and wait until it and its whole subtree have terminated.
+      *
+      * `ActorRef.stop` only enqueues a `Terminate` and returns while the subtree is still running;
+      * each child finishes the message it is handling, and keeps handling its mailbox until its
+      * parent's `Terminate` reaches it. A restart or rejoin that re-spawns against the same store
+      * without waiting here races the old subtree: its writes can land after the wipe, or after the
+      * successor has read its recovery marks from the store. No real restart can produce that,
+      * because the old process is gone before the new one opens the store.
+      *
+      * The death watch is placed before the stop is sent (the watcher's `preStart` runs inside
+      * `actorOf`), so the notification cannot be missed. The watched actor terminates only after
+      * its last child has.
+      */
+    private def stopAndAwait(system: ActorSystem[IO], ref: NoSendActorRef[IO]): IO[Unit] =
+        for
+            terminated <- Deferred[IO, Unit]
+            _ <- system.actorOf(new Actor[IO, Unit] {
+                override def preStart: IO[Unit] = context.watch(ref, ()).void
+                override def receive: Receive[IO, Unit] =
+                    PartialFunction.fromFunction(_ => terminated.complete(()) >> context.self.stop)
+            })
+            _ <- ref.stop
+            _ <- terminated.get.timeoutTo(
+              1.minute,
+              IO.raiseError(new IllegalStateException(s"$ref did not terminate within 1 minute"))
+            )
+        yield ()
+
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns everything;
       * release cancels the CL tick fibers.
       */
@@ -858,7 +887,7 @@ object MultiPeerHeadHarness:
                     old <- peerRuntime.get.map(_(peerNum))
                     // Stop the old subtree, then re-spawn against the SAME store + L2 ledger; the
                     // rebuilt network re-registers in the shared registry so the mesh re-attaches.
-                    _ <- old.ref.stop
+                    _ <- stopAndAwait(system, old.ref)
                     gen <- restartGen.updateAndGet(_ + 1)
                     network <- transports.rebuildHeadNetwork(peerNum)
                     spawned <- Mrm
@@ -897,15 +926,13 @@ object MultiPeerHeadHarness:
                   handle = h,
                 )
             }
-            respawnCoil = { (coilNum: CoilPeerNumber) =>
+            // Re-spawn a coil whose old subtree has already terminated, against the same store +
+            // L2 ledger (or the wiped one, for a rejoin). The coil's uplink is reused: the hub-coil
+            // registry is keyed by coil number and the re-spawned liaison's `register` overwrites
+            // the coil-inbound endpoint, so the hub's next send lands on the new actor.
+            respawnStoppedCoil = { (coilNum: CoilPeerNumber) =>
                 for
                     old <- coilRuntime.get.map(_(coilNum))
-                    // Stop the old subtree, then re-spawn against the same store + L2 ledger (or
-                    // the wiped one, for a rejoin). The coil's uplink is reused: the hub-coil
-                    // registry is keyed by coil number and the re-spawned liaison's `register`
-                    // overwrites the coil-inbound endpoint, so the hub's next send lands on the
-                    // new actor.
-                    _ <- old.ref.stop
                     gen <- restartGen.updateAndGet(_ + 1)
                     spawned <- Mrm
                         .spawnCoil(
@@ -941,15 +968,20 @@ object MultiPeerHeadHarness:
                   handle = h,
                 )
             }
-            restartCoilPeer = respawnCoil
+            restartCoilPeer = { (coilNum: CoilPeerNumber) =>
+                coilRuntime.get
+                    .map(_(coilNum))
+                    .flatMap(old => stopAndAwait(system, old.ref)) >> respawnStoppedCoil(coilNum)
+            }
             rejoinCoilPeer = { (coilNum: CoilPeerNumber) =>
                 coilRuntime.get
                     .map(_(coilNum))
                     .flatMap(old =>
-                        // Wipe with the coil stopped, so nothing is writing while we do it.
-                        old.ref.stop >> old.backendStore.wipeData >>
+                        // Wipe only once the coil has stopped, so nothing is writing while we do
+                        // it, or after.
+                        stopAndAwait(system, old.ref) >> old.backendStore.wipeData >>
                             old.l2Ledger.wipe.value.flatMap(IO.fromEither)
-                    ) >> respawnCoil(coilNum)
+                    ) >> respawnStoppedCoil(coilNum)
             }
         yield Harness(
           transportMode = transportMode,
