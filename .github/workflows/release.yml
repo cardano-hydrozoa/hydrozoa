@@ -17,9 +17,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history + tags so BuildInfo's `git describe` resolves
+          # This job's token can write packages, and the build runs third-party code; nothing here
+          # needs the token in .git/config (`git describe` is local).
+          persist-credentials: false
 
       - name: Install Nix
         # Nix's own installer, pinned and verified; see the script.
+        # Its download of the Nix tarball has no retry or timeout of its own.
+        timeout-minutes: 5
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: .github/scripts/install-nix.sh
