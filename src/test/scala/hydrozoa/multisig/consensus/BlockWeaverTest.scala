@@ -616,6 +616,66 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     )
 
     // ===================================
+    // Carol (2), leading block 2, holds live requests past the cap for the next block
+    // ===================================
+    val _ = property("Carol (2), leading block 2, holds live requests past the cap") = run(
+      resource = smallCapResource,
+      testM = for {
+          env <- ask
+          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          cap = config.maxRequestsPerBlock
+          // Every request arrives after Carol arms as leader of block 2 with an empty mempool, so
+          // each one takes the live path of `Leader.AwaitingConfirmation`. The overflow property
+          // above feeds its requests before arming, which exercises the extraction at arming
+          // instead. Two past the cap: the first overflowing request and one after it.
+          requests <- pick(genUserRequests(smallCap + 2))
+          forwardedExpected = requests.take(cap)
+          heldExpected = requests.drop(cap)
+          made <- mkBlockWeaverActorWithEvents(Carol.headPeerNumber)
+          weaver = made._1
+          seen = made._2
+          brief1 <- mkDummyBlockBrief1(config.headConfig)
+          _ <- lift((weaver ! brief1) >> env.system.waitForIdle())
+          _ <- lift(requests.traverse_(weaver ! _) >> env.system.waitForIdle())
+          // The weaver traces each decision before acting on it, so its own events say which
+          // requests went to the joint ledger and which it held, with no race against the mock.
+          sentIds = () =>
+              seen.get.collect { case BlockWeaverEvent.RequestSentToJointLedger(id) => id }
+          heldIds = () => seen.get.collect { case BlockWeaverEvent.RequestAddedToMempool(id) => id }
+          _ <- settle(sentIds().size + heldIds().size == requests.size)
+          _ <- assertWith(
+            sentIds() == forwardedExpected.map(_.requestId) &&
+                heldIds() == heldExpected.map(_.requestId),
+            s"block 2 must take exactly the first $cap live requests and hold the rest: " +
+                s"sent ${sentIds()}, held ${heldIds()}"
+          )
+          _ <- settle(env.jointLedgerMock.events.get == forwardedExpected)
+          // Soft-confirm block 1 so Carol completes block 2 and follows block 3, whose brief
+          // carries the held requests: she can only reproduce it if she kept them.
+          _ <- lift(
+            (weaver ! Block.SoftConfirmed.Minor(
+              brief1,
+              softAckSignatures = List.empty,
+              finalizationRequested = false
+            )) >> env.system.waitForIdle()
+          )
+          brief3 <- mkMinorBriefWith(
+            BlockNumber(3),
+            config.headConfig,
+            heldExpected.map(r => (r.requestId, r.request.body.mkHash, ValidityFlag.Valid))
+          )
+          _ <- lift((weaver ! brief3) >> env.system.waitForIdle())
+          _ <- settle(env.jointLedgerMock.events.get == requests)
+          fed <- lift(IO(env.jointLedgerMock.events.get))
+          _ <- assertWith(
+            fed == requests,
+            "held requests must roll into block 3, after block 2's: " +
+                s"expected ${requests.map(_.requestId)}, got ${fed.map(_.requestId)}"
+          )
+      } yield true
+    )
+
+    // ===================================
     // Carol (2) leads block (2), feeding new requests in order
     // ===================================
     val _ = property("Carol (2) leads block (2), feeding new requests in order") = run(
