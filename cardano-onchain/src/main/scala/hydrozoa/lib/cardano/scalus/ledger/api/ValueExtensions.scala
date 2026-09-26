@@ -2,7 +2,6 @@ package hydrozoa.lib.cardano.scalus.cardano.onchain.plutus
 
 import scalus.cardano.onchain.plutus.prelude.List.Cons
 import scalus.cardano.onchain.plutus.prelude.{List, fail, require}
-import scalus.cardano.onchain.plutus.v1.Value.{-, zero}
 import scalus.cardano.onchain.plutus.v3.{PolicyId, TokenName, Value}
 import scalus.compiler.Compile
 
@@ -69,6 +68,3 @@ object ValueExtension:
                         case List.Nil => fail("onlyNonAdaToken: no non-ada assets in value")
                 case List.Nil =>
                     fail("onlyNonAdaToken: no non-ada assets in value")
-
-        // Negate value, useful for burning operations
-        def unary_- : Value = Value.zero - self
