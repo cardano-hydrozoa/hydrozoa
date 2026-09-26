@@ -29,46 +29,24 @@ jobs:
     # no diagnosable artifact. 90 minutes turns a wedge into a red build within the hour or so.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-
-      # On a PR, classify the changed files. With `every`, a file counts for a filter only if it
-      # matches all of that filter's patterns, so `other` means "outside docs, Markdown, unit-test
-      # code and integration-test code": production code, the build, Nix, the workflows.
-      - name: Classify changed paths
-        id: filter
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
+      # Depth 2 brings in both parents of the PR test merge that `pull_request` checks out, which
+      # is what "Plan the run" diffs against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          predicate-quantifier: every
-          filters: |
-            other:
-              - '!docs/**'
-              - '!**/*.md'
-              - '!src/test/**'
-              - '!integration/**'
-            unit:
-              - 'src/test/**'
-            integration:
-              - 'integration/**'
+          fetch-depth: 2
 
       # What runs: everything, unless this is a PR whose changes are confined to test code or docs.
-      # Unit-test code can't affect the integration suites, nor integration-test code the unit
-      # tests; anything else (production code, build, Nix, workflows) runs everything. Merge-queue
-      # and manual runs always run everything.
+      # The script puts each changed file in one bucket: docs (docs/ or any *.md), unit
+      # (src/test/), integration (integration/), or other (production code, build, Nix,
+      # workflows...). Unit-test code can't affect the integration suites, nor integration-test
+      # code the unit tests; anything in `other` runs everything. Merge-queue and manual runs
+      # always run everything, and so does a PR whose change set can't be determined.
       - name: Plan the run
         id: plan
         env:
-          EVENT: ${{ github.event_name }}
-          OTHER: ${{ steps.filter.outputs.other }}
-          UNIT: ${{ steps.filter.outputs.unit }}
-          INTEGRATION: ${{ steps.filter.outputs.integration }}
-        run: |
-          unit=${UNIT:-false}; integration=${INTEGRATION:-false}
-          if [ "$EVENT" != pull_request ] || [ "$OTHER" = true ]; then unit=true; integration=true; fi
-          code=false
-          if [ "$unit" = true ] || [ "$integration" = true ]; then code=true; fi
-          { echo "code=$code"; echo "unit=$unit"; echo "integration=$integration"; } >> "$GITHUB_OUTPUT"
-          echo "code=$code unit=$unit integration=$integration"
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/classify-changes.sh
 
       - name: Install Nix
         if: steps.plan.outputs.code == 'true'
