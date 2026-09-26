@@ -2,6 +2,8 @@
 # Decide what the CI `build` job runs, from the files a pull request changes.
 #
 # Every changed path falls into one bucket, checked in this order:
+#   unit         under docs/api/: the unit tests check these schemas against the code
+#                (OpenApiSchemaTest), so they are test inputs, not documentation
 #   docs         under docs/, or any *.md file anywhere
 #   unit         under src/test/
 #   integration  under integration/
@@ -59,6 +61,7 @@ trap '[[ -z ${tmp} ]] || rm -f -- "${tmp}"' EXIT
 # `case` pattern also matches `/`.
 classify() {
   case $1 in
+    docs/api/*) bucket=unit ;;
     docs/* | *.md) bucket=docs ;;
     src/test/*) bucket=unit ;;
     integration/*) bucket=integration ;;
