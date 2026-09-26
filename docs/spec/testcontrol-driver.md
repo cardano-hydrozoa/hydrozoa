@@ -154,7 +154,8 @@ Used in the command loop (Phase 2). The invariant: between commands, if all imme
 tickOne → true  → recurse
 tickOne → false → done? true  → return
                        false → nextInterval → advance → recurse
-                                (deadlock if nextInterval = 0)
+                                (deadlock if nextInterval = 0;
+                                 stuck if past tickHorizon)
 ```
 
 Used in the startup pump (Phase 1) and the shutdown drain (Phase 3). In these phases the inner legitimately uses `IO.sleep` — for fast-forwarding to the current time during startup, and for polling idle state during shutdown. The `nextInterval` fallback handles those sleeps. The caller supplies the tracer that the per-advance warn routes through:
@@ -163,6 +164,8 @@ Used in the startup pump (Phase 1) and the shutdown drain (Phase 3). In these ph
 - **Shutdown drain** passes `ContraTracer.nullTracer` — `waitForIdle` polls with `IO.sleep` and per-actor 1-second ping loops fire on staggered offsets, generating hundreds to thousands of small advances per trial that would otherwise drown the log.
 
 A genuine deadlock (no eligible fibers + `nextInterval == 0`) is still surfaced via the framework `log` and `IO.raiseError` regardless of which tracer the caller passed.
+
+Each phase is bounded by `tickHorizon` (2 hours of virtual time by default; a suite may override it), counted from the phase's first advance so that the startup pump's jump from the epoch doesn't count. The per-actor ping loops always leave a next timer, so without the bound a SUT that will never signal — its actor system terminated by a panic, say, while `beforeFinalize` waits for signals — is driven forever while memory grows. Past the bound the phase fails as stuck, naming the phase and, like every failure here, the TestControl seed. Each phase logs how much virtual time it advanced when it finishes.
 
 ## totalAdvanced: Exact Virtual Time Tracking
 
@@ -200,6 +203,6 @@ Because per-advance logging is silenced during shutdown, the failure signals are
 
 - **`tickUntil: fibers exhausted but signal not received` error** — between commands a clock advance was needed. Either the SUT has an unexpected `IO.sleep` in its command path, or a `Deferred.get` is never completed. The strict `tickUntil` raises this rather than silently advancing.
 - **`TestControl deadlock: no eligible fibers and predicate not satisfied` error** — `tickUntilAdvancing` saw `tc.nextInterval == 0` (no future timers) while `done` was still false. Indicates the inner is wedged with no scheduled work.
-- **Test never terminates** — `tc.results` never becomes defined. Suggests a fiber leak (a never-cancelled background loop keeps `tickUntilAdvancing` recursing on its 1-second ping). Check that all background fibers are cancelled in the SUT's `Resource` finalizer.
+- **`tickUntilAdvancing (<phase>): not done after <tickHorizon> of virtual time` error** — `tc.results` never became defined while timers kept firing. Either the SUT is stuck (look earlier in the log for an actor error that terminated the system, e.g. a consensus panic) or a never-cancelled background loop keeps the program alive after its result; check that all background fibers are cancelled in the SUT's `Resource` finalizer.
 
 To investigate an unexpected sleep in shutdown, temporarily pass `log` (instead of `ContraTracer.nullTracer`) to the shutdown-drain `tickUntilAdvancing` call in `runCommandsWithTestControl`.
