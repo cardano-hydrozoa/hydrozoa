@@ -3,7 +3,6 @@ package hydrozoa.multisig.ledger.l2
 import io.circe.{Decoder, Encoder}
 import scala.util.Try
 import scalus.uplc.builtin.ByteString
-import scodec.bits.ByteVector
 
 /** A digest over the elements that constitute an L2 ledger's state, as defined in
   * `docs/spec/l2-state-certificate.md`.
@@ -25,9 +24,7 @@ import scodec.bits.ByteVector
   * this type carries only the 32 bytes and their encodings.
   */
 final case class L2StateHash(byteString: ByteString) {
-    // ByteVector, not `byteString.toHex`: the latter caches its hex on this retained digest, and
-    // `toString`/the circe encoder both route through here. `bytes` is already in hand.
-    def toHex: String = ByteVector(byteString.bytes).toHex
+    def toHex: String = byteString.toHex
 
     override def toString: String = toHex
 }

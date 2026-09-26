@@ -24,7 +24,6 @@ import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{ByteString, Data, ToData, platform}
 import scalus.|>
-import scodec.bits.ByteVector
 import supranational.blst.Scalar
 
 given toDataTransactionInput: ToData[TransactionInput] with {
@@ -57,8 +56,7 @@ object EvacuationMapInstances:
     }
 
     given evacuationKeyKeyEncoder: KeyEncoder[EvacuationKey] = {
-        // Hex via ByteVector, not `byteString.toHex`: the latter caches its hex on the retained key.
-        KeyEncoder.encodeKeyString.contramap(ek => ByteVector(ek.byteString.bytes).toHex)
+        KeyEncoder.encodeKeyString.contramap(_.byteString.toHex)
     }
 
     // FIXME: This is partial, but KeyDecoder lacks the "emap" method that Decoder has?
@@ -84,9 +82,7 @@ object EvacuationMapInstances:
   * golden, so a change to [[EvacuationMap.digest]] is a wire break.
   */
 final case class EvacuationMapHash(byteString: ByteString) {
-    // ByteVector, not `byteString.toHex`: the latter caches its hex on this retained digest, and
-    // `toString`/the circe encoder both route through here. `bytes` is already in hand.
-    def toHex: String = ByteVector(byteString.bytes).toHex
+    def toHex: String = byteString.toHex
 
     override def toString: String = toHex
 }
