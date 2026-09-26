@@ -11,23 +11,25 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# The job's GITHUB_TOKEN may only read the repository. It is minted per job and expires with it.
+# The jobs' GITHUB_TOKEN may only read the repository. It is minted per job and expires with it.
 permissions:
   contents: read
 
+# Four jobs: `plan` decides from a PR's changed paths what runs; `tests` (precommit, unit and
+# integration suites) and `yaci` (the suites against a real Cardano devnet) run side by side; and
+# `build` reports their outcome. We do NOT path-filter the workflow itself: `build` is the
+# repository ruleset's required check on `main`, so it must always run and report, or the merge is
+# blocked. A PR that touches no code passes in about a minute.
 jobs:
-  # The `build` job is a required status check (repository ruleset on `main`). It must ALWAYS run
-  # and report, or the ruleset blocks the merge — so we do NOT path-filter the workflow itself.
-  # Instead, a PR's changed paths decide which steps run inside it (see "Plan the run"), and a
-  # PR that touches no code passes in about a minute.
-  build:
+  plan:
     # Pinned rather than ubuntu-latest, so the host image changes only when we change it. Nix
     # supplies the toolchain; the host matters for Docker (the Yaci suites), the kernel and disk.
     runs-on: ubuntu-24.04
-    # Without this the job inherits GitHub's 6-hour default. The integration suite has wedged
-    # before (real-clock properties), and each time it burned hours of a hosted runner and produced
-    # no diagnosable artifact. 90 minutes turns a wedge into a red build within the hour or so.
-    timeout-minutes: 90
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.plan.outputs.code }}
+      unit: ${{ steps.plan.outputs.unit }}
+      integration: ${{ steps.plan.outputs.integration }}
     steps:
       # Depth 2 brings in both parents of the PR test merge that `pull_request` checks out, which
       # is what "Plan the run" diffs against.
@@ -48,8 +50,21 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: .github/scripts/classify-changes.sh
 
+  tests:
+    needs: plan
+    if: needs.plan.outputs.unit == 'true' || needs.plan.outputs.integration == 'true'
+    runs-on: ubuntu-24.04
+    # Without this the job inherits GitHub's 6-hour default. The integration suite has wedged
+    # before (real-clock properties), and each time it burned hours of a hosted runner and produced
+    # no diagnosable artifact. 90 minutes turns a wedge into a red build within the hour or so.
+    timeout-minutes: 90
+    steps:
+      # Nothing in this job uses the token through git, and the build runs third-party code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Install Nix
-        if: steps.plan.outputs.code == 'true'
         # Nix's own installer, pinned and verified; see the script.
         # Its download of the Nix tarball has no retry or timeout of its own.
         timeout-minutes: 5
@@ -58,7 +73,6 @@ jobs:
         run: .github/scripts/install-nix.sh
 
       - name: Cache sbt / coursier / ivy
-        if: steps.plan.outputs.code == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -70,21 +84,20 @@ jobs:
 
       # `.#ci` is the flake's CI shell: the JDK, sbt, just and nixfmt, without the developer tools.
       - name: Format / lint / nixfmt checks
-        if: steps.plan.outputs.code == 'true'
         run: nix develop .#ci --command just precommit
 
       - name: Unit tests
-        if: steps.plan.outputs.unit == 'true'
+        if: needs.plan.outputs.unit == 'true'
         run: nix develop .#ci --command just test
 
       # Under CI the build points the forked test JVMs at logback-ci.xml: WARN and above on the
       # console, everything down to TRACE in integration/integration-tests.log, uploaded below.
       - name: Integration tests
-        if: steps.plan.outputs.integration == 'true'
+        if: needs.plan.outputs.integration == 'true'
         run: nix develop .#ci --command just integration-fast
 
       - name: Upload integration log
-        if: always() && steps.plan.outputs.integration == 'true'
+        if: always() && needs.plan.outputs.integration == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-log-attempt-${{ github.run_attempt }}
@@ -94,37 +107,65 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-      # The bloxbean/yaci-cli image is ~578 MB and dominates the yaci-suite runtime on a
-      # cold runner (~3.5 min pull). Cache the tarball keyed on build.sbt so any bump of
-      # testcontainers / scalus-testkit / bloxbean invalidates it, but everything else
-      # rides on the last cached image (via restore-keys). Testcontainers picks up the
-      # loaded image transparently — no shim required.
-      - name: Cache Yaci DevKit image
-        if: steps.plan.outputs.integration == 'true'
-        id: yaci-image-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Name every failed test on the run page: a summary table plus one annotation per failure,
+      # read from sbt's JUnit reports. Runs after a failing step too.
+      - name: Summarise test results
+        if: always()
+        run: python3 .github/scripts/test-summary.py target
+
+      # Artifact names must be unique within a run, hence the job in each name.
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: ~/.cache/docker-images/yaci-cli.tar
-          key: docker-yaci-cli-${{ hashFiles('**/build.sbt') }}
-          restore-keys: docker-yaci-cli-
+          name: test-reports-tests-attempt-${{ github.run_attempt }}
+          path: target/out/jvm/*/*/test-reports/
+          if-no-files-found: ignore
+          retention-days: 3
 
-      - name: Load cached Yaci DevKit image
-        if: steps.plan.outputs.integration == 'true'
-        run: |
-          tarball="$HOME/.cache/docker-images/yaci-cli.tar"
-          if [ -f "$tarball" ]; then
-            docker load -i "$tarball"
-          else
-            echo "No cached image tarball — testcontainers will pull on demand."
-          fi
+  # The Yaci suites start a Cardano devnet in Docker (Testcontainers pulls bloxbean/yaci-cli) and
+  # run against it: CI's only real node, so the only check of our transactions against the
+  # node's own ledger rules, script budgets and protocol-version gating. A job of its own, so it
+  # reports even when `tests` fails early, and its wall time overlaps theirs.
+  yaci:
+    needs: plan
+    # The Yaci suites reach nearly all of the integration test code (the harness, the RBR model
+    # and properties, Stage 4's generators), so they run whenever the integration suites do.
+    if: needs.plan.outputs.integration == 'true'
+    runs-on: ubuntu-24.04
+    # Install, compile, and the Yaci step's own 20 minutes.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
+      - name: Install Nix
+        timeout-minutes: 5
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .github/scripts/install-nix.sh
+
+      # Restore only: `tests` saves this key, and two jobs saving the same key race for it.
+      - name: Restore sbt / coursier / ivy cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.sbt
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      # Median about 7 minutes. It has hung until the job timeout three times; 20 minutes fails
+      # a hang fast and still leaves room for a slow image pull.
       - name: Yaci integration tests (Docker)
-        if: steps.plan.outputs.integration == 'true'
+        timeout-minutes: 20
         run: nix develop .#ci --command just integration-yaci-docker
 
-      # The Yaci suites log through the same config, and the file is rewritten per run.
+      # The Yaci suites log through the same config as the integration tests.
       - name: Upload Yaci integration log
-        if: always() && steps.plan.outputs.integration == 'true'
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: yaci-log-attempt-${{ github.run_attempt }}
@@ -132,32 +173,44 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-      - name: Save Yaci DevKit image to cache
-        if: steps.plan.outputs.integration == 'true' && steps.yaci-image-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/.cache/docker-images
-          image=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^bloxbean/yaci-cli:' | head -n1)
-          if [ -z "$image" ]; then
-            echo "No bloxbean/yaci-cli image found after the test run — nothing to cache." >&2
-            exit 0
-          fi
-          docker save "$image" -o ~/.cache/docker-images/yaci-cli.tar
-
-      # Name every failed test on the run page: a summary table plus one annotation per failure,
-      # read from sbt's JUnit reports. Runs after a failing step too.
       - name: Summarise test results
-        if: always() && steps.plan.outputs.code == 'true'
+        if: always()
         run: python3 .github/scripts/test-summary.py target
 
       - name: Upload test reports
-        if: always() && steps.plan.outputs.code == 'true'
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-reports-attempt-${{ github.run_attempt }}
+          name: test-reports-yaci-attempt-${{ github.run_attempt }}
           path: target/out/jvm/*/*/test-reports/
           if-no-files-found: ignore
           retention-days: 3
 
-      - name: No code changes — build/test skipped
-        if: steps.plan.outputs.code != 'true'
-        run: echo "Only docs or Markdown changed — skipping Nix, build and tests. The 'build' check passes."
+  # The required check. Passes when the plan succeeded and each test job either passed or was
+  # skipped by the plan; fails if either failed, was cancelled or timed out.
+  build:
+    needs: [plan, tests, yaci]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the jobs' results
+        env:
+          PLAN: ${{ needs.plan.result }}
+          TESTS: ${{ needs.tests.result }}
+          YACI: ${{ needs.yaci.result }}
+          CODE: ${{ needs.plan.outputs.code }}
+        run: |
+          echo "plan: ${PLAN}, tests: ${TESTS}, yaci: ${YACI}"
+          if [[ ${PLAN} == success && ${CODE} != true ]]; then
+            echo "Only docs or Markdown changed, so nothing was built or tested." |
+              tee -a "${GITHUB_STEP_SUMMARY}"
+          fi
+          ok=true
+          [[ ${PLAN} == success ]] || ok=false
+          [[ ${TESTS} == success || ${TESTS} == skipped ]] || ok=false
+          [[ ${YACI} == success || ${YACI} == skipped ]] || ok=false
+          if [[ ${ok} != true ]]; then
+            echo "::error title=CI::plan ${PLAN}, tests ${TESTS}, yaci ${YACI}"
+            exit 1
+          fi
