@@ -14,7 +14,7 @@ The integration tests that use a mock Carda mno backend (stage1 `Mock` mode) run
 
 `TestControl` offers automatic execution (`tickAll`, `tick`) but we do not use it. Those methods advance the clock to the next timer on every iteration and would loop indefinitely over the per-actor 1-second ping loop, giving no opportunity to interleave test commands between clock advances.
 
-Instead, we drive the scheduler manually via `tc.tickOne` and `tc.advance` from a separate runtime — the outer driver. This gives us precise control: advance exactly the delay declared by each command, drain all resulting actor work, then run the next command.
+Instead, we drive the scheduler manually via `tc.tickOne` and `tc.advance` from a separate runtime — the outer driver. This gives us precise control: advance exactly the delay declared by each command (stepping through every timer inside it), drain all resulting actor work, then run the next command.
 
 `ModelBasedSuite` therefore splits execution into two runtimes running concurrently:
 
@@ -89,9 +89,9 @@ totalAdvanced.addAndGet(delay.toNanos)
 
 **Step 6 — Advance clock:**
 ```scala
-if delay > Duration.Zero then tc.advance(delay) else IO.unit
+advanceThroughTimers(tc, delay)
 ```
-`tc.advance` requires a strictly positive duration, so zero-delay commands (e.g. `StartBlockCommand`) skip this call.
+The clock moves by exactly `delay`, but from timer to timer: drain every eligible fiber with `tickOne`, then advance to `min(nextInterval, remaining)`, and repeat until the delay is spent. Every SUT fiber sleeping into the window therefore wakes at its own instant, in time order. A single `tc.advance(delay)` would instead make all of them due at once, at the window's end, in an order chosen by the scheduler seed: a `CardanoLiaison` poll (every ≤100 ms in Stage 4) would fire once instead of `delay / period` times, and a delayed delivery such as the 5 s soft-block limiter hold would land a whole command delay late. That breaks the SUT's own timing contract (`TxTiming.cardanoLiaisonPollingPeriodSafetyFactor`) and produced intermittent "consensus is broken" failures: a leader completing a block on L1 poll results 190 s old rejected a deposit its followers had seen. Zero-delay commands (e.g. `StartBlockCommand`) only drain eligible fibers.
 
 **Step 7 — Release inner:**
 ```scala

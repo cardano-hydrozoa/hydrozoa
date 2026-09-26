@@ -564,7 +564,8 @@ trait ModelBasedSuite {
       *
       * Outer:
       *   1. Read `(delay, gate)` from `pendingDelay`.
-      *   2. Advance the virtual clock by exactly `delay` (skipped when zero).
+      *   2. Advance the virtual clock by exactly `delay`, running every SUT timer that falls due
+      *      inside it at its own instant ([[advanceThroughTimers]]).
       *   3. `gate.complete(())` — unblock the inner.
       *   4. `tickUntil`: tick until `tickOne → false` (all fibers exhausted), then assert signal.
       *
@@ -661,9 +662,9 @@ trait ModelBasedSuite {
                                     (delay, gate) = ret
                                     _ <- IO(totalAdvanced.addAndGet(delay.toNanos): Unit)
 
-                                    // 6. Advance exactly `delay` (tc.advance requires > 0).
-                                    _ <-
-                                        if delay > Duration.Zero then tc.advance(delay) else IO.unit
+                                    // 6. Advance exactly `delay`, stepping through every timer
+                                    // that falls due inside it (see `advanceThroughTimers`).
+                                    _ <- advanceThroughTimers(tc, delay)
 
                                     // 7. Release the inner to run the command.
                                     _ <- log.info("Opening the gate")
@@ -712,6 +713,34 @@ trait ModelBasedSuite {
                 )
         }
     }
+
+    /** Advance the virtual clock by exactly `delay`, stepping from timer to timer so that every SUT
+      * fiber sleeping into the window wakes at its own instant, in time order, and runs before the
+      * clock moves on.
+      *
+      * A single `tc.advance(delay)` would instead make every timer inside the window due at once,
+      * at its end: a periodic task (a `CardanoLiaison` poll, every ≤100 ms in Stage 4) would then
+      * fire once instead of `delay / period` times, and a delayed delivery (the 5 s soft-block
+      * limiter) would land `delay` late, in whatever order the scheduler picks. That quantizes the
+      * SUT's notion of time to command arrivals and breaks its timing contract — e.g. the leader
+      * completing a block on L1 poll results `delay` old, rejecting a deposit its followers see
+      * (`TxTiming.cardanoLiaisonPollingPeriodSafetyFactor`).
+      *
+      * Ready fibers are drained with `tickOne` before each step; the same 1 s ping loops that rule
+      * out `tickAll` are bounded here by `delay`.
+      */
+    private def advanceThroughTimers[A](tc: TestControl[A], delay: FiniteDuration): IO[Unit] =
+        tc.tickOne.flatMap {
+            case true => advanceThroughTimers(tc, delay)
+            case false =>
+                if delay <= Duration.Zero then IO.unit
+                else
+                    tc.nextInterval.flatMap { next =>
+                        // `nextInterval` is zero when nothing is scheduled: take the whole rest.
+                        val step = if next > Duration.Zero && next < delay then next else delay
+                        tc.advance(step) >> advanceThroughTimers(tc, delay - step)
+                    }
+        }
 
     /** Strict variant: ticks until `tickOne` returns `false` (all eligible fibers exhausted), then
       * checks `done`. If `done` is false at that point, raises an error — between commands the SUT
