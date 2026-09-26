@@ -21,7 +21,7 @@ Instead, we drive the scheduler manually via `tc.tickOne` and `tc.advance` from 
 - **Inner**: the SUT (actor system, consensus logic, ledger) runs here, on the `TestControl` scheduler. All `IO.sleep` calls are intercepted by the virtual clock and do not consume real time.
 - **Outer**: the test driver runs here, on the standard `global` runtime. It steps the inner forward with `tc.tickOne` and moves the virtual clock forward with `tc.advance`.
 
-The inner is started with `TestControl.execute(innerIO)`, which returns a `TestControl[A]` handle. Nothing in the inner runs until the outer calls `tc.tickOne` or `tc.advance`.
+The inner is started with `TestControl.execute(innerIO, seed = ...)`, which returns a `TestControl[A]` handle. Nothing in the inner runs until the outer calls `tc.tickOne` or `tc.advance`. The scheduler seed orders fibers that become eligible at the same virtual instant, so a ScalaCheck seed alone does not replay a failure: the driver logs the seed (`TestControl scheduler seed: …`) before each run, attaches it to a falsified property's labels and to any exception's message (`[TestControl seed: …]`), and `TESTCONTROL_SEED=<seed>` pins it.
 
 ## cats-actors Internals: Why This Works
 

@@ -619,13 +619,21 @@ trait ModelBasedSuite {
                 } yield (sut, prop && beforeFinalizeProp, s, lastCmd, testCase)
             }
 
+        // TestControl's scheduler seed decides the order of fibers that become ready at the same
+        // virtual instant, so ScalaCheck's seed alone does not replay a failure. It is logged
+        // before the run (a hung run never reaches the end), attached to a falsified property's
+        // labels and to any exception, and `TESTCONTROL_SEED` pins it to replay a reported one.
+        val tcSeed = new AtomicReference[String]("<not started>")
+
         // Outer driver: advances the virtual clock and drives tickOne loops between commands.
         // tickAll / tick are not used — they iterate indefinitely over the per-actor 1 s ping loop.
         // Instead, drainAll/tickUntil stop when the inner signals via pendingDelay (a Deferred gate).
-        for {
+        (for {
             _ <- log.debug("Using TestControl to run the test case...")
             // 1. Start the inner on the mocked runtime. It's paused — nothing runs yet.
-            tc <- TestControl.execute(innerIO)
+            tc <- TestControl.execute(innerIO, seed = sys.env.get("TESTCONTROL_SEED"))
+            _ <- IO(tcSeed.set(tc.seed))
+            _ <- log.warn(s"TestControl scheduler seed: ${tc.seed} (replay: TESTCONTROL_SEED)")
             totalAdvanced <- IO(new java.util.concurrent.atomic.AtomicLong(0L))
 
             // 2. Pump until the first signal.
@@ -703,14 +711,17 @@ trait ModelBasedSuite {
             }
             _ <- log.info(s"---- TC ---- seed: ${tc.seed}  simulated: ${days} days")
         } yield result match {
-            case Some(cats.effect.Outcome.Succeeded(value)) => value
-            case Some(cats.effect.Outcome.Errored(e))       => throw e
+            case Some(cats.effect.Outcome.Succeeded((sut, prop, state, lastCmd, tcase))) =>
+                (sut, prop :| s"TestControl seed: ${tc.seed}", state, lastCmd, tcase)
+            case Some(cats.effect.Outcome.Errored(e)) => throw e
             case Some(cats.effect.Outcome.Canceled()) =>
                 throw new RuntimeException("Inner program was canceled")
             case None =>
                 throw new RuntimeException(
                   "Inner program did not produce a result (deadlock or non-termination)"
                 )
+        }).adaptError { case e =>
+            new RuntimeException(s"${e.getMessage} [TestControl seed: ${tcSeed.get}]", e)
         }
     }
 
