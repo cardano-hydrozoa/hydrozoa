@@ -32,7 +32,7 @@ Global / excludeLintKeys ++= Set(
   rpmScriptsDirectory
 )
 
-val scalusVersion = "1.0.0"
+val scalusVersion = "1.2.0"
 // A val, not an inline literal, because `hydrozoa.BuildInfo` bakes it in: it is part of the
 // `l2ParamsHash` preimage, which serializes ProtocolParams with scalus's upickle writer and so
 // depends on upickle's formatting as well as scalus's (docs/spec/head-params-hash.md).
