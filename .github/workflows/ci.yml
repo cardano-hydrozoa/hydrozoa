@@ -11,6 +11,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The job's GITHUB_TOKEN may only read the repository. It is minted per job and expires with it.
+permissions:
+  contents: read
+
 jobs:
   # The `build` job is a required status check (repository ruleset on `main`). It must ALWAYS run
   # and report, or the ruleset blocks the merge — so we do NOT path-filter the workflow itself.
@@ -68,11 +72,11 @@ jobs:
 
       - name: Install Nix
         if: steps.plan.outputs.code == 'true'
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
 
       - name: Cache sbt / coursier / ivy
         if: steps.plan.outputs.code == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.sbt
@@ -98,7 +102,7 @@ jobs:
 
       - name: Upload integration log
         if: always() && steps.plan.outputs.integration == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-log-attempt-${{ github.run_attempt }}
           path: |
@@ -115,7 +119,7 @@ jobs:
       - name: Cache Yaci DevKit image
         if: steps.plan.outputs.integration == 'true'
         id: yaci-image-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/docker-images/yaci-cli.tar
           key: docker-yaci-cli-${{ hashFiles('**/build.sbt') }}
@@ -138,7 +142,7 @@ jobs:
       # The Yaci suites log through the same config, and the file is rewritten per run.
       - name: Upload Yaci integration log
         if: always() && steps.plan.outputs.integration == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: yaci-log-attempt-${{ github.run_attempt }}
           path: integration/integration-tests.log
@@ -155,6 +159,21 @@ jobs:
             exit 0
           fi
           docker save "$image" -o ~/.cache/docker-images/yaci-cli.tar
+
+      # Name every failed test on the run page: a summary table plus one annotation per failure,
+      # read from sbt's JUnit reports. Runs after a failing step too.
+      - name: Summarise test results
+        if: always() && steps.plan.outputs.code == 'true'
+        run: python3 .github/scripts/test-summary.py target
+
+      - name: Upload test reports
+        if: always() && steps.plan.outputs.code == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-reports-attempt-${{ github.run_attempt }}
+          path: target/out/jvm/*/*/test-reports/
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: No code changes — build/test skipped
         if: steps.plan.outputs.code != 'true'
