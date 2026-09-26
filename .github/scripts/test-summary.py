@@ -33,6 +33,11 @@ def escape_annotation(text):
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def escape_property(text):
+    # A property value (title=...) must also escape the `:` and `,` that delimit properties.
+    return escape_annotation(text).replace(":", "%3A").replace(",", "%2C")
+
+
 def main():
     roots = sys.argv[1:] or ["target"]
     files = report_files(roots)
@@ -81,7 +86,7 @@ def main():
             out.append("")
             out.append(trace)
         out.append("```\n")
-        print(f"::error title={escape_annotation(test)}::{escape_annotation(message or kind)}")
+        print(f"::error title={escape_property(test)}::{escape_annotation(message or kind)}")
 
     text = "\n".join(out) + "\n"
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
