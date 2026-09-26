@@ -1,7 +1,7 @@
 {
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     git-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -38,10 +38,11 @@
           done
           exec ${sbt0}/bin/sbt "-Dsbt.script=$self" "''${args[@]}"
         '';
-        # The nixpkgs `sbt` package also bundles the `sbtn` thin client (sbt 1.x), which cannot
-        # drive an sbt 2 server (it reports `unknown event: sbt/exec`). Strip it so only `sbt` is on
-        # PATH — nobody should reach for the broken client by habit. Restore once nixpkgs ships an
-        # sbt 2 `sbtn`. `sbt` itself is the BSP shim above.
+        # The nixpkgs `sbt` package also puts the `sbtn` thin client on PATH. Before nixos-26.05 it
+        # was an sbt 1.x client, which cannot drive an sbt 2 server (it reports `unknown event:
+        # sbt/exec`); 26.05's is 2.0.0-RC13, a release candidate. Keep it off PATH so only `sbt`
+        # is there. The launcher still runs its own copy (share/sbt/bin) for a plain `sbt` on an
+        # sbt 2 build; `--server` runs sbt in-process instead. `sbt` itself is the BSP shim above.
         sbtNoSbtn = pkgs.symlinkJoin {
           name = "sbt-no-sbtn";
           paths = [ sbt0 ];
