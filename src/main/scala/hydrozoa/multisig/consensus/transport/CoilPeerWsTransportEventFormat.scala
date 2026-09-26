@@ -18,6 +18,8 @@ object CoilPeerWsTransportEventFormat:
         e match {
             case NoLiaisonForInbound =>
                 warn("inbound from hub but no liaison registered")
+            case JoinAnswerHeld =>
+                info("the hub's join answer arrived before the liaison registered; holding it")
             case UnexpectedInboundWire(payload) =>
                 warn(s"unexpected coil-bound wire from hub: $payload")
             case DecodeError(cause) =>

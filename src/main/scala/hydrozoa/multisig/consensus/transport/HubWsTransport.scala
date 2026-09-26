@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.transport
 
-import cats.effect.std.Queue
+import cats.effect.std.{Mutex, Queue}
 import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.*
 import fs2.Stream
@@ -52,17 +52,30 @@ final class HubWsTransport private (
     private val coilPeers: CoilPeers,
     private val headParamsHash: Hash32,
     private val inboundRef: Ref[IO, Map[CoilPeerNumber, LiaisonProtocol.HubLiaisonHandle]],
+    private val heldPositions: Ref[IO, Map[CoilPeerNumber, Join.Connected]],
+    private val registering: Mutex[IO],
     private val ownHead: HeadIdentity,
     private val keepAlivePing: FiniteDuration,
     private val tracer: ContraTracer[IO, HubWsTransportEvent],
 )(using CardanoNetwork.Section)
     extends HubTransport {
 
+    /** Hands the liaison the coil's position if it arrived before it, then routes that coil's
+      * inbound to it.
+      *
+      * The held position goes first and the handle is published after it, both under
+      * [[registering]], so a frame a socket delivers on the fast path never overtakes it.
+      */
     override def register(
         coil: CoilPeerNumber,
         localLiaison: LiaisonProtocol.HubLiaisonHandle
     ): IO[Unit] =
-        inboundRef.update(_.updated(coil, localLiaison))
+        registering.lock.surround(
+          heldPositions
+              .modify(held => (held - coil, held.get(coil)))
+              .flatMap(_.traverse_(localLiaison ! _)) >>
+              inboundRef.update(_.updated(coil, localLiaison))
+        )
 
     override def send(
         coil: CoilPeerNumber,
@@ -83,15 +96,32 @@ final class HubWsTransport private (
                 tracer.traceWith(UnexpectedInboundWire(coil, other))
         }
 
+    /** Route a coil frame to that coil's registered liaison.
+      *
+      * Before registration, the coil's position (the `Join.Connected` its handshake carries) is
+      * **held** (the latest one) rather than dropped. A coil sends it once per dial and a healthy
+      * link is never redialed, and without it the hub never answers, so a cold coil waits
+      * indefinitely. The hub's server can be accepting before the node has built and registered its
+      * liaisons, so this ordering does occur. Pull traffic is still dropped: the coil's puller
+      * resends it.
+      */
     private def toLiaison(
         coil: CoilPeerNumber,
         request: LiaisonProtocol.FromCoil
     ): IO[Unit] =
-        inboundRef.get.flatMap { m =>
-            m.get(coil) match {
-                case Some(liaison) => liaison ! request
-                case None          => tracer.traceWith(NoLiaisonForInbound(coil))
-            }
+        inboundRef.get.map(_.get(coil)).flatMap {
+            case Some(liaison) => liaison ! request
+            case None =>
+                registering.lock.surround(inboundRef.get.map(_.get(coil)).flatMap {
+                    case Some(liaison) => liaison ! request
+                    case None =>
+                        request match {
+                            case position: Join.Connected =>
+                                heldPositions.update(_.updated(coil, position)) >>
+                                    tracer.traceWith(JoinPositionHeld(coil))
+                            case _ => tracer.traceWith(NoLiaisonForInbound(coil))
+                        }
+                })
         }
 
     /** The ordered verdict on one inbound handshake.
@@ -236,11 +266,15 @@ object HubWsTransport {
                 .traverse(c => Queue.unbounded[IO, String].map(c -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[CoilPeerNumber, LiaisonProtocol.HubLiaisonHandle])
+            heldPositions <- Ref[IO].of(Map.empty[CoilPeerNumber, Join.Connected])
+            registering <- Mutex[IO]
         } yield new HubWsTransport(
           outboxes,
           coilPeers,
           headParamsHash,
           inboundRef,
+          heldPositions,
+          registering,
           ownHead,
           keepAlivePing,
           tracer

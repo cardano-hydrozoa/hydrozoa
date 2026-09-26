@@ -17,6 +17,11 @@ object HubWsTransportEvent:
     /** An inbound frame arrived from a coil peer that has no registered local liaison. */
     final case class NoLiaisonForInbound(coil: CoilPeerNumber) extends HubWsTransportEvent
 
+    /** A coil's position arrived before that coil's local liaison registered; it is held and handed
+      * to the liaison when it does.
+      */
+    final case class JoinPositionHeld(coil: CoilPeerNumber) extends HubWsTransportEvent
+
     /** Received an inbound wire payload from a coil peer that is not in the coil-emitted subset. */
     final case class UnexpectedInboundWire(coil: CoilPeerNumber, payload: CoilFrame.Wire)
         extends HubWsTransportEvent

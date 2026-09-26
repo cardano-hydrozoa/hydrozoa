@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.transport
 
-import cats.effect.std.Queue
+import cats.effect.std.{Mutex, Queue}
 import cats.effect.{Deferred, FiberIO, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
@@ -53,12 +53,22 @@ final class CoilPeerWsTransport private (
     private val ownHead: HeadIdentity,
     private val outbox: Queue[IO, String],
     private val inboundRef: Ref[IO, Option[LiaisonProtocol.CoilLiaisonHandle]],
+    private val heldAnswer: Ref[IO, Option[Join.Answer]],
+    private val registering: Mutex[IO],
     private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
 )(using CardanoNetwork.Section)
     extends CoilTransport {
 
+    /** Hands the liaison any join answer that arrived before it, then routes inbound to it.
+      *
+      * The held answer goes first and the handle is published after it, both under [[registering]],
+      * so a frame the reader delivers on the fast path never overtakes it.
+      */
     override def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit] =
-        inboundRef.set(Some(localLiaison))
+        registering.lock.surround(
+          heldAnswer.getAndSet(None).flatMap(_.traverse_(localLiaison ! _)) >>
+              inboundRef.set(Some(localLiaison))
+        )
 
     override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
         outbox.offer(CoilFrame.encode(CoilFrame.Msg(request)))
@@ -69,10 +79,28 @@ final class CoilPeerWsTransport private (
       */
     override def announceMarks(marks: Join.Connected): IO[Unit] = IO.unit
 
+    /** Route a hub frame to the registered liaison.
+      *
+      * Before registration, a join answer is **held** (the latest one) rather than dropped. The hub
+      * answers once per dial and a healthy link is never redialed, while a cold coil waits for its
+      * answer indefinitely, so a dropped answer is never replaced and the coil never boots. The
+      * dialer can be up before the node has built and registered its liaison, so this ordering does
+      * occur. Pull traffic is still dropped: it answers or asks for a pull no current liaison made,
+      * and the pullers resend.
+      */
     private def toLiaison(request: LiaisonProtocol.FromHub): IO[Unit] =
         inboundRef.get.flatMap {
             case Some(liaison) => liaison ! request
-            case None          => tracer.traceWith(NoLiaisonForInbound)
+            case None =>
+                registering.lock.surround(inboundRef.get.flatMap {
+                    case Some(liaison) => liaison ! request
+                    case None =>
+                        request match {
+                            case answer: (Join.Offer | Join.NoOffer) =>
+                                heldAnswer.set(Some(answer)) >> tracer.traceWith(JoinAnswerHeld)
+                            case _ => tracer.traceWith(NoLiaisonForInbound)
+                        }
+                })
         }
 
     private def dispatchInbound(payload: CoilFrame.Wire): IO[Unit] =
@@ -273,6 +301,8 @@ object CoilPeerWsTransport {
         for {
             outbox <- Queue.unbounded[IO, String]
             inboundRef <- Ref[IO].of(Option.empty[LiaisonProtocol.CoilLiaisonHandle])
+            heldAnswer <- Ref[IO].of(Option.empty[Join.Answer])
+            registering <- Mutex[IO]
         } yield new CoilPeerWsTransport(
           ownCoilNum,
           ownWallet,
@@ -281,6 +311,8 @@ object CoilPeerWsTransport {
           ownHead,
           outbox,
           inboundRef,
+          heldAnswer,
+          registering,
           tracer
         )
 }
