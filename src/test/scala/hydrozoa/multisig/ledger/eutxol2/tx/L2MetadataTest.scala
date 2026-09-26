@@ -7,7 +7,7 @@ import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.rng.Seed
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.ArbitraryInstances.given
-import scalus.cardano.ledger.{AssetName, KeepRaw, MultiAsset, PolicyId, ScriptHash, Transaction}
+import scalus.cardano.ledger.{AssetName, AuxiliaryData, KeepRaw, MultiAsset, PolicyId, ScriptHash, Transaction}
 import scalus.uplc.builtin.ByteString
 
 /** Round-trip and negative-shape tests for [[L2Metadata]] — the head-label metadata (headId pin,
@@ -44,6 +44,23 @@ object L2MetadataTest extends Properties("L2 metadata") {
             val metadata = L2Metadata(List(1, 3), Map(1 -> demoBundle))
             L2Metadata.parse(withMetadata(baseTx, metadata)) == Right((headId, metadata))
     }
+
+    /** L2 clients may still build the bare Shelley-era map (or the Shelley-MA pair), so parsing
+      * must accept every auxiliary-data format, not only the Alonzo one `asAuxData` now emits.
+      */
+    val _ = property("parses every auxiliary-data format") =
+        forAll(Arbitrary.arbitrary[Transaction], genL1Bound) { (baseTx, l1Bound) =>
+            val metadata = L2Metadata(l1Bound, Map.empty)
+            val md = L2Metadata.asAuxData(headId, metadata).getMetadata
+            List(
+              AuxiliaryData.Metadata(md),
+              AuxiliaryData.MetadataWithScripts(md, IndexedSeq.empty),
+              AuxiliaryData.AlonzoFormat(Some(md))
+            ).forall(aux =>
+                L2Metadata.parse(baseTx.copy(auxiliaryData = Some(KeepRaw(aux)))) ==
+                    Right((headId, metadata))
+            )
+        }
 
     val _ = property("rejects a transaction with no auxiliary data") =
         forAll(Arbitrary.arbitrary[Transaction]) { baseTx =>
