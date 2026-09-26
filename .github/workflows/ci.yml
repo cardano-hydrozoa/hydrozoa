@@ -88,14 +88,20 @@ jobs:
 
       # The test steps run even when the precommit checks fail, so one run reports both: a
       # formatting slip is the most common first failure, and it shouldn't hide the tests.
+      # Each test step has its own timeout, inside the job's, so that a hang still leaves time for
+      # the summary below to report which step didn't finish.
       - name: Unit tests
+        id: unit
         if: ${{ !cancelled() && needs.plan.outputs.unit == 'true' }}
+        timeout-minutes: 30
         run: nix develop .#ci --command just test
 
       # Under CI the build points the forked test JVMs at logback-ci.xml: WARN and above on the
       # console, everything down to TRACE in integration/integration-tests.log, uploaded below.
       - name: Integration tests
+        id: integration
         if: ${{ !cancelled() && needs.plan.outputs.integration == 'true' }}
+        timeout-minutes: 40
         run: nix develop .#ci --command just integration-fast
 
       - name: Upload integration log
@@ -109,10 +115,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-      # Name every failed test on the run page: a summary table plus one annotation per failure,
-      # read from sbt's JUnit reports. Runs after a failing step too.
+      # Name every failed test on the run page: a summary plus one annotation per failure, read
+      # from sbt's JUnit reports. Runs after a failing step too. The steps' outcomes let it tell
+      # "passed" from "didn't finish": a hang or a compile error leaves no report behind.
       - name: Summarise test results
         if: always()
+        env:
+          TEST_STEPS: unit=${{ steps.unit.outcome }} integration=${{ steps.integration.outcome }}
         run: python3 .github/scripts/test-summary.py target
 
       # Artifact names must be unique within a run, hence the job in each name.
@@ -162,11 +171,13 @@ jobs:
       # A step of its own, so the Yaci step's timeout covers only the suites, and a compile error
       # reads as one rather than as a Yaci failure.
       - name: Compile
+        id: compile
         run: nix develop .#ci --command sbt integration/Test/compile
 
       # Median about 7 minutes on a compiled tree. It has hung until the job timeout three times;
       # 20 minutes fails a hang fast and still leaves room for a slow image pull.
       - name: Yaci integration tests (Docker)
+        id: yaci
         timeout-minutes: 20
         run: nix develop .#ci --command just integration-yaci-docker
 
@@ -182,6 +193,8 @@ jobs:
 
       - name: Summarise test results
         if: always()
+        env:
+          TEST_STEPS: compile=${{ steps.compile.outcome }} yaci=${{ steps.yaci.outcome }}
         run: python3 .github/scripts/test-summary.py target
 
       - name: Upload test reports
