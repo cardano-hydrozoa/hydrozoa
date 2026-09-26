@@ -342,6 +342,15 @@ trait ModelBasedSuite {
       */
     def useTestControl: Boolean
 
+    /** How much virtual time the startup pump and the shutdown drain may each advance, under
+      * TestControl, before the case fails as stuck. Both advance to the next timer whenever no
+      * fiber is eligible, and the per-actor ping loops always leave a next timer, so without a
+      * bound a SUT that will never signal (its actor system terminated, say) is driven forever
+      * while memory grows. Counted from the first advance on, which in the startup pump is the jump
+      * from virtual zero to the start time.
+      */
+    def tickHorizon: FiniteDuration = 2.hours
+
     // ===================================
     // Property entry point
     // ===================================
@@ -648,7 +657,8 @@ trait ModelBasedSuite {
                   if pending then IO.pure(true)
                   else tc.results.map(_.isDefined)
               },
-              advanceTracer = log
+              advanceTracer = log,
+              phase = "startup"
             )
 
             // 3. Guard: if the inner already finished (empty command list), skip the loop.
@@ -699,7 +709,8 @@ trait ModelBasedSuite {
             } >> tickUntilAdvancing(
               tc,
               tc.results.map(_.isDefined),
-              advanceTracer = ContraTracer.nullTracer
+              advanceTracer = ContraTracer.nullTracer,
+              phase = "shutdown drain"
             )
 
             // 10. Extract the result
@@ -780,34 +791,47 @@ trait ModelBasedSuite {
       * advances per trial, would drown the log). The caller passes the tracer that the per-advance
       * warn should route through: [[log]] from the startup pump, [[ContraTracer.nullTracer]] from
       * the shutdown drain. A genuine deadlock (no eligible fibers + `nextInterval == 0`) is still
-      * surfaced via the framework [[log]] and `IO.raiseError` regardless of the passed tracer.
+      * surfaced via the framework [[log]] and `IO.raiseError` regardless of the passed tracer, and
+      * so is a phase that advances past [[tickHorizon]] without `done` (`elapsed` is the virtual
+      * time advanced so far, `None` before the first advance).
       */
     private def tickUntilAdvancing[A](
         tc: TestControl[A],
         done: IO[Boolean],
-        advanceTracer: ContraTracer[IO, Slf4jMsg]
+        advanceTracer: ContraTracer[IO, Slf4jMsg],
+        phase: String,
+        elapsed: Option[FiniteDuration] = None
     ): IO[Unit] =
         tc.tickOne.flatMap {
-            case true => tickUntilAdvancing(tc, done, advanceTracer)
+            case true => tickUntilAdvancing(tc, done, advanceTracer, phase, elapsed)
             case false =>
                 done.flatMap {
                     case true =>
-                        log.info("tickUntilAdvancing is done")
+                        log.info(
+                          s"tickUntilAdvancing ($phase) is done after " +
+                              s"${elapsed.getOrElse(Duration.Zero).toSeconds} s of virtual time"
+                        )
                     case false =>
                         tc.nextInterval.flatMap { next =>
-                            if next > Duration.Zero then
-                                advanceTracer.warn(
-                                  s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
-                                ) >> tc.advance(next) >> tickUntilAdvancing(tc, done, advanceTracer)
-                            else {
+                            val after = elapsed.map(_ + next).orElse(Some(Duration.Zero))
+                            if next <= Duration.Zero then {
                                 val msg =
                                     "TestControl deadlock: no eligible fibers and predicate not satisfied"
                                 log.error(msg) >> IO.raiseError(new RuntimeException(msg))
-                            }
+                            } else if after.exists(_ > tickHorizon) then {
+                                val msg =
+                                    s"tickUntilAdvancing ($phase): not done after $tickHorizon of " +
+                                        "virtual time; the SUT is stuck (e.g. its actor system " +
+                                        "terminated while a wait for its signals continued)"
+                                log.error(msg) >> IO.raiseError(new RuntimeException(msg))
+                            } else
+                                advanceTracer.warn(
+                                  s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
+                                ) >> tc.advance(next) >>
+                                    tickUntilAdvancing(tc, done, advanceTracer, phase, after)
                         }
                 }
         }
-
 }
 
 object ModelBasedSuite {
