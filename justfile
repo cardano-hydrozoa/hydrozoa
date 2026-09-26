@@ -110,7 +110,7 @@ integration-e2e-docker:
 integration-e2e-docker-recovery:
   #!/usr/bin/env bash
   trap 'just notify "integration-e2e-docker-recovery"' EXIT
-  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "Docker/publishLocal; stage; integration/testOnly hydrozoa.integration.e2e.DockerRecoveryTest"
+  sbt "Docker/publishLocal; stage; set integration/Test/testOptions ~= (_.filterNot(_.isInstanceOf[Tests.Exclude])); integration/testOnly hydrozoa.integration.e2e.DockerRecoveryTest"
 
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
 export:
