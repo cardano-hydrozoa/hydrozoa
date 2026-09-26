@@ -59,10 +59,13 @@ test:
   sbt test
 
 # Compile all sources (main + test) with -Werror, mirroring CI.
+# `--server` runs sbt in this process. A plain `sbt` hands the command to an already-running sbt
+# server, which evaluates the build with the environment it was started in, so this run's CI=true
+# would be ignored. `--batch` closes stdin, so sbt never waits at a prompt.
 build-werror:
   #!/usr/bin/env bash
   trap 'just notify "build-werror"' EXIT
-  CI=true sbt "Test/compile; integration/Test/compile"
+  CI=true sbt --server --batch "Test/compile; integration/Test/compile"
 
 integration-fast:
   #!/usr/bin/env bash
@@ -145,10 +148,11 @@ precommit: lint-check fmt-check nixfmt-check scalacheck-framework-check
 
 # Like precommit, but cleans first — matches CI's fresh-target behaviour so
 # stale SemanticDB can't hide unused-import / lint failures.
+# In-process for the same reason as build-werror.
 ci-check:
   #!/usr/bin/env bash
   trap 'just notify "ci-check"' EXIT
-  CI=true sbt "clean; fmtCheckAll; lintCheckAll"
+  CI=true sbt --server --batch "clean; fmtCheckAll; lintCheckAll"
   just nixfmt-check
 
 prepush: precommit test integration-fast build-werror
