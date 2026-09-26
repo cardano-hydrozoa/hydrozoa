@@ -185,15 +185,34 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Twenty-peers head works (extended)") =
         Stage4Suite(label = "stage4-twenty-peers-extended", nPeers = 20, nCommands = 500).property()
 
+    val _ = property("Two-peers head works WS (extended)") = Stage4Suite(
+      label = "stage4-ws-two-peers-extended",
+      nPeers = 2,
+      nCommands = 500,
+      transportMode = TransportMode.WebSocket,
+      backendMode = BackendMode.RocksDb()
+    ).property()
+
+    val _ = property("Ten-peers head works WS (extended)") = Stage4Suite(
+      label = "stage4-ws-ten-peers-extended",
+      nPeers = 10,
+      nCommands = 500,
+      transportMode = TransportMode.WebSocket,
+      backendMode = BackendMode.RocksDb()
+    ).property()
+
 // WebSocket variants run on the real clock: each case waits out a 60 s takeoff (sized for the
 // 20-peer Direct run) and real inter-arrival delays, so one case costs about two minutes where a
 // Direct case costs seconds. The command model is exercised by the Direct properties above at the
 // default 10 cases; these exist for the transport, which every case drives end to end over real WS
-// connections, so 3 cases each keep that coverage at a third of the wall-clock.
+// connections, so they run half the configured case count (5 of the build's 10). Their extended
+// variants stay in `Stage4Properties` above, at the full count of a deep run.
 object Stage4WsProperties extends YetAnotherProperties("Integration Stage 4 WS"):
 
+    // Halves whatever `-s` asked for: ScalaCheck applies command-line parameters first and
+    // `overrideParameters` last, so a fixed count here would silently ignore `-s`.
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
-        p.withWorkers(1).withMinSuccessfulTests(3)
+        p.withWorkers(1).withMinSuccessfulTests(math.max(1, p.minSuccessfulTests / 2))
 
     // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
     // takeoff trick — `genInitialState` anchors `startTime` at `Instant.now() + 60s` when
@@ -215,22 +234,6 @@ object Stage4WsProperties extends YetAnotherProperties("Integration Stage 4 WS")
       nPeers = 2,
       nCoilPeers = 1,
       transportMode = TransportMode.WebSocket,
-    ).property()
-
-    val _ = property("Two-peers head works WS (extended)") = Stage4Suite(
-      label = "stage4-ws-two-peers-extended",
-      nPeers = 2,
-      nCommands = 500,
-      transportMode = TransportMode.WebSocket,
-      backendMode = BackendMode.RocksDb()
-    ).property()
-
-    val _ = property("Ten-peers head works WS (extended)") = Stage4Suite(
-      label = "stage4-ws-ten-peers-extended",
-      nPeers = 10,
-      nCommands = 500,
-      transportMode = TransportMode.WebSocket,
-      backendMode = BackendMode.RocksDb()
     ).property()
 
 // ===================================
