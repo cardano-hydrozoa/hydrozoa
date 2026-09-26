@@ -2,10 +2,13 @@
 """Summarise sbt's JUnit XML test reports for a CI run.
 
 Reads every TEST-*.xml under the given directories (default: all sbt test-report directories
-under target/). Writes a Markdown summary to $GITHUB_STEP_SUMMARY (a table of totals per suite
-with failures, then each failed test with its message and the first lines of its trace), and
+under target/). Writes a Markdown summary to $GITHUB_STEP_SUMMARY (one line of totals, then each
+failed test with its suite, its message and the first lines of its trace), and
 emits one `::error` annotation per failed test, so a failure is named on the run page without
 reading the log. Prints the same summary to stdout when run outside GitHub Actions.
+
+GitHub displays at most 10 error annotations per step, so with more failures the annotations show
+the first ten and the summary, which has no limit, lists them all.
 
 Exit status is always 0: the test steps decide pass or fail; this only reports.
 """
