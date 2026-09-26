@@ -163,9 +163,12 @@ lazy val petri: Project = (project in file("petri"))
       libraryDependencies ++= Seq(
         "org.typelevel" %% "cats-core" % "2.13.0",
         "org.typelevel" %% "spire" % "0.18.0",
-        "org.scalatest" %% "scalatest" % "3.2.19" % Test,
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
-        "org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test,
+        "org.scalatest" %% "scalatest" % "3.2.20" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
+        // Built against scalatestplus `scalacheck-1-18`; exclude it so the `scalacheck-1-19` pinned
+        // here is the only copy of `org.scalatestplus.scalacheck` on the test classpath.
+        ("org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test)
+            .exclude("org.scalatestplus", "scalacheck-1-18_3"),
         "org.typelevel" %% "spire-laws" % "0.18.0" % Test
       )
     )
@@ -282,7 +285,7 @@ lazy val core: Project = (project in file("."))
         "org.typelevel" %% "cats-effect" % "3.6.3",
         "com.github.suprnation.cats-actors" %% "cats-actors" % "2.1.0",
         "org.typelevel" %% "spire" % "0.18.0",
-        "org.scalactic" %% "scalactic" % "3.2.19",
+        "org.scalactic" %% "scalactic" % "3.2.20",
         "org.typelevel" %% "cats-core" % "2.13.0",
         // http4s - web server and websocket client
         "org.http4s" %% "http4s-ember-server" % http4sVersion,
@@ -315,9 +318,12 @@ lazy val core: Project = (project in file("."))
       ),
       libraryDependencies ++= Seq(
         "org.typelevel" %% "spire-laws" % "0.18.0" % Test,
-        "org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test,
-        "org.scalatest" %% "scalatest" % "3.2.19" % Test,
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        // Built against scalatestplus `scalacheck-1-18`; exclude it so the `scalacheck-1-19` pinned
+        // here is the only copy of `org.scalatestplus.scalacheck` on the test classpath.
+        ("org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test)
+            .exclude("org.scalatestplus", "scalacheck-1-18_3"),
+        "org.scalatest" %% "scalatest" % "3.2.20" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
         "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
         "org.scalus" %% "scalus-testkit" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
@@ -429,7 +435,7 @@ lazy val integration: Project = (project in file("integration"))
       ),
       // test dependencies
       libraryDependencies ++= Seq(
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
         "org.typelevel" %% "cats-effect" % "3.6.3" % Test,
         // Bloxbean's `yaci-cardano-test:0.1.0` (transitively via scalus-testkit) pins
         // testcontainers-java to 1.17.6 → docker-java 3.2.13 → Docker Engine API 1.32, which
@@ -473,7 +479,7 @@ lazy val examples: Project = (project in file("examples"))
       name := "hydrozoa-examples",
       publish / skip := true,
       libraryDependencies ++= Seq(
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
         "org.typelevel" %% "cats-effect" % "3.6.3" % Test
       )
     )
@@ -576,7 +582,7 @@ lazy val benchmark: Project = (project in file("benchmark"))
       ),
       libraryDependencies ++= Seq(
         // "org.scalacheck" %% "scalacheck" % "1.19.0",
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
         "org.scalus" %% "scalus-testkit" % scalusVersion
       )
     )
