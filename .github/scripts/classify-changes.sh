@@ -5,15 +5,17 @@
 #   unit         under docs/api/: the unit tests check these schemas against the code
 #                (OpenApiSchemaTest), so they are test inputs, not documentation
 #   docs         under docs/, or any *.md file anywhere
-#   unit         under src/test/
+#   core-test    under src/test/: the unit tests, and also a dependency of the integration suites,
+#                which build on core's test code (`core % "test->test"` in build.sbt)
 #   integration  under integration/
 #   other        anything else: production code, build, Nix, workflows, scripts, dotfiles
 # A rename counts both its old and its new path; a deletion counts its path.
 #
-# The plan: any `other` file runs everything; otherwise `unit` files run the precommit checks and
-# the unit tests, `integration` files the precommit checks and the integration suites (Yaci
-# included), and docs alone, or no files at all, run nothing heavy. Any event but pull_request
-# (merge_group, workflow_dispatch, ...) runs everything.
+# The plan: any `other` or `core-test` file runs everything; otherwise `unit` files run the
+# precommit checks and the unit tests, `integration` files the precommit checks and the
+# integration suites, Yaci's included (nothing in core depends on them), and docs alone, or no
+# files at all, run nothing heavy. Any event but pull_request (merge_group, workflow_dispatch, ...)
+# runs everything.
 #
 # The change set of a pull_request run is HEAD^1..HEAD. For that event actions/checkout checks
 # out GitHub's test merge (refs/pull/N/merge): a two-parent commit whose first parent is the base
@@ -51,7 +53,7 @@ summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 forced=""
 # A human-readable description of the change set that was classified.
 range=""
-n_docs=0 n_unit=0 n_integration=0 n_other=0
+n_docs=0 n_unit=0 n_core_test=0 n_integration=0 n_other=0
 listing=""
 listed=0
 tmp=""
@@ -63,7 +65,7 @@ classify() {
   case $1 in
     docs/api/*) bucket=unit ;;
     docs/* | *.md) bucket=docs ;;
-    src/test/*) bucket=unit ;;
+    src/test/*) bucket=core-test ;;
     integration/*) bucket=integration ;;
     *) bucket=other ;;
   esac
@@ -147,6 +149,7 @@ collect_pr_changes() {
     case ${bucket} in
       docs) n_docs=$((n_docs + 1)) ;;
       unit) n_unit=$((n_unit + 1)) ;;
+      core-test) n_core_test=$((n_core_test + 1)) ;;
       integration) n_integration=$((n_integration + 1)) ;;
       *) n_other=$((n_other + 1)) ;;
     esac
@@ -168,7 +171,7 @@ else
 fi
 
 unit=false integration=false
-if [[ -n ${forced} ]] || ((n_other > 0)); then
+if [[ -n ${forced} ]] || ((n_other > 0 || n_core_test > 0)); then
   unit=true integration=true
 else
   if ((n_unit > 0)); then unit=true; fi
@@ -193,7 +196,7 @@ fi
   echo "integration=${integration}"
 } >>"${output}"
 
-counts="docs ${n_docs}, unit ${n_unit}, integration ${n_integration}, other ${n_other}"
+counts="docs ${n_docs}, unit ${n_unit}, core-test ${n_core_test}, integration ${n_integration}, other ${n_other}"
 # An anticipated failure on a pull_request is worth an annotation; the other events are by design.
 if [[ ${event} == pull_request && -n ${forced} ]]; then
   echo "::warning title=CI plan::Running everything: ${forced}."

@@ -35,12 +35,12 @@ jobs:
         with:
           fetch-depth: 2
 
-      # What runs: everything, unless this is a PR whose changes are confined to test code or docs.
-      # The script puts each changed file in one bucket: docs (docs/ or any *.md), unit
-      # (src/test/), integration (integration/), or other (production code, build, Nix,
-      # workflows...). Unit-test code can't affect the integration suites, nor integration-test
-      # code the unit tests; anything in `other` runs everything. Merge-queue and manual runs
-      # always run everything, and so does a PR whose change set can't be determined.
+      # What runs: everything, unless this is a PR whose changes are confined to integration-test
+      # code, the API schemas or docs. The script puts each changed file in one bucket; see its
+      # header. Integration-test code can't affect the unit tests, so a PR confined to
+      # integration/ skips them; the integration suites build on core's test code, so a change
+      # to src/test/ runs everything. Merge-queue and manual runs always run everything, and so
+      # does a PR whose change set can't be determined.
       - name: Plan the run
         id: plan
         env:
