@@ -86,14 +86,16 @@ jobs:
       - name: Format / lint / nixfmt checks
         run: nix develop .#ci --command just precommit
 
+      # The test steps run even when the precommit checks fail, so one run reports both: a
+      # formatting slip is the most common first failure, and it shouldn't hide the tests.
       - name: Unit tests
-        if: needs.plan.outputs.unit == 'true'
+        if: ${{ !cancelled() && needs.plan.outputs.unit == 'true' }}
         run: nix develop .#ci --command just test
 
       # Under CI the build points the forked test JVMs at logback-ci.xml: WARN and above on the
       # console, everything down to TRACE in integration/integration-tests.log, uploaded below.
       - name: Integration tests
-        if: needs.plan.outputs.integration == 'true'
+        if: ${{ !cancelled() && needs.plan.outputs.integration == 'true' }}
         run: nix develop .#ci --command just integration-fast
 
       - name: Upload integration log
