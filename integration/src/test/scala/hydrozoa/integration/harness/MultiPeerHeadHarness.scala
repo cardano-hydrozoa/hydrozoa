@@ -52,7 +52,7 @@ import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.{HttpRoutes, Uri}
 import org.scalacheck.{Gen, PropertyM}
-import scala.concurrent.duration.{DurationLong, FiniteDuration}
+import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, ProtocolParams, SlotConfig, Utxos}
@@ -641,8 +641,8 @@ object MultiPeerHeadHarness:
         handle: H,
     )
 
-    /** Everything the harness yields. `sutErrors` is appended to by the error drainer (one entry
-      * per uncaught actor exception); callers read it post-run.
+    /** Everything the harness yields. `sutErrors` is appended to by the event-stream listener (one
+      * entry per uncaught actor exception); callers read it post-run.
       */
     case class Harness[H](
         transportMode: Transport.Mode,
@@ -666,8 +666,43 @@ object MultiPeerHeadHarness:
         rejoinCoilPeer: CoilPeerNumber => IO[Coil[H]],
     )
 
+    /** Run `body` against a fresh [[resource]], failing — instead of hanging — if the actor system
+      * terminates underneath it.
+      *
+      * A failure that escalates to the user guardian terminates the whole actor system
+      * (cats-actors' `TerminateActorSystem`). From then on every `?` asked of an actor waits
+      * forever, while the harness's own CL tick loops and the metrics samplers are plain fibers,
+      * not actors, and keep scheduling timers. Under TestControl the clock therefore keeps
+      * advancing, nothing completes, and `TestControlDriver` ticks forever: the failure that caused
+      * it is never reported. Racing the body against termination ends the run at once with the
+      * errors the listener recorded.
+      */
+    def useGuarded[H, A](inputs: Inputs, hooks: Hooks[H])(body: Harness[H] => IO[A]): IO[A] =
+        resource(inputs, hooks).use { harness =>
+            IO.race(harness.system.waitForTermination, body(harness)).flatMap {
+                case Right(a) => IO.pure(a)
+                case Left(()) =>
+                    // The escalated failure is published to the event stream around the moment
+                    // the system terminates, and termination cancels the system's own listener, so
+                    // it can be left in the queue unread. Give it a moment (virtual time under
+                    // TestControl), then drain what is left alongside what the listener recorded.
+                    for
+                        _ <- IO.sleep(1.second)
+                        leftover <- harness.system.eventStream.tryTakeN(None)
+                        _ <- leftover.traverse_(ErrorDrainer.record(harness.sutErrors))
+                        errors <- harness.sutErrors.get
+                        result <- IO.raiseError[A](
+                          new IllegalStateException(
+                            "the actor system terminated under the test body; uncaught actor " +
+                                s"errors: ${errors.mkString("; ")}"
+                          )
+                        )
+                    yield result
+            }
+        }
+
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns everything;
-      * release cancels the CL tick fibers and the error drainer.
+      * release cancels the CL tick fibers.
       */
     def resource[H](
         inputs: Inputs,
@@ -684,7 +719,10 @@ object MultiPeerHeadHarness:
               PreSystem.align(transportMode.useTestControl, startEpochMs, takeoffTime, log)
             )
 
-            system <- ActorSystem[IO](label)
+            // Recorded by the system's own event-stream listener, the stream's only consumer: a
+            // second `take` loop on the same queue would see only the events the listener did not.
+            sutErrors <- Resource.eval(Ref[IO].of(List.empty[String]))
+            system <- ActorSystem[IO](label, ErrorDrainer.listener(sutErrors))
             backendAndSnapshot <- Resource.eval(
               CardanoBackend.mk(
                 cardanoBackendMode,
@@ -766,8 +804,6 @@ object MultiPeerHeadHarness:
                   }
                   .map(_.toMap)
             )
-            sutErrors <- Resource.eval(Ref[IO].of(List.empty[String]))
-            _ <- ErrorDrainer.start(system, sutErrors)
             headPollingPeriodOf = (peerNum: HeadPeerNumber) =>
                 multiNodeConfig
                     .nodeConfigs(peerNum)
@@ -1828,20 +1864,24 @@ object MultiPeerHeadHarness:
     // ===================================
 
     object ErrorDrainer:
-        /** Spawn a fiber that drains `system.eventStream` and appends every uncaught actor
-          * exception to `sutErrors`. Cancelled on release.
+        /** The actor system's event-stream listener: print every event as cats-actors' default
+          * listener does, and append every uncaught actor exception to `sutErrors`.
+          *
+          * It has to BE the listener. `ActorSystem` already runs one `take` loop over its event
+          * stream, and a second loop on the same queue splits the events between the two — each
+          * event reached exactly one of them, so an error could miss `sutErrors` entirely.
           */
-        def start(
-            system: ActorSystem[IO],
-            sutErrors: Ref[IO, List[String]],
-        ): Resource[IO, Unit] =
-            startedFiber(
-              system.eventStream.take.flatMap {
-                  case e: ActorError if e.cause != ActorError.NoCause =>
-                      sutErrors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
-                  case _ => IO.unit
-              }.foreverM
-            )
+        def listener(sutErrors: Ref[IO, List[String]]): Any => IO[Unit] = event =>
+            // Uncancelable, recording first: the system cancels this listener as it terminates,
+            // which is exactly when the error that terminated it is being handled here.
+            (record(sutErrors)(event) >> IO.println(s"[EventBus] => $event")).uncancelable
+
+        /** Append `event` to `sutErrors` if it is an uncaught actor exception. */
+        def record(sutErrors: Ref[IO, List[String]])(event: Any): IO[Unit] = event match {
+            case e: ActorError if e.cause != ActorError.NoCause =>
+                sutErrors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
+            case _ => IO.unit
+        }
 
     // ===================================
     // Ticks — per-CardanoLiaison tick fibers
@@ -1885,11 +1925,3 @@ object MultiPeerHeadHarness:
             conns: HeadMultisigRegimeManager.Connections,
         ): IO[Nothing] =
             (IO.sleep(pollingPeriod) >> (conns.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM
-
-    // ===================================
-    // Shared helper
-    // ===================================
-
-    /** Long-running fiber managed as a resource: started on acquire, cancelled on release. */
-    private def startedFiber(action: IO[Nothing]): Resource[IO, Unit] =
-        Resource.make(action.start)(_.cancel).void
