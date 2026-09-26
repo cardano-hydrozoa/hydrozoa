@@ -125,19 +125,31 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
     private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.fallbackDispatched.get.timeout(scenarioTimeout)
+              )
+            )
         yield ()
 
     private def step3_awaitResolutionSubmitted: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.resolutionSubmitted.get.timeout(scenarioTimeout)
+              )
+            )
         yield ()
 
     private def step4_awaitEvacuationDone: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(ctx.evacuationDone.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.evacuationDone.get.timeout(scenarioTimeout)
+              )
+            )
         yield ()
 
     /** After evacuation completes, cancel the periodic-request loop, wait a beat for any in-flight

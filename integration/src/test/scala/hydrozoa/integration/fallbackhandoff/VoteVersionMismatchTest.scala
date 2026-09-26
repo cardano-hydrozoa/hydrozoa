@@ -88,16 +88,32 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
             )
 
             // 2. Both head peers hard-confirm through major-2 off-chain.
-            _ <- lift(ctx.bothPeersConfirmedMajor2.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.bothPeersConfirmedMajor2.get.timeout(scenarioTimeout)
+              )
+            )
 
             // 3. CL notices the on-chain treasury is stale and dispatches
             // `Action.FallbackToRuleBased`; HMRM auto-spawns RRM/RBA.
-            _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.fallbackDispatched.get.timeout(scenarioTimeout)
+              )
+            )
 
             // 4. Every head peer's RBA finds the SEC matching the on-chain treasury's
             // versionMajor and submits a Vote that passes Plutus.
-            _ <- lift(ctx.allHeadsBuildingVote.get.timeout(scenarioTimeout))
-            _ <- lift(ctx.allHeadsVoteSubmittedOk.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.allHeadsBuildingVote.get.timeout(scenarioTimeout)
+              )
+            )
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.allHeadsVoteSubmittedOk.get.timeout(scenarioTimeout)
+              )
+            )
             errs <- lift(ctx.harness.sutErrors.get)
             _ <- assertWith(
               !errs.exists(_.contains("versionMajor field must match")),
@@ -109,7 +125,12 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
             // the rule-based regime). Skipped when `nCoilPeers == 0`.
             _ <-
                 if nCoilPeers > 0
-                then lift(ctx.allCoilsHandledDispute.get.timeout(scenarioTimeout))
+                then
+                    lift(
+                      MultiPeerHeadHarness.guarded(ctx.harness)(
+                        ctx.allCoilsHandledDispute.get.timeout(scenarioTimeout)
+                      )
+                    )
                 else pure(())
         yield true
 
