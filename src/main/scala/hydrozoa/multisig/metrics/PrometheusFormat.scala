@@ -139,6 +139,113 @@ object PrometheusFormat:
           "Requests the sequencer will admit now before backpressure trips.",
           s.sequencerHeadroom
         )
+        gauge(
+          "hydrozoa_equity_lovelace",
+          "Head equity beyond L2 liabilities, as of the last stack this peer closed.",
+          s.equityLovelace
+        )
+        gauge(
+          "hydrozoa_composer_seconds_in_phase",
+          "How long the StackComposer has been in its current phase.",
+          s.composer.secondsInPhase
+        )
+        gauge(
+          "hydrozoa_composer_partitions_done",
+          "Partitions derived so far for the stack being built.",
+          s.composer.partitionsDone
+        )
+        gauge(
+          "hydrozoa_composer_partitions_total",
+          "Partitions in the stack being built.",
+          s.composer.partitionsTotal
+        )
+        // The phase itself as a labelled 0/1 set, so a dashboard can select on it.
+        StackComposerPhase.values.foreach { p =>
+            b ++= "# TYPE hydrozoa_composer_phase gauge\n"
+            b ++= s"hydrozoa_composer_phase{phase=\"$p\"} ${
+                    if s.composer.phase == p then 1 else 0
+                }\n"
+        }
+
+        // Whole-process resource gauges — concurrency axes, read against a cumulative counter
+        // above and across a load step-down (see `RuntimeStats`). The `_total` counters here are
+        // monotonic by construction.
+        gauge(
+          "hydrozoa_fibers_suspended",
+          "Fibers suspended on the cats-effect runtime. The axis that failed on 2026-08-26.",
+          s.runtime.fibersSuspended
+        )
+        gauge(
+          "hydrozoa_fibers_queued_local",
+          "Fibers sitting in worker-local run queues.",
+          s.runtime.fibersQueuedLocal
+        )
+        gauge("hydrozoa_worker_threads", "cats-effect compute workers.", s.runtime.workerThreads)
+        gauge(
+          "hydrozoa_workers_active",
+          "Compute workers running a fiber.",
+          s.runtime.workersActive
+        )
+        gauge(
+          "hydrozoa_workers_searching",
+          "Compute workers searching for work. Non-zero while hydrozoa_timers_executed_total is " +
+              "flat is the cats-effect scheduler-seizure signature.",
+          s.runtime.workersSearching
+        )
+        gauge(
+          "hydrozoa_workers_blocked",
+          "Compute workers inside a blocking region.",
+          s.runtime.workersBlocked
+        )
+        gauge(
+          "hydrozoa_timers_outstanding",
+          "Armed timers across all worker heaps.",
+          s.runtime.timersOutstanding
+        )
+        counter(
+          "hydrozoa_timers_executed_total",
+          "Timers fired since start. Flat while the process is loaded means timer delivery is dead.",
+          s.runtime.timersExecuted
+        )
+        gauge("hydrozoa_live_threads", "JVM live threads.", s.runtime.liveThreads)
+        gauge("hydrozoa_heap_used_bytes", "JVM heap in use.", s.runtime.heapUsedBytes)
+        gauge("hydrozoa_heap_committed_bytes", "JVM heap committed.", s.runtime.heapCommittedBytes)
+        gauge(
+          "hydrozoa_open_file_descriptors",
+          "Open file descriptors, or -1 where the platform does not report them.",
+          s.runtime.openFileDescriptors
+        )
+
+        // ---- block-rate limiter ----
+        gaugeD(
+          "hydrozoa_block_gate_multiplier",
+          "Block-lane rate multiplier. 1 means the downstream-backlog gate is fully open and " +
+              "block production is paced only by softBlockMinPeriod; below 1 the stack composer " +
+              "is behind and the effective period is softBlockMinPeriod divided by this.",
+          s.blockGate.multiplier
+        )
+        gauge(
+          "hydrozoa_block_gate_backlog",
+          "Soft-confirmed blocks released since the last hard confirmation.",
+          s.blockGate.backlog
+        )
+        gaugeD(
+          "hydrozoa_block_gate_residual",
+          "Per-stack-cycle backlog, filtered over several cycles. The multiplier is derived from " +
+              "this rather than from instantaneous depth, which is dominated by cycle phase.",
+          s.blockGate.residual
+        )
+        counter(
+          "hydrozoa_block_gate_holds_total",
+          "Holds begun by the block limiter. Rising means the shaper is binding.",
+          s.blockGate.holds
+        )
+        counter(
+          "hydrozoa_block_gate_drains_total",
+          "Headroom signals received (one per hard confirmation). Flat while blocks are being " +
+              "produced means the gate has stopped being reopened.",
+          s.blockGate.drains
+        )
 
         b.toString
 

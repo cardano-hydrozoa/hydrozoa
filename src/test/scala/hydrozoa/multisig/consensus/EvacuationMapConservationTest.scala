@@ -19,7 +19,7 @@ import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_TransactionInput
 import scalus.cardano.ledger.{AssetName, Coin, TransactionInput, Value}
 import scalus.uplc.builtin.ByteString
-import test.Generators.Hydrozoa.genKnownValuePayoutObligationWithMinAdaEnsured
+import test.Generators.Hydrozoa.{genKnownValuePayoutObligationWithMinAdaEnsured, testL2StateHash}
 
 /** Conservation properties over the evacuation map: an L2 transaction (a minor block's
   * `evacuationMapDiff`) must neither over- nor under-credit any account — the map's total value is
@@ -105,8 +105,11 @@ object EvacuationMapConservationTest extends Properties("EvacuationMap conservat
           treasuryTokenName = headConfig.headTokenNames.treasuryTokenName,
           utxoId = fixed(Arbitrary.arbitrary[TransactionInput], seed = 1),
           address = headConfig.headMultisigAddress,
-          datum =
-              MultisigTreasuryUtxo.Datum(ByteString.fromArray(Array.fill[Byte](48)(0)), BigInt(3)),
+          datum = MultisigTreasuryUtxo.Datum(
+            ByteString.fromArray(Array.fill[Byte](48)(0)),
+            BigInt(3),
+            testL2StateHash.byteString
+          ),
           value = Value(Coin(potLovelace + 1_000_000L)) + treasuryTokenValue,
           equity = Equity(Coin(1_000_000L)).get
         )
@@ -114,7 +117,8 @@ object EvacuationMapConservationTest extends Properties("EvacuationMap conservat
           config = headConfig,
           initialTreasury = treasury,
           partitions = StackPartition.partition(NonEmptyList.one(minorBlock)),
-          initialEvacuationMap = initialMap
+          initialEvacuationMap = initialMap,
+          l2StateHashes = Map(minorBlock.brief.blockNum -> testL2StateHash)
         )
     }
 

@@ -15,6 +15,12 @@ import org.http4s.{Method, Request as Http4sRequest, Uri}
 /** A client-side handle for submitting [[UserRequest]]s to a Hydrozoa peer and awaiting its
   * assigned [[RequestId]]. Abstracts over the transport: an in-process actor send, an in-memory
   * http4s round-trip against [[HydrozoaRoutes]], or a real over-the-wire HTTP call.
+  *
+  * TODO: this does not belong in the main codebase. It is a *client* of the node, not part of one,
+  * and the abstraction over transports exists for tests. What keeps it here is the packaged CLI:
+  * `hydrozoa submit-deposit` and `hydrozoa submit-l2-tx` submit through [[http]]. Moving it out
+  * means deciding where a first-party client lives — its own module, or collapsed into the two CLI
+  * commands with the harness keeping its own. [[direct]] has no callers at all and can go with it.
   */
 trait SubmissionClient:
     def submit(userRequest: UserRequest): IO[RequestId]
@@ -53,8 +59,17 @@ object SubmissionClient:
                 ).withEntity(bodyJson)
                 client.expect[RequestAccepted](req).map(_.requestId)
 
+    /** The submission body: the kind tag, the payloads, and the digest the submitter computed over
+      * them. The head re-derives the digest and refuses the request on a mismatch, so this is the
+      * one field a client cannot copy from somewhere else — see `docs/user-guide/REQUEST-HASH.md`.
+      */
     private def requestJson(request: UserRequest): Json =
         val (tag, body) = request.body match
             case b: UserRequestBody.DepositRequestBody     => ("deposit", b.asJson)
             case b: UserRequestBody.TransactionRequestBody => ("transaction", b.asJson)
-        Json.obj("type" -> Json.fromString(tag)).deepMerge(body)
+        Json
+            .obj(
+              "type" -> Json.fromString(tag),
+              "requestHash" -> Json.fromString(request.requestHash.toHex)
+            )
+            .deepMerge(body)

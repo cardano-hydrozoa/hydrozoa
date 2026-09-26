@@ -38,6 +38,19 @@ extension [M[_], A](t: TracerA[M, A, Unit])
         }
     }
 
+    /** [[runTracerA]] compiled to a plain function, built once per tracer rather than per trace.
+      * The upstream Haskell gets this for free — `traceWith` is INLINE and `arr (const ())` is a
+      * CAF, so GHC floats the compiled arrow out of the hot path; on the JVM the equivalent must be
+      * done by hand ([[ContraTracer]] memoises the result). A squelching tracer compiles to a
+      * constant `unit`, making a squelched `traceWith` allocation-free.
+      */
+    def compile(using monadM: Monad[M]): A => M[Unit] = t match {
+        case TracerA.Emitting(emits, _) => a => monadM.void(emits.run(a))
+        case TracerA.Squelching(_) =>
+            val unit = monadM.unit
+            _ => unit
+    }
+
 object TracerA:
     case class Emitting[M[_], A, X, B](emitter: Kleisli[M, A, X], nonEmitter: Kleisli[M, X, B])
         extends TracerA[M, A, B]
@@ -99,6 +112,79 @@ object TracerA:
                 case Emitting(e, p) => Emitting(e.first, p.first)
             }
         }
+
+        // Strict Kleisli combinators backing the split/merge/choice overrides below — direct
+        // translations of the upstream Haskell's hand-written (****)/(|||) equations. The class
+        // defaults route through `first` plus lifted swap/dup/fold stages, each of which survives
+        // as a per-trace pure+flatMap in the fused arrow (upstream measured the default (***) at
+        // ~1KB of thunks per level per dispatch); these run the two legs directly.
+        def idK[M[_], A](using appM: Applicative[M]): Kleisli[M, A, A] =
+            Kleisli(a => appM.pure(a))
+
+        /** `f **** g`: run both legs on the halves of a pair. */
+        def parK[M[_], A, B, C, D](f: Kleisli[M, A, B], g: Kleisli[M, C, D])(using
+            monadM: Monad[M]
+        ): Kleisli[M, (A, C), (B, D)] =
+            Kleisli((ac: (A, C)) =>
+                monadM.flatMap(f.run(ac._1))(b => monadM.map(g.run(ac._2))(d => (b, d)))
+            )
+
+        /** `f &&& g` at the Kleisli level: run both legs on the same input, no dup/swap stages. */
+        def fanK[M[_], A, B, C](f: Kleisli[M, A, B], g: Kleisli[M, A, C])(using
+            monadM: Monad[M]
+        ): Kleisli[M, A, (B, C)] =
+            Kleisli((a: A) => monadM.flatMap(f.run(a))(b => monadM.map(g.run(a))(c => (b, c))))
+
+        /** `f ||| g` at the Kleisli level: dispatch on the Either, no merging `arr` stage. */
+        def eitherK[M[_], A, B, C](
+            f: Kleisli[M, A, C],
+            g: Kleisli[M, B, C]
+        ): Kleisli[M, Either[A, B], C] =
+            Kleisli(_.fold(f.run, g.run))
+
+        /** `f +++ g` at the Kleisli level. */
+        def plusK[M[_], A, B, C, D](f: Kleisli[M, A, B], g: Kleisli[M, C, D])(using
+            functorM: Functor[M]
+        ): Kleisli[M, Either[A, C], Either[B, D]] =
+            Kleisli(
+              _.fold(
+                a => functorM.map(f.run(a))(Left(_)),
+                c => functorM.map(g.run(c))(Right(_))
+              )
+            )
+
+        // The upstream equations: `Squelching l *** Emitting re rp = Emitting (id **** re) (l ****
+        // rp)` etc. Squelching legs fold into whichever side of the Emitting pair keeps them
+        // droppable.
+        def split[M[_]: Monad, A, B, C, D](
+            f: TracerA[M, A, B],
+            g: TracerA[M, C, D]
+        ): TracerA[M, (A, C), (B, D)] = (f, g) match {
+            case (Squelching(l), Squelching(r))       => Squelching(parK(l, r))
+            case (Squelching(l), Emitting(re, rp))    => Emitting(parK(idK, re), parK(l, rp))
+            case (Emitting(le, lp), Squelching(r))    => Emitting(parK(le, idK), parK(lp, r))
+            case (Emitting(le, lp), Emitting(re, rp)) => Emitting(parK(le, re), parK(lp, rp))
+        }
+
+        def merge[M[_]: Monad, A, B, C](
+            f: TracerA[M, A, B],
+            g: TracerA[M, A, C]
+        ): TracerA[M, A, (B, C)] = (f, g) match {
+            case (Squelching(l), Squelching(r))       => Squelching(fanK(l, r))
+            case (Squelching(l), Emitting(re, rp))    => Emitting(fanK(idK[M, A], re), parK(l, rp))
+            case (Emitting(le, lp), Squelching(r))    => Emitting(fanK(le, idK[M, A]), parK(lp, r))
+            case (Emitting(le, lp), Emitting(re, rp)) => Emitting(fanK(le, re), parK(lp, rp))
+        }
+
+        def choice[M[_]: Monad, A, B, C](
+            f: TracerA[M, A, C],
+            g: TracerA[M, B, C]
+        ): TracerA[M, Either[A, B], C] = (f, g) match {
+            case (Squelching(l), Squelching(r))    => Squelching(eitherK(l, r))
+            case (Squelching(l), Emitting(re, rp)) => Emitting(plusK(idK[M, A], re), eitherK(l, rp))
+            case (Emitting(le, lp), Squelching(r)) => Emitting(plusK(le, idK[M, B]), eitherK(lp, r))
+            case (Emitting(le, lp), Emitting(re, rp)) => Emitting(plusK(le, re), eitherK(lp, rp))
+        }
     }
 
     given [M[_]: Monad]: Category[[X, Y] =>> TracerA[M, X, Y]] with {
@@ -118,6 +204,16 @@ object TracerA:
         // The manual implementation would look like:
         //   (Kleisli((a, c) => s.run(a).map((_, c)))
         def first[A, B, C](fa: TracerA[M, A, B]): TracerA[M, (A, C), (B, C)] = TracerAOps.first(fa)
+
+        override def split[A, B, C, D](
+            f: TracerA[M, A, B],
+            g: TracerA[M, C, D]
+        ): TracerA[M, (A, C), (B, D)] = TracerAOps.split(f, g)
+
+        override def merge[A, B, C](
+            f: TracerA[M, A, B],
+            g: TracerA[M, A, C]
+        ): TracerA[M, A, (B, C)] = TracerAOps.merge(f, g)
     }
 
     given [M[_]: Monad]: ArrowChoice[[X, Y] =>> TracerA[M, X, Y]] with {
@@ -138,6 +234,25 @@ object TracerA:
             TracerAOps.compose(f, g)
 
         def first[A, B, C](fa: TracerA[M, A, B]): TracerA[M, (A, C), (B, C)] = TracerAOps.first(fa)
+
+        // Without an explicit `choice` the class default fires:
+        //   f ||| g = choose(f)(g) >>> lift(_.merge)
+        // which inserts an extra lifted merge stage on every dispatch (mirrors the upstream
+        // Haskell's hand-written (|||) equations).
+        override def choice[A, B, C](
+            f: TracerA[M, A, C],
+            g: TracerA[M, B, C]
+        ): TracerA[M, Either[A, B], C] = TracerAOps.choice(f, g)
+
+        override def split[A, B, C, D](
+            f: TracerA[M, A, B],
+            g: TracerA[M, C, D]
+        ): TracerA[M, (A, C), (B, D)] = TracerAOps.split(f, g)
+
+        override def merge[A, B, C](
+            f: TracerA[M, A, B],
+            g: TracerA[M, A, C]
+        ): TracerA[M, A, (B, C)] = TracerAOps.merge(f, g)
     }
 
     def nat[M[_], N[_], A, B](h: M ~> N)(t: TracerA[M, A, B]): TracerA[N, A, B] = t match {

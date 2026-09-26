@@ -14,12 +14,13 @@ import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
-import hydrozoa.multisig.consensus.liaison.{PeerLiaisonCoilToHub, PeerLiaisonEventFormat, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
+import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonEventFormat, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.{HeadMultisigRegimeManager, NoopActor}
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
@@ -138,11 +139,11 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
     /** Per-coil actors + the Ref recording what its slow-consensus slot receives. */
     private final case class CoilParts(
         coilNum: CoilPeerNumber,
-        pending: Deferred[IO, HeadMultisigRegimeManager.Connections],
+        pending: HeadMultisigRegimeManager.PendingConnections,
         coilSeen: Ref[IO, Vector[HardAck]],
         coilSlowConsensus: SlowConsensusActor.Handle,
-        coilLiaison: PeerLiaisonCoilToHub.Handle,
-        hubLiaison: PeerLiaisonHubToCoil.Handle,
+        coilLiaison: ActorRef[IO, LiaisonProtocol.CoilLiaisonMessage],
+        hubLiaison: ActorRef[IO, LiaisonProtocol.HubLiaisonMessage],
     )
 
     /** Stand up one hub head serving `nCoil` coil peers, inject each coil peer's hard-acks (built
@@ -164,7 +165,10 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                 Persistence.fromBackend(backend, persistenceTracer).flatMap { persistence =>
                     ActorSystem[IO]("coil-liaison-test").use { system =>
                         for {
-                            headPending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
+                            headPending <- Deferred[IO, Either[
+                              Throwable,
+                              HeadMultisigRegimeManager.Connections
+                            ]]
                             hubSeen <- Ref[IO].of(Vector.empty[HardAck])
                             hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
                             sequencer <- system.actorOf(
@@ -181,11 +185,15 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         )
                                 }
                                 for {
-                                    pending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
+                                    pending <- Deferred[IO, Either[
+                                      Throwable,
+                                      HeadMultisigRegimeManager.Connections
+                                    ]]
                                     coilSeen <- Ref[IO].of(Vector.empty[HardAck])
                                     coilSlowConsensus <- system.actorOf(
                                       new HardAckRecorder(coilSeen)
                                     )
+                                    joinSettled <- Deferred[IO, Either[Throwable, Unit]]
                                     coilLiaison <- system.actorOf(
                                       PeerLiaisonCoilToHub(
                                         coilConfig,
@@ -197,9 +205,29 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                                 PeerId.Head(hubNum)
                                               )
                                         ),
-                                        persistence
+                                        persistence,
+                                        // This suite drives the pull chains, not the join
+                                        // exchange: nobody is listening for the marks, and an
+                                        // offer would mean the hub decided to seed a coil this
+                                        // suite never sets up as stale.
+                                        _ => IO.unit,
+                                        offer =>
+                                            IO.raiseError(
+                                              RuntimeException(
+                                                s"no join exchange in this suite: $offer"
+                                              )
+                                            ),
+                                        joinSettled
                                       )
                                     )
+                                    // Drive the liaison out of join mode the way a real bring-up
+                                    // does — every coil is cold and its hub has nothing to seed
+                                    // from. Awaiting `joinSettled` is safe before `pending` is
+                                    // completed below: the liaison opens this barrier before it
+                                    // resolves its connections, precisely so the two cannot wait
+                                    // on each other.
+                                    _ <- coilLiaison ! Join.NoOffer("no join exchange in suite")
+                                    _ <- joinSettled.get.flatMap(IO.fromEither)
                                     hubLiaison <- system.actorOf(
                                       PeerLiaisonHubToCoil(
                                         hubConfig,
@@ -212,7 +240,17 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                                 PeerId.Coil(coilNum)
                                               )
                                         ),
-                                        persistence
+                                        persistence,
+                                        // This suite drives the pull chains, not the join
+                                        // exchange. Raise rather than answer, so a later change
+                                        // that does send `Join.Connected` here fails loudly
+                                        // instead of silently taking a stubbed decision.
+                                        connected =>
+                                            IO.raiseError(
+                                              RuntimeException(
+                                                s"no join exchange in this suite: $connected"
+                                              )
+                                            )
                                       )
                                     )
                                 } yield CoilParts(
@@ -238,7 +276,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         coilPeers.map(c => c.coilNum -> c.coilLiaison).toMap,
                                   )
                                 )
-                            _ <- headPending.complete(headConnections)
+                            _ <- headPending.complete(Right(headConnections))
                             _ <- coilPeers.traverse_ { c =>
                                 baseConnections(system, slowConsensus = c.coilSlowConsensus)
                                     .map(
@@ -247,15 +285,28 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         remoteHubLiaison = Some(c.hubLiaison),
                                       )
                                     )
-                                    .flatMap(c.pending.complete)
+                                    .flatMap(conns => c.pending.complete(Right(conns)))
                             }
 
                             // Let the initial population/own-hard-ack handshakes settle, then
                             // inject each coil peer's hard-acks in order.
                             _ <- system.waitForIdle()
                             acksByCoil = mkAcks(coilPeers.map(_.coilNum))
+                            // Persist before injecting, as the consensus actors do (CR4). The
+                            // outbound lane evicts from its in-memory outbox once the remote
+                            // acknowledges past an entry, and serves older ones from the journal;
+                            // an ack that never reached the journal makes that eviction fatal
+                            // (LaneOutbound.EvictedButUnservable, which stops the actor system).
+                            // `peerLiaisonOutboxDepth` is generated, so a small draw evicts before
+                            // the hub has drained and the whole run dies.
                             _ <- coilPeers.zip(acksByCoil).traverse_ { case (c, acks) =>
-                                acks.traverse_(c.coilLiaison ! _)
+                                acks.traverse_ { ack =>
+                                    persistence.arrivalStamp.flatMap(stamp =>
+                                        persistence.put(
+                                          JournalKey.HardAck(PeerId.Coil(c.coilNum), ack.hardAckNum)
+                                        )(JournalValue(stamp, ack))
+                                    ) >> (c.coilLiaison ! ack)
+                                }
                             }
                             // The up-relay-down cascade is pull-driven (GetMsgBatch round-trips
                             // plus resend ticks), so mailbox idleness does not imply delivery
@@ -278,17 +329,30 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
             .unsafeRunSync()
     }
 
-    /** Poll until `isSettled` holds (50 ms period, 15 s budget). Budget exhaustion returns normally
-      * — the caller's property then fails with its own labels showing the shortfall.
+    /** Poll until `isSettled` holds, then return. Exhausting the budget RAISES.
+      *
+      * Returning normally instead would let the caller's property fail on whatever partial state it
+      * happened to observe — "hub saw 1 ack" reads as a broken relay when the relay was merely
+      * unfinished, and sends the reader after a bug that is not there. The budget is generous
+      * because it is a liveness bound, not a performance assertion: only a relay that never
+      * completes should reach it.
       */
     private def settleOn(isSettled: IO[Boolean]): IO[Unit] = {
         val pollPeriod = 50.millis
+        val budget = 60.seconds
         def go(remaining: FiniteDuration): IO[Unit] =
             isSettled.flatMap { settled =>
-                if settled || remaining <= Duration.Zero then IO.unit
+                if settled then IO.unit
+                else if remaining <= Duration.Zero then
+                    IO.raiseError(
+                      IllegalStateException(
+                        s"the relay did not settle within $budget — the assertion below would" +
+                            " otherwise report whatever partial state this observed"
+                      )
+                    )
                 else IO.sleep(pollPeriod) >> go(remaining - pollPeriod)
             }
-        go(15.seconds)
+        go(budget)
     }
 
     private def peerIdsOf(acks: Vector[HardAck]): Set[PeerId] = acks.map(_.ackId.peerId).toSet

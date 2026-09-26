@@ -48,10 +48,11 @@ class ReadyEndpointTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(status),
                       ConsensusStoreReader.empty,
+                      None,
                       None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),

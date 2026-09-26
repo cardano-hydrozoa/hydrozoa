@@ -124,13 +124,13 @@ under it. Then load the CLI alias and check you are on the version you expect:
 source ./hydrozoa.sh   # sets the `hydrozoa` alias + HYDROZOA_HOME (this folder, an absolute path)
 
 hydrozoa version       # verify the image you are running
-#   hydrozoa 0.1.11
-#   git:   v0.1.11
+#   hydrozoa 0.1.14
+#   git:   v0.1.14
 #   built: 2026-07-28 14:00:37.834-0600
 ```
 
-(The `git:` line is `git describe` provenance; a published image built from the `v0.1.11` tag reads a
-clean `v0.1.11`. A locally built image between releases shows the distance from the newest tag, e.g.
+(The `git:` line is `git describe` provenance; a published image built from the `v0.1.14` tag reads a
+clean `v0.1.14`. A locally built image between releases shows the distance from the newest tag, e.g.
 `v0.1.0-10-gaa9d7c69`.)
 
 Need a version that isn't in the registry? Build it from this repo — see §3.
@@ -222,9 +222,9 @@ pipeline turns operator-authored files into the two runtime files each node need
                                       │
    deploy-scripts-and-g2-setup        │
    (head-0 wallet, Blockfrost)        │
-   └─ bootstrap/ref-utxos.json ───────┤  the on-chain reference UTxOs: treasury + dispute
-                                      │  validators and the G2 setup ladder (falls back to the
-                                      │  per-network default baked into the image)
+   └─ bootstrap/ref-utxos.json ───────┤  the on-chain reference UTxOs: treasury + dispute +
+                                      │  regime validators and the G2 setup ladder (falls back to
+                                      │  the per-network default baked into the image)
                                       │
                                       │  + head-0 UTxOs + protocol params   (Blockfrost)
                                       ▼
@@ -327,15 +327,16 @@ just deploy-scripts-and-g2-setup        # local
 # -> $HYDROZOA_HOME/bootstrap/ref-utxos.json (funded by head-0's wallet under the head dir)
 ```
 
-The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators — and
-the G2 setup ladder — as **reference UTxOs** at startup. This target deploys the currently
+The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute + regime
+validators — and the G2 setup ladder — as **reference UTxOs** at startup. This target deploys the currently
 compiled scripts, funded from head-0's wallet (change returns): one chained tx per validator
 plus, unless an existing ladder is reused (the `LADDER_REFS` argument), one tx carrying the seven
 setup-ladder rungs — all locked at the unspendable burn address — then writes the reference
 inputs to `ref-utxos.json`; the bootstrap directory's own refs take precedence over the
 committed defaults. Because the burn address can never be spent from, **one deployment serves
 every head and every restart** — redeploy the validators only when the compiled scripts change
-(symptom: step 5 or node start fails complaining about invalid treasury/dispute script utxos);
+(symptom: step 5 or node start fails complaining about invalid treasury/dispute/regime script
+utxos);
 the ladder never changes.
 
 ### Step 5 — Build the shared head config
@@ -425,8 +426,8 @@ finalization) appears in the same section as the head progresses.
 build (§3) is already tagged `…:latest`, so it is picked up without either:
 
 ```bash
-HYDROZOA_VERSION=0.1.11 just head-up                          # a specific published release
-HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.11 just head-up  # a specific/other image name
+HYDROZOA_VERSION=0.1.14 just head-up                          # a specific published release
+HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.14 just head-up  # a specific/other image name
 ```
 
 **Another head** — each head directory carries its own `docker-compose.yml`, so switch heads by

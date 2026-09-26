@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.limiter.LimiterTimestamp
 import io.circe.*
 import io.circe.generic.semiauto.*
@@ -43,15 +44,17 @@ object Block {
     }
 
     /** Result of fast consensus: block brief plus every head peer's soft-ack signature over the
-      * brief's [[BlockHeader.Section.signingBytes]]. Carries no L1 effect signatures — those belong
-      * to the slow consensus cycle (see [[hydrozoa.multisig.consensus.SlowConsensusActor]]).
+      * brief's [[BlockBrief.Section.blockHash]]. Carries no L1 effect signatures — those belong to
+      * the slow consensus cycle (see [[hydrozoa.multisig.consensus.SlowConsensusActor]]).
       */
     sealed trait SoftConfirmed
         extends BlockBrief.Section,
           BlockStatus.SoftConfirmed,
           Fields.HasFinalizationRequested,
           LimiterTimestamp {
-        def headerMultiSigned: List[BlockHeader.HeaderSignature]
+        def softAckSignatures: List[SoftAck.Signature]
+
+        override def blockHash: BlockHash = blockBrief.blockHash
 
         override def limiterTimestamp: Instant = blockBrief.endTime.instant
 
@@ -62,7 +65,7 @@ object Block {
     object SoftConfirmed {
         final case class Minor(
             override val blockBrief: BlockBrief.Minor,
-            override val headerMultiSigned: List[BlockHeader.HeaderSignature],
+            override val softAckSignatures: List[SoftAck.Signature],
             override val finalizationRequested: Boolean
         ) extends Block.SoftConfirmed,
               BlockType.Minor {
@@ -72,7 +75,7 @@ object Block {
 
         final case class Major(
             override val blockBrief: BlockBrief.Major,
-            override val headerMultiSigned: List[BlockHeader.HeaderSignature],
+            override val softAckSignatures: List[SoftAck.Signature],
             override val finalizationRequested: Boolean
         ) extends Block.SoftConfirmed,
               BlockType.Major {
@@ -82,12 +85,17 @@ object Block {
 
         final case class Final(
             override val blockBrief: BlockBrief.Final,
-            override val headerMultiSigned: List[BlockHeader.HeaderSignature]
+            override val softAckSignatures: List[SoftAck.Signature]
         ) extends Block.SoftConfirmed,
               BlockType.Final {
             override transparent inline def header: BlockHeader.Final = blockBrief.header
             override transparent inline def body: BlockBody.Final = blockBrief.body
             override transparent inline def finalizationRequested: Boolean = false
+
+            /** The last block this head will ever produce: there is no next block to pace against,
+              * and holding it only delays finalization.
+              */
+            override def limiterExempt: Boolean = true
         }
 
         type Next = Block.SoftConfirmed & BlockType.Next

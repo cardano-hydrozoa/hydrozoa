@@ -89,11 +89,12 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       ConsensusStoreReader.empty,
                       Some(ledger),
+                      None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
                       PeerMetrics.create(0L, Vector.empty),
@@ -123,10 +124,11 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       ConsensusStoreReader.empty,
+                      None,
                       None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),

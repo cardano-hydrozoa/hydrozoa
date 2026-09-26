@@ -57,7 +57,7 @@ class StoreDumpTest extends AnyFunSuite:
                       )
                       .put(
                         Cf.DepositMap,
-                        StoreKey.DepositMap.encode,
+                        StoreKey.DepositMap(BlockNumber(9)).encode,
                         Array.fill[Byte](32)(0xab.toByte)
                       )
                       .put(
@@ -70,6 +70,7 @@ class StoreDumpTest extends AnyFunSuite:
                 .open(
                   tempDir,
                   testCfs,
+                  TestStoreIdentity.default,
                   Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
                 )
                 .use(b => populate(b) *> StoreDump.stats(b, testCfs))
@@ -78,7 +79,8 @@ class StoreDumpTest extends AnyFunSuite:
             // Build a name → entries map to assert key counts independent of CF ordering.
             val byCf = stats.perCf.map(s => s.cf -> s.entries).toMap
             val rendered = stats.render
-            // 8 we wrote + the schema-version entry seeded by `RocksDbBackendStore.open` = 9.
+            // 8 we wrote + the 5 Meta entries `RocksDbBackendStore.open` seeds on a fresh store
+            // (the schema version, plus the four `StoreIdentity` fields) = 13.
             assert(
               byCf(Cf.Block) == 2 &&
                   byCf(Cf.SoftAck(ownPeer)) == 1 &&
@@ -87,8 +89,8 @@ class StoreDumpTest extends AnyFunSuite:
                   byCf(Cf.HardConfirmation) == 1 &&
                   byCf(Cf.DepositMap) == 1 &&
                   byCf(Cf.Treasury) == 1 &&
-                  byCf(Cf.Meta) == 1 &&
-                  stats.total.entries == 9 &&
+                  byCf(Cf.Meta) == 5 &&
+                  stats.total.entries == 13 &&
                   rendered.contains("TOTAL") &&
                   rendered.contains("Block"),
               s"stats=$stats\nrendered:\n$rendered"
@@ -104,6 +106,7 @@ class StoreDumpTest extends AnyFunSuite:
                 .open(
                   tempDir,
                   testCfs,
+                  TestStoreIdentity.default,
                   Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
                 )
                 .use { b =>
@@ -125,7 +128,12 @@ class StoreDumpTest extends AnyFunSuite:
                             StoreKey.HardConfirmation(StackNumber(0)).encode,
                             Array[Byte](1)
                           )
-                          .put(Cf.DepositMap, StoreKey.DepositMap.encode, Array[Byte](1, 2, 3))
+                          .put(
+                            Cf.DepositMap,
+                            StoreKey.DepositMap(BlockNumber(9)).encode,
+                            Array[Byte](1, 2, 3)
+                          )
+                          .put(Cf.Treasury, StoreKey.Treasury.encode, Array[Byte](4, 5, 6))
                     ) *> StoreDump.dump(b, testCfs)
                 }
                 .unsafeRunSync()
@@ -136,6 +144,9 @@ class StoreDumpTest extends AnyFunSuite:
                   rendered.contains("SoftAck(3,2)") &&
                   rendered.contains("SoftConfirmation(7)") &&
                   rendered.contains("HardConfirmation(0)") &&
+                  // Block-keyed, so it decodes to its block number — `Cf.Treasury` is what still
+                  // covers the singleton rendering.
+                  rendered.contains("DepositMap(9)") &&
                   rendered.contains("(singleton)") &&
                   rendered.contains("Meta("),
               rendered

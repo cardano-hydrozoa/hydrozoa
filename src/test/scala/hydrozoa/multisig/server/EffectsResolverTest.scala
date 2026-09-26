@@ -11,12 +11,12 @@ import hydrozoa.multisig.consensus.UserRequest.{DepositRequest, TransactionReque
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
-import hydrozoa.multisig.ledger.l2.Destination
+import hydrozoa.multisig.ledger.l2.{Destination, L2StateHash}
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, DepositDecision, RequestBlockEntry, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
@@ -81,16 +81,18 @@ class EffectsResolverTest extends AnyFunSuite:
             blockNum = BlockNumber(1),
             blockVersion = BlockVersion.Full(1, 0),
             kzgCommitment = EvacuationMap.empty.kzgCommitment,
+            l2StateHash = L2StateHash(ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))),
             header = StandaloneEvacuationCommitmentOnchain(
               StandaloneEvacuationCommitmentOnchain(
                 headId = headConfig.headTokenNames.treasuryTokenName.bytes,
                 versionMajor = BigInt(1),
                 versionMinor = BigInt(0),
-                commitment = EvacuationMap.empty.kzgCommitment
+                commitment = EvacuationMap.empty.kzgCommitment,
+                l2StateHash = ByteString.fromArray(Array.fill[Byte](32)(0x5c.toByte))
               )
             )
           ),
-          headerMultiSigned = List(Some(BlockHeader.Minor.HeaderSignature(IArray(0.toByte))))
+          signatures = List(Some(StandaloneEvacuationCommitment.Signature(IArray(0.toByte))))
         )
     private val secId: TransactionHash = EffectIds.secL1TxId(sec.commitment)
 
@@ -125,9 +127,7 @@ class EffectsResolverTest extends AnyFunSuite:
             def blockBriefs: IO[List[BlockBrief.Next]] = IO.pure(List(minorBrief))
             def blockBrief(num: BlockNumber): IO[Option[BlockBrief.Next]] =
                 IO.pure(Option.when(num == BlockNumber(1))(minorBrief))
-            def softConfirmation(
-                num: BlockNumber
-            ): IO[Option[Timestamped[Block.SoftConfirmed.Next]]] = IO.pure(None)
+            def softConfirmedAt(num: BlockNumber): IO[Option[Instant]] = IO.pure(None)
             def stackOf(num: BlockNumber): IO[Option[StackNumber]] =
                 IO.pure(Option.when(num == BlockNumber(1))(StackNumber(1)))
             def hardConfirmation(

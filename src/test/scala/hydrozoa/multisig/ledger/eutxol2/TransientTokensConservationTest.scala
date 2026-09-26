@@ -82,7 +82,13 @@ object TransientTokensConservationTest extends Properties("TransientTokens conse
     ): Either[String | TransactionException, (L2Tx, Compartments)] =
         for {
             l2Tx <- L2Tx.parse(tx.toCbor, ledgerConfig)
-            next <- HydrozoaTransactionMutator.transit(ledgerConfig, L2TxFixtures.time, state, l2Tx)
+            next <- HydrozoaTransactionMutator.transit(
+              ledgerConfig,
+              L2TxFixtures.l2ProtocolParams,
+              L2TxFixtures.time,
+              state,
+              l2Tx
+            )
         } yield (l2Tx, next)
 
     private def totalCombinedValue(compartments: Compartments): Value =

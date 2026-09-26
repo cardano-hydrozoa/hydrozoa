@@ -15,6 +15,13 @@ object RemoteL2LedgerEventFormat:
                 info(s"Connecting to WebSocket at $uri")
             case Connected(uri) =>
                 info(s"Successfully connected to $uri")
+            case HandshakeStalled(uri, budget) =>
+                LogEvent(
+                  Level.Warn,
+                  s"WebSocket handshake to $uri did not complete within $budget; " +
+                      "abandoning this attempt and retrying",
+                  routingKey = Some("RemoteL2Ledger")
+                )
             case ConnectionError(attempt, backoff, cause) =>
                 LogEvent(
                   Level.Warn,

@@ -4,25 +4,30 @@ import cats.*
 import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.implicits.*
 import com.suprnation.actor.ActorContext
-import com.suprnation.actor.ActorRef.NoSendActorRef
+import com.suprnation.actor.ActorRef.{ActorRef, NoSendActorRef}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
 import hydrozoa.multisig.LifecycleEvent.{StartingActors, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.consensus.limiter.Limiter
+import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterControl}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2Screener}
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.{Markers, Persistence}
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
 trait HeadMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
+    /** The first L1 sample, read by `Serve` before the actor system exists. See
+      * [[ReplayActor.replay]] for why the read cannot happen inside this actor.
+      */
+    firstPollResults: PollResults,
     l2Ledger: L2Ledger[IO],
     l2Screener: L2Screener[IO],
     persistence: Persistence[IO],
@@ -48,22 +53,34 @@ trait HeadMultisigRegimeManager(
         for {
             _ <- tracer.traceWith(StartingActors)
 
-            pendingConnections <- Deferred[IO, HeadMultisigRegimeManager.Connections]
-
+            // Every recovery marker this peer boots from, derived ONCE here and projected into
+            // each child actor. Deriving per-actor let two paths interpret the same journal
+            // independently, which is how a seeded store could satisfy one and not the other.
+            markers <- Markers.derive(persistence, config.ownPeerId)
             core <- spawnCoreActors(
               config,
               cardanoBackend,
               l2Ledger,
               persistence,
               pendingConnections,
+              markers,
             )
 
             // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
             // hydrozoa.multisig.consensus.limiter.Limiter). Only the consensus actor's reference
             // to BlockWeaver is routed through this limiter; other senders (JointLedger,
             // PeerLiaisonHeadToHead, …) keep direct refs.
+            // The block lane carries the gate as well as the shaper: `gate` makes the period
+            // dynamic, tightening as the composer falls behind. The stack lane below deliberately
+            // takes no gate — it is a pure spacing gate at `hardStackMinPeriod`.
             blockWeaverLimiter <- context.actorOf(
-              Limiter[BlockWeaver.Request](core.blockWeaver, config, tracers.blockWeaverLimiter)
+              Limiter[BlockWeaver.Request](
+                core.blockWeaver,
+                config,
+                tracers.blockWeaverLimiter,
+                gate = Some(config.blockLimiterGate),
+                metrics = Some(metrics)
+              )
             )
 
             requestSequencer <- context.actorOf(
@@ -73,7 +90,8 @@ trait HeadMultisigRegimeManager(
                 l2Screener,
                 tracers.eventSequencer,
                 persistence,
-                metrics
+                metrics,
+                markers
               )
             )
 
@@ -161,7 +179,17 @@ trait HeadMultisigRegimeManager(
                         coilNum,
                         pendingConnections,
                         tracers.peerLiaison(PeerId.Coil(coilNum)),
-                        persistence
+                        persistence,
+                        // The start-point decision reads this hub's store AND its L2 ledger, so it
+                        // is closed over here rather than handed to the liaison as two more
+                        // dependencies it would otherwise have no use for.
+                        connected =>
+                            CoilStartPoint.decide(
+                              PeerId.Coil(coilNum),
+                              connected,
+                              persistence,
+                              l2Ledger
+                            )(using config)
                       )
                     )
                 )
@@ -171,7 +199,7 @@ trait HeadMultisigRegimeManager(
             // `remoteHeadProxies` wiring above. Errors loudly if a hub is missing its transport.
             remoteCoilLiaisons <-
                 if hubbedCoilPeers.isEmpty then
-                    IO.pure(Map.empty[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle])
+                    IO.pure(Map.empty[CoilPeerNumber, liaison.LiaisonProtocol.CoilLiaisonHandle])
                 else
                     hubCoilTransport match {
                         case None =>
@@ -199,6 +227,7 @@ trait HeadMultisigRegimeManager(
             connections = HeadMultisigRegimeManager.Connections(
               blockWeaver = core.blockWeaver,
               blockWeaverLimiter = blockWeaverLimiter,
+              blockRateGate = Some(blockWeaverLimiter),
               cardanoLiaison = core.cardanoLiaison,
               consensusActor = core.consensusActor,
               requestSequencer = Some(requestSequencer),
@@ -222,7 +251,7 @@ trait HeadMultisigRegimeManager(
             // L1 sample.
             _ <- ReplayActor.replay(
               persistence,
-              cardanoBackend,
+              firstPollResults,
               ReplayActor.Targets(
                 blockWeaver = core.blockWeaver,
                 fastConsensusActor = core.consensusActor,
@@ -234,12 +263,12 @@ trait HeadMultisigRegimeManager(
               peers = config.headPeerIds.map(_.peerNum).toList,
               hubs = config.hubHeadPeerNumbers,
               coils = hubbedCoilPeers,
-              treasuryAddress = config.initializationTx.treasuryProduced.address,
-              leadsFastBlock = config.canLeadFast
+              leadsFastBlock = config.canLeadFast,
+              markers = markers
             )(using config)
 
-            _ <- pendingConnections.complete(connections)
-            _ <- connectionsDeferred.complete(connections)
+            _ <- pendingConnections.complete(Right(connections))
+            _ <- connectionsDeferred.complete(Right(connections))
 
             _ <- tracer.traceWith(WatchingActors)
 
@@ -315,17 +344,22 @@ object HeadMultisigRegimeManager {
         stackComposer: StackComposer.Handle,
         /** Throttled-write handle for the SlowConsensusActor → StackComposer lane. */
         stackComposerLimiter: StackComposer.Handle,
+        /** Control handle on the block lane's limiter, used to tell it a stack hard-confirmed.
+          * `None` on a coil peer, which runs no limiters. Contravariance in the message type is
+          * what lets the same actor be addressed both as `blockWeaverLimiter` and as this.
+          */
+        blockRateGate: Option[ActorRef[IO, LimiterControl]] = None,
         slowConsensusActor: SlowConsensusActor.Handle,
         // ---- Producer broadcast targets (§5.2) [doc-ref] ----
         /** Head-peer-mesh liaisons (one per other head peer); empty on a coil peer. Producers
           * broadcast their own artifacts here. `ActorRef` is contravariant in its message type, so
           * a handle is usable as `ActorRef[IO, <any artifact in its Request>]`.
           */
-        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle] = Nil,
+        headPeerLiaisons: List[liaison.LiaisonProtocol.MeshLocalHandle] = Nil,
         /** A coil peer's single uplink to its hub; `None` on a head peer. `SlowConsensusActor`
           * broadcasts its own hard-ack to `headPeerLiaisons ++ coilUplink`.
           */
-        coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
+        coilUplink: Option[liaison.LiaisonProtocol.CoilLocalHandle] = None,
         /** Present only on a hub head peer (§5.4) [doc-ref]: the fan-out that relays the population
           * to its coil peers. Producers send only their own production here. `None` elsewhere.
           */
@@ -333,22 +367,25 @@ object HeadMultisigRegimeManager {
         // ---- Remote-handle resolution for spawned liaisons (in-process only) ----
         // Only the in-process harness (stage4 / unit tests) populates these; in a real deployment
         // the counterpart is another process reached over the transport, so they stay empty.
-        remoteHeadLiaisons: Map[HeadPeerNumber, liaison.PeerLiaisonHeadToHead.Handle] = Map.empty,
-        remoteCoilLiaisons: Map[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle] = Map.empty,
-        remoteHubLiaison: Option[liaison.PeerLiaisonHubToCoil.Handle] = None,
+        remoteHeadLiaisons: Map[HeadPeerNumber, liaison.LiaisonProtocol.MeshLiaisonHandle] =
+            Map.empty,
+        remoteCoilLiaisons: Map[CoilPeerNumber, liaison.LiaisonProtocol.CoilLiaisonHandle] =
+            Map.empty,
+        remoteHubLiaison: Option[liaison.LiaisonProtocol.RemoteHubHandle] = None,
         /** Present only on a hub head peer (§5.3) [doc-ref]: re-sequences its coil peers' hard-acks
           * onto the `HubHardAckLane`. `None` elsewhere.
           */
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
         /** Hub→coil liaisons this hub runs (for `CoilRelay`'s fan-out); empty elsewhere. */
-        coilPeerLiaisons: List[liaison.PeerLiaisonHubToCoil.Handle] = Nil,
+        coilPeerLiaisons: List[liaison.LiaisonProtocol.HubLocalHandle] = Nil,
     )
 
-    type PendingConnections = Deferred[IO, Connections]
+    type PendingConnections = Deferred[IO, Either[Throwable, Connections]]
 
     def resource(
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
+        firstPollResults: PollResults,
         virtualLedger: L2Ledger[IO],
         l2Screener: L2Screener[IO],
         persistence: Persistence[IO],
@@ -366,6 +403,7 @@ object HeadMultisigRegimeManager {
                 new HeadMultisigRegimeManager(
                   config,
                   cardanoBackend,
+                  firstPollResults,
                   virtualLedger,
                   l2Screener,
                   persistence,

@@ -9,7 +9,7 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.metrics.PeerMetrics
-import hydrozoa.multisig.persistence.ConsensusStoreReader
+import hydrozoa.multisig.persistence.{ArchiveWatermarks, ConsensusStoreReader}
 import java.nio.file.{Files, Path}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
@@ -54,11 +54,14 @@ class OpenApiSchemaTest extends AnyFunSuite:
                       }
                     )
                     routes <- HydrozoaRoutes(
-                      requestSequencerStub,
+                      Some(requestSequencerStub),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       ConsensusStoreReader.empty,
                       None,
+                      // An archiver is declared here so the generated document describes the
+                      // watermark endpoint. Mounting is per-node; the schema is the whole API.
+                      Some(ArchiveWatermarks.empty()),
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
                       PeerMetrics.create(0L, Vector.empty),

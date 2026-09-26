@@ -264,9 +264,9 @@ object DisputeResolutionValidator extends Validator {
                     case _ => fail(VoteTimeValidityCheck)
                 }
 
-                // The multisig field of voteRedeemer must have signatures of the blockHeader
-                // field of voteRedeemer for all the public keys in the headPeers field of the
-                // regime datum.
+                // The multisig field of voteRedeemer must have signatures of the sec field of
+                // voteRedeemer (its serialized Data) for all the public keys in the headPeers
+                // field of the regime datum.
                 val msg = voteRedeemer.sec.toData |> serialiseData
                 require(
                   regimeDatum.headPeers.length == voteRedeemer.headMultisig.length,

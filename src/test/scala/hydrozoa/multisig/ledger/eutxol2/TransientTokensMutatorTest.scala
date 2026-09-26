@@ -40,7 +40,13 @@ class TransientTokensMutatorTest extends AnyFunSuite {
     ): Either[String | TransactionException, (L2Tx, Compartments)] =
         for {
             l2Tx <- L2Tx.parse(tx.toCbor, ledgerConfig)
-            next <- HydrozoaTransactionMutator.transit(ledgerConfig, time, state, l2Tx)
+            next <- HydrozoaTransactionMutator.transit(
+              ledgerConfig,
+              l2ProtocolParams,
+              time,
+              state,
+              l2Tx
+            )
         } yield (l2Tx, next)
 
     private def outputId(l2Tx: L2Tx, index: Int): TransactionInput =

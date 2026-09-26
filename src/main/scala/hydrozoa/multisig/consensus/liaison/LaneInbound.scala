@@ -71,7 +71,18 @@ final class LaneInbound[T, N] private (
       * consensus actors that `ReplayActor` already re-fed).
       */
     def restoreCursor(lastReceived: Option[N]): IO[Unit] =
-        inboundCursor.set(lastReceived.flatMap(next).getOrElse(initialCursor))
+        restoreCursor(lastReceived, initialCursor)
+
+    /** As [[restoreCursor]], but starting from `start` rather than the cold [[initialCursor]] when
+      * the journal holds nothing.
+      *
+      * For a coil peer seeded at a start point: its journals are empty on the first boot after
+      * adoption, and the cold cursor would send it pulling from the beginning of a history its hub
+      * has pruned. Once it has received anything the journal is ahead of the start point and wins,
+      * which is why this is a floor and not an override — a lane never moves backwards onto it.
+      */
+    def restoreCursor(lastReceived: Option[N], start: N): IO[Unit] =
+        inboundCursor.set(lastReceived.flatMap(next).getOrElse(start))
 }
 
 object LaneInbound {

@@ -20,7 +20,6 @@ import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
@@ -101,7 +100,7 @@ final case class RuleBasedActor(
             traced(
               before = RuleBasedActorEvent.Regime.Querying,
               action = cardanoBackend.utxosAt(
-                address = config.headMultisigAddress,
+                address = config.ruleBasedRegimeAddress,
                 asset = (
                   config.headMultisigScript.policyId,
                   config.headTokenNames.regimeWitnessTokenName
@@ -224,7 +223,7 @@ final case class RuleBasedActor(
                 case Left(e) => raiseError(e)
             }
             _ <- traceRight(
-              RuleBasedActorEvent.Treasury.Found(treasuryUtxo.treasuryOutput.value.toString)
+              RuleBasedActorEvent.Treasury.Found(treasuryUtxo.treasuryOutput.value)
             )
             _ <- traceRight(RuleBasedActorEvent.Treasury.Parsing)
             _ <- treasuryUtxo.treasuryOutput.datum match {
@@ -235,10 +234,10 @@ final case class RuleBasedActor(
             }
         } yield treasuryUtxo
 
-    /** Read the regime utxo (by HRWT beacon at the head multisig address) and parse it. The
-      * rule-based txs reference it for the immutable head-identity fields. Missing or datum-less is
-      * recoverable — the HRWT still sits in the datum-less multisig regime utxo until the fallback
-      * tx lands (or it was rolled back); other parse failures throw.
+    /** Read the regime utxo (by HRWT beacon at the rule-based regime script address) and parse it.
+      * The rule-based txs reference it for the immutable head-identity fields. Missing is
+      * recoverable — the HRWT sits in the multisig regime utxo, at the head multisig address, until
+      * the fallback tx moves it here (or the fallback was rolled back); parse failures throw.
       */
     private def getRegime: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] = {
         val regimeMissing: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] =
@@ -252,8 +251,6 @@ final case class RuleBasedActor(
                 case (i, o) :: Nil =>
                     RuleBasedRegimeUtxo.parse(Utxo(i, o)) match {
                         case Right(u) => pure(u)
-                        case Left(_: RuleBasedRegimeOutput.ParseError.RegimeDatumMissing) =>
-                            regimeMissing
                         case Left(e) =>
                             raiseError(Error.ParseError.Regime.WrappedRegimeParseError(e))
                     }
@@ -276,12 +273,12 @@ final case class RuleBasedActor(
             case Nil =>
                 DisputeAction.Abstain
             case multiSec :: _ =>
-                // `headerMultiSigned` is peer-position-aligned over
+                // `signatures` is peer-position-aligned over
                 // `allHeadPeers.sorted ++ allCoilPeers.sorted` (Some/None per peer). The first
                 // `nHeadPeers` slots are the head peers (AllOf, always Some); the rest are the coil
                 // peers in sorted order — exactly the sparse `coilMultisig` the dispute-resolution
                 // script verifies position for position, so pass the coil tail through unchanged.
-                val (head, coil) = multiSec.headerMultiSigned.splitAt(config.nHeadPeers.convert)
+                val (head, coil) = multiSec.signatures.splitAt(config.nHeadPeers.convert)
                 DisputeAction.Vote(
                   sec = RuleBasedActor.toOnchain(multiSec.commitment),
                   signatures = head.flatten,
@@ -300,7 +297,7 @@ final case class RuleBasedActor(
         versionMajor: BigInt
     ): IO[List[StandaloneEvacuationCommitment.MultiSigned]] =
         for {
-            markers <- Markers.derive(persistence.backend, config.ownPeerId)
+            markers <- Markers.derive(persistence, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
@@ -337,7 +334,7 @@ final case class RuleBasedActor(
       */
     private[rulebased] def loadEvacuationInputs(versionMajor: BigInt): IO[EvacuationInputs] =
         for {
-            markers <- Markers.derive(persistence.backend, config.ownPeerId)
+            markers <- Markers.derive(persistence, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
@@ -346,7 +343,7 @@ final case class RuleBasedActor(
             _ <- tracer.traceWith(
               RuleBasedActorEvent.Evacuation.CandidateMaps(
                 s"$latest",
-                candidateEvacMaps.keySet.map(k => s"$k").toList
+                candidateEvacMaps.keySet
               )
             )
         } yield EvacuationInputs(candidateEvacMaps, fallbackTxHash)
@@ -408,7 +405,7 @@ final case class RuleBasedActor(
             ): IO[Either[StackNumber, TransactionHash]] =
                 tracer
                     .traceWith(
-                      RuleBasedActorEvent.Evacuation.EvacuationAnchor(label, s"$txId")
+                      RuleBasedActorEvent.Evacuation.EvacuationAnchor(label, txId)
                     )
                     .as(Right(txId))
             persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
@@ -440,7 +437,7 @@ final case class RuleBasedActor(
             IO.pure(config.initialEvacuationMap.kzgCommitment -> config.initialEvacuationMap)
         else
             for {
-                markers <- Markers.derive(persistence.backend, config.ownPeerId)
+                markers <- Markers.derive(persistence, config.ownPeerId)
                 latest <- markers.hardConfirmed.liftTo[IO](
                   MissingState("no hard-confirmed stack on disk")
                 )
@@ -948,7 +945,7 @@ final case class RuleBasedActor(
                 // past withdrawals; the original resolution-time map is committed by the oldest
                 // treasury tx's output datum, which is what `candidateEvacMaps` is keyed by.
                 _ <- EitherT.right[Error.RecoverableErrors](
-                  tracer.traceWith(RuleBasedActorEvent.Evacuation.ResolvedKzg(s"$resolutionKzg"))
+                  tracer.traceWith(RuleBasedActorEvent.Evacuation.ResolvedKzg(resolutionKzg))
                 )
                 evacuationMapAtResolution <- lookupMap(resolutionKzg, inputs.candidateEvacMaps)
 
@@ -1128,13 +1125,14 @@ final case class RuleBasedActor(
     // evacuation regime then spawns but never polls, so funds never come back (custody-critical). A
     // fixed-cadence self-tick fires every `evacuationBotPollingPeriod` regardless of mailbox
     // activity, which is correct here because `handleTick` is a poll-then-retry safe to re-run.
-    // TODO(#622-review): this overwrites `tickFiber` without cancelling any fiber already there. If
-    // cats-actors ever re-runs `preStart` on a restart without `postStop` in between, the old tick
-    // fiber orphans (two poll loops, one uncancellable). Cancel the existing fiber before replacing
-    // it — or confirm cats-actors' restart path always runs `postStop` first, and note that here.
     private def startTickTimer: IO[Unit] =
-        (IO.sleep(config.evacuationBotPollingPeriod) >> (context.self ! Tick)).foreverM.start
-            .flatMap(fib => tickFiber.set(Some(fib)))
+        val pollLoop =
+            (IO.sleep(config.evacuationBotPollingPeriod) >> (context.self ! Tick)).foreverM
+        for
+            fib <- pollLoop.start
+            previous <- tickFiber.getAndSet(Some(fib))
+            _ <- previous.fold(IO.unit)(_.cancel)
+        yield ()
 
     /** Cancel the self-tick fiber so it stops pinging `self` once the actor has stopped, instead of
       * leaking a fiber that keeps delivering `Tick` to a dead actor (dead letters).
@@ -1260,8 +1258,8 @@ object RuleBasedActor {
     enum DisputeAction:
         case Vote(
             sec: StandaloneEvacuationCommitment.Onchain,
-            signatures: List[BlockHeader.Minor.HeaderSignature],
-            coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]]
+            signatures: List[StandaloneEvacuationCommitment.Signature],
+            coilSignatures: List[Option[StandaloneEvacuationCommitment.Signature]]
         )
         case Abstain
 

@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.liaison
 
+import cats.Eval
 import cats.effect.{IO, Ref}
 import hydrozoa.lib.logging.ContraTracer
 
@@ -53,7 +54,7 @@ final class Puller[G, N](
     /** Send a pull, tracing it as a `BatchRequested` (covers initial, retransmit, and next). */
     private def sendTraced(g: G): IO[Unit] =
         tracer.traceWith(
-          PeerLiaisonEvent.BatchRequested(numberOfBatchRequest(g), describeGet(g))
+          PeerLiaisonEvent.BatchRequested(numberOfBatchRequest(g), Eval.later(describeGet(g)))
         ) >> send(g)
 
     /** Send the initial request, rebuilt from the current inbound cursors. After a crash the lanes
@@ -96,7 +97,7 @@ final class Puller[G, N](
                             _ <- tracer.traceWith(
                               PeerLiaisonEvent.BatchReceived(
                                 numberOfBatch(received),
-                                describeBatch(received)
+                                Eval.later(describeBatch(received))
                               )
                             )
                             next <- buildGet(numberOfBatchRequest(outstanding).increment)

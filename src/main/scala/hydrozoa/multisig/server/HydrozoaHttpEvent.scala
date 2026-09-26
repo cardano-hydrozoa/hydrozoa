@@ -31,8 +31,16 @@ object HydrozoaHttpEvent:
     /** Decode-failure history (the circe cursor breadcrumb path), separated for diagnostics. */
     final case class JsonDecodeErrorHistory(path: String, history: String) extends HydrozoaHttpEvent
 
-    /** The request body decoded to a domain object (debug). */
-    final case class RequestDecoded(path: String, decoded: String) extends HydrozoaHttpEvent
+    /** The request body decoded to a domain object (debug).
+      *
+      * Carries the request's shape rather than the request. Rendering a decoded request means
+      * `toString` on its payloads, and a `ByteString`'s `toString` is its hex — which scalus caches
+      * on the instance, so a payload that is later retained is retained at three times its size.
+      * The event is built on every request whatever the log level, so that cost is paid whether or
+      * not anyone is reading debug logs.
+      */
+    final case class RequestDecoded(path: String, kind: String, payloadBytes: Int)
+        extends HydrozoaHttpEvent
 
     /** A request was rejected by screening or backpressure — an expected 400, not a fault, so it
       * carries only the client-facing reason (no exception or stack trace).
@@ -50,3 +58,16 @@ object HydrozoaHttpEvent:
 
     /** Admin finalize: finalization signal forwarded to BlockWeaver. */
     case object FinalizeSignalSent extends HydrozoaHttpEvent
+
+    /** An attached archiver reported how far it has durably copied. */
+    final case class ArchiveWatermarkRecorded(advanced: Int, regressed: Int)
+        extends HydrozoaHttpEvent
+
+    /** An archiver reported a watermark below one already held, and the held figure stands.
+      *
+      * Normally means the archive was rebuilt and now holds less than the node assumed when it last
+      * deleted on the strength of the earlier report. The node cannot un-delete, so saying so is
+      * all that is left to do about it.
+      */
+    final case class ArchiveWatermarkRegressed(family: String, reported: Long, held: Long)
+        extends HydrozoaHttpEvent

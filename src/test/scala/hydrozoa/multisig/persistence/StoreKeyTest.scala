@@ -28,7 +28,7 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.BlockResult(BlockNumber(0)) -> Cf.BlockResult,
           StoreKey.SoftConfirmation(BlockNumber(0)) -> Cf.SoftConfirmation,
           StoreKey.HardConfirmation(StackNumber(0)) -> Cf.HardConfirmation,
-          StoreKey.DepositMap -> Cf.DepositMap,
+          StoreKey.DepositMap(BlockNumber(0)) -> Cf.DepositMap,
           StoreKey.Treasury -> Cf.Treasury,
           StoreKey.EvacuationMap(BlockNumber(0)) -> Cf.EvacuationMap,
           StoreKey.RequestHighWater(BlockNumber(0)) -> Cf.RequestHighWater,
@@ -99,7 +99,7 @@ class StoreKeyTest extends AnyFunSuite:
     }
 
     test("singleton snapshot keys all encode to the same empty key") {
-        val keys: List[StoreKey] = List(StoreKey.DepositMap, StoreKey.Treasury)
+        val keys: List[StoreKey] = List(StoreKey.Treasury)
         keys.foreach { k =>
             assert(k.encode.isEmpty, s"$k encoded to ${k.encode.length} bytes, expected 0")
         }
@@ -123,5 +123,5 @@ class StoreKeyTest extends AnyFunSuite:
         // Mirror what WriteBatch / Persistence do — accept a JournalKey wherever a StoreKey is expected.
         def takesAnyStoreKey(k: StoreKey): Cf = k.cf
         val _ = assert(takesAnyStoreKey(JournalKey.Block(BlockNumber(42))) == Cf.Block)
-        assert(takesAnyStoreKey(StoreKey.DepositMap) == Cf.DepositMap)
+        assert(takesAnyStoreKey(StoreKey.DepositMap(BlockNumber(0))) == Cf.DepositMap)
     }
