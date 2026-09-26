@@ -9,7 +9,9 @@ on:
 
 jobs:
   publish-image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # A release takes about 5 minutes; without this a hung step would run for GitHub's 6 hours.
+    timeout-minutes: 30
     permissions:
       contents: write # edit the release notes to link the image
       packages: write # push to ghcr.io
@@ -24,14 +26,15 @@ jobs:
       - name: Install Nix
         # Nix's own installer, pinned and verified; see the script.
         # Its download of the Nix tarball has no retry or timeout of its own.
+        # No GITHUB_TOKEN: the installer writes it to /etc/nix/nix.conf, which any process can read,
+        # and this job's token can write packages. One flake fetch per release stays well inside
+        # GitHub's anonymous rate limit.
         timeout-minutes: 5
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: .github/scripts/install-nix.sh
 
       - name: Stage the Docker build context
         # Native-packager writes the Dockerfile + app under target/docker/stage (no daemon needed).
-        run: nix develop --command sbt Docker/stage
+        run: nix develop .#ci --command sbt Docker/stage
 
       # The staged context is JVM bytecode plus a Dockerfile whose only RUN steps
       # are chmod and useradd, and both native dependencies (blst-java,
