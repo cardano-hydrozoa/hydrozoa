@@ -264,12 +264,6 @@ private object EvacuationTxOps {
                   resolvedUtxos = finalized.resolvedUtxos
                 )
             } yield evacuationTx) match {
-                case Right(w) if overExUnitBudget(w.tx) =>
-                    // scalus's `ExUnitsTooBigValidator` compares `actual > max` with a memory-first
-                    // `Ordering[ExUnits]`, so it fails to reject a tx whose CPU steps exceed the max
-                    // while its memory is under it — but the ledger rejects such a tx
-                    // (`ExUnitsTooBigUTxO`). Re-check each component here so halving still converges.
-                    loop(halveEvacuation(evacuatees))
                 case Right(w) => Right(w)
                 // When the tx is too large or exceeds ex-unit limits, retry with a smaller batch.
                 // TODO: non-size errors (e.g. value conservation failures from the balancer adding
@@ -283,6 +277,8 @@ private object EvacuationTxOps {
                       )
                     ) =>
                     loop(halveEvacuation(evacuatees))
+                // `ExUnitsTooBigValidator` (in `nonSigningValidators`) checks memory and steps
+                // separately, like the ledger, so a steps-only overrun also lands here.
                 case Left(
                       BuilderError(
                         SomeBuildError.ValidationError(_: ExUnitsExceedMaxException, _),
@@ -292,16 +288,6 @@ private object EvacuationTxOps {
                     loop(halveEvacuation(evacuatees))
                 case Left(e) => Left(e)
             }
-
-        /** Component-wise "exceeds the per-tx ex-unit budget" check, working around scalus's
-          * memory-first [[Ordering]] on `ExUnits` (see the `Right` branch of [[loop]]).
-          */
-        private def overExUnitBudget(tx: Transaction)(using config: Config): Boolean = {
-            val declared =
-                tx.witnessSet.redeemers.map(_.value.totalExUnits).getOrElse(ExUnits.zero)
-            val max = config.cardanoInfo.protocolParams.maxTxExecutionUnits
-            declared.memory > max.memory || declared.steps > max.steps
-        }
 
         // TODO: Make method on RuleBasedTreasuryUtxo
         def extractTreasuryDatum(
