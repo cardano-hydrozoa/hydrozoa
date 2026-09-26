@@ -16,7 +16,7 @@ import hydrozoa.integration.harness.{MultiPeerHeadHarness, Plugin}
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
@@ -186,7 +186,7 @@ case class Stage4Suite(
         // model rule-based; waiting on them after fallback would spin the CL polling loop
         // until the outer test timeout, accumulating the InitWindowElapsed warn flood.
         val happyPathProp: IO[Prop] = for
-            _ <- log.warn("beforeFinalize")
+            _ <- log.info("beforeFinalize")
             submitted <- sut.mutable.submittedRequestIds.get
             // Arm the fast-cycle drain: publish the final submitted set so the JL predicate arm
             // knows the target. The signal fires only after this is set, preventing mid-run
