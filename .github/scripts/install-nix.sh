@@ -29,17 +29,13 @@ echo "${INSTALL_SHA256}  ${work}/install" | sha256sum --check --strict -
 {
   echo "experimental-features = nix-command flakes"
   echo "max-jobs = auto"
+  # printf is a builtin, so the token is never in a process's argument list; ${work} is private
+  # (mode 0700) and removed on exit, and GitHub masks the token's value in the log.
+  if [[ -n ${GITHUB_TOKEN:-} ]]; then printf 'access-tokens = github.com=%s\n' "${GITHUB_TOKEN}"; fi
 } >"${work}/nix.conf"
 
 sh "${work}/install" --daemon --yes --no-channel-add --nix-extra-conf-file "${work}/nix.conf"
 
-if [[ -n ${GITHUB_TOKEN:-} ]]; then
-  # Appended by a root shell reading the token from its environment, so it never appears in a
-  # command line or the log. The file lives only as long as this runner VM.
-  sudo --preserve-env=GITHUB_TOKEN sh -c \
-    'printf "access-tokens = github.com=%s\n" "${GITHUB_TOKEN}" >>/etc/nix/nix.conf'
-  sudo systemctl restart nix-daemon
-fi
-
 echo "/nix/var/nix/profiles/default/bin" >>"${GITHUB_PATH:-/dev/null}"
-/nix/var/nix/profiles/default/bin/nix --version
+# Proves the daemon answers, so a broken install fails this step rather than the first `nix develop`.
+/nix/var/nix/profiles/default/bin/nix store info

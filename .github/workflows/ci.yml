@@ -51,6 +51,8 @@ jobs:
       - name: Install Nix
         if: steps.plan.outputs.code == 'true'
         # Nix's own installer, pinned and verified; see the script.
+        # Its download of the Nix tarball has no retry or timeout of its own.
+        timeout-minutes: 5
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: .github/scripts/install-nix.sh
