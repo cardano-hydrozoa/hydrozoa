@@ -14,10 +14,12 @@ import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
   *
   * **Bounded.** Those same ping loops mean a program that will never finish still always has a next
   * timer, so an unbounded driver cannot tell "slow" from "stuck" and ticks forever. The run fails
-  * once `horizon` of virtual time has passed. The TestContext seed is named on every failure; pass
-  * it back as `seed` to replay the same interleaving (`TestControl.execute` otherwise draws a
-  * random one per run). The horizon is counted from the first advance on, because the first advance
-  * is the harness's jump from virtual zero to the real epoch (`PreSystem.align`).
+  * once `horizon` of virtual time has passed. The TestContext seed is named on every failure; set
+  * `TESTCONTROL_SEED` to it (or pass it as `seed`) to replay the same interleaving
+  * (`TestControl.execute` otherwise draws a random one per run). `ModelBasedSuite` reads the same
+  * variable, so one setting replays either driver. The horizon is counted from the first advance
+  * on, because the first advance is the harness's jump from virtual zero to the real epoch
+  * (`PreSystem.align`).
   */
 object TestControlDriver:
 
@@ -29,14 +31,14 @@ object TestControlDriver:
     def run[A](
         program: IO[A],
         horizon: FiniteDuration = defaultHorizon,
-        seed: Option[String] = None,
+        seed: Option[String] = sys.env.get("TESTCONTROL_SEED"),
     ): A =
         TestControl
             .execute(program, seed = seed)
             .flatMap(tc =>
                 // Printed as well as attached: a test reporter need not show suppressed exceptions.
                 val replay =
-                    s"TestControl interleaving seed: replay with seed = Some(\"${tc.seed}\")"
+                    s"TestControl interleaving seed: ${tc.seed} (replay: TESTCONTROL_SEED=${tc.seed})"
                 def failWith(e: Throwable): IO[A] =
                     IO(System.err.println(s"[TestControlDriver] ${e.getMessage} — $replay")) >>
                         IO(e.addSuppressed(new RuntimeException(replay))) >> IO.raiseError(e)
