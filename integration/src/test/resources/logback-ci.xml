@@ -1,6 +1,14 @@
+<!--
+  CI logging for the integration tests (selected by the build when CI is set). Everything down to
+  TRACE goes to integration-tests.log, which the CI workflow uploads as a short-lived artifact; the
+  console, which GitHub keeps in the job log, gets WARN and above only.
+-->
 <configuration>
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
             </pattern>

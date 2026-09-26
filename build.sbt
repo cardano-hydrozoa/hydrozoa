@@ -410,6 +410,13 @@ lazy val integration: Project = (project in file("integration"))
         "--enable-native-access=ALL-UNNAMED",
         "--sun-misc-unsafe-memory-access=allow",
         "-Dapi.version=1.44"
+      ),
+      // Under CI, log through logback-ci.xml (console at WARN, everything to integration-tests.log,
+      // which the workflow uploads). A setting rather than an environment variable, because the
+      // forked test JVM inherits the environment of the sbt server, which a CI job starts in its
+      // first step; `Def.uncached` so the CI check is read on every run, not cached per machine.
+      Test / javaOptions ++= Def.uncached(
+        if (sys.env.contains("CI")) Seq("-Dlogback.configurationFile=logback-ci.xml") else Nil
       )
     )
 
