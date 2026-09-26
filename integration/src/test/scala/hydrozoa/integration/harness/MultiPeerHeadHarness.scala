@@ -299,7 +299,7 @@ object MultiPeerHeadHarness:
         def emit(e: LogEvent): IO[Unit] = Slf4jTracer.sink.traceWith(e)
         ContraTracer[IO, FirewalledCardanoBackendEvent] {
             case FirewalledCardanoBackendEvent.DroppedOutboundTx(etx) =>
-                emit(from.warn(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}"))
+                emit(from.info(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}"))
             case FirewalledCardanoBackendEvent.SubmittedTx(etx, Right(())) =>
                 emit(
                   from.info(

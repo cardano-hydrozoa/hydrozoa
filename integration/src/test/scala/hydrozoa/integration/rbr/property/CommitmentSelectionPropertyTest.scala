@@ -321,7 +321,7 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
                 case FirewalledCardanoBackendEvent.DroppedOutboundTx(etx) =>
                     hydrozoa.lib.logging.LogEvent
                         .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                        .warn(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}")
+                        .info(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}")
                 case FirewalledCardanoBackendEvent.SubmittedTx(etx, result) =>
                     hydrozoa.lib.logging.LogEvent
                         .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
