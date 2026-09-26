@@ -187,7 +187,8 @@ jobs:
           retention-days: 3
 
   # The required check. Passes when the plan succeeded and each test job either passed or was
-  # skipped by the plan; fails if either failed, was cancelled or timed out.
+  # skipped by the plan; fails if either failed, was cancelled or timed out, or was skipped
+  # although the plan called for it.
   build:
     needs: [plan, tests, yaci]
     if: always()
@@ -200,8 +201,11 @@ jobs:
           TESTS: ${{ needs.tests.result }}
           YACI: ${{ needs.yaci.result }}
           CODE: ${{ needs.plan.outputs.code }}
+          UNIT: ${{ needs.plan.outputs.unit }}
+          INTEGRATION: ${{ needs.plan.outputs.integration }}
         run: |
-          echo "plan: ${PLAN}, tests: ${TESTS}, yaci: ${YACI}"
+          echo "plan: ${PLAN} (unit ${UNIT:-?}, integration ${INTEGRATION:-?})," \
+            "tests: ${TESTS}, yaci: ${YACI}"
           if [[ ${PLAN} == success && ${CODE} != true ]]; then
             echo "Only docs or Markdown changed, so nothing was built or tested." |
               tee -a "${GITHUB_STEP_SUMMARY}"
@@ -210,6 +214,13 @@ jobs:
           [[ ${PLAN} == success ]] || ok=false
           [[ ${TESTS} == success || ${TESTS} == skipped ]] || ok=false
           [[ ${YACI} == success || ${YACI} == skipped ]] || ok=false
+          # A job may be skipped only because the plan said so. Any other skip (a mistyped output
+          # name, say, which reads as empty) would otherwise pass with nothing run.
+          [[ ${CODE} == true || ${CODE} == false ]] || ok=false
+          if [[ ${TESTS} == skipped && (${UNIT} != false || ${INTEGRATION} != false) ]]; then
+            ok=false
+          fi
+          if [[ ${YACI} == skipped && ${INTEGRATION} != false ]]; then ok=false; fi
           if [[ ${ok} != true ]]; then
             echo "::error title=CI::plan ${PLAN}, tests ${TESTS}, yaci ${YACI}"
             exit 1
