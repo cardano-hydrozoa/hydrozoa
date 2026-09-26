@@ -12,7 +12,9 @@
 #
 # Environment:
 #   GITHUB_TOKEN  optional; the job's token, given to Nix for github.com so that fetching the flake's
-#                 github: inputs is not subject to GitHub's anonymous rate limit (runners share IPs)
+#                 github: inputs is not subject to GitHub's anonymous rate limit (runners share IPs).
+#                 It ends up in /etc/nix/nix.conf, which every process on the runner can read, so
+#                 pass only a read-only token: not from a job whose token can write.
 #   GITHUB_PATH   set by the runner; Nix's bin directory is added to it for the later steps
 set -euo pipefail
 
@@ -29,8 +31,8 @@ echo "${INSTALL_SHA256}  ${work}/install" | sha256sum --check --strict -
 {
   echo "experimental-features = nix-command flakes"
   echo "max-jobs = auto"
-  # printf is a builtin, so the token is never in a process's argument list; ${work} is private
-  # (mode 0700) and removed on exit, and GitHub masks the token's value in the log.
+  # printf is a builtin, so the token is never in a process's argument list, and GitHub masks its
+  # value in the log. The installer copies this file into /etc/nix/nix.conf (mode 0644).
   if [[ -n ${GITHUB_TOKEN:-} ]]; then printf 'access-tokens = github.com=%s\n' "${GITHUB_TOKEN}"; fi
 } >"${work}/nix.conf"
 
