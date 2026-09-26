@@ -38,16 +38,14 @@
           done
           exec ${sbt0}/bin/sbt "-Dsbt.script=$self" "''${args[@]}"
         '';
-        # The nixpkgs `sbt` package also puts the `sbtn` thin client on PATH. Before nixos-26.05 it
-        # was an sbt 1.x client, which cannot drive an sbt 2 server (it reports `unknown event:
-        # sbt/exec`); 26.05's is 2.0.0-RC13, a release candidate. Keep it off PATH so only `sbt`
-        # is there. The launcher still runs its own copy (share/sbt/bin) for a plain `sbt` on an
-        # sbt 2 build; `--server` runs sbt in-process instead. `sbt` itself is the BSP shim above.
-        sbtNoSbtn = pkgs.symlinkJoin {
-          name = "sbt-no-sbtn";
+        # The nixpkgs `sbt` package with `sbt` replaced by the BSP shim above. Its `sbtn` (the thin
+        # client, 2.0.0-RC13 on nixos-26.05) is the binary the launcher itself runs for a plain `sbt`
+        # on an sbt 2 build; `--server` runs sbt in-process instead.
+        sbtWithBspShim = pkgs.symlinkJoin {
+          name = "sbt-with-bsp-shim";
           paths = [ sbt0 ];
           postBuild = ''
-            rm -f $out/bin/sbtn $out/bin/sbt
+            rm -f $out/bin/sbt
             ln -s ${sbtBspShim}/bin/sbt $out/bin/sbt
           '';
         };
@@ -78,7 +76,7 @@
               just # command runner, similar to `make`
               libnotify # used in justfile
               nixfmt
-              sbtNoSbtn
+              sbtWithBspShim
             ];
             inherit (pre-commit-check) shellHook;
           };
@@ -90,7 +88,7 @@
               jdk
               just
               nixfmt
-              sbtNoSbtn
+              sbtWithBspShim
             ];
           };
         };
