@@ -679,27 +679,33 @@ object MultiPeerHeadHarness:
       * errors the listener recorded.
       */
     def useGuarded[H, A](inputs: Inputs, hooks: Hooks[H])(body: Harness[H] => IO[A]): IO[A] =
-        resource(inputs, hooks).use { harness =>
-            IO.race(harness.system.waitForTermination, body(harness)).flatMap {
-                case Right(a) => IO.pure(a)
-                case Left(()) =>
-                    // The escalated failure is published to the event stream around the moment
-                    // the system terminates, and termination cancels the system's own listener, so
-                    // it can be left in the queue unread. Give it a moment (virtual time under
-                    // TestControl), then drain what is left alongside what the listener recorded.
-                    for
-                        _ <- IO.sleep(1.second)
-                        leftover <- harness.system.eventStream.tryTakeN(None)
-                        _ <- leftover.traverse_(ErrorDrainer.record(harness.sutErrors))
-                        errors <- harness.sutErrors.get
-                        result <- IO.raiseError[A](
-                          new IllegalStateException(
-                            "the actor system terminated under the test body; uncaught actor " +
-                                s"errors: ${errors.mkString("; ")}"
-                          )
-                        )
-                    yield result
-            }
+        resource(inputs, hooks).use(harness => guarded(harness)(body(harness)))
+
+    /** Run `io` against a live `harness`, failing at once if its actor system terminates first —
+      * the per-step form of [[useGuarded]], for a test that holds the harness in a context and
+      * awaits one milestone at a time. Unguarded, such an await sits out its whole timeout after
+      * the system has died and reports a `TimeoutException` instead of the error that killed it.
+      */
+    def guarded[H, A](harness: Harness[H])(io: IO[A]): IO[A] =
+        IO.race(harness.system.waitForTermination, io).flatMap {
+            case Right(a) => IO.pure(a)
+            case Left(()) =>
+                // The escalated failure is published to the event stream around the moment the
+                // system terminates, and termination cancels the system's own listener, so it can
+                // be left in the queue unread. Give it a moment (virtual time under TestControl),
+                // then drain what is left alongside what the listener recorded.
+                for
+                    _ <- IO.sleep(1.second)
+                    leftover <- harness.system.eventStream.tryTakeN(None)
+                    _ <- leftover.traverse_(ErrorDrainer.record(harness.sutErrors))
+                    errors <- harness.sutErrors.get
+                    result <- IO.raiseError[A](
+                      new IllegalStateException(
+                        "the actor system terminated under the test body; uncaught actor " +
+                            s"errors: ${errors.mkString("; ")}"
+                      )
+                    )
+                yield result
         }
 
     /** Stop `ref` and wait until it and its whole subtree have terminated.
