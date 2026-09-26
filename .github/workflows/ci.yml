@@ -2,6 +2,9 @@ name: CI
 
 on:
   pull_request:
+  # A merge queue tests each queued PR (or batch) on top of main before merging it; this is the
+  # event it sends. Harmless until the queue is enabled in the repository's ruleset.
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -11,36 +14,64 @@ concurrency:
 jobs:
   # The `build` job is a required status check (repository ruleset on `main`). It must ALWAYS run
   # and report, or the ruleset blocks the merge — so we do NOT path-filter the workflow itself.
-  # Instead, a docs-only PR skips the expensive Nix/sbt steps and the check passes in ~1 min.
+  # Instead, a PR's changed paths decide which steps run inside it (see "Plan the run"), and a
+  # PR that touches no code passes in about a minute.
   build:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest, so the host image changes only when we change it. Nix
+    # supplies the toolchain; the host matters for Docker (the Yaci suites), the kernel and disk.
+    runs-on: ubuntu-24.04
     # Without this the job inherits GitHub's 6-hour default. The integration suite has wedged
-    # repeatedly (the Stage-4 "Two-heads-one-coil works WS" property, on the real clock), and each
-    # time it burned hours of a hosted runner, silently skipped the steps after it, and produced no
-    # diagnosable artifact. The norm for this job is ~46 min; 90 leaves generous headroom while
-    # turning a wedge into a red build within the hour.
+    # before (real-clock properties), and each time it burned hours of a hosted runner and produced
+    # no diagnosable artifact. 90 minutes turns a wedge into a red build within the hour or so.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      # On a PR, decide whether anything outside docs/ changed. `code == 'false'` means docs-only.
-      - name: Detect non-docs changes
+      # On a PR, classify the changed files. With `every`, a file counts for a filter only if it
+      # matches all of that filter's patterns, so `other` means "outside docs, Markdown, unit-test
+      # code and integration-test code": production code, the build, Nix, the workflows.
+      - name: Classify changed paths
         id: filter
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v3
         with:
+          predicate-quantifier: every
           filters: |
-            code:
+            other:
               - '!docs/**'
+              - '!**/*.md'
+              - '!src/test/**'
+              - '!integration/**'
+            unit:
+              - 'src/test/**'
+            integration:
+              - 'integration/**'
 
-      # Everything below runs for code changes and for manual (workflow_dispatch) runs; it is
-      # skipped only on a docs-only PR.
+      # What runs: everything, unless this is a PR whose changes are confined to test code or docs.
+      # Unit-test code can't affect the integration suites, nor integration-test code the unit
+      # tests; anything else (production code, build, Nix, workflows) runs everything. Merge-queue
+      # and manual runs always run everything.
+      - name: Plan the run
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          OTHER: ${{ steps.filter.outputs.other }}
+          UNIT: ${{ steps.filter.outputs.unit }}
+          INTEGRATION: ${{ steps.filter.outputs.integration }}
+        run: |
+          unit=${UNIT:-false}; integration=${INTEGRATION:-false}
+          if [ "$EVENT" != pull_request ] || [ "$OTHER" = true ]; then unit=true; integration=true; fi
+          code=false
+          if [ "$unit" = true ] || [ "$integration" = true ]; then code=true; fi
+          { echo "code=$code"; echo "unit=$unit"; echo "integration=$integration"; } >> "$GITHUB_OUTPUT"
+          echo "code=$code unit=$unit integration=$integration"
+
       - name: Install Nix
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
+        if: steps.plan.outputs.code == 'true'
         uses: DeterminateSystems/nix-installer-action@main
 
       - name: Cache sbt / coursier / ivy
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
+        if: steps.plan.outputs.code == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -50,19 +81,31 @@ jobs:
           key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
           restore-keys: sbt-${{ runner.os }}-
 
+      # `.#ci` is the flake's CI shell: the JDK, sbt, just and nixfmt, without the developer tools.
       - name: Format / lint / nixfmt checks
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
-        run: nix develop --command just precommit
+        if: steps.plan.outputs.code == 'true'
+        run: nix develop .#ci --command just precommit
 
       - name: Unit tests
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
-        run: nix develop --command just test
+        if: steps.plan.outputs.unit == 'true'
+        run: nix develop .#ci --command just test
 
+      # Under CI the build points the forked test JVMs at logback-ci.xml: WARN and above on the
+      # console, everything down to TRACE in integration/integration-tests.log, uploaded below.
       - name: Integration tests
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
-        env:
-          JAVA_TOOL_OPTIONS: -Dlogback.configurationFile=classpath:logback-ci.xml
-        run: nix develop --command just integration-fast
+        if: steps.plan.outputs.integration == 'true'
+        run: nix develop .#ci --command just integration-fast
+
+      - name: Upload integration log
+        if: always() && steps.plan.outputs.integration == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-log-attempt-${{ github.run_attempt }}
+          path: |
+            integration/integration-tests.log
+            integration/stage4-peers-interaction.mmd
+          if-no-files-found: ignore
+          retention-days: 3
 
       # The bloxbean/yaci-cli image is ~578 MB and dominates the yaci-suite runtime on a
       # cold runner (~3.5 min pull). Cache the tarball keyed on build.sbt so any bump of
@@ -70,7 +113,7 @@ jobs:
       # rides on the last cached image (via restore-keys). Testcontainers picks up the
       # loaded image transparently — no shim required.
       - name: Cache Yaci DevKit image
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
+        if: steps.plan.outputs.integration == 'true'
         id: yaci-image-cache
         uses: actions/cache@v4
         with:
@@ -79,7 +122,7 @@ jobs:
           restore-keys: docker-yaci-cli-
 
       - name: Load cached Yaci DevKit image
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
+        if: steps.plan.outputs.integration == 'true'
         run: |
           tarball="$HOME/.cache/docker-images/yaci-cli.tar"
           if [ -f "$tarball" ]; then
@@ -89,13 +132,21 @@ jobs:
           fi
 
       - name: Yaci integration tests (Docker)
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
-        env:
-          JAVA_TOOL_OPTIONS: -Dlogback.configurationFile=classpath:logback-ci.xml
-        run: nix develop --command just integration-yaci-docker
+        if: steps.plan.outputs.integration == 'true'
+        run: nix develop .#ci --command just integration-yaci-docker
+
+      # The Yaci suites log through the same config, and the file is rewritten per run.
+      - name: Upload Yaci integration log
+        if: always() && steps.plan.outputs.integration == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaci-log-attempt-${{ github.run_attempt }}
+          path: integration/integration-tests.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Save Yaci DevKit image to cache
-        if: (github.event_name != 'pull_request' || steps.filter.outputs.code == 'true') && steps.yaci-image-cache.outputs.cache-hit != 'true'
+        if: steps.plan.outputs.integration == 'true' && steps.yaci-image-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.cache/docker-images
           image=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^bloxbean/yaci-cli:' | head -n1)
@@ -105,6 +156,6 @@ jobs:
           fi
           docker save "$image" -o ~/.cache/docker-images/yaci-cli.tar
 
-      - name: Docs-only change — build/test skipped
-        if: github.event_name == 'pull_request' && steps.filter.outputs.code != 'true'
-        run: echo "Only docs/** changed — skipping Nix build, tests, and integration. The 'build' check passes."
+      - name: No code changes — build/test skipped
+        if: steps.plan.outputs.code != 'true'
+        run: echo "Only docs or Markdown changed — skipping Nix, build and tests. The 'build' check passes."
