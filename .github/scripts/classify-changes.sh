@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Decide what the CI `build` job runs, from the files a pull request changes.
+# Decide which CI tests run (the `tests` and `yaci` jobs), from the files a pull request changes.
 #
 # Every changed path falls into one bucket, checked in this order:
 #   unit         under docs/api/: the unit tests check these schemas against the code
