@@ -151,7 +151,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
             |> ToData.tupleToData |> serialiseData |> blake2b_224
             |> ScalusScalar.fromByteStringBigEndianUnsafe
         KzgCommitment.calculateKzgCommitment(
-          List.single(Scalar().from_bendian(scalar._1.toByteArray))
+          List.singleton(Scalar().from_bendian(scalar._1.toByteArray))
         )
     }
 
@@ -222,7 +222,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         )
         val txInfo = TxInfo(
           inputs = List(treasuryInput),
-          referenceInputs = List.Cons(ladderRefInput, List.single(regimeRefInput)),
+          referenceInputs = List.Cons(ladderRefInput, List.singleton(regimeRefInput)),
           outputs = List.Cons(changeOutput, List.Cons(treasuryOutput, evacuationOutputs)),
           id = TxId(ByteString.fromHex("cd" * 32))
         )
@@ -250,8 +250,8 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
           inAccumulator = activeSetAccumulator,
           outAccumulator = g1Generator,
           proof = g1Generator,
-          evacuationKeys = List.single(evacueeKey),
-          evacuationOutputs = List.single(evacueeOutput),
+          evacuationKeys = List.singleton(evacueeKey),
+          evacuationOutputs = List.singleton(evacueeOutput),
           treasuryOutputAddr = treasuryOutputAddr,
           treasuryOutputValue = treasuryResidualValue
         )
