@@ -65,7 +65,7 @@ directory is a scratchpad for in-flight feature specs, which graduate into
 
 The preferred and supported setup is [Nix](https://nixos.org/download/). Install
 a recent Nix and run `nix develop` to drop into a dev shell with every
-dependency pinned (JDK, `sbt`, `scalafmt`, `scalafix`, `mermaid-cli`, and more).
+dependency pinned (JDK, `sbt`, `just`, `nixfmt`); formatting and linting run through sbt.
 If you use [direnv](https://direnv.net/), `.envrc` already runs `use flake .`
 so the shell loads automatically.
 

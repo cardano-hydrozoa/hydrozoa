@@ -50,7 +50,6 @@
             ln -s ${sbtBspShim}/bin/sbt $out/bin/sbt
           '';
         };
-        visualvm = pkgs.visualvm.override { jdk = jdk; };
         # Define the hooks
         pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
@@ -66,31 +65,33 @@
           };
         };
       in
-      rec {
-        devShell = pkgs.mkShell {
-          JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
-          # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
-          buildInputs = [ pkgs.bashInteractive ];
-          packages = with pkgs; [
-            ammonite # modernized scala repl: https://ammonite.io/
-            async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
-            git # otherwise `git` resolves to the broken macOS Xcode shim inside `nix develop`
-            jdk
-            just # command runner, similar to `make`
-            libnotify # used in justfile
-            ltex-ls # Language server for markdown: https://github.com/valentjn/ltex-ls
-            nixfmt
-            sbtNoSbtn
-            scala-cli
-            scalafix
-            scalafmt
-            # Visualize programs running on the JVM. May need _JAVA_AWT_WM_NONREPARENTING=1 on wayland:
-            #    https://github.com/oracle/visualvm/issues/403
-            visualvm
-            nodejs_24 # this is needed by IDEA's MCP Server
-            mermaid-cli
-          ];
-          inherit (pre-commit-check) shellHook;
+      {
+        devShells = {
+          default = pkgs.mkShell {
+            JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
+            # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
+            buildInputs = [ pkgs.bashInteractive ];
+            packages = with pkgs; [
+              git # otherwise `git` resolves to the broken macOS Xcode shim inside `nix develop`
+              jdk
+              just # command runner, similar to `make`
+              libnotify # used in justfile
+              nixfmt
+              sbtNoSbtn
+            ];
+            inherit (pre-commit-check) shellHook;
+          };
+          # What the CI workflow runs (`nix develop .#ci`): the JDK, sbt, and the recipes' `just` and
+          # `nixfmt`. No developer tools, and no pre-commit hook installed on entry.
+          ci = pkgs.mkShell {
+            JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
+            packages = with pkgs; [
+              jdk
+              just
+              nixfmt
+              sbtNoSbtn
+            ];
+          };
         };
       }
     ));
