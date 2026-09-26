@@ -43,6 +43,10 @@ case class Stage4Suite(
     nCommands: Int = 10,
     transportMode: TransportMode = TransportMode.Direct,
     backendMode: BackendMode = BackendMode.InMemory,
+    // Real-clock runs only: how far past case generation the head's start is anchored. It has to
+    // cover only what runs before `PreSystem.align` (initial-state sampling, command generation,
+    // the command table); the actor/WS setup runs after the anchor. Ignored under TestControl.
+    takeoffOffset: FiniteDuration = 60.seconds,
 ) extends ModelBasedSuite:
 
     override type Env = Unit
@@ -82,7 +86,8 @@ case class Stage4Suite(
           Stage4Suite.genInitialState(
             nPeers = nPeers,
             nCoilPeers = nCoilPeers,
-            useTestControl = useTestControl
+            useTestControl = useTestControl,
+            takeoffOffset = takeoffOffset,
           )
         )
 
@@ -790,6 +795,7 @@ object Stage4Suite:
         absorptionSlack: FiniteDuration = 60.seconds,
         meanInterArrivalTime: HeadPeerNumber => FiniteDuration = _ => 12.seconds,
         useTestControl: Boolean = true,
+        takeoffOffset: FiniteDuration = 60.seconds,
     ): Gen[ModelState] =
         val cardanoNetwork = CardanoNetwork.Preprod
         // TestPeers provisions head + coil wallets from the same seed under stable ordinals.
@@ -803,10 +809,11 @@ object Stage4Suite:
 
         // Non-TestControl runs anchor the initial block's end-time to a wall-clock offset in
         // the future so `sutResource` can sleep until that anchor and have the model clock
-        // and the wall clock coincide at command 1. 60s matches stage 1's budget; if 20-peer
-        // setup overruns it the test aborts (see sutResource). Under TestControl the head-config
-        // generator falls back to the deterministic Jan-1-2026 + 100-day random distribution
-        // — reading the wall clock there would defeat seed-based reproducibility.
+        // and the wall clock coincide at command 1. `takeoffOffset` must cover case generation up
+        // to `PreSystem.align` (the harness's first step, before any actor or socket exists); if
+        // that overruns it the case aborts with "initialization took too long". Under TestControl
+        // the head-config generator falls back to the deterministic Jan-1-2026 + 100-day random
+        // distribution — reading the wall clock there would defeat seed-based reproducibility.
         //
         // TODO: `genInitialState` returns a pure `Gen[ModelState]` so we can't thread
         // [[MultiPeerHeadHarness.mkTakeoffTime]] (which returns `IO[Option[Instant]]`) here
@@ -814,7 +821,7 @@ object Stage4Suite:
         // TestControl are unaffected because the wall-clock branch is skipped anyway.
         val takeoffTime: Option[java.time.Instant] =
             if useTestControl then None
-            else Some(java.time.Instant.now().plusSeconds(60))
+            else Some(java.time.Instant.now().plusMillis(takeoffOffset.toMillis))
 
         val generateHeadStartTime = MultiPeerHeadHarness.generateHeadStartTime(takeoffTime)
 
