@@ -4,12 +4,12 @@ import cats.effect.{IO, Resource}
 import com.comcast.ip4s.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{ArchiveWatermarks, ConsensusStoreReader}
 import hydrozoa.multisig.server.HydrozoaHttpEvent.ServerStarted
+import hydrozoa.multisig.{NodeStatus, SubmissionGate}
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
 import org.http4s.server.middleware.CORS
@@ -33,6 +33,9 @@ object HydrozoaServer {
       * @param requestSequencer
       *   Handle to the RequestSequencer actor, or `None` on a coil peer. See [[HydrozoaRoutes]] for
       *   what its absence removes.
+      * @param submissions
+      *   Admits the submissions forwarded to the RequestSequencer; closed at the handoff to the
+      *   rule-based regime
       * @param blockWeaver
       *   Handle to the BlockWeaver actor
       * @param nodeStatus
@@ -55,6 +58,7 @@ object HydrozoaServer {
       */
     def create(
         requestSequencer: Option[RequestSequencer.Handle],
+        submissions: SubmissionGate,
         blockWeaver: BlockWeaver.Handle,
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
@@ -69,6 +73,7 @@ object HydrozoaServer {
             hydrozoaRoutes <- Resource.eval(
               HydrozoaRoutes(
                 requestSequencer,
+                submissions,
                 blockWeaver,
                 nodeStatus,
                 consensusReader,
@@ -95,6 +100,7 @@ object HydrozoaServer {
       */
     def run(
         requestSequencer: Option[RequestSequencer.Handle],
+        submissions: SubmissionGate,
         blockWeaver: BlockWeaver.Handle,
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
@@ -107,6 +113,7 @@ object HydrozoaServer {
     ): IO[Nothing] = {
         create(
           requestSequencer,
+          submissions,
           blockWeaver,
           nodeStatus,
           consensusReader,

@@ -4,9 +4,9 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Ref}
 import cats.syntax.contravariant.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.NoopActor
 import hydrozoa.multisig.consensus.ack.HardAckNumber
@@ -117,7 +117,7 @@ class HubJoinHandoffTest extends AnyFunSuite {
             .open(persistenceTracer)
             .use { backend =>
                 Persistence.fromBackend(backend, persistenceTracer).flatMap { persistence =>
-                    ActorSystem[IO]("hub-join-test").use { system =>
+                    HydrozoaActorSystem.withoutRoot("hub-join-test").use { system =>
                         for {
                             seen <- Ref[IO].of(Vector.empty[LiaisonProtocol.CoilLiaisonMessage])
                             remote <- system.actorOf(new Recorder(seen))

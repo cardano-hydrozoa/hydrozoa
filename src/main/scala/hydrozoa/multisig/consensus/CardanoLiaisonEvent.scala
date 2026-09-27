@@ -95,11 +95,14 @@ object CardanoLiaisonEvent:
       */
     final case class RuleBasedTreasuryQueryError(err: String) extends CardanoLiaisonEvent
 
-    /** Some actions will be submitted to L1. `hasFallback` true means at least one is a fallback or
-      * silence-period noop (logged at warn level).
+    /** The actions due this tick (a silence-period noop submits nothing). `notice` sets the level:
+      * WARN on the first dispatch about a given silence period or fallback tx, DEBUG on its
+      * repeats, INFO for routine actions (see [[CardanoLiaison.classifyDispatch]]).
       */
-    final case class ActionsDispatched(actions: List[CardanoLiaison.Action], hasFallback: Boolean)
-        extends CardanoLiaisonEvent
+    final case class ActionsDispatched(
+        actions: List[CardanoLiaison.Action],
+        notice: CardanoLiaison.DispatchNotice
+    ) extends CardanoLiaisonEvent
 
     /** The rule-based treasury has been observed on L1 and the handoff to the rule-based regime has
       * been dispatched (step 3): the head has fallen into rule-based fallback. `txId` is the tx

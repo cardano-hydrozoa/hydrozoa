@@ -1,4 +1,5 @@
 import com.typesafe.sbt.packager.docker._
+import sbt.hydrozoa.CompileProblems
 
 // NB (sbt 2): bare settings written at the top level of build.sbt are applied to *every*
 // subproject, not just the root. Anything specific to the root application (Docker packaging,
@@ -13,6 +14,9 @@ lazy val gitRevision: String =
 
 Global / excludeLintKeys += Docker / dockerLabels
 Global / excludeLintKeys += Docker / dockerEnvVars
+// DockerPlugin sets `Docker / target` for its default staging directory; `core` pins
+// `Docker / stagingDirectory` instead (below), so nothing reads it.
+Global / excludeLintKeys += Docker / target
 // native-packager's JavaAppPackaging archetype propagates executableScriptName/name/sourceDirectory
 // into the Debian/Rpm/Universal-docs/Universal-src packaging scopes. We only build the Universal
 // `stage` output and the Docker image, so those scoped copies are never consumed; silence sbt's
@@ -31,7 +35,7 @@ Global / excludeLintKeys ++= Set(
   rpmScriptsDirectory
 )
 
-val scalusVersion = "1.0.0"
+val scalusVersion = "1.2.0"
 // A val, not an inline literal, because `hydrozoa.BuildInfo` bakes it in: it is part of the
 // `l2ParamsHash` preimage, which serializes ProtocolParams with scalus's upickle writer and so
 // depends on upickle's formatting as well as scalus's (docs/spec/head-params-hash.md).
@@ -59,16 +63,56 @@ lazy val useFixedScalaCheck: Setting[Seq[TestFramework]] =
   testFrameworks := testFrameworks.value.filterNot(_ == TestFrameworks.ScalaCheck) :+
     scalaCheckFramework
 
+// CI's summary reads every test event from a JSON-lines file each forked test JVM writes
+// (`test.CiTestEvents`; the format is described in .github/scripts/test-summary.py). ScalaCheck's
+// events are recorded by `ScalaCheckFrameworkFixed`; ScalaTest's by `ScalaTestFrameworkRecorded`,
+// registered in place of ScalaTest's own framework. Both live in core's test sources, so only core
+// and the projects with its test classpath can load them: those are `testEventProjects`, and
+// `checkScalaCheckFramework` fails the build if one of them runs ScalaTest unrecorded.
+lazy val recordedScalaTest: TestFramework = new TestFramework("test.ScalaTestFrameworkRecorded")
+
+lazy val recordTestEvents: Seq[Setting[?]] = Seq(
+  testFrameworks := testFrameworks.value.map(f =>
+    if (f == TestFrameworks.ScalaTest) recordedScalaTest else f
+  ),
+  Test / javaOptions ++= Def.uncached(
+    Seq(
+      s"-Dhydrozoa.ci.events=${((Test / target).value / "ci-events").getAbsolutePath}",
+      s"-Dhydrozoa.ci.project=${thisProject.value.id}",
+      s"-Dhydrozoa.ci.sbt=${sbtVersion.value}"
+    )
+  )
+)
+
+// CI's summary also reads every compiler problem, recorded from sbt's reporter to
+// `<target>/ci-events/compile-<config>.jsonl` (project/CompileProblems.scala). A bare setting, so
+// it reaches every project.
+CompileProblems.settings(Compile) ++ CompileProblems.settings(Test)
+
 // Registering the wrapper is per-project, and forgetting it in a new subproject would silently
 // restore the dropped-failure behaviour — a green build, the same signature as the bug itself. This
 // check fails the run instead. It inspects every project, so it also covers projects that never
 // applied `useFixedScalaCheck`, which is precisely the case a per-project check would miss.
 lazy val checkScalaCheckFramework =
-  taskKey[Unit]("Fail if any project registers ScalaCheck's own sbt framework.")
+  taskKey[Unit](
+    "Fail if any project registers ScalaCheck's own sbt framework, or runs ScalaTest unrecorded."
+  )
 
 lazy val everyProject = ScopeFilter(inAnyProject)
+lazy val testEventProjects = ScopeFilter(inProjects(core, integration, examples, ciCanary))
 
 useFixedScalaCheck
+
+// No class of ours may extend Throwable other than through Exception (project/NoBareThrowables.scala);
+// run by `lintAll` and `lintCheckAll`, over the projects they lint.
+NoBareThrowables.settings(ScopeFilter(inProjects(cardanoOnchain, petri, core, integration, benchmark)))
+
+// sbt 2 puts a project's test classes on classpaths as a jar, and packaging that jar picks a
+// `Main-Class` for its manifest from the test sources' main classes: every ScalaCheck
+// `Properties` object has a `main`, so it warns "multiple main classes detected" on every test
+// run. No test jar is meant to be run, so name none. A bare setting, so it reaches every project;
+// `Test / run` still offers the discovered mains.
+Test / packageBin / mainClass := None
 
 checkScalaCheckFramework := Def.uncached {
   val ids = thisProject.all(everyProject).value.map(_.id)
@@ -79,6 +123,18 @@ checkScalaCheckFramework := Def.uncached {
         if fws.contains(TestFrameworks.ScalaCheck) &&
           cp.exists(_.data.id.contains("scalacheck_")) =>
       id
+  }
+  val unrecorded = thisProject.all(testEventProjects).value.map(_.id)
+    .zip((Test / testFrameworks).all(testEventProjects).value)
+    .collect {
+      case (id, fws) if fws.contains(TestFrameworks.ScalaTest) || !fws.contains(recordedScalaTest) =>
+        id
+    }
+  if (unrecorded.nonEmpty) {
+    sys.error(
+      s"${unrecorded.mkString(", ")} runs ScalaTest without recording its events, so CI's summary " +
+        "would not see those suites. Apply `recordTestEvents` to it."
+    )
   }
   if (offenders.nonEmpty) {
     sys.error(
@@ -110,7 +166,7 @@ lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
       // to *every* subproject, and enabling the plugin on a project that lacks the `scalus` library
       // on its classpath (e.g. `petri`) fails compilation with `package scalus.compiler ... does not
       // have a member method compile`. Published with CrossVersion.full → scalus-plugin_<full-scala>.
-      addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
+      addCompilerPlugin(("org.scalus" % "scalus-plugin" % scalusVersion).cross(CrossVersion.full)),
     )
 
 // Standalone petri net framework
@@ -122,9 +178,12 @@ lazy val petri: Project = (project in file("petri"))
       libraryDependencies ++= Seq(
         "org.typelevel" %% "cats-core" % "2.13.0",
         "org.typelevel" %% "spire" % "0.18.0",
-        "org.scalatest" %% "scalatest" % "3.2.19" % Test,
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
-        "org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test,
+        "org.scalatest" %% "scalatest" % "3.2.20" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
+        // Built against scalatestplus `scalacheck-1-18`; exclude it so the `scalacheck-1-19` pinned
+        // here is the only copy of `org.scalatestplus.scalacheck` on the test classpath.
+        ("org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test)
+            .exclude("org.scalatestplus", "scalacheck-1-18_3"),
         "org.typelevel" %% "spire-laws" % "0.18.0" % Test
       )
     )
@@ -241,7 +300,7 @@ lazy val core: Project = (project in file("."))
         "org.typelevel" %% "cats-effect" % "3.6.3",
         "com.github.suprnation.cats-actors" %% "cats-actors" % "2.1.0",
         "org.typelevel" %% "spire" % "0.18.0",
-        "org.scalactic" %% "scalactic" % "3.2.19",
+        "org.scalactic" %% "scalactic" % "3.2.20",
         "org.typelevel" %% "cats-core" % "2.13.0",
         // http4s - web server and websocket client
         "org.http4s" %% "http4s-ember-server" % http4sVersion,
@@ -274,9 +333,12 @@ lazy val core: Project = (project in file("."))
       ),
       libraryDependencies ++= Seq(
         "org.typelevel" %% "spire-laws" % "0.18.0" % Test,
-        "org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test,
-        "org.scalatest" %% "scalatest" % "3.2.19" % Test,
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        // Built against scalatestplus `scalacheck-1-18`; exclude it so the `scalacheck-1-19` pinned
+        // here is the only copy of `org.scalatestplus.scalacheck` on the test classpath.
+        ("org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test)
+            .exclude("org.scalatestplus", "scalacheck-1-18_3"),
+        "org.scalatest" %% "scalatest" % "3.2.20" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
         "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
         "org.scalus" %% "scalus-testkit" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
@@ -289,7 +351,7 @@ lazy val core: Project = (project in file("."))
       ),
       // Scalus compiler plugin — compiles on-chain `@Compile` code to UPLC (see `cardanoOnchain`
       // for why this is scoped per-project rather than declared once at the top level).
-      addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
+      addCompilerPlugin(("org.scalus" % "scalus-plugin" % scalusVersion).cross(CrossVersion.full)),
       // Bake the version, git revision, and build time into `hydrozoa.BuildInfo` so they can be
       // logged at startup, served from `GET /version`, and stamped onto the Docker image labels.
       //
@@ -341,11 +403,36 @@ lazy val core: Project = (project in file("."))
         "--enable-native-access=ALL-UNNAMED",
         "--sun-misc-unsafe-memory-access=allow"
       ),
+      // Under CI, log through logback-core-ci.xml: nothing on the console, and everything to
+      // target/unit-tests.log, which the workflow uploads. Selected the way `integration` selects
+      // its CI config; see there for why it is an uncached setting.
+      Test / javaOptions ++= Def.uncached(
+        if (sys.env.contains("CI")) Seq("-Dlogback.configurationFile=logback-core-ci.xml") else Nil
+      ),
+      // Tests that need what CI lacks: a Blockfrost API key (`RequiresBlockfrostApiKey`) or a
+      // real node's store (`test.RequiresNodeStore`). They cancel without it, so under CI they are
+      // excluded by tag rather than reported as cancelled every run; local runs keep them. Scoped
+      // to the ScalaTest framework this build records, since `-l` means nothing to ScalaCheck.
+      Test / testOptions ++= Def.uncached(
+        if (sys.env.contains("CI"))
+          Seq(
+            Tests.Argument(
+              recordedScalaTest,
+              "-l",
+              "requires-blockfrost-api-key",
+              "-l",
+              "requires-node-store"
+            )
+          )
+        else Nil
+      ),
     )
+    .settings(recordTestEvents)
 
 // Integration tests
 lazy val integration: Project = (project in file("integration"))
     .dependsOn(core % "compile->compile;test->test", petri)
+    .settings(recordTestEvents)
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
@@ -390,7 +477,7 @@ lazy val integration: Project = (project in file("integration"))
       ),
       // test dependencies
       libraryDependencies ++= Seq(
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
         "org.typelevel" %% "cats-effect" % "3.6.3" % Test,
         // Bloxbean's `yaci-cardano-test:0.1.0` (transitively via scalus-testkit) pins
         // testcontainers-java to 1.17.6 → docker-java 3.2.13 → Docker Engine API 1.32, which
@@ -414,6 +501,14 @@ lazy val integration: Project = (project in file("integration"))
         "--enable-native-access=ALL-UNNAMED",
         "--sun-misc-unsafe-memory-access=allow",
         "-Dapi.version=1.44"
+      ),
+      // Under CI, log through logback-ci.xml (nothing on the console; everything to
+      // integration-tests.log, which the workflow uploads). A setting rather than an environment
+      // variable, because a forked test JVM inherits the environment of the sbt that forks it,
+      // which can be a server started by an earlier call; `Def.uncached` so the CI check is read
+      // on every run, not cached per machine.
+      Test / javaOptions ++= Def.uncached(
+        if (sys.env.contains("CI")) Seq("-Dlogback.configurationFile=logback-ci.xml") else Nil
       )
     )
 
@@ -422,14 +517,32 @@ lazy val integration: Project = (project in file("integration"))
 // `sbt "examples/testOnly *TransientTokenDemo*"`. See examples/README.md.
 lazy val examples: Project = (project in file("examples"))
     .dependsOn(core % "compile->compile;test->test", integration % "test->test")
+    .settings(recordTestEvents)
     .settings(
       name := "hydrozoa-examples",
       publish / skip := true,
       libraryDependencies ++= Seq(
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
         "org.typelevel" %% "cats-effect" % "3.6.3" % Test
       )
     )
+
+// The reporting canary: tests with known outcomes (a failure, a cancelled, an ignored and a pending
+// test, a falsified property, and a suite that halts its JVM on request) and, on request, a compile
+// error in `ci-canary/broken`. `just ci-canary` runs them and checks that CI's summary reports each
+// exactly. Nothing aggregates, lints or otherwise runs this project.
+lazy val ciCanary: Project = (project in file("ci-canary"))
+    .dependsOn(core % "test->test")
+    .settings(
+      name := "ci-canary",
+      publish / skip := true,
+      Test / fork := true,
+      Test / javaOptions ++= Seq(
+        "--enable-native-access=ALL-UNNAMED",
+        "--sun-misc-unsafe-memory-access=allow"
+      )
+    )
+    .settings(recordTestEvents)
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.7"
@@ -438,7 +551,7 @@ ThisBuild / scalaVersion := "3.3.7"
 // ++=`, each per-subproject addition would append to the *shared* ThisBuild scope, so the flags
 // accumulate once per subproject (4×) and `-Werror` then fails on "flag set repeatedly". Keep it
 // bare (no `ThisBuild /`): each subproject gets exactly one copy.
-scalacOptions ++= Seq(
+scalacOptions ++= Def.uncached(Seq(
   "-feature",
   "-deprecation",
   "-unchecked",
@@ -451,7 +564,7 @@ scalacOptions ++= Seq(
   // dedicated cleanup pass; demote to a warning/error once those sites are fixed.
   "-Wconf:msg=interpolation uses toString:s",
   "-Yretain-trees", // Essential for incremental compilation
-) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil)
+) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil))
 
 // Custom commands to format and lint all subprojects
 addCommandAlias(
@@ -464,17 +577,17 @@ addCommandAlias(
 )
 addCommandAlias(
   "lintAll",
-  ";cardanoOnchain/scalafixAll ;petri/scalafixAll ;core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll"
+  ";cardanoOnchain/scalafixAll ;petri/scalafixAll ;core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll ;checkNoBareThrowables"
 )
 addCommandAlias(
   "lintCheckAll",
-  ";cardanoOnchain/scalafixAll --check ;petri/scalafixAll --check ;core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check"
+  ";cardanoOnchain/scalafixAll --check ;petri/scalafixAll --check ;core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check ;checkNoBareThrowables"
 )
 
 // No `testFrameworks` entry for ScalaTest: sbt's default list already carries it, as
 // `TestFramework(org.scalatest.tools.Framework, org.scalatest.tools.ScalaTestFramework)`. Adding it
 // again registers a *second* framework that resolves to the same runner, and sbt then runs every
-// suite once per entry — twice.
+// suite once per entry — twice. `recordTestEvents` replaces that entry rather than adding one.
 
 // Tests are wall-clock/sleep-bound (real System timestamps in the cats-actors), so run more
 // suites concurrently than CPU cores to overlap the waits. sbt's default caps concurrency at the
@@ -512,7 +625,7 @@ lazy val benchmark: Project = (project in file("benchmark"))
       ),
       libraryDependencies ++= Seq(
         // "org.scalacheck" %% "scalacheck" % "1.19.0",
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
         "org.scalus" %% "scalus-testkit" % scalusVersion
       )
     )

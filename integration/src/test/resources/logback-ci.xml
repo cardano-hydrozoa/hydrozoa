@@ -1,11 +1,11 @@
+<!--
+  CI logging for the integration tests (selected by the build when CI is set). Everything the
+  loggers below pass, with the root at TRACE, goes to integration-tests.log, which the CI workflow
+  uploads as a short-lived artifact. Nothing goes to the console: the job log GitHub keeps is for
+  sbt's test results, and a warning a test provokes on purpose would read there as a failure.
+-->
 <configuration>
 
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
-            </pattern>
-        </encoder>
-    </appender>
     <appender name="FILE" class="ch.qos.logback.core.FileAppender">
         <file>integration-tests.log</file>
         <append>false</append>
@@ -15,24 +15,46 @@
         </encoder>
     </appender>
 
+    <!-- Every dead letter, one per line, for CI's summary (.github/scripts/test-summary.py reads
+         this format, `hydrozoa.dead-letters` version 1): the level (WARN while the actor system
+         runs, DEBUG once it is stopping), a tab, and the message with tabs and newlines flattened.
+         In the directory the build gives the forked JVM for its test events. -->
+    <appender name="DEAD_LETTERS" class="ch.qos.logback.core.FileAppender">
+        <file>${hydrozoa.ci.events}/dead-letters.tsv</file>
+        <append>true</append>
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="ch.qos.logback.classic.PatternLayout">
+                <fileHeader>#hydrozoa.dead-letters&#9;1</fileHeader>
+                <pattern>%level&#9;%replace(%msg){'[\t\r\n]+', ' '}%n</pattern>
+            </layout>
+        </encoder>
+    </appender>
+    <logger name="DeadLetters" level="trace">
+        <appender-ref ref="DEAD_LETTERS"/>
+    </logger>
+
     <appender name="MERMAID" class="ch.qos.logback.core.FileAppender">
         <file>stage4-peers-interaction.mmd</file>
         <append>false</append>
-        <layout class="hydrozoa.integration.MermaidSequenceDiagramLayout">
-            <pattern>%msg%n</pattern>
-        </layout>
+        <!-- A layout inside a LayoutWrappingEncoder, not a bare <layout>: logback reports the bare
+             form as a WARN status, and a WARN status makes it print its whole configuration
+             status (about 30 |-INFO lines) to the console of every JVM. -->
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="hydrozoa.integration.MermaidSequenceDiagramLayout">
+                <pattern>%msg%n</pattern>
+            </layout>
+        </encoder>
     </appender>
     <logger name="CoilPeerWsTransport" level="warn"/>
     <logger name="CoilJoin" level="info"/>
     <logger name="PeerTransport" level="warn"/>
-    <logger name="Mermaid.PeerLiaison" level="info" additivity="false">
     <!-- The only record of why a supervised actor failed; never quiet it. -->
     <logger name="Supervision" level="error"/>
+    <logger name="Mermaid.PeerLiaison" level="info" additivity="false">
         <appender-ref ref="MERMAID"/>
     </logger>
 
     <root level="trace">
-        <appender-ref ref="STDOUT"/>
         <appender-ref ref="FILE"/>
     </root>
 

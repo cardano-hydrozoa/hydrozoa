@@ -5,8 +5,8 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
 import io.circe.parser.decode
 import java.time.Instant
@@ -171,12 +171,12 @@ class LimiterSpacingTest extends AnyFunSuite:
     // test is what should fail.
     test("a failure inside the limiter is escalated, not swallowed and carried on from") {
         val period = 500.millis
-        val seen = ActorSystem[IO]("limiter-failure")
-            .use(system =>
+        val seen = HydrozoaActorSystem("limiter-failure")
+            .use(actors =>
                 for {
                     got <- Ref.of[IO, Vector[(Int, Long)]](Vector.empty)
-                    sink <- system.actorOf(Recorder(got))
-                    lim <- system.actorOf(
+                    sink <- actors.actorOf(Recorder(got))
+                    lim <- actors.actorOf(
                       Limiter[LaneMsg](sink, limits(softBlockMinPeriod = period), throwOnHold)
                     )
                     _ <- lim ! Paced(0) // released immediately; nothing is held yet
@@ -299,7 +299,8 @@ class LimiterSpacingTest extends AnyFunSuite:
         gate: Option[LimiterGate],
         settle: FiniteDuration
     )(send: ActorRef[IO, LaneMsg | LimiterControl] => IO[Unit]): Vector[(Int, Long)] =
-        ActorSystem[IO]("limiter-test")
+        HydrozoaActorSystem
+            .withoutRoot("limiter-test")
             .use(system =>
                 for {
                     seen <- Ref.of[IO, Vector[(Int, Long)]](Vector.empty)

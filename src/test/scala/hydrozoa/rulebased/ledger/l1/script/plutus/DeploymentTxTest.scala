@@ -1,7 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
 import cats.data.NonEmptyList
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
@@ -63,8 +62,6 @@ class DeploymentTxTest extends AnyFunSuite {
         // 4. Sign the transaction using the test peer's wallet
         val wallet = testPeers.walletFor(HeadPeerNumber(0))
         val signedTx = deployTx.tx.attachVKeyWitnesses(List(wallet.mkVKeyWitness(deployTx.tx)))
-
-        println(s"${HexUtil.encodeHexString(signedTx.toCbor)}")
 
         // 5. Submit the tx to the L1 mock and observe the ref utxo produced
         val finalStateResult = TransactionChain.foldTxChain(Seq(signedTx))(
@@ -146,8 +143,6 @@ class DeploymentTxTest extends AnyFunSuite {
         // 4. Sign the transaction using the test peer's wallet
         val wallet = testPeers.walletFor(HeadPeerNumber(0))
         val signedTx = deployTx.tx.attachVKeyWitnesses(List(wallet.mkVKeyWitness(deployTx.tx)))
-
-        println(s"${HexUtil.encodeHexString(signedTx.toCbor)}")
 
         // 5. Submit the tx to the L1 mock and observe the ref utxo produced
         val finalStateResult = TransactionChain.foldTxChain(Seq(signedTx))(

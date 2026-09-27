@@ -120,7 +120,7 @@ class DurabilityOrderTest extends AnyFunSuite {
                               )
                           case None => persistence,
                 )
-                observed <- MultiPeerHeadHarness.resource(inputs, hooks).use { harness =>
+                observed <- MultiPeerHeadHarness.useGuarded(inputs, hooks) { harness =>
                     // Kick each leader in turn so blocks keep being produced across the whole fast
                     // round for the entire window; the coils see every one of them relayed.
                     val kicks = (0 until (runFor / kickEvery).toInt).toList

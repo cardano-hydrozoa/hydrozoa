@@ -23,6 +23,9 @@ final class FirewalledPeerTransport(
     ): IO[Unit] =
         underlying.register(remote, localLiaison)
 
+    override def unregister(remote: HeadPeerId): IO[Unit] =
+        underlying.unregister(remote)
+
     override def send(remote: HeadPeerId, request: LiaisonProtocol.MeshEmitted): IO[Unit] =
         shouldDrop(remote).flatMap {
             case true =>
