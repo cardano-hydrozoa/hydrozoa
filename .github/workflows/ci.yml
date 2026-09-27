@@ -22,11 +22,11 @@ permissions:
 env:
   SBT: sbt --server --batch
 
-# `plan` decides from a PR's changed paths what runs; `tests` (precommit, unit and integration
-# suites) and `yaci` (the suites against a real Cardano devnet) run side by side; and `build`
-# reports their outcome. The workflow itself has no path filter: `build` is the repository
-# ruleset's required check on `main`, so it must always run and report, or the merge is blocked. A
-# PR that touches no code runs only `plan` and `build`.
+# `plan` decides from a PR's changed paths what runs; `unit` (precommit, the unit suites and the
+# reporting canary), `integration` and `yaci` (the suites against a real Cardano devnet) run side
+# by side; and `build` reports their outcome. The workflow itself has no path filter: `build` is
+# the repository ruleset's required check on `main`, so it must always run and report, or the
+# merge is blocked. A PR that touches no code runs only `plan` and `build`.
 jobs:
   plan:
     # Pinned rather than ubuntu-latest, so the host image changes only when we change it. Nix
@@ -58,16 +58,17 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: .github/scripts/classify-changes.py
 
-  tests:
+  # Precommit runs here for every PR that runs any test, so this job runs whenever a test job does,
+  # and skips its unit step when the plan didn't call for the unit tests.
+  unit:
     needs: plan
     if: >-
       needs.plan.outputs.unit == 'true' || needs.plan.outputs.integration == 'true' ||
       needs.plan.outputs.canary == 'true'
     runs-on: ubuntu-24.04
-    # Without this the job inherits GitHub's 6-hour default, and a wedged step would hold a hosted
-    # runner for hours and leave no diagnosable artifact. 90 minutes turns a wedge into a red
-    # build.
-    timeout-minutes: 90
+    # Without a timeout the job inherits GitHub's 6-hour default, and a wedged step would hold a
+    # hosted runner for hours and leave no diagnosable artifact.
+    timeout-minutes: 60
     steps:
       # No token in .git/config: nothing in this job uses it through git, and the build runs
       # third-party code.
@@ -83,6 +84,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: .github/scripts/install-nix.sh
 
+      # The one job that saves this cache; the others restore it only, since two jobs saving the
+      # same key race for it.
       - name: Cache sbt / coursier / ivy
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -109,14 +112,6 @@ jobs:
         timeout-minutes: 30
         run: nix develop .#ci --command just test
 
-      # Under CI the build points the forked test JVMs at logback-ci.xml: nothing on the console,
-      # and in integration/integration-tests.log, uploaded below, everything its loggers pass.
-      - name: Integration tests
-        id: integration
-        if: ${{ !cancelled() && needs.plan.outputs.integration == 'true' }}
-        timeout-minutes: 40
-        run: nix develop .#ci --command just integration-fast
-
       # Tests whose outcomes are known, and a compile error on purpose: the step passes only if the
       # summary reports each of them exactly. Runs when the build or the reporting code changes.
       - name: Reporting canary
@@ -134,8 +129,69 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
+      # Name every failed test on the run page: a summary plus error annotations, read from the
+      # test-event files the build writes (see the script's header). Runs after a failing step
+      # too. The steps' outcomes let it tell a pass from a step that failed without recording a
+      # failed or unfinished test, as a compile error does.
+      - name: Summarise test results
+        if: always()
+        env:
+          TEST_STEPS: unit=${{ steps.unit.outcome }}
+        run: python3 .github/scripts/test-summary.py target
+
+      # Artifact names must be unique within a run, hence the job in each name.
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-reports-unit-attempt-${{ github.run_attempt }}
+          path: target/out/jvm/*/*/test-reports/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # A job of its own, alongside `unit`, so the two suites' times overlap rather than add up.
+  integration:
+    needs: plan
+    if: needs.plan.outputs.integration == 'true'
+    runs-on: ubuntu-24.04
+    # Install (5), the shell, dependencies and compile, and the integration step's own 40 minutes.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        timeout-minutes: 5
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .github/scripts/install-nix.sh
+
+      - name: Restore sbt / coursier / ivy cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.sbt
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      # A step of its own, so the integration step's timeout covers only the suites, and a compile
+      # error reads as one rather than as a test failure.
+      - name: Compile
+        id: compile
+        run: nix develop .#ci --command sbt --server --batch integration/Test/compile
+
+      # Under CI the build points the forked test JVMs at logback-ci.xml: nothing on the console,
+      # and in integration/integration-tests.log, uploaded below, everything its loggers pass.
+      - name: Integration tests
+        id: integration
+        timeout-minutes: 40
+        run: nix develop .#ci --command just integration-fast
+
       - name: Upload integration log
-        if: always() && needs.plan.outputs.integration == 'true'
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-log-attempt-${{ github.run_attempt }}
@@ -145,22 +201,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-      # Name every failed test on the run page: a summary plus error annotations, read from the
-      # test-event files the build writes (see the script's header). Runs after a failing step
-      # too. The steps' outcomes let it tell a pass from a step that failed without recording a
-      # failed or unfinished test, as a compile error does.
       - name: Summarise test results
         if: always()
         env:
-          TEST_STEPS: unit=${{ steps.unit.outcome }} integration=${{ steps.integration.outcome }}
+          TEST_STEPS: >-
+            compile=${{ steps.compile.outcome }}
+            integration=${{ steps.integration.outcome }}
         run: python3 .github/scripts/test-summary.py target
 
-      # Artifact names must be unique within a run, hence the job in each name.
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-reports-tests-attempt-${{ github.run_attempt }}
+          name: test-reports-integration-attempt-${{ github.run_attempt }}
           path: target/out/jvm/*/*/test-reports/
           if-no-files-found: ignore
           retention-days: 3
@@ -168,7 +221,7 @@ jobs:
   # The Yaci suites start a Cardano devnet in Docker (Testcontainers pulls bloxbean/yaci-cli) and
   # run against it: CI's only real node, so the only check of our transactions against the
   # node's own ledger rules, script budgets and protocol-version gating. A job of its own, so it
-  # reports even when `tests` fails early, and runs alongside it.
+  # reports even when another job fails early, and runs alongside them.
   yaci:
     needs: plan
     # The Yaci suites reach nearly all of the integration test code (the harness, the RBR model
@@ -188,7 +241,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: .github/scripts/install-nix.sh
 
-      # Restore only: `tests` saves this key, and two jobs saving the same key race for it.
+      # Restore only: `unit` saves this key, and two jobs saving the same key race for it.
       - name: Restore sbt / coursier / ivy cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -240,7 +293,7 @@ jobs:
   # The required check. Passes when the plan succeeded and each test job either passed or was
   # skipped because the plan didn't call for it; see the script for the rules.
   build:
-    needs: [plan, tests, yaci]
+    needs: [plan, unit, integration, yaci]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

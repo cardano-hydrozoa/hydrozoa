@@ -21,7 +21,8 @@ PLAN = "plan"
 PLAN_OUTPUTS = ("code", "unit", "integration", "canary")
 # Test job -> the plan outputs that call for it. It may be skipped only if all of them are "false".
 TEST_JOBS = {
-    "tests": ("unit", "integration", "canary"),
+    "unit": ("unit", "integration", "canary"),  # it runs precommit for every tested PR
+    "integration": ("integration",),
     "yaci": ("integration",),
 }
 
