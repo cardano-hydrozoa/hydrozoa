@@ -3,8 +3,8 @@ package hydrozoa.testcontrol
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO, Ref}
-import hydrozoa.lib.actor.HydrozoaActorSystem
 import com.suprnation.typelevel.actors.syntax.*
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import java.time.Instant
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
