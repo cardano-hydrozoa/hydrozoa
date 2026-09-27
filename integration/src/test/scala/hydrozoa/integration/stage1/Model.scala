@@ -20,7 +20,7 @@ import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
-import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
+import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.eutxol2.{Compartments, EutxoL2Ledger, HydrozoaTransactionMutator, TransientTokens}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.Valid
@@ -31,7 +31,6 @@ import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import monocle.Lens
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
-import scala.annotation.nowarn
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 import scala.util.chaining.*
@@ -346,7 +345,11 @@ object Model:
                               )
                             )
                             _ <- registerOrReject[M](events)
-                            absorbedThisBlock <- absorb[M](cmd.blockCreationEndTime)
+                            // A final block absorbs nothing; `refund` rejects every deposit left.
+                            absorbedThisBlock <-
+                                if cmd.isFinal then
+                                    StateT.pure[M, State, Queue[Absorbed]](Queue.empty)
+                                else absorb[M](cmd.blockCreationEndTime)
                             refundedThisBlock <- refund[M](cmd.isFinal, cmd.blockCreationEndTime)
                             blockBrief <- mkBlockBrief[M](
                               cmd.isFinal,
@@ -429,52 +432,53 @@ object Model:
             rejected <- liftS(DepositStatus.Rejected.reject(depositsToRegisterOrReject._2))
         } yield (registered, rejected)
 
-        @nowarn("msg=unused explicit parameter")
-        def absorb[M[_]: Applicative](
+        /** Absorb the deposits the JointLedger finds eligible (`DepositsMap.partition`): mature,
+          * not expired, and on L1. A deposit is on L1 exactly when the model submitted it: the SUT
+          * reads the head's utxos at block completion, and a failed submission fails the property.
+          * At most `maxDepositsAbsorbedPerBlock` are absorbed, in `hydrozoaKnownRegisteredDeposits`
+          * order; the rest wait for a later block. The absorbed deposits' genesis outputs join the
+          * L2 utxos, as in the L2 ledger's `ApplyDepositDecisions`.
+          */
+        def absorb[M[_]: Monad](
             blockCreationEndTime: BlockCreationEndTime
-        ): StateT[M, State, Queue[Absorbed]] =
-            // The fast cycle does not rotate the treasury, so no deposit ever transitions to
-            // Absorbed. Mature Submitted deposits flow to `refund` instead (see SUT's
-            // `NotInPollResults` compartment in `DepositsMap.partition`).
-            StateT.pure(Queue.empty)
+        ): StateT[M, State, Queue[Absorbed]] = for {
+            state <- StateT.get[M, State]
+            settlementValidityEnd <- getNewSettlementValidityEnd[M]
 
-        // Previous absorb body (kept for review; restore once the slow cycle rotates the
-        // treasury and absorption can actually happen on the fast/slow split):
-        //
-        // def absorb(
-        //     blockCreationEndTime: BlockCreationEndTime
-        // ): cats.data.State[State, Queue[Absorbed]] = for {
-        //     state <- cats.data.State.get[State]
-        //     settlementValidityEnd <- getNewSettlementValidityEnd
-        //
-        //     depositsToAbsorb: Queue[Submitted] = {
-        //         given TxTiming.Section = state.multiNodeConfig
-        //         val eligible = state.deposits.depositsSubmitted
-        //             .filter { submitted =>
-        //                 {
-        //
-        //                     logger.trace(
-        //                       s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
-        //                           s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
-        //                           s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
-        //                     )
-        //
-        //                     // Check all the conditions
-        //                     // mature
-        //                     submitted.depositAbsorptionStart.convert <= blockCreationEndTime
-        //                     // Fits in validity window
-        //                     && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
-        //                 }
-        //             }
-        //         val byStartTime = eligible.sortBy(_.depositAbsorptionStart)
-        //         byStartTime.take(state.multiNodeConfig.headConfig.maxDepositsAbsorbedPerBlock)
-        //     }
-        //
-        //     _ = logger.trace(s"depositsToAbsorb: $depositsToAbsorb")
-        //
-        //     depositsAbsorbed <- DepositStatus.Absorbed.absorb(depositsToAbsorb)
-        // } yield depositsAbsorbed
+            depositsToAbsorb: Queue[Submitted] = {
+                given TxTiming.Section = state.multiNodeConfig
+                state.deposits.hydrozoaKnownRegisteredDeposits
+                    .collect { case submitted: Submitted => submitted }
+                    .filter(submitted =>
+                        !TxTiming.depositIsExpired(
+                          settlementValidityEnd,
+                          submitted.depositAbsorptionEnd
+                        )
+                            && !TxTiming.depositIsImmature(
+                              submitted.depositAbsorptionStart,
+                              blockCreationEndTime
+                            )
+                    )
+                    .take(state.multiNodeConfig.headConfig.maxDepositsAbsorbedPerBlock.convert)
+            }
 
+            absorbed <- liftS(DepositStatus.Absorbed.absorb(depositsToAbsorb))
+
+            genesisUtxos = absorbed.flatMap { deposit =>
+                L2Genesis
+                    .fromDepositPayload(
+                      deposit.depositRefundTxSeq.depositTx.depositProduced.utxoId,
+                      deposit.request.request.body.l2Payload
+                    )
+                    .asUtxos
+                    .map((input, output) => input -> output.value)
+            }
+            _ <- StateT.modify[M, State](_.focus(_.utxosL2Active).modify(_ ++ genesisUtxos))
+        } yield absorbed
+
+        /** Reject what the JointLedger rejects: every deposit that has expired, and every mature
+          * deposit that is not on L1. A final block rejects every deposit still undecided.
+          */
         private def refund[M[_]: Monad](
             isFinal: Boolean,
             blockCreationEndTime: BlockCreationEndTime
@@ -484,23 +488,19 @@ object Model:
 
             depositsToRefund: Queue[Refundable] =
                 if isFinal
-                then
-                    state.deposits.hydrozoaKnownRegisteredDeposits // all known deposits should be refunded
+                then state.deposits.hydrozoaKnownRegisteredDeposits
                 else
+                    given TxTiming.Section = state.multiNodeConfig
                     state.deposits.hydrozoaKnownRegisteredDeposits.filter(refundable =>
-                        given TxTiming.Section = state.multiNodeConfig
-
-                        // On the fast-only path nothing is ever absorbed, so any mature deposit
-                        // (Submitted included) refunds as soon as the SUT classifies it
-                        // `NotInPollResults`. The expired clause stays as a belt-and-braces.
-                        refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
-                        || refundable.depositAbsorptionStart.convert <= blockCreationEndTime
+                        TxTiming.depositIsExpired(
+                          settlementValidityEnd,
+                          refundable.depositAbsorptionEnd
+                        )
+                            || (!TxTiming.depositIsImmature(
+                              refundable.depositAbsorptionStart,
+                              blockCreationEndTime
+                            ) && !refundable.isInstanceOf[Submitted])
                     )
-            // Previous predicate (restore when the slow cycle wires absorption back in):
-            //
-            // refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
-            // || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable
-            //     .isInstanceOf[Submitted])
             refunded <- liftS(DepositStatus.Refunded.refund(depositsToRefund))
         } yield refunded
 
