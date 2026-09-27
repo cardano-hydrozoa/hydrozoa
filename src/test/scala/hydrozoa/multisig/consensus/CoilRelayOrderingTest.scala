@@ -136,46 +136,43 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
             raised <- cats.effect.Ref[IO].of(Vector.empty[Throwable])
             appended <- cats.effect.Ref[IO].of(0)
             delivered <- cats.effect.Ref[IO].of(List.empty[Int])
-            _ <- HydrozoaActorSystem
-                .withoutRoot("coil-relay-ordering-test")
-                .use { system =>
-                    for {
-                        now <- realTimeQuantizedInstant(headConfig.slotConfig)
-                        lane = blockLane
-                        _ <- lane.seedHighWater(Some(BlockNumber(4920)))
-                        liaison <- system.actorOf(new LiaisonStub(lane, raised, appended))
-                        relay <- system.actorOf(
-                          CoilRelay(CoilRelay.Connections(coilPeerLiaisons = List(liaison)))
-                        )
-                        _ <- IO.sleep(50.millis) // let CoilRelay.PreStart resolve its connections
-                        remoteLed = relay ! brief(4921, now)
-                        ownLed = relay ! brief(4922, now)
-                        // The sleeps below only space the two sends; which brief the relay sees first
-                        // is fixed by the send order and its FIFO mailbox, not by the clock.
-                        _ <- interleaving match {
-                            case Interleaving.MeshFirst =>
-                                remoteLed >> IO.sleep(50.millis) >> ownLed
-                            case Interleaving.OwnLedFirst =>
-                                ownLed >> IO.sleep(50.millis) >> remoteLed
-                            // One feeder, so its own sends are ordered by `!` and the lane cannot
-                            // see a gap no matter which fiber was descheduled.
-                            case Interleaving.SingleFeeder =>
-                                remoteLed >> ownLed
+            _ <- HydrozoaActorSystem("coil-relay-ordering-test").use { actors =>
+                for {
+                    now <- realTimeQuantizedInstant(headConfig.slotConfig)
+                    lane = blockLane
+                    _ <- lane.seedHighWater(Some(BlockNumber(4920)))
+                    liaison <- actors.actorOf(new LiaisonStub(lane, raised, appended))
+                    relay <- actors.actorOf(
+                      CoilRelay(CoilRelay.Connections(coilPeerLiaisons = List(liaison)))
+                    )
+                    _ <- IO.sleep(50.millis) // let CoilRelay.PreStart resolve its connections
+                    remoteLed = relay ! brief(4921, now)
+                    ownLed = relay ! brief(4922, now)
+                    // The sleeps below only space the two sends; which brief the relay sees first
+                    // is fixed by the send order and its FIFO mailbox, not by the clock.
+                    _ <- interleaving match {
+                        case Interleaving.MeshFirst =>
+                            remoteLed >> IO.sleep(50.millis) >> ownLed
+                        case Interleaving.OwnLedFirst =>
+                            ownLed >> IO.sleep(50.millis) >> remoteLed
+                        // One feeder, so its own sends are ordered by `!` and the lane cannot
+                        // see a gap no matter which fiber was descheduled.
+                        case Interleaving.SingleFeeder =>
+                            remoteLed >> ownLed
+                    }
+                    _ <- awaitSettled(appended, raised)
+                    // Presence-of-effect: the briefs the lane will actually serve a coil
+                    // peer, in order. The block lane's `maxPerReply` is 1, so pull twice.
+                    served <- List(4921, 4922).traverse(n =>
+                        lane.reply(BlockNumber(n)).attempt.map {
+                            case Right(LaneOutbound.Items(items)) =>
+                                items.map(_.blockNum.convert.toInt)
+                            case _ => Nil
                         }
-                        _ <- awaitSettled(appended, raised)
-                        // Presence-of-effect: the briefs the lane will actually serve a coil
-                        // peer, in order. The block lane's `maxPerReply` is 1, so pull twice.
-                        served <- List(4921, 4922).traverse(n =>
-                            lane.reply(BlockNumber(n)).attempt.map {
-                                case Right(LaneOutbound.Items(items)) =>
-                                    items.map(_.blockNum.convert.toInt)
-                                case _ => Nil
-                            }
-                        )
-                        _ <- delivered.set(served.flatten)
-                    } yield ()
-                }
-                .attempt // the raise takes the actor system down; that is the incident
+                    )
+                    _ <- delivered.set(served.flatten)
+                } yield ()
+            }.attempt // the raise takes the actor system down; that is the incident
             errs <- raised.get
             n <- delivered.get
         } yield (errs.headOption, n)
