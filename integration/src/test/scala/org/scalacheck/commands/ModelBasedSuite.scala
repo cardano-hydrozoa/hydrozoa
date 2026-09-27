@@ -491,7 +491,9 @@ trait ModelBasedSuite {
                       s"Last executed command: $lastCmd"
                 )
             else IO(ModelBasedSuite.recordTestCase(testCase.commands.map(_.label)))
-    } yield prop :| "Property failed, see the log above for details"
+    } yield prop :| ("Property failed: its commands and states are in the \"Property is " +
+        "falsified\" warning of org.scalacheck.commands.ModelBasedSuite (under CI, in " +
+        "integration-tests.log)")
 
     private def prettyCmdsRes(rs: List[AnyCommand[State, Sut]], lastCmd: Int) = {
         def formatDuration(d: FiniteDuration): String = {
