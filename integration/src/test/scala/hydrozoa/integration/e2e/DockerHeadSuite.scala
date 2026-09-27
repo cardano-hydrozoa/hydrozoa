@@ -7,6 +7,7 @@ import hydrozoa.BuildInfo
 import hydrozoa.app.cli.{DemoConfig, SubmitL2Transaction}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
 import hydrozoa.multisig.consensus.UserRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.PeerWallet
@@ -79,6 +80,12 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
     private val ComposeProject = topology.project
     private val Tag = topology.tag
     private val composeOverlays = topology.composeOverlays
+
+    // Subprocess output and scenario steps: the logback config in use decides where they go.
+    private val out: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(
+          Slf4jMsgFormat.humanFormat("hydrozoa.integration.e2e.DockerHeadSuite")
+        )
 
     /** Head peers publish the user HTTP API; coil peers dial out only (`runCoilNode` starts no
       * `HydrozoaServer`), so only these are observable over HTTP.
@@ -356,7 +363,7 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
     private def cliCapture(args: String*): IO[String] =
         IO.blocking {
             Process(launcher.toString +: args, repoRoot.toFile)
-                .!!(ProcessLogger(line => println(s"$Tag $line")))
+                .!!(ProcessLogger(line => out.info(s"$Tag $line").unsafeRunSync()))
         }
 
     private def runProcess(
@@ -368,7 +375,7 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
             val captured = new StringBuilder
             val logger = ProcessLogger { line =>
                 val _ = captured.append(line).append('\n')
-                println(s"$Tag $line")
+                out.info(s"$Tag $line").unsafeRunSync()
             }
             val code = Process(cmd, cwd, extraEnv*).!(logger)
             if code != 0 then
@@ -380,8 +387,11 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
     private def runProcessLenient(cmd: Seq[String], extraEnv: Seq[(String, String)]): IO[Unit] =
         IO.blocking {
             val code =
-                Process(cmd, None, extraEnv*).!(ProcessLogger(line => println(s"$Tag $line")))
-            if code != 0 then println(s"$Tag (non-fatal) exit $code: ${cmd.mkString(" ")}")
+                Process(cmd, None, extraEnv*).!(
+                  ProcessLogger(line => out.info(s"$Tag $line").unsafeRunSync())
+                )
+            if code != 0 then
+                out.warn(s"$Tag (non-fatal) exit $code: ${cmd.mkString(" ")}").unsafeRunSync()
         }
 
     // ---- small utilities ---------------------------------------------------------------------
@@ -413,7 +423,7 @@ abstract class DockerHeadSuite(topology: DockerTopology) extends AnyFunSuite:
             loop
         }
 
-    private def log(msg: String): IO[Unit] = IO.println(s"$Tag $msg")
+    private def log(msg: String): IO[Unit] = out.info(s"$Tag $msg")
 
     private def makeHome: IO[Path] = IO.blocking(Files.createTempDirectory("hydrozoa-e2e"))
 
