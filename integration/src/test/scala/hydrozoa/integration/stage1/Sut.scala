@@ -232,6 +232,8 @@ object SutCommands:
                 })
 
                 submissionErrors = ret.filter(_._2.isLeft)
+                // The model counts every submitted deposit as on L1 and predicts its absorption,
+                // so a rejected submission fails the command rather than only being logged.
                 _ <- IO.whenA(submissionErrors.nonEmpty)(
                   sut.log.error(
                     "Submit deposit errors:" + submissionErrors
@@ -241,6 +243,11 @@ object SutCommands:
                                 s"\n\tcbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
                         )
                         .mkString
+                  ) >> IO.raiseError(
+                    RuntimeException(
+                      "L1 rejected the deposit txs of requests " +
+                          submissionErrors.map(_._1._1).mkString(", ")
+                    )
                   )
                 )
             } yield ()
