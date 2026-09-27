@@ -14,6 +14,9 @@ lazy val gitRevision: String =
 
 Global / excludeLintKeys += Docker / dockerLabels
 Global / excludeLintKeys += Docker / dockerEnvVars
+// DockerPlugin sets `Docker / target` for its default staging directory; `core` pins
+// `Docker / stagingDirectory` instead (below), so nothing reads it.
+Global / excludeLintKeys += Docker / target
 // native-packager's JavaAppPackaging archetype propagates executableScriptName/name/sourceDirectory
 // into the Debian/Rpm/Universal-docs/Universal-src packaging scopes. We only build the Universal
 // `stage` output and the Docker image, so those scoped copies are never consumed; silence sbt's
