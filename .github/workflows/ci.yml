@@ -1,15 +1,31 @@
 name: CI
 
 on:
+  # Each merge to main is built from scratch, and that build's compiled classes are saved for pull
+  # requests to start from; see "Choose the compile cache" in the plan job.
+  push:
+    branches: [main]
   pull_request:
   # A merge queue tests each queued PR (or batch) on top of main before merging it; this is the
   # event it sends. It fires only when the repository's ruleset enables the queue.
   merge_group:
   workflow_dispatch:
+    inputs:
+      compile-cache:
+        description: >-
+          none: compile from scratch. save: compile from scratch and save the compiled classes for
+          later runs on this branch. restore: start from the classes a save left on this branch,
+          or else on main.
+        type: choice
+        options: [none, save, restore]
+        default: none
 
+# A newer push to a pull request cancels the run for the older one. A run for main is never
+# cancelled: it is the build from scratch that the pull requests' compile cache comes from, so a
+# second merge, or a manual run on main, waits for it.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # The jobs' GITHUB_TOKEN may only read the repository. It is minted per job and expires with it.
 permissions:
@@ -21,6 +37,18 @@ permissions:
 # server keeps the environment of the step that started it.
 env:
   SBT: sbt --server --batch
+  # What a saved compile holds, for each project and configuration: zinc's analysis, the record
+  # of which source (by content hash) each class file was compiled from and what depends on what,
+  # and the class and SemanticDB files. With these zinc recompiles only the sources that differ
+  # and what depends on them. sbt's own task cache (~/.cache/sbt) is never saved: it also records
+  # which test suites passed, and `sbt test` skips those.
+  COMPILED_PATHS: |
+    target/out/jvm/*/*/zinc
+    target/out/jvm/*/*/test-zinc
+    target/out/jvm/*/*/classes
+    target/out/jvm/*/*/test-classes
+    target/out/jvm/*/*/meta
+    target/out/jvm/*/*/test-meta
 
 # `plan` decides from a PR's changed paths what runs; `unit` (precommit, the unit suites and the
 # reporting canary), `integration` and `yaci` (the suites against a real Cardano devnet) run side
@@ -38,6 +66,8 @@ jobs:
       unit: ${{ steps.plan.outputs.unit }}
       integration: ${{ steps.plan.outputs.integration }}
       canary: ${{ steps.plan.outputs.canary }}
+      compile-cache: ${{ steps.compile-cache.outputs.mode }}
+      compile-key: ${{ steps.compile-cache.outputs.key }}
     steps:
       # Depth 2 brings in both parents of the PR test merge that `pull_request` checks out, which
       # is what "Plan the run" diffs against.
@@ -57,6 +87,32 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: .github/scripts/classify-changes.py
+
+      # Whether the test jobs start their compile from a saved one (restore), compile from scratch
+      # and save the result (save), or neither (none). A push to main saves; a pull request
+      # restores the latest save with the same build definition (the hash in the key). GitHub
+      # gives a pull request's run the caches of its own merge ref, its base branch and main, and
+      # shows a cache that a pull request's run saves to no other ref, so no pull request can
+      # change what another starts from. Only main and manual `save` runs save, so a pull request
+      # based on main starts from main's latest build. A merge-queue run compiles from scratch, as
+      # the last check before main. Every job's compile ends in the build's checkCompileState,
+      # which fails unless zinc's analysis records exactly the current sources.
+      - name: Choose the compile cache
+        id: compile-cache
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCHED: ${{ inputs.compile-cache }}
+          BUILD_HASH: ${{ hashFiles('build.sbt', 'project/**', 'flake.nix', 'flake.lock') }}
+        run: |
+          case "${EVENT}" in
+            push) mode=save ;;
+            pull_request) mode=restore ;;
+            workflow_dispatch) mode=${DISPATCHED:-none} ;;
+            *) mode=none ;;
+          esac
+          echo "Compile cache: ${mode}"
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+          echo "key=compiled-v1-${RUNNER_OS}-${BUILD_HASH}" >> "${GITHUB_OUTPUT}"
 
   # Precommit runs here for every PR that runs any test, so this job runs whenever a test job does,
   # and skips its unit step when the plan didn't call for the unit tests.
@@ -96,8 +152,46 @@ jobs:
           key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
           restore-keys: sbt-${{ runner.os }}-
 
+      # See "Choose the compile cache" in the plan job. The matched key names the main commit the
+      # classes were compiled from.
+      - name: Restore compiled classes
+        if: needs.plan.outputs.compile-cache == 'restore'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.COMPILED_PATHS }}
+          key: ${{ needs.plan.outputs.compile-key }}-${{ github.sha }}
+          restore-keys: ${{ needs.plan.outputs.compile-key }}-
+
+      # Compiles everything precommit and the tests need, under CI's -Werror, then checks that the
+      # classes are of this checkout's sources. First, so that precommit's lint finds the classes
+      # it reads up to date, rather than recompiling them without -Werror (Scalafix removes it)
+      # and leaving the tests a second full compile.
       # `.#ci` is the flake's CI shell: what the recipes need, without the developer tools.
+      - name: Compile
+        id: compile
+        run: nix develop .#ci --command sbt --server --batch checkCompileState
+
+      # The one job that saves compiled classes: the others compile the same projects, and two
+      # jobs saving one key race for it. Saved right after a successful compile, before any test
+      # runs. sbt keeps each zinc analysis file as a link into its task cache, which isn't saved,
+      # so the links are first replaced by the files they point to.
+      - name: Prepare compiled classes for saving
+        if: needs.plan.outputs.compile-cache == 'save'
+        run: |
+          find target/out/jvm -type l \( -path '*/zinc/*' -o -path '*/test-zinc/*' \) -print0 |
+            while IFS= read -r -d '' link; do
+              cp --remove-destination "$(readlink -f "${link}")" "${link}"
+            done
+      - name: Upload compiled classes
+        if: needs.plan.outputs.compile-cache == 'save'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.COMPILED_PATHS }}
+          key: ${{ needs.plan.outputs.compile-key }}-${{ github.sha }}
+
+      # Runs even when the compile failed, so that one run reports formatting and lint as well.
       - name: Format / lint / nixfmt checks
+        if: ${{ !cancelled() }}
         run: nix develop .#ci --command just precommit
 
       # The test steps run even when the precommit checks fail, so one run reports both: a
@@ -177,14 +271,23 @@ jobs:
           key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
           restore-keys: sbt-${{ runner.os }}-
 
+      # As in `unit`, which saves them.
+      - name: Restore compiled classes
+        if: needs.plan.outputs.compile-cache == 'restore'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.COMPILED_PATHS }}
+          key: ${{ needs.plan.outputs.compile-key }}-${{ github.sha }}
+          restore-keys: ${{ needs.plan.outputs.compile-key }}-
+
       # A step of its own, so the integration step's timeout covers only the suites, and a compile
-      # error reads as one rather than as a test failure. It also compiles `examples`, whose demo
-      # suites no step runs.
+      # error reads as one rather than as a test failure. The same compile and check as in `unit`,
+      # plus `examples`, whose demo suites no step runs.
       - name: Compile
         id: compile
         run: >-
           nix develop .#ci --command
-          sbt --server --batch "integration/Test/compile; examples/Test/compile"
+          sbt --server --batch "checkCompileState; examples/Test/compile"
 
       # Under CI the build points the forked test JVMs at logback-ci.xml: nothing on the console,
       # and in integration/integration-tests.log, uploaded below, everything its loggers pass.
@@ -254,11 +357,20 @@ jobs:
           key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
           restore-keys: sbt-${{ runner.os }}-
 
+      # As in `unit`, which saves them.
+      - name: Restore compiled classes
+        if: needs.plan.outputs.compile-cache == 'restore'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.COMPILED_PATHS }}
+          key: ${{ needs.plan.outputs.compile-key }}-${{ github.sha }}
+          restore-keys: ${{ needs.plan.outputs.compile-key }}-
+
       # A step of its own, so the Yaci step's timeout covers only the suites, and a compile error
-      # reads as one rather than as a Yaci failure.
+      # reads as one rather than as a Yaci failure. The same compile and check as in `unit`.
       - name: Compile
         id: compile
-        run: nix develop .#ci --command sbt --server --batch integration/Test/compile
+        run: nix develop .#ci --command sbt --server --batch checkCompileState
 
       # The suites can hang: 20 minutes fails a hang fast, and still leaves room above a normal
       # run on a compiled tree for a slow image pull.
