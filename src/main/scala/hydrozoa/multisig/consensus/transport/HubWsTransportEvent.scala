@@ -14,11 +14,22 @@ object HubWsTransportEvent:
     /** `send` was called for a coil peer that has no outbox — wiring bug. */
     final case class NoOutboxForCoil(coil: CoilPeerNumber) extends HubWsTransportEvent
 
-    /** An inbound frame arrived from a coil peer that has no registered local liaison. */
+    /** An inbound frame arrived from a coil peer for which no local liaison was ever registered. */
     final case class NoLiaisonForInbound(coil: CoilPeerNumber) extends HubWsTransportEvent
 
-    /** A coil's position arrived before that coil's local liaison registered; it is held and handed
-      * to the liaison when it does.
+    /** The local liaison for a coil peer was unregistered on purpose (the handoff to the rule-based
+      * regime), just before it is stopped.
+      */
+    final case class LiaisonUnregistered(coil: CoilPeerNumber) extends HubWsTransportEvent
+
+    /** An inbound frame arrived from a coil peer whose local liaison was unregistered on purpose,
+      * and was dropped. Expected: the coil does not know this hub handed off, and keeps pulling
+      * until it hands off itself.
+      */
+    final case class InboundAfterUnregister(coil: CoilPeerNumber) extends HubWsTransportEvent
+
+    /** A coil's position arrived while no local liaison was registered for that coil — before the
+      * first one, or after one was unregistered; it is held and handed to the next one registered.
       */
     final case class JoinPositionHeld(coil: CoilPeerNumber) extends HubWsTransportEvent
 

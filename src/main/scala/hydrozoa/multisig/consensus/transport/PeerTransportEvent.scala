@@ -19,8 +19,19 @@ object PeerTransportEvent:
     /** `send` was called with a request variant that cannot be serialised over the wire. */
     final case class DroppingNonWireRequest(remote: HeadPeerId) extends PeerTransportEvent
 
-    /** An inbound frame arrived from a remote that has no registered local liaison. */
+    /** An inbound frame arrived from a remote for which no local liaison was ever registered. */
     final case class NoLiaisonForInbound(remote: HeadPeerId) extends PeerTransportEvent
+
+    /** The local liaison for a remote was unregistered on purpose (the handoff to the rule-based
+      * regime), just before it is stopped.
+      */
+    final case class LiaisonUnregistered(remote: HeadPeerId) extends PeerTransportEvent
+
+    /** An inbound frame arrived from a remote whose local liaison was unregistered on purpose, and
+      * was dropped. Expected: the remote does not know this node handed off, and keeps pulling
+      * until it hands off itself.
+      */
+    final case class InboundAfterUnregister(remote: HeadPeerId) extends PeerTransportEvent
 
     // ---- dialer (client side) ----
 

@@ -25,6 +25,12 @@ trait CoilTransport {
       */
     def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit]
 
+    /** Stop dispatching inbound to the liaison [[register]] wired, before that liaison is stopped.
+      * The hub does not know this coil stopped it and keeps sending; from now on its frames are
+      * dropped as expected rather than delivered to a stopped actor.
+      */
+    def unregister: IO[Unit]
+
     /** Enqueue a coil→hub batch for delivery to the hub. */
     def send(request: LiaisonProtocol.CoilEmitted): IO[Unit]
 
@@ -52,7 +58,7 @@ final class CoilPeerWsTransport private (
     private val ownMarks: IO[Join.Connected],
     private val ownHead: HeadIdentity,
     private val outbox: Queue[IO, String],
-    private val inboundRef: Ref[IO, Option[LiaisonProtocol.CoilLiaisonHandle]],
+    private val inboundRef: Ref[IO, Option[InboundRoute[LiaisonProtocol.CoilLiaisonHandle]]],
     private val heldAnswer: Ref[IO, Option[Join.Answer]],
     private val registering: Mutex[IO],
     private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
@@ -67,8 +73,12 @@ final class CoilPeerWsTransport private (
     override def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit] =
         registering.lock.surround(
           heldAnswer.getAndSet(None).flatMap(_.traverse_(localLiaison ! _)) >>
-              inboundRef.set(Some(localLiaison))
+              inboundRef.set(Some(InboundRoute.Live(localLiaison)))
         )
+
+    override def unregister: IO[Unit] =
+        registering.lock.surround(inboundRef.set(Some(InboundRoute.Closed))) >>
+            tracer.traceWith(LiaisonUnregistered)
 
     override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
         outbox.offer(CoilFrame.encode(CoilFrame.Msg(request)))
@@ -87,18 +97,27 @@ final class CoilPeerWsTransport private (
       * dialer can be up before the node has built and registered its liaison, so this ordering does
       * occur. Pull traffic is dropped: it answers or asks for a pull no current liaison made, and
       * the pullers resend.
+      *
+      * An answer is held the same way after the liaison was unregistered, since a later register
+      * would otherwise wait on an answer it never saw. Pull traffic then is the hub not knowing
+      * this coil handed off, and is dropped as expected rather than as a fault.
       */
     private def toLiaison(request: LiaisonProtocol.FromHub): IO[Unit] =
         inboundRef.get.flatMap {
-            case Some(liaison) => liaison ! request
-            case None =>
+            case Some(InboundRoute.Live(liaison)) => liaison ! request
+            case _ =>
                 registering.lock.surround(inboundRef.get.flatMap {
-                    case Some(liaison) => liaison ! request
-                    case None =>
+                    case Some(InboundRoute.Live(liaison)) => liaison ! request
+                    case route =>
                         request match {
                             case answer: (Join.Offer | Join.NoOffer) =>
                                 heldAnswer.set(Some(answer)) >> tracer.traceWith(JoinAnswerHeld)
-                            case _ => tracer.traceWith(NoLiaisonForInbound)
+                            case _ =>
+                                route match {
+                                    case Some(InboundRoute.Closed) =>
+                                        tracer.traceWith(InboundAfterUnregister)
+                                    case _ => tracer.traceWith(NoLiaisonForInbound)
+                                }
                         }
                 })
         }
@@ -300,7 +319,9 @@ object CoilPeerWsTransport {
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
-            inboundRef <- Ref[IO].of(Option.empty[LiaisonProtocol.CoilLiaisonHandle])
+            inboundRef <- Ref[IO].of(
+              Option.empty[InboundRoute[LiaisonProtocol.CoilLiaisonHandle]]
+            )
             heldAnswer <- Ref[IO].of(Option.empty[Join.Answer])
             registering <- Mutex[IO]
         } yield new CoilPeerWsTransport(

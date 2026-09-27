@@ -19,6 +19,16 @@ object PeerTransportEventFormat:
                 warn(s"send: dropping non-wire request to remote=${remote.peerNum: Int}")
             case NoLiaisonForInbound(remote) =>
                 warn(s"inbound from remote=${remote.peerNum: Int} but no liaison registered")
+            case LiaisonUnregistered(remote) =>
+                info(
+                  s"unregistered the liaison for remote=${remote.peerNum: Int}; its inbound is " +
+                      "dropped from now on"
+                )
+            case InboundAfterUnregister(remote) =>
+                debug(
+                  s"inbound from remote=${remote.peerNum: Int} after its liaison was " +
+                      "unregistered; dropping"
+                )
             case DialerConnected(remote, uri) =>
                 info(s"dialer: connected to remote=${remote.peerNum: Int} at $uri")
             case DialerFailed(remote, cause) =>
