@@ -5,6 +5,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.{ActorRef, NoSendActorRef}
 import com.suprnation.actor.SupervisorStrategy.{Decider, Escalate, Stop}
 import com.suprnation.actor.event.{Debug, Error as ActorError, Info, Warning}
+import com.suprnation.actor.utils.IdGen
 import com.suprnation.actor.{ActorContext, ActorSystem, ChildRestartStats, DeadLetter, Envelope, EnvelopeWithDeferred, OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.lib.logging.{Level, LogEvent, Slf4jTracer}
 import scala.collection.immutable
@@ -37,6 +38,13 @@ final class HydrozoaActorSystem private (
     /** Start `props` as a child of the root, under a generated name. */
     def actorOf[Request](props: => Actor[IO, Request]): IO[ActorRef[IO, Request]] =
         rootContext.actorOf(props)
+
+    /** Start the actor `props` builds as a child of the root, under `name` if given. */
+    def actorOf[Request](
+        props: IO[Actor[IO, Request]],
+        name: => String = IdGen.newId()
+    ): IO[ActorRef[IO, Request]] =
+        rootContext.actorOf(props, name)
 
     /** Wait until the system terminates, then return the failure that terminated it, if one did. A
       * system released without a failure, as on SIGTERM, returns `None`.
