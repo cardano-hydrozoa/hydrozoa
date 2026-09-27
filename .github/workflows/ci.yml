@@ -101,6 +101,8 @@ jobs:
       # formatting slip is the most common first failure, and it shouldn't hide the tests.
       # Each test step has its own timeout, inside the job's, so that a hang still leaves time for
       # the summary below to report which step didn't finish.
+      # Under CI the build points the forked test JVMs at logback-core-ci.xml: nothing on the
+      # console, and in target/unit-tests.log, uploaded below, everything its loggers pass.
       - name: Unit tests
         id: unit
         if: ${{ !cancelled() && needs.plan.outputs.unit == 'true' }}
@@ -123,6 +125,15 @@ jobs:
         if: ${{ !cancelled() && needs.plan.outputs.canary == 'true' }}
         timeout-minutes: 15
         run: nix develop .#ci --command just ci-canary
+
+      - name: Upload unit test log
+        if: always() && needs.plan.outputs.unit == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unit-log-attempt-${{ github.run_attempt }}
+          path: target/unit-tests.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Upload integration log
         if: always() && needs.plan.outputs.integration == 'true'
