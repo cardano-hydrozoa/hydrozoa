@@ -297,7 +297,7 @@ A scenario that needs **both** real L1 and slow-cycle multi-peer consensus does 
 - **Stage 4 cannot test L1 backend issues.** The mock backend never rejects, never delays, never enforces protocol parameters precisely. Real-world fee or witness bugs caught only by stage 1.
 - **All harness tables go through the tracer.** `traceBlockTable`, `traceStackTable`, and `EffectsLanded.traceEffectsTable` each render the table as a single multi-line string and emit it via `Tracer.info`, so the output lands in the test log via logback (not just stdout). When adding a new table, follow the same `render…` + `trace…` pair — never raw `println`.
 - **Mock L1 is shared across peers in stage 4.** Every peer sees the same on-chain state. That's correct for a single head but doesn't model partitions or per-peer L1 views.
-- **The cardanoBackend handle on `Stage1Sut`.** Used directly by SUT commands (query head UTxOs, submit deposit txs) and indirectly by `CardanoLiaison.runEffects` (poll → `PollResults` → `JointLedger`). It is load-bearing for `JointLedger` to observe L1 state regardless of whether the suite asserts effect presence.
+- **The cardanoBackend handle on `Stage1Sut`.** `CompleteBlockCommand` reads the head address's UTxOs through it and hands them to `JointLedger` as the block's poll results, and `SubmitDepositsCommand` submits deposit txs through it. `CardanoLiaison` polls it too, but in stage 1 its `PollResults` go to `BlockWeaverMock`, which drops them.
 
 ## Related Code Map
 

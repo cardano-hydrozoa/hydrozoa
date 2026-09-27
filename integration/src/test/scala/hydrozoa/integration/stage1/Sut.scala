@@ -34,12 +34,10 @@ import scalus.utils.Pretty
 
 case class Stage1Sut(
     headAddress: ShelleyAddress,
-    // The shared L1 backend handle. Retained even though L1 effect-presence assertions moved to
-    // stage4 ([[hydrozoa.integration.stage4.EffectsLanded]]), because the real `CardanoLiaison`
-    // actor needs it: liaison.runEffects polls the backend on each tick and feeds the results to
-    // `JointLedger` via `PollResults`, which is how the head observes deposits maturing and L1
-    // settlements landing. Also used directly by SUT commands to query head UTxOs and to submit
-    // signed deposit txs straight to L1 (mirroring stage4's `RegisterAndSubmitDepositCommand`).
+    // The shared L1 backend handle. `CompleteBlockCommand` reads the head's UTxOs through it as
+    // the block's poll results, which is how the JointLedger sees deposits on L1, and
+    // `SubmitDepositsCommand` submits signed deposit txs through it. The real `CardanoLiaison`
+    // polls it too, but its `PollResults` go to `BlockWeaverMock`, which drops them.
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
     agent: AgentActor.Handle,
