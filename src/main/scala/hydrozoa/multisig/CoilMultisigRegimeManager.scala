@@ -94,6 +94,7 @@ trait CoilMultisigRegimeManager(
               )
             )
             _ <- transport.register(hubLiaison)
+            _ <- detachAtHandoff(transport.unregister)
             _ <- registered.complete(())
             remoteHubProxy <- context.actorOf(RemoteHubProxy(transport))
 
