@@ -178,10 +178,13 @@ jobs:
           restore-keys: sbt-${{ runner.os }}-
 
       # A step of its own, so the integration step's timeout covers only the suites, and a compile
-      # error reads as one rather than as a test failure.
+      # error reads as one rather than as a test failure. It also compiles `examples`, whose demo
+      # suites no step runs.
       - name: Compile
         id: compile
-        run: nix develop .#ci --command sbt --server --batch integration/Test/compile
+        run: >-
+          nix develop .#ci --command
+          sbt --server --batch "integration/Test/compile; examples/Test/compile"
 
       # Under CI the build points the forked test JVMs at logback-ci.xml: nothing on the console,
       # and in integration/integration-tests.log, uploaded below, everything its loggers pass.
