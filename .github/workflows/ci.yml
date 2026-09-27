@@ -109,9 +109,8 @@ jobs:
         timeout-minutes: 30
         run: nix develop .#ci --command just test
 
-      # Under CI the build points the forked test JVMs at logback-ci.xml: WARN and above on the
-      # console, and in integration/integration-tests.log, uploaded below, everything its loggers
-      # pass (the root logger is at TRACE).
+      # Under CI the build points the forked test JVMs at logback-ci.xml: nothing on the console,
+      # and in integration/integration-tests.log, uploaded below, everything its loggers pass.
       - name: Integration tests
         id: integration
         if: ${{ !cancelled() && needs.plan.outputs.integration == 'true' }}

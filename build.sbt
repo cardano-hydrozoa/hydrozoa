@@ -498,7 +498,7 @@ lazy val integration: Project = (project in file("integration"))
         "--sun-misc-unsafe-memory-access=allow",
         "-Dapi.version=1.44"
       ),
-      // Under CI, log through logback-ci.xml (console at WARN, the detailed log to
+      // Under CI, log through logback-ci.xml (nothing on the console; everything to
       // integration-tests.log, which the workflow uploads). A setting rather than an environment
       // variable, because a forked test JVM inherits the environment of the sbt that forks it,
       // which can be a server started by an earlier call; `Def.uncached` so the CI check is read
