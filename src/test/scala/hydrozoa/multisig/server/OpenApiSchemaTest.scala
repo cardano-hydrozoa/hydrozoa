@@ -7,10 +7,10 @@ import hydrozoa.config.GenerateSampleConfig.{defaultSpec, testPeersSpec}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{ArchiveWatermarks, ConsensusStoreReader}
+import hydrozoa.multisig.{NodeStatus, SubmissionGate}
 import java.nio.file.{Files, Path}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
@@ -57,6 +57,7 @@ class OpenApiSchemaTest extends AnyFunSuite:
                     )
                     routes <- HydrozoaRoutes(
                       Some(requestSequencerStub),
+                      SubmissionGate.unsafeOpen(),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       ConsensusStoreReader.empty,

@@ -801,6 +801,7 @@ object Serve {
                       sys.error("RequestSequencer required on head peers")
                     )
                   ),
+                  mrm.submissions,
                   connections.blockWeaver,
                   mrm.nodeStatus.get,
                   consensusReader,
@@ -856,6 +857,7 @@ object Serve {
                 .create(
                   // None on a coil — this is what removes the mutating routes.
                   connections.requestSequencer,
+                  mrm.submissions,
                   connections.blockWeaver,
                   mrm.nodeStatus.get,
                   consensusReader,
