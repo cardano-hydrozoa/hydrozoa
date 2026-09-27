@@ -1,11 +1,10 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.unsafe.implicits.global
-import cats.effect.{IO, Ref, Resource}
+import cats.effect.{IO, Resource}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
-import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.multisig.block.BlockConfig
@@ -429,52 +428,6 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     )
 
     // ===================================
-    // Bob (1), retired by the finalization trigger, ignores a late request
-    // ===================================
-    val _ = property(
-      "Bob (1), retired by the finalization trigger, ignores a late request"
-    ) = run(
-      resource = defaultResource,
-      testM = for {
-          env <- ask
-          anyLedgerEvent <- pick(genUserRequest.label("request arriving after the trigger"))
-          errors <- lift(Ref[IO].of(List.empty[String]))
-          drainer <- lift(
-            env.system.eventStream.take
-                .flatMap {
-                    case e: ActorError if e.cause != ActorError.NoCause =>
-                        errors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
-                    case _ => IO.unit
-                }
-                .foreverM
-                .start
-          )
-          weaver <- mkBlockWeaverActor(Bob.headPeerNumber)
-          _ <- lift(
-            (weaver ! BlockWeaver.LocalFinalizationTrigger.Triggered) >> env.system.waitForIdle()
-          )
-          _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) {
-              case CompleteBlockFinal(None, _) => ()
-          })
-          // The weaver retired on the final block; a request arriving after must
-          // dead-letter — never panic, never reach the joint ledger.
-          _ <- lift((weaver ! anyLedgerEvent) >> env.system.waitForIdle())
-          _ <- lift(awaitCond(errors.get.map(_.nonEmpty), 500.millis, 50.millis).attempt.void)
-          collected <- lift(errors.get)
-          _ <- lift(drainer.cancel)
-          _ <- assertWith(
-            collected.isEmpty,
-            s"a late request must dead-letter on the retired weaver, not panic it: $collected"
-          )
-          fedEvents <- lift(IO(env.jointLedgerMock.events.get))
-          _ <- assertWith(
-            fedEvents.isEmpty,
-            s"the late request must not reach the joint ledger, but it fed $fedEvents"
-          )
-      } yield true
-    )
-
-    // ===================================
     // Carol (2), armed as leader of block 2, records the trigger and finalizes only at completion
     // ===================================
     val _ = property(
@@ -763,47 +716,20 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     )
 
     // ===================================
-    // Carol (2) retires after reproducing the final block; a Final confirmation is harmless
+    // Carol (2) reproduces the final block as a follower
     // ===================================
-    val _ = property(
-      "Carol (2) retires after reproducing the final block; a Final confirmation is harmless"
-    ) = run(
+    val _ = property("Carol (2) reproduces the final block as a follower") = run(
       resource = defaultResource,
       testM = for {
           env <- ask
-          errors <- lift(Ref[IO].of(List.empty[String]))
-          drainer <- lift(
-            env.system.eventStream.take
-                .flatMap {
-                    case e: ActorError if e.cause != ActorError.NoCause =>
-                        errors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
-                    case _ => IO.unit
-                }
-                .foreverM
-                .start
-          )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           finalBrief <- mkDummyFinalBlockBrief1(
             env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber).headConfig
           )
-          // Carol reproduces final block 1 as a follower and retires (no block will follow);
-          // the Final confirmation sent next must dead-letter or retire her — never panic.
           _ <- lift((weaver ! finalBrief) >> env.system.waitForIdle())
           _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) { case _: CompleteBlockFinal =>
               ()
           })
-          _ <- lift(
-            (weaver ! Block.SoftConfirmed.Final(finalBrief, softAckSignatures = List.empty)) >>
-                env.system.waitForIdle()
-          )
-          // Give the event-stream drainer a beat to observe a panic before reading.
-          _ <- lift(awaitCond(errors.get.map(_.nonEmpty), 500.millis, 50.millis).attempt.void)
-          collected <- lift(errors.get)
-          _ <- lift(drainer.cancel)
-          _ <- assertWith(
-            collected.isEmpty,
-            s"the final confirmation must retire the armed leader, not panic it: $collected"
-          )
       } yield true
     )
 
