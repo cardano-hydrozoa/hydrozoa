@@ -7,6 +7,7 @@ import hydrozoa.integration.stage1.Stage1PropertiesL1Mock.property
 import hydrozoa.integration.stage1.SuiteCardano.{Mock, Public, Yaci}
 import hydrozoa.integration.yaci.DevKit
 import org.scalacheck.YetAnotherProperties
+import org.scalatest.funsuite.AnyFunSuite
 import test.SeedPhrase
 
 object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 on L1 mock"):
@@ -75,13 +76,36 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * This scenario brings up deposits to the scene by adding two additional commands:
       *   - [[RegisterDepositCommand]]
       *   - [[SubmitDepositCommand]]
+      *
+      * Not registered as a property: it is pending, see [[Stage1DepositsPending]]. Register it
+      * again (`val _ = property("Deposits") = deposits.property()`) once the model absorbs
+      * deposits.
       */
-    val _ = property("Deposits") = Suite(
+    val deposits: Suite = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateYaciTxTiming,
       scenarioGen = DepositsScenarioGen,
       label = "deposits-mock"
-    ).property()
+    )
+
+/** Stage 1's "Deposits" property on the L1 mock, reported as pending instead of run, because it
+  * passed without testing deposits.
+  *
+  * Every deposit submission failed on the mock: the mock is seeded with the peers' pre-init UTxOs
+  * (`genesisUtxos = state.preinitPeerUtxosL1` in [[Suite.sutResource]]), while the model applies
+  * the initialization tx and funds deposits from its change output, and Stage 1 has no slow side to
+  * put the initialization tx on L1. So each `SubmitDepositsCommand` failed with "Missing inputs",
+  * and the property passed only because the model expects nothing to reach L1 either: its `absorb`
+  * is stubbed to absorb nothing and every mature deposit is refunded (`Model.scala`). Seeding the
+  * mock with the initialization tx applied makes the deposits land, the SUT absorbs one, and the
+  * property fails. Fixing it needs the model's absorption designed; until then this marks it
+  * pending. ScalaCheck has no pending status, hence a ScalaTest suite. The property itself is
+  * [[Stage1PropertiesL1Mock.deposits]].
+  */
+class Stage1DepositsPending extends AnyFunSuite:
+    test("Integration Stage 1 on L1 mock: Deposits (pending: the model does not absorb deposits)")(
+      pending
+    )
 
 /** The Yaci runner has only some of the properties which are worth running on Yaci, see property
   * descriptions in the [[Stage1PropertiesL1Mock]]. To run this suite you need a Yaci devkit up and
