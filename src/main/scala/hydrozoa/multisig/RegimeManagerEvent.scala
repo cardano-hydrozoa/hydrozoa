@@ -32,7 +32,11 @@ sealed trait LifecycleEvent extends RegimeManagerEvent
 object LifecycleEvent:
     case object StartingActors extends LifecycleEvent
     case object WatchingActors extends LifecycleEvent
-    final case class TerminatedActor(actor: Actors) extends LifecycleEvent
+
+    /** A watched child terminated. `atHandoff`: the manager had already handed off to the
+      * rule-based regime, and stops its multisig children itself, so the termination is expected.
+      */
+    final case class TerminatedActor(actor: Actors, atHandoff: Boolean) extends LifecycleEvent
     final case class TerminatedDependency(dep: Dependencies) extends LifecycleEvent
 
     /** A supervised child failed and the decider escalated to the root, which stops the system.
