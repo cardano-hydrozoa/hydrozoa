@@ -14,6 +14,7 @@ object CardanoLiaisonEventFormat:
         e match {
             case TimeoutReceived =>
                 info("received Timeout, run effects...")
+            case Quiesced => info("quiesced: no more L1 polling or submissions")
             case StackHardConfirmedReceived(stackNum) =>
                 info(s"received Stack.HardConfirmed for stack $stackNum")
             case InitialStackEffectsLearned =>
