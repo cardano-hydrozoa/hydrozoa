@@ -82,8 +82,10 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
             // `forcedMajorBlockWakeupTime` deadman on each header takes over and force-completes
             // empty major blocks until we reach major 2; the trailing requests keep minor blocks
             // flowing.
+            // It outlives the fallback: a kick made at or after the handoff comes back closed, which
+            // is expected, so `try`.
             _ <- lift(
-              (MultiPeerHeadHarness.submitKickRequest(ctx.harness)
+              (MultiPeerHeadHarness.trySubmitKickRequest(ctx.harness)
                   >> IO.sleep(1.second)).foreverM.start.void
             )
 

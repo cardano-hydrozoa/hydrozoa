@@ -382,22 +382,58 @@ object MultiPeerHeadHarness:
         case (_: PeerId.Coil, _) => IO.pure(None)
     }
 
+    /** What became of a submission made through a peer's [[SubmissionGate]]. */
+    enum Submission:
+        /** The `RequestSequencer` answered it (accepted or rejected). */
+        case Answered
+
+        /** The gate was closed: the peer handed off to the rule-based regime, whose actors take no
+          * requests. Expected at and after a fallback, never before one.
+          */
+        case Closed
+
     /** Submit one [[KickRequest]] to `peer`'s `RequestSequencer` to kick `BlockWeaver` past block
       * 1's `Leader.AwaitingConfirmation` so the deadman switch on subsequent block headers can
       * force-produce major blocks. The request screens cleanly but is marked `Invalid` at apply —
       * the block still completes, which is all these scenarios need.
+      *
+      * It goes through the peer's [[SubmissionGate]], as the HTTP submission route does, so a
+      * request made at the handoff to the rule-based regime is answered before the sequencer stops
+      * or comes back [[Submission.Closed]], never asked of a stopped actor (a dead letter, and an
+      * ask that waits forever). For a scenario with no fallback, where closed means something went
+      * wrong, use [[submitKickRequest]].
       */
+    def trySubmitKickRequest(
+        harness: Harness[Option[RequestSequencer.Handle]],
+        peer: HeadPeerNumber = HeadPeerNumber(0),
+    ): IO[Submission] =
+        val userRequest = KickRequest.mkKickTransactionRequest(harness.multiNodeConfig, peer)
+        for
+            p <- IO.fromOption(harness.peers.get(peer))(
+              new NoSuchElementException(s"peer $peer missing in harness")
+            )
+            sequencer <- IO.fromOption(p.handle)(
+              new NoSuchElementException(s"peer $peer has no RequestSequencer handle")
+            )
+            outcome <- p.submissions.admit(Submission.Closed)(
+              (sequencer ?: userRequest).as(Submission.Answered)
+            )
+        yield outcome
+
+    /** [[trySubmitKickRequest]] for a scenario that never falls back: a closed gate is an error. */
     def submitKickRequest(
         harness: Harness[Option[RequestSequencer.Handle]],
         peer: HeadPeerNumber = HeadPeerNumber(0),
     ): IO[Unit] =
-        val userRequest = KickRequest.mkKickTransactionRequest(harness.multiNodeConfig, peer)
-        for
-            sequencer <- IO.fromOption(harness.peers.get(peer).flatMap(_.handle))(
-              new NoSuchElementException(s"peer $peer missing in harness")
-            )
-            _ <- sequencer ?: userRequest
-        yield ()
+        trySubmitKickRequest(harness, peer).flatMap {
+            case Submission.Answered => IO.unit
+            case Submission.Closed =>
+                IO.raiseError(
+                  new IllegalStateException(
+                    s"peer $peer refused a kick request: its submissions are closed (handed off)"
+                  )
+                )
+        }
 
     /** Stand up the head + coil peers for a dispute-flow test: derive pre-init UTxOs and coil
       * wallets from `testPeers`, coil node configs and the TestControl start epoch from
@@ -627,12 +663,14 @@ object MultiPeerHeadHarness:
 
     /** Per-head-peer artifacts exposed to callers: resolved connections, persistence backend, the
       * in-process [[SubmissionClient]] (bound to this peer's [[HydrozoaRoutes]] via
-      * `Client.fromHttpApp`), and the caller-derived handle.
+      * `Client.fromHttpApp`), the regime manager's [[SubmissionGate]] (for a test that asks the
+      * `RequestSequencer` directly, as the HTTP route does), and the caller-derived handle.
       */
     case class Peer[H](
         connections: HeadMultisigRegimeManager.Connections,
         backendStore: BackendStore[IO],
         submissionClient: SubmissionClient,
+        submissions: SubmissionGate,
         handle: H,
     )
 
@@ -855,6 +893,7 @@ object MultiPeerHeadHarness:
                     connections = conns,
                     backendStore = peerMrms(peerNum).backendStore,
                     submissionClient = submissionClient,
+                    submissions = peerMrms(peerNum).mrm.submissions,
                     handle = h,
                   )
               }
@@ -926,6 +965,7 @@ object MultiPeerHeadHarness:
                   connections = conns,
                   backendStore = old.backendStore,
                   submissionClient = submissionClient,
+                  submissions = mrm.submissions,
                   handle = h,
                 )
             }

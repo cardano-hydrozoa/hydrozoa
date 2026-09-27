@@ -92,7 +92,9 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
         for
             ctx <- ask
             fiber <- lift(
-              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitKickRequest(
+              // Runs into the fallback: a kick made at or after the handoff comes back closed,
+              // which is expected, so `try`.
+              (IO.sleep(1.second) >> MultiPeerHeadHarness.trySubmitKickRequest(
                 ctx.harness
               )).foreverM.start
             )
