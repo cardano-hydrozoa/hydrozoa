@@ -7,8 +7,8 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.harness.{KickRequest, MultiPeerHeadHarness}
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
@@ -137,20 +137,30 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
     private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(submitOneUserRequest(ctx))
+            _ <- lift(MultiPeerHeadHarness.submitKickRequest(ctx.harness))
         yield ()
 
     private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            fiber <- lift((IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start)
+            // Runs into the fallback: a kick made at or after the handoff comes back closed, which
+            // is expected, so `try`.
+            fiber <- lift(
+              (IO.sleep(1.second) >> MultiPeerHeadHarness.trySubmitKickRequest(
+                ctx.harness
+              )).foreverM.start
+            )
             _ <- lift(ctx.periodicRequestFiber.set(Some(fiber)))
         yield ()
 
     private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.fallbackDispatched.get.timeout(scenarioTimeout)
+              )
+            )
         yield ()
 
     /** For [[ExpectedCommitment.DefaultMajor1]] this is a no-op. */
@@ -164,13 +174,21 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
     private def step3_awaitResolutionSubmitted: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.resolutionSubmitted.get.timeout(scenarioTimeout)
+              )
+            )
         yield ()
 
     private def step4_awaitEvacuationDone: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(ctx.evacuationDone.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.evacuationDone.get.timeout(scenarioTimeout)
+              )
+            )
         yield ()
 
     private def step5_assertTerminalHistogram: test.TestM[Ctx, Unit] =
@@ -280,16 +298,6 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
     // Wiring
     // ------------------------------------------------------------------
 
-    private def submitOneUserRequest(ctx: Ctx): IO[Unit] =
-        val peerNum = HeadPeerNumber(0)
-        val userRequest = KickRequest.mkKickTransactionRequest(ctx.multiNodeConfig, peerNum)
-        for
-            sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).flatMap(_.handle))(
-              new NoSuchElementException(s"peer $peerNum missing in harness")
-            )
-            _ <- sequencer ?: userRequest
-        yield ()
-
     private def humanFormatTracer: ContraTracer[IO, MultiPeerHeadHarness.Event] =
         ContraTracer[IO, MultiPeerHeadHarness.Event] {
             case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
@@ -321,7 +329,7 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
                 case FirewalledCardanoBackendEvent.DroppedOutboundTx(etx) =>
                     hydrozoa.lib.logging.LogEvent
                         .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                        .warn(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}")
+                        .info(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}")
                 case FirewalledCardanoBackendEvent.SubmittedTx(etx, result) =>
                     hydrozoa.lib.logging.LogEvent
                         .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")

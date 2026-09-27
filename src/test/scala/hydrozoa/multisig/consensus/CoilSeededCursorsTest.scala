@@ -5,9 +5,9 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.*
 import cats.syntax.contravariant.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.NoopActor
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, HubHardAckNumber, SoftAckNumber}
@@ -105,7 +105,7 @@ class CoilSeededCursorsTest extends AnyFunSuite {
             .open(tracer)
             .use(backend =>
                 Persistence.fromBackend(backend, tracer).flatMap { p =>
-                    ActorSystem[IO]("coil-cursor-test").use { system =>
+                    HydrozoaActorSystem.withoutRoot("coil-cursor-test").use { system =>
                         for {
                             _ <- IO.whenA(seeded)(p.put(StoreKey.StartPoint)(startPoint))
                             _ <- blocksTo.traverse_(n =>

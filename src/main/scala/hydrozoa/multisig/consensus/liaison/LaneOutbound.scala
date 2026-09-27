@@ -137,6 +137,15 @@ final class LaneOutbound[T, N] private (
       * serving those would push the remote's cursor past our bound. Returns [[OutOfBounds]] if the
       * remote's cursor is ahead of what we could have produced (protocol desync — the caller
       * raises), else the (possibly empty) slice.
+      *
+      * **Ahead of the lane is not ahead of what we produced.** Everything is persisted before it is
+      * appended (CR4), so the journal can run ahead of `lastAppended` while an item is between its
+      * write and its append, and a remote can legitimately hold a cursor inside that window: a hub
+      * seeds a rejoining coil peer's cursors from its journals (`CoilStartPoint`), not from this
+      * lane. A cursor whose every predecessor from our bound up is already durable is therefore
+      * answered with nothing yet — the pending append closes the window, or a restart does, since
+      * recovery seeds the high-water from the journal ([[seedHighWater]]). Only a cursor past what
+      * the journal holds is [[OutOfBounds]].
       */
     def reply(remoteCursor: N, servable: T => Boolean = _ => true): IO[Reply[T]] =
         // `servable` is the puller's backpressure ceiling, expressed as a predicate so a lane can be
@@ -154,13 +163,15 @@ final class LaneOutbound[T, N] private (
             // The remote may never legitimately ask past our next-producible number.
             val bound = next(last)
             if bound.exists(_ < remoteCursor) then
-                IO.pure(
-                  OutOfBounds(
-                    asked = remoteCursor.toString,
-                    bound = bound.fold("none")(_.toString),
-                    lastAppended = last.fold("none")(_.toString)
-                  )
-                )
+                bound.fold(IO.pure(false))(durableUpTo(_, remoteCursor)).map { durable =>
+                    if durable then Items(Nil)
+                    else
+                        OutOfBounds(
+                          asked = remoteCursor.toString,
+                          bound = bound.fold("none")(_.toString),
+                          lastAppended = last.fold("none")(_.toString)
+                        )
+                }
             else
                 last match
                     // Nothing released on this lane yet, so nothing is servable whatever the store
@@ -212,6 +223,35 @@ final class LaneOutbound[T, N] private (
                             }
         }
 
+    /** Whether the journal holds every number this lane would produce from `from` (inclusive) up to
+      * `cursor` (exclusive), in [[next]] order and without a gap — i.e. whether a remote at
+      * `cursor` is ahead of this lane only by items that are already durable and not yet appended.
+      * Read in pages of [[capacity]]; reached only on a pull that would otherwise be out of bounds.
+      */
+    private def durableUpTo(from: N, cursor: N): IO[Boolean] =
+        serveFromJournal(from, capacity).flatMap { page =>
+            // Walk the page from `from`; `Left` = decided, `Right(n)` = the page ran out at `n`.
+            @annotation.tailrec
+            def walk(expected: N, rest: List[N]): Either[Boolean, N] =
+                if ord.equiv(expected, cursor) then Left(true)
+                else
+                    rest match
+                        case n :: tail if ord.equiv(n, expected) =>
+                            next(Some(n)) match
+                                case Some(after) => walk(after, tail)
+                                case None        => Left(false)
+                        case Nil => Right(expected)
+                        case _   => Left(false)
+            walk(from, page.map(numberOf)) match
+                case Left(decided) => IO.pure(decided)
+                // A full page that ended short of the cursor: continue from where it stopped. A
+                // short page means the journal has nothing more.
+                case Right(resume) =>
+                    if page.size == capacity && ord.gt(resume, from) then
+                        durableUpTo(resume, cursor)
+                    else IO.pure(false)
+        }
+
     /** The item held at `number`, iff the outbox still holds it. **Diagnostics only**: `None` means
       * "outside the in-memory window", NOT "does not exist" — the journal may well have it. Never
       * drive protocol decisions off this; use [[reply]], which consults both.
@@ -227,9 +267,10 @@ object LaneOutbound {
     /** Result of [[LaneOutbound.reply]]: the desync sentinel or the (possibly empty) slice to send.
       */
     enum Reply[+T]:
-        /** The remote's cursor is ahead of our next-producible number — protocol desync. Carries
-          * the diagnostic indices (stringified — a lane is generic over its number type `N`): what
-          * the remote `asked` for, our `bound` (`next(lastAppended)`), and `lastAppended` itself.
+        /** The remote's cursor is ahead of our next-producible number, and of anything durable past
+          * it — protocol desync. Carries the diagnostic indices (stringified — a lane is generic
+          * over its number type `N`): what the remote `asked` for, our `bound`
+          * (`next(lastAppended)`), and `lastAppended` itself.
           */
         case OutOfBounds(asked: String, bound: String, lastAppended: String)
         case Items(items: List[T])

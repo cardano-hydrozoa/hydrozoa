@@ -50,47 +50,51 @@ object PropertyMTest extends Properties("PropertyM") {
         val startTime = IO.realTime.unsafeRunSync()
         // - Switch this to `monadicIO` to see it fail
         // - Running the pathological case in monadicTestControlExecuteEmbed will hang forever
-        val _ = monadicTestControlExecute(
-          prop = PropertyM.run(pathologicalCase),
-          testControlCallback = tc =>
-              // Here, tc : TestControl[Prop] is essentially a "handle" into the TestControl runtime.
-              for {
-                  // At the start of execution, there are no pending fibers. We need to advance until our `pathologicalCase`
-                  // is executing. But we can't call `tick`, because `tick` will keep calling fibers until they return
-                  // and `foreverM` won't return and `tick` doesn't pass any time.
-                  // Thus, we need to call `tickOne` instead and execute only a single fiber.
-                  _ <- tc.tickOne
-                  // At this point we'll have both our "sleep" and "forever" fiber running. We can advance time 10
-                  // seconds, our sleep fiber will wake up, and cancel the "forever" fiber, and the execution will complete.
-                  _ <- tc.advanceAndTick(10.second)
-                  res <- tc.results.map {
-                      case None => throw RuntimeException("Could not get results from test")
-                      case Some(Succeeded(x)) => x
-                      case Some(_) =>
-                          throw RuntimeException(
-                            "Could not get successful results from test ('Some' case)"
-                          )
-                  }
-              } yield res
-        ).check()
+        val inner = checkQuietly(
+          monadicTestControlExecute(
+            prop = PropertyM.run(pathologicalCase),
+            testControlCallback = tc =>
+                // Here, tc : TestControl[Prop] is essentially a "handle" into the TestControl runtime.
+                for {
+                    // At the start of execution, there are no pending fibers. We need to advance until our `pathologicalCase`
+                    // is executing. But we can't call `tick`, because `tick` will keep calling fibers until they return
+                    // and `foreverM` won't return and `tick` doesn't pass any time.
+                    // Thus, we need to call `tickOne` instead and execute only a single fiber.
+                    _ <- tc.tickOne
+                    // At this point we'll have both our "sleep" and "forever" fiber running. We can advance time 10
+                    // seconds, our sleep fiber will wake up, and cancel the "forever" fiber, and the execution will complete.
+                    _ <- tc.advanceAndTick(10.second)
+                    res <- tc.results.map {
+                        case None => throw RuntimeException("Could not get results from test")
+                        case Some(Succeeded(x)) => x
+                        case Some(_) =>
+                            throw RuntimeException(
+                              "Could not get successful results from test ('Some' case)"
+                            )
+                    }
+                } yield res
+          )
+        )
         val endTime = IO.realTime.unsafeRunSync()
         if endTime - startTime >= 10.seconds
         then throw RuntimeException("TestControl is not speeding up time properly")
-        else Prop.passed
+        else inner.passed :| s"the property run under TestControl did not pass: ${inner.status}"
     }
 
     val _ = property("TestControl.executeEmbed runner should complete quickly") = {
         val startTime = IO.realTime.unsafeRunSync()
         // Switch this to `monadicIO` to see it fail
-        val _ = monadicTestControlExecuteEmbed(
-          for {
-              _ <- PropertyM.run(IO.sleep(10.seconds))
-          } yield true
-        ).check()
+        val inner = checkQuietly(
+          monadicTestControlExecuteEmbed(
+            for {
+                _ <- PropertyM.run(IO.sleep(10.seconds))
+            } yield true
+          )
+        )
         val endTime = IO.realTime.unsafeRunSync()
         if endTime - startTime >= 10.seconds
         then throw RuntimeException("TestControl is not speeding up time properly")
-        else Prop.passed
+        else inner.passed :| s"the property run under TestControl did not pass: ${inner.status}"
 
     }
 
@@ -124,10 +128,10 @@ object PropertyMTest extends Properties("PropertyM") {
     // - That we can do arbitrary effects (IO) in between calls to the generators
     val _ = property("commutativity of integer addition") = monadicIO(for {
         int1 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-        _ <- run(IO.println("Run some IO in between the calls."))
+        // An effect between the two picks, whose result the assertion uses.
+        fromIO <- run(IO(int1))
         int2 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-        _ <- run(IO.println(s"($int1, $int2)"))
-        _ <- assert(int1 + int2 == int2 + int1)
+        _ <- assert(fromIO + int2 == int2 + int1)
     } yield true)
 
     // This demonstrates what it looks like when we generate multiple arguments. They are reported
@@ -162,11 +166,18 @@ object PropertyMTest extends Properties("PropertyM") {
       )
     )
 
-    // Demo: collect the generation statistics for a single generated value
+    // Demo: collect the generation statistics for a single generated value. The value `collect`
+    // attaches is checked, then dropped, so the run doesn't print a distribution table.
     val _ = property("monitor example 1") = monadicIO(for {
         e <- pick[IO, Int](Gen.choose(0, 10))
         _ <- monitor(collect(e))
-    } yield true)
+    } yield true).map(res =>
+        val collectedOne = res.collected.toList match {
+            case List(e: Int) => 0 <= e && e <= 10
+            case _            => false
+        }
+        res.copy(status = if collectedOne then res.status else False, collected = Set.empty)
+    )
 
     // Demo: add "Failure!" as a message to the counter example.
     val _ = property("monitor example 2") = {
@@ -196,9 +207,10 @@ object PropertyMTest extends Properties("PropertyM") {
         )
     }
 
-    // Using "pre". This demonstrates that test cases are skipped if the pre-condition isn't satisfied.
-    // If you examine the output from this function, you'll see that many integer values were generated,
-    // all odd ones were discarded (and don't count towards "passed" tests)
+    // Using "pre". This demonstrates that test cases are skipped if the pre-condition isn't satisfied:
+    // every odd value generated is discarded (and doesn't count towards "passed" tests), every even
+    // one passes. The generated value is collected to check that, then dropped, so the run doesn't
+    // print a distribution table.
     val _ = property("`pre` demo") = {
         monadicIO(
           for {
@@ -213,6 +225,12 @@ object PropertyMTest extends Properties("PropertyM") {
               _ <- pre[IO](int % 2 == 0)
               // _ <- assert(int == 0) // Uncomment this line if you want to see the number of discarded test cases
           } yield true
+        ).map(res =>
+            val asExpected = res.collected.toList match {
+                case List(int: Int) => if int % 2 == 0 then res.success else res.status == Undecided
+                case _              => false
+            }
+            res.copy(status = if asExpected then res.status else False, collected = Set.empty)
         )
     }
 
@@ -300,22 +318,45 @@ object PropertyMTest extends Properties("PropertyM") {
         })
     }
 
+    private val fixedSeed: Seed =
+        Seed.fromBase64("W28rrQBwU4e2me7TydWPZDGl22_0duuU4iuVz5Y6QxN=").get
+
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p
             .withMinSuccessfulTests(100)
-            .withInitialSeed(Seed.fromBase64("W28rrQBwU4e2me7TydWPZDGl22_0duuU4iuVz5Y6QxN=").get)
+            .withInitialSeed(fixedSeed)
     }
 
-    val _ = property("demo: bound values behave deterministically when given a seed") =
-        val prop = monadicIO(
-          for {
-              int1 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-              int2 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-              int3 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-              _ <- run(IO.println(s"$int1 $int2 $int3"))
-          } yield true
-        )
-        prop
+    // Runs the same monadic property twice from one seed, recording the values it binds: both runs
+    // must bind the same values, in the same order.
+    val _ = property("demo: bound values behave deterministically when given a seed") = {
+        def boundValues(): Vector[(Int, Int, Int)] = {
+            val bound = Vector.newBuilder[(Int, Int, Int)]
+            val prop = monadicIO(
+              for {
+                  int1 <- pick[IO, Int](Arbitrary.arbitrary[Int])
+                  int2 <- pick[IO, Int](Arbitrary.arbitrary[Int])
+                  int3 <- pick[IO, Int](Arbitrary.arbitrary[Int])
+                  _ <- run(IO { val _ = bound += ((int1, int2, int3)) })
+              } yield true
+            )
+            val _ = checkQuietly(prop, _.withInitialSeed(fixedSeed).withMinSuccessfulTests(20))
+            bound.result()
+        }
+        val first = boundValues()
+        val second = boundValues()
+        (first.nonEmpty && first == second) :|
+            s"two runs from one seed bound different values: $first vs $second"
+    }
+
+    /** Check `prop` without printing a report (unlike `Prop.check`), for properties that check
+      * another property. Single-threaded, ScalaCheck's default.
+      */
+    private def checkQuietly(
+        prop: Prop,
+        params: Test.Parameters => Test.Parameters = identity
+    ): Test.Result =
+        Test.check(params(Test.Parameters.default), prop)
 }
 
 // TODO: Assertions have color codes and emoji for visibility on color-capable terminals.

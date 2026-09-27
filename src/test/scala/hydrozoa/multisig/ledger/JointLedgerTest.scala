@@ -13,7 +13,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.lib.actor.{HydrozoaActorSystem, SyncRequest}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
@@ -139,7 +139,7 @@ object JointLedgerTestHelpers {
             .map { multiNodeConfig =>
                 val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
                 for {
-                    system <- ActorSystem[IO]("JointLedger")
+                    system <- HydrozoaActorSystem.withoutRoot("JointLedger")
                     consensusAgent <- Resource.eval(system.actorOf(ConsensusAgent()))
                     stackComposerSink <- Resource.eval(system.actorOf(StackComposerSink()))
 
@@ -593,23 +593,24 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               depositsMap <- getJointLedgerState.map(_.deposits)
 
-              // Test statistic:  make sure that ties are actually occurring in some samples
-              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+              // What kind of case this is: whether it has several events, ties in absorption start
+              // time, and a sorted order that differs from the event stream. Labels, so a failing
+              // case reports them; they used to be `collect`ed, printing a distribution table on
+              // every run.
+              _ <- lift(PropertyM.monitor[IO](_.label {
                   if eventStream.length <= 1
                   then "events.length <= 1"
                   else "events.length > 1"
               }))
 
-              // Test statistic:  make sure that ties are actually occurring in some samples
-              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+              _ <- lift(PropertyM.monitor[IO](_.label {
                   val collectionSizes = depositsMap.treeMap.map(_._2.length)
                   if collectionSizes.forall(_ == 1)
                   then "no duplicate start times"
                   else "some duplicate start times"
               }))
 
-              // Test statistic: the flattened deposits map and unsorted stream are different
-              _ <- lift(PropertyM.monitor[IO](Prop.collect {
+              _ <- lift(PropertyM.monitor[IO](_.label {
                   if depositsMap.flatten == eventStream
                   then "depositsMap.flatValues == eventStream"
                   else "depositsMap.flatValues != eventStream"

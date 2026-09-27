@@ -22,6 +22,7 @@ import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperatio
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos, generateScriptReferenceUtxos as defaultScriptRefsGen}
 import hydrozoa.integration.yaci.DevKit
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendBlockfrost, CardanoBackendEvent, CardanoBackendEventFormat, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
@@ -39,7 +40,7 @@ import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat, StoreIdentity}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus, SubmissionGate}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
 import io.circe.{Json, parser}
 import java.nio.file.{Files, Path}
@@ -52,7 +53,7 @@ import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.{HttpRoutes, Uri}
 import org.scalacheck.{Gen, PropertyM}
-import scala.concurrent.duration.{DurationLong, FiniteDuration}
+import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, ProtocolParams, SlotConfig, Utxos}
@@ -299,7 +300,7 @@ object MultiPeerHeadHarness:
         def emit(e: LogEvent): IO[Unit] = Slf4jTracer.sink.traceWith(e)
         ContraTracer[IO, FirewalledCardanoBackendEvent] {
             case FirewalledCardanoBackendEvent.DroppedOutboundTx(etx) =>
-                emit(from.warn(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}"))
+                emit(from.info(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}"))
             case FirewalledCardanoBackendEvent.SubmittedTx(etx, Right(())) =>
                 emit(
                   from.info(
@@ -381,22 +382,58 @@ object MultiPeerHeadHarness:
         case (_: PeerId.Coil, _) => IO.pure(None)
     }
 
+    /** What became of a submission made through a peer's [[SubmissionGate]]. */
+    enum Submission:
+        /** The `RequestSequencer` answered it (accepted or rejected). */
+        case Answered
+
+        /** The gate was closed: the peer handed off to the rule-based regime, whose actors take no
+          * requests. Expected at and after a fallback, never before one.
+          */
+        case Closed
+
     /** Submit one [[KickRequest]] to `peer`'s `RequestSequencer` to kick `BlockWeaver` past block
       * 1's `Leader.AwaitingConfirmation` so the deadman switch on subsequent block headers can
       * force-produce major blocks. The request screens cleanly but is marked `Invalid` at apply —
       * the block still completes, which is all these scenarios need.
+      *
+      * It goes through the peer's [[SubmissionGate]], as the HTTP submission route does, so a
+      * request made at the handoff to the rule-based regime is answered before the sequencer stops
+      * or comes back [[Submission.Closed]], never asked of a stopped actor (a dead letter, and an
+      * ask that waits forever). For a scenario with no fallback, where closed means something went
+      * wrong, use [[submitKickRequest]].
       */
+    def trySubmitKickRequest(
+        harness: Harness[Option[RequestSequencer.Handle]],
+        peer: HeadPeerNumber = HeadPeerNumber(0),
+    ): IO[Submission] =
+        val userRequest = KickRequest.mkKickTransactionRequest(harness.multiNodeConfig, peer)
+        for
+            p <- IO.fromOption(harness.peers.get(peer))(
+              new NoSuchElementException(s"peer $peer missing in harness")
+            )
+            sequencer <- IO.fromOption(p.handle)(
+              new NoSuchElementException(s"peer $peer has no RequestSequencer handle")
+            )
+            outcome <- p.submissions.admit(Submission.Closed)(
+              (sequencer ?: userRequest).as(Submission.Answered)
+            )
+        yield outcome
+
+    /** [[trySubmitKickRequest]] for a scenario that never falls back: a closed gate is an error. */
     def submitKickRequest(
         harness: Harness[Option[RequestSequencer.Handle]],
         peer: HeadPeerNumber = HeadPeerNumber(0),
     ): IO[Unit] =
-        val userRequest = KickRequest.mkKickTransactionRequest(harness.multiNodeConfig, peer)
-        for
-            sequencer <- IO.fromOption(harness.peers.get(peer).flatMap(_.handle))(
-              new NoSuchElementException(s"peer $peer missing in harness")
-            )
-            _ <- sequencer ?: userRequest
-        yield ()
+        trySubmitKickRequest(harness, peer).flatMap {
+            case Submission.Answered => IO.unit
+            case Submission.Closed =>
+                IO.raiseError(
+                  new IllegalStateException(
+                    s"peer $peer refused a kick request: its submissions are closed (handed off)"
+                  )
+                )
+        }
 
     /** Stand up the head + coil peers for a dispute-flow test: derive pre-init UTxOs and coil
       * wallets from `testPeers`, coil node configs and the TestControl start epoch from
@@ -626,12 +663,14 @@ object MultiPeerHeadHarness:
 
     /** Per-head-peer artifacts exposed to callers: resolved connections, persistence backend, the
       * in-process [[SubmissionClient]] (bound to this peer's [[HydrozoaRoutes]] via
-      * `Client.fromHttpApp`), and the caller-derived handle.
+      * `Client.fromHttpApp`), the regime manager's [[SubmissionGate]] (for a test that asks the
+      * `RequestSequencer` directly, as the HTTP route does), and the caller-derived handle.
       */
     case class Peer[H](
         connections: HeadMultisigRegimeManager.Connections,
         backendStore: BackendStore[IO],
         submissionClient: SubmissionClient,
+        submissions: SubmissionGate,
         handle: H,
     )
 
@@ -641,8 +680,8 @@ object MultiPeerHeadHarness:
         handle: H,
     )
 
-    /** Everything the harness yields. `sutErrors` is appended to by the error drainer (one entry
-      * per uncaught actor exception); callers read it post-run.
+    /** Everything the harness yields. `sutErrors` is appended to by the event-stream listener (one
+      * entry per uncaught actor exception); callers read it post-run.
       */
     case class Harness[H](
         transportMode: Transport.Mode,
@@ -666,8 +705,66 @@ object MultiPeerHeadHarness:
         rejoinCoilPeer: CoilPeerNumber => IO[Coil[H]],
     )
 
+    /** Run `body` against a fresh [[resource]], failing — instead of hanging — if the actor system
+      * terminates underneath it.
+      *
+      * A failure that reaches the root actor terminates the whole actor system
+      * ([[HydrozoaActorSystem]]). From then on every `?` asked of an actor waits forever, while the
+      * harness's own CL tick loops and the metrics samplers are plain fibers, not actors, and keep
+      * scheduling timers. Under TestControl the clock therefore keeps advancing, nothing completes,
+      * and `TestControlDriver` ticks until its horizon, then reports only that the program was
+      * still running: the failure that caused it is never reported. Racing the body against
+      * termination ends the run at once with the errors the listener recorded.
+      */
+    def useGuarded[H, A](inputs: Inputs, hooks: Hooks[H])(body: Harness[H] => IO[A]): IO[A] =
+        resource(inputs, hooks).use(harness => guarded(harness)(body(harness)))
+
+    /** Run `io` against a live `harness`, failing at once if its actor system terminates first —
+      * the per-step form of [[useGuarded]], for a test that holds the harness in a context and
+      * awaits one milestone at a time. Unguarded, such an await sits out its whole timeout after
+      * the system has died and reports a `TimeoutException` instead of the error that killed it.
+      */
+    def guarded[H, A](harness: Harness[H])(io: IO[A]): IO[A] =
+        IO.race(harness.system.waitForTermination, io).flatMap {
+            case Right(a) => IO.pure(a)
+            case Left(()) =>
+                // The escalated failure is published to the event stream around the moment the
+                // system terminates, and termination cancels the system's own listener, so it can
+                // be left in the queue unread. Give it a moment (virtual time under TestControl),
+                // then drain what is left alongside what the listener recorded.
+                for
+                    _ <- IO.sleep(1.second)
+                    leftover <- harness.system.eventStream.tryTakeN(None)
+                    _ <- leftover.traverse_(ErrorDrainer.record(harness.sutErrors))
+                    errors <- harness.sutErrors.get
+                    result <- IO.raiseError[A](
+                      new IllegalStateException(
+                        "the actor system terminated under the test body; uncaught actor " +
+                            s"errors: ${errors.mkString("; ")}"
+                      )
+                    )
+                yield result
+        }
+
+    /** Stop `ref` and wait until it and its whole subtree have terminated, leaves first (see
+      * [[SubtreeStop]]).
+      *
+      * `ActorRef.stop` alone only enqueues a `Terminate`, and cats-actors lets the stopped actor
+      * terminate, and its watchers hear of it, before its children have: they may still be
+      * finishing the message they are handling, and then their own `postStop`. A restart or rejoin
+      * that re-spawns against the same store without waiting for the whole subtree races it: its
+      * writes can land after the wipe, or after the successor has read its recovery marks from the
+      * store. No real restart can produce that, because the old process is gone before the new one
+      * opens the store.
+      *
+      * The subtree is marked as stopped on purpose first, so the messages its actors lose, as a
+      * real crash would, are logged as that and not counted as dead letters while running.
+      */
+    private def stopAndAwait(actors: HydrozoaActorSystem, ref: NoSendActorRef[IO]): IO[Unit] =
+        actors.expectDeadLetters(ref) >> SubtreeStop.stopAndAwait(actors.system, ref)
+
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns everything;
-      * release cancels the CL tick fibers and the error drainer.
+      * release cancels the CL tick fibers.
       */
     def resource[H](
         inputs: Inputs,
@@ -684,7 +781,11 @@ object MultiPeerHeadHarness:
               PreSystem.align(transportMode.useTestControl, startEpochMs, takeoffTime, log)
             )
 
-            system <- ActorSystem[IO](label)
+            // Recorded by the system's own event-stream listener, the stream's only consumer: a
+            // second `take` loop on the same queue would see only the events the listener did not.
+            sutErrors <- Resource.eval(Ref[IO].of(List.empty[String]))
+            actors <- HydrozoaActorSystem(label, ErrorDrainer.record(sutErrors))
+            system = actors.system
             backendAndSnapshot <- Resource.eval(
               CardanoBackend.mk(
                 cardanoBackendMode,
@@ -708,7 +809,7 @@ object MultiPeerHeadHarness:
                     Mrm
                         .buildPeer(
                           peerNum,
-                          system,
+                          actors,
                           hooks.wrapBackend(PeerId.Head(peerNum), cardanoBackend),
                           multiNodeConfig,
                           backendMode,
@@ -741,7 +842,7 @@ object MultiPeerHeadHarness:
                         .buildCoil(
                           coilConfig,
                           coilNum,
-                          system,
+                          actors,
                           hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                           transports.coilUplinks(coilNum),
                           hooks.tracer.contramap(Event.Coil(coilNum, _)),
@@ -766,8 +867,6 @@ object MultiPeerHeadHarness:
                   }
                   .map(_.toMap)
             )
-            sutErrors <- Resource.eval(Ref[IO].of(List.empty[String]))
-            _ <- ErrorDrainer.start(system, sutErrors)
             headPollingPeriodOf = (peerNum: HeadPeerNumber) =>
                 multiNodeConfig
                     .nodeConfigs(peerNum)
@@ -778,8 +877,8 @@ object MultiPeerHeadHarness:
             // Every CL tick fiber — initial and restart-spawned — is owned by this Supervisor, which
             // cancels all outstanding fibers on release. The `headTicks`/`coilTicks` refs it returns
             // index the per-peer/coil cancel actions so a crash-restart can retire the victim's old
-            // tick — which would otherwise keep poking its stopped CardanoLiaison, a dead-letter
-            // flood — before spawning a fresh one.
+            // tick before stopping it — it would otherwise keep poking a stopped CardanoLiaison, a
+            // dead-letter flood — and spawn a fresh one after.
             tickSupervisor <- Supervisor[IO]
             headTicks <- Ticks.superviseAll(tickSupervisor, peerConnections, headPollingPeriodOf)
             coilTicks <- Ticks.superviseAll(tickSupervisor, coilConnections, coilPollingPeriodOf)
@@ -789,6 +888,7 @@ object MultiPeerHeadHarness:
                       submissionClient <- Http.mkPeerSubmissionClient(
                         peerNum,
                         conns,
+                        peerMrms(peerNum).mrm.submissions,
                         multiNodeConfig,
                       )
                       h <- hooks.handle(PeerId.Head(peerNum), conns)
@@ -796,6 +896,7 @@ object MultiPeerHeadHarness:
                     connections = conns,
                     backendStore = peerMrms(peerNum).backendStore,
                     submissionClient = submissionClient,
+                    submissions = peerMrms(peerNum).mrm.submissions,
                     handle = h,
                   )
               }
@@ -820,16 +921,21 @@ object MultiPeerHeadHarness:
             restartHeadPeer = { (peerNum: HeadPeerNumber) =>
                 for
                     old <- peerRuntime.get.map(_(peerNum))
-                    // Stop the old subtree, then re-spawn against the SAME store + L2 ledger; the
-                    // rebuilt network re-registers in the shared registry so the mesh re-attaches.
-                    _ <- old.ref.stop
-                    gen <- restartGen.updateAndGet(_ + 1)
+                    // Cut the peer off from its inputs, stop the old subtree, then re-spawn against
+                    // the SAME store + L2 ledger. Its CL tick is retired, and the rebuilt network
+                    // re-registers in the shared registry with no liaisons yet, so the other peers'
+                    // sends to this one are dropped, as they would be to a crashed process, rather
+                    // than reaching the old actors as they stop. The re-spawned liaisons register
+                    // and the mesh re-attaches.
+                    _ <- headTicks.get.flatMap(_.getOrElse(peerNum, IO.unit))
                     network <- transports.rebuildHeadNetwork(peerNum)
+                    _ <- stopAndAwait(actors, old.ref)
+                    gen <- restartGen.updateAndGet(_ + 1)
                     spawned <- Mrm
                         .spawnPeer(
                           s"hmrm-$peerNum-r$gen",
                           peerNum,
-                          system,
+                          actors,
                           cardanoBackend,
                           multiNodeConfig,
                           network,
@@ -842,14 +948,18 @@ object MultiPeerHeadHarness:
                         .map(_._1)
                     (mrm, ref) = spawned
                     conns <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
-                    // Cancel the victim's previous tick (its CardanoLiaison is now stopped), then
-                    // start a fresh supervised tick against the new connections.
-                    _ <- headTicks.get.flatMap(_.getOrElse(peerNum, IO.unit))
+                    // A fresh supervised tick against the new connections (the old one was
+                    // retired before the stop).
                     tickFib <- tickSupervisor.supervise(
                       Ticks.tickLoop(headPollingPeriodOf(peerNum), conns)
                     )
                     _ <- headTicks.update(_.updated(peerNum, tickFib.cancel))
-                    submissionClient <- Http.mkPeerSubmissionClient(peerNum, conns, multiNodeConfig)
+                    submissionClient <- Http.mkPeerSubmissionClient(
+                      peerNum,
+                      conns,
+                      mrm.submissions,
+                      multiNodeConfig
+                    )
                     h <- hooks.handle(PeerId.Head(peerNum), conns)
                     _ <- peerRuntime.update(
                       _.updated(peerNum, Mrm.Peer(mrm, ref, old.backendStore, old.l2Ledger))
@@ -858,24 +968,24 @@ object MultiPeerHeadHarness:
                   connections = conns,
                   backendStore = old.backendStore,
                   submissionClient = submissionClient,
+                  submissions = mrm.submissions,
                   handle = h,
                 )
             }
-            respawnCoil = { (coilNum: CoilPeerNumber) =>
+            // Re-spawn a coil whose old subtree has already terminated, and whose CL tick is
+            // retired, against the same store + L2 ledger (or the wiped one, for a rejoin). The
+            // coil's uplink is reused: the hub-coil registry is keyed by coil number and the
+            // re-spawned liaison's `register` overwrites the coil-inbound endpoint, so the hub's
+            // next send lands on the new actor.
+            respawnStoppedCoil = { (coilNum: CoilPeerNumber) =>
                 for
                     old <- coilRuntime.get.map(_(coilNum))
-                    // Stop the old subtree, then re-spawn against the same store + L2 ledger (or
-                    // the wiped one, for a rejoin). The coil's uplink is reused: the hub-coil
-                    // registry is keyed by coil number and the re-spawned liaison's `register`
-                    // overwrites the coil-inbound endpoint, so the hub's next send lands on the
-                    // new actor.
-                    _ <- old.ref.stop
                     gen <- restartGen.updateAndGet(_ + 1)
                     spawned <- Mrm
                         .spawnCoil(
                           s"cmrm-${coilNum.convert}-r$gen",
                           old.config,
-                          system,
+                          actors,
                           hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                           transports.coilUplinks(coilNum),
                           hooks.tracer.contramap(Event.Coil(coilNum, _)),
@@ -887,7 +997,6 @@ object MultiPeerHeadHarness:
                         .map(_._1)
                     (mrm, ref) = spawned
                     conns <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
-                    _ <- coilTicks.get.flatMap(_.getOrElse(coilNum, IO.unit))
                     tickFib <- tickSupervisor.supervise(
                       Ticks.tickLoop(coilPollingPeriodOf(coilNum), conns)
                     )
@@ -905,15 +1014,29 @@ object MultiPeerHeadHarness:
                   handle = h,
                 )
             }
-            restartCoilPeer = respawnCoil
+            // A coil is cut off from its inputs before it stops, as a head is above: its CL tick
+            // is retired and its hub's sends to it are dropped. The re-spawned liaison's
+            // `register` puts it back on the network.
+            cutOffCoil = { (coilNum: CoilPeerNumber) =>
+                coilTicks.get.flatMap(_.getOrElse(coilNum, IO.unit)) >>
+                    transports.disconnectCoil(coilNum)
+            }
+            restartCoilPeer = { (coilNum: CoilPeerNumber) =>
+                coilRuntime.get
+                    .map(_(coilNum))
+                    .flatMap(old => cutOffCoil(coilNum) >> stopAndAwait(actors, old.ref)) >>
+                    respawnStoppedCoil(coilNum)
+            }
             rejoinCoilPeer = { (coilNum: CoilPeerNumber) =>
                 coilRuntime.get
                     .map(_(coilNum))
                     .flatMap(old =>
-                        // Wipe with the coil stopped, so nothing is writing while we do it.
-                        old.ref.stop >> old.backendStore.wipeData >>
+                        // Wipe only once the coil has stopped, so nothing is writing while we do
+                        // it, or after.
+                        cutOffCoil(coilNum) >> stopAndAwait(actors, old.ref) >>
+                            old.backendStore.wipeData >>
                             old.l2Ledger.wipe.value.flatMap(IO.fromEither)
-                    ) >> respawnCoil(coilNum)
+                    ) >> respawnStoppedCoil(coilNum)
             }
         yield Harness(
           transportMode = transportMode,
@@ -1224,8 +1347,13 @@ object MultiPeerHeadHarness:
             bringUpNetwork: Resource[IO, Unit],
             // Rebuild ONE head peer's transport bundle for a crash-restart, re-registering it in the
             // shared registry so the other peers' next sends resolve to the new transport (Direct
-            // only; unsupported under WS, which disables the TestControl clock anyway).
+            // only; unsupported under WS, which disables the TestControl clock anyway). Until the
+            // peer's liaisons register with it, the other peers' and its coils' sends to it are
+            // dropped.
             rebuildHeadNetwork: HeadPeerNumber => IO[HeadNetwork],
+            // Take ONE coil peer off the network for a crash-restart: its hub's sends to it are
+            // dropped until a liaison registers for it again (Direct only; a no-op under WS).
+            disconnectCoil: CoilPeerNumber => IO[Unit],
         )
 
         /** Per-peer transport bundle: the head-mesh transport and an optional hub-side hub-coil
@@ -1312,13 +1440,27 @@ object MultiPeerHeadHarness:
               coilTransports,
               Resource.unit,
               rebuildHeadNetwork = peerNum =>
-                  directHeadNetwork(
-                    peerNum,
-                    multiNodeConfig,
-                    inProcessRegistry,
-                    hubCoilRegistry
-                  ).allocated
-                      .map(_._1),
+                  // The coils it hubs lose it too, until its re-spawned liaisons register.
+                  hubCoilRegistry.traverse_(
+                    _.update(registry =>
+                        multiNodeConfig.headConfig
+                            .hubbedCoilPeerNums(peerNum)
+                            .foldLeft(registry)((acc, coilNum) =>
+                                acc.updatedWith(coilNum)(_.map(_.copy(hubInbound = None)))
+                            )
+                    )
+                  ) >>
+                      directHeadNetwork(
+                        peerNum,
+                        multiNodeConfig,
+                        inProcessRegistry,
+                        hubCoilRegistry
+                      ).allocated
+                          .map(_._1),
+              disconnectCoil = coilNum =>
+                  hubCoilRegistry.traverse_(
+                    _.update(_.updatedWith(coilNum)(_.map(_.copy(coilInbound = None))))
+                  ),
             )
 
         /** WebSocket (real-clock) bring-up: split into a creation phase (this method) and a
@@ -1392,6 +1534,8 @@ object MultiPeerHeadHarness:
                       "peer crash-restart is unsupported under WebSocket transport"
                     )
                   ),
+              // Not modelled under WS: a coil restart there leaves its link as it was.
+              disconnectCoil = _ => IO.unit,
             )
 
         /** Per-peer parts produced in WS Phase 1: the transport bundle exposed to the MRM, the
@@ -1576,7 +1720,7 @@ object MultiPeerHeadHarness:
 
         def buildPeer(
             peerNum: HeadPeerNumber,
-            system: ActorSystem[IO],
+            actors: HydrozoaActorSystem,
             cardanoBackend: L1Backend[IO],
             multiNodeConfig: MultiNodeConfig,
             backendMode: StorageBackend.Mode,
@@ -1610,7 +1754,7 @@ object MultiPeerHeadHarness:
                         spawned <- spawnPeer(
                           s"hmrm-$peerNum",
                           peerNum,
-                          system,
+                          actors,
                           cardanoBackend,
                           multiNodeConfig,
                           network,
@@ -1636,7 +1780,7 @@ object MultiPeerHeadHarness:
         def spawnPeer(
             actorName: String,
             peerNum: HeadPeerNumber,
-            system: ActorSystem[IO],
+            actors: HydrozoaActorSystem,
             cardanoBackend: L1Backend[IO],
             multiNodeConfig: MultiNodeConfig,
             network: Transport.HeadNetwork,
@@ -1684,13 +1828,13 @@ object MultiPeerHeadHarness:
                   peerFactory,
                   hubFactory,
                 )
-                ref <- Resource.eval(system.actorOf(mrm, actorName))
+                ref <- Resource.eval(actors.actorOf(mrm, actorName))
             yield (mrm, ref: NoSendActorRef[IO])
 
         def buildCoil(
             coilConfig: NodeConfig,
             coilNum: CoilPeerNumber,
-            system: ActorSystem[IO],
+            actors: HydrozoaActorSystem,
             cardanoBackend: L1Backend[IO],
             uplink: Transport.ContextFn[CoilTransport],
             callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
@@ -1704,7 +1848,7 @@ object MultiPeerHeadHarness:
                     spawned <- spawnCoil(
                       s"cmrm-${coilNum.convert}",
                       coilConfig,
-                      system,
+                      actors,
                       cardanoBackend,
                       uplink,
                       callerTracer,
@@ -1726,7 +1870,7 @@ object MultiPeerHeadHarness:
         def spawnCoil(
             actorName: String,
             coilConfig: NodeConfig,
-            system: ActorSystem[IO],
+            actors: HydrozoaActorSystem,
             cardanoBackend: L1Backend[IO],
             uplink: Transport.ContextFn[CoilTransport],
             callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
@@ -1763,7 +1907,7 @@ object MultiPeerHeadHarness:
                   callerTracer,
                   uplinkFactory,
                 )
-                ref <- Resource.eval(system.actorOf(mrm, actorName))
+                ref <- Resource.eval(actors.actorOf(mrm, actorName))
             yield (mrm, ref: NoSendActorRef[IO])
 
     // ===================================
@@ -1783,6 +1927,7 @@ object MultiPeerHeadHarness:
         def mkPeerSubmissionClient(
             peerNum: HeadPeerNumber,
             conns: HeadMultisigRegimeManager.Connections,
+            submissions: SubmissionGate,
             multiNodeConfig: MultiNodeConfig,
         ): IO[SubmissionClient] =
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
@@ -1805,6 +1950,7 @@ object MultiPeerHeadHarness:
               // Some: the harness builds a head node's routes, and only a head mounts the
               // submission and admin-finalize endpoints.
               Some(requestSequencer),
+              submissions,
               conns.blockWeaver,
               // The harness runs no head lifecycle, so readiness is a constant Active.
               IO.pure(NodeStatus.Active),
@@ -1828,20 +1974,18 @@ object MultiPeerHeadHarness:
     // ===================================
 
     object ErrorDrainer:
-        /** Spawn a fiber that drains `system.eventStream` and appends every uncaught actor
-          * exception to `sutErrors`. Cancelled on release.
+        /** Append `event` to `sutErrors` if it is an uncaught actor exception.
+          *
+          * Handed to [[HydrozoaActorSystem]] as its `onEvent`, so it runs inside the system's own
+          * event-stream listener: `ActorSystem` already runs one `take` loop over its event stream,
+          * and a second loop on the same queue splits the events between the two, each event
+          * reaching exactly one of them, so an error could miss `sutErrors` entirely.
           */
-        def start(
-            system: ActorSystem[IO],
-            sutErrors: Ref[IO, List[String]],
-        ): Resource[IO, Unit] =
-            startedFiber(
-              system.eventStream.take.flatMap {
-                  case e: ActorError if e.cause != ActorError.NoCause =>
-                      sutErrors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
-                  case _ => IO.unit
-              }.foreverM
-            )
+        def record(sutErrors: Ref[IO, List[String]])(event: Any): IO[Unit] = event match {
+            case e: ActorError if e.cause != ActorError.NoCause =>
+                sutErrors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
+            case _ => IO.unit
+        }
 
     // ===================================
     // Ticks — per-CardanoLiaison tick fibers
@@ -1885,11 +2029,3 @@ object MultiPeerHeadHarness:
             conns: HeadMultisigRegimeManager.Connections,
         ): IO[Nothing] =
             (IO.sleep(pollingPeriod) >> (conns.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM
-
-    // ===================================
-    // Shared helper
-    // ===================================
-
-    /** Long-running fiber managed as a resource: started on acquire, cancelled on release. */
-    private def startedFiber(action: IO[Nothing]): Resource[IO, Unit] =
-        Resource.make(action.start)(_.cancel).void
