@@ -4,7 +4,7 @@
 # describes. From the head directory, with this repo checked out at $HYDROZOA_REPO:
 #
 #   docker compose -p hydrozoa-local -f docker-compose.yml \
-#       -f "$HYDROZOA_REPO/docker-compose.yaci.yml" up -d
+#       -f "$HYDROZOA_REPO/integration/yaci/docker-compose.yaci.yml" up -d
 #
 # The `-p` project name keeps a local devnet run from colliding with a `docker compose up` against
 # a public testnet. Nothing in the scaffolded docker-compose.yml mentions Yaci; drop this file and

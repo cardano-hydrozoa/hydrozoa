@@ -55,7 +55,7 @@ object DockerTopology {
       coilQuorum = 2,
       project = "hydrozoa-e2e",
       tag = "[smoke]",
-      composeOverlayNames = List("docker-compose.yaci.yml")
+      composeOverlayNames = List("integration/yaci/docker-compose.yaci.yml")
     )
 
     /** [[shipped]] again, under its own compose project. The project namespaces the peers' named

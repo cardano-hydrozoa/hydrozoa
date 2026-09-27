@@ -47,7 +47,7 @@ import scalus.uplc.builtin.ByteString
   * without `coilQuorum` of them signing, so a broken coil surfaces as a `/ready` timeout rather
   * than passing unnoticed.
   *
-  * '''Devnet bring-up goes through `scripts/yaci-devnet.sh`''' — the same script
+  * '''Devnet bring-up goes through `integration/yaci/yaci-devnet.sh`''' — the same script
   * docs/user-guide/DEPLOYMENT.md hands an operator, rather than a Scala reimplementation that could
   * drift from it. That script owns every devnet-specific step: creating the devnet, describing its
   * chain, and funding head-0 (a devnet has no faucet).
@@ -362,7 +362,7 @@ abstract class DockerHeadSuite(topology: DockerTopology, scenarioName: String) e
 
     // ---- process orchestration ---------------------------------------------------------------
 
-    /** Run `scripts/yaci-devnet.sh`, the same entry point the deployment guide documents.
+    /** Run `integration/yaci/yaci-devnet.sh`, the same entry point the deployment guide documents.
       *
       * `COMPOSE_PROJECT_NAME` points it at this run's project, so the devnet it creates is the one
       * the peers join, and `HYDROZOA_BIN` at the staged launcher the recipe just built.
@@ -538,7 +538,7 @@ object DockerHeadSuite:
         destination: ShelleyAddress
     )
 
-    /** The devnet's host-mapped Blockfrost port (`docker-compose.yaci.yml`). */
+    /** The devnet's host-mapped Blockfrost port (`integration/yaci/docker-compose.yaci.yml`). */
     private val HostBlockfrostUrl = "http://localhost:18080/api/v1"
 
     /** The in-mesh URL the containers use (compose service name `yaci`). */
@@ -598,7 +598,7 @@ object DockerHeadSuite:
       * reimplementing its steps.
       */
     private lazy val devnetScript: Path = {
-        val path = repoRoot.resolve("scripts").resolve("yaci-devnet.sh")
+        val path = repoRoot.resolve("integration/yaci/yaci-devnet.sh")
         if !Files.isExecutable(path) then throw RuntimeException(s"$path is missing")
         path
     }
