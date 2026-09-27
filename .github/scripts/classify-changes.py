@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Decide which CI tests run (the `tests` and `yaci` jobs), from the files a pull request changes.
+"""Decide which CI tests run (the `unit`, `integration` and `yaci` jobs), from the files a pull
+request changes.
 
 Every changed path falls into one bucket; the first matching rule in BUCKETS wins:
   unit         under docs/api/: the unit tests check these schemas against the code
