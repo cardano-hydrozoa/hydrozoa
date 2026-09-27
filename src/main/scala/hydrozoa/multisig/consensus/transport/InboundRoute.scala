@@ -7,6 +7,10 @@ package hydrozoa.multisig.consensus.transport
   * differently: a frame on a never-registered link is a wiring fault or an early frame, while a
   * frame on a closed one is the other end not yet knowing that this node stopped its liaison (it
   * handed off to the rule-based regime), and is expected.
+  *
+  * Registering a liaison over a closed route reopens it, and hands the new liaison any join frame
+  * held meanwhile. That is deliberate: a liaison registered after the handoff would reopen the
+  * link, and nothing does that today.
   */
 enum InboundRoute[+H]:
 
