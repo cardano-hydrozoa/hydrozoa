@@ -19,7 +19,7 @@ test steps decide pass or fail, and this only reports.
 FORMATS, version 1 (the canonical description; the Scala writers point here)
 ============================================================================
 
-Dead letters: `hydrozoa.dead-letters` v1, a text format described after the JSON ones.
+Dead letters: `hydrozoa.dead-letters` v1, a text format described after them.
 
 Two JSON-lines formats: one JSON object per line, UTF-8, `\\n`-terminated, each line flushed as
 written. Every object has "type" and "time" (epoch milliseconds). Readers must reject a file whose
@@ -74,6 +74,16 @@ any (a compilation with nothing to report may not call it).
 A compile served from sbt 2's cache starts no compilation, so its file keeps the previous
 compile's problems: readers use compile problems only to explain a test step that failed, and
 otherwise note them as stale.
+
+Dead letters: `hydrozoa.dead-letters` v1. Written by the CI logging configs
+(src/test/resources/logback-core-ci.xml, integration/src/test/resources/logback-ci.xml) inside
+each forked test JVM, appended to `<project's Test/target>/ci-events/dead-letters.tsv`. Each JVM
+that opens the file writes the header line `#hydrozoa.dead-letters<TAB>1`; every other line is one
+dead letter: the level, a tab, and the message (`<message class> to <recipient path>[ from <sender
+path>] (system running|system stopping|recipient crashed on purpose)`), tabs and newlines
+flattened. WARN means the actor system was running; DEBUG that the dead letter was expected (the
+system stopping, or a test having crashed the recipient on purpose). A file whose first line isn't
+that header, or a line with another level, is invalid.
 
 HOW THIS READER JUDGES (never "passed" without positive evidence; unknown input is never a pass)
 ===============================================================================================
@@ -150,17 +160,14 @@ by the things it counts holds their number.
   buildSbt, testedSbt    project/build.properties' sbt.version (null if unreadable), TESTED_SBT
   junitOnly, eventsOnly  sorted suite names with a JUnit report and no suite-end, and the reverse
   excludedCanaryFiles    files skipped for a `ci-canary` directory
+  deadLettersRunning     dead letters at WARN (sent while an actor system ran)
+  deadLettersExpected    dead letters at DEBUG (the system stopping, or a recipient crashed on
+                         purpose)
+  deadLetterFilesInvalid [str]: a reason per dead-letters file that couldn't be read
   notes                  [str]
+The three deadLetter fields were added within v1: they are new fields, and no existing field
+changed meaning, so a reader of the earlier v1 is unaffected.
 
-Dead letters: `hydrozoa.dead-letters` v1. Written by the CI logging configs
-(src/test/resources/logback-core-ci.xml, integration/src/test/resources/logback-ci.xml) inside
-each forked test JVM, appended to `<project's Test/target>/ci-events/dead-letters.tsv`. Each JVM
-that opens the file writes the header line `#hydrozoa.dead-letters<TAB>1`; every other line is one
-dead letter: the level, a tab, and the message (`<message class> to <recipient path>[ from <sender
-path>] (system running|system stopping|recipient crashed on purpose)`), tabs and newlines
-flattened. WARN means the actor system was running; DEBUG that the dead letter was expected, the
-system stopping or a test having crashed the recipient on purpose. A file whose first line isn't that header, or a line with
-another level, is invalid.
 """
 
 import collections
