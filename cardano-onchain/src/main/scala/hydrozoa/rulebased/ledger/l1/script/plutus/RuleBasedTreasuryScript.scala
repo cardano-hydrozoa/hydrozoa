@@ -531,8 +531,7 @@ object RuleBasedTreasuryValidator extends Validator {
 }
 
 object RuleBasedTreasuryScript {
-    // Compile the validator using PlutusV3.compile
-    given scalus.compiler.Options = scalus.compiler.Options.default
+    given scalus.compiler.Options = ScriptCompilerOptions.options
 
     val compiledPlutusV3Program: PlutusV3[Data => Unit] =
         PlutusV3.compile(RuleBasedTreasuryValidator.validate)
