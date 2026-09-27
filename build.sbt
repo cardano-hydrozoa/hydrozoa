@@ -107,6 +107,12 @@ useFixedScalaCheck
 // run by `lintAll` and `lintCheckAll`, over the projects they lint.
 NoBareThrowables.settings(ScopeFilter(inProjects(cardanoOnchain, petri, core, integration, benchmark)))
 
+// `checkCompileState` compiles the projects the lint and the tests need, then fails unless each
+// one's compiled classes are of the current sources (project/CompileState.scala). CI runs it as
+// its compile step, after restoring `target/` from a build of main.
+CompileState.configSettings
+CompileState.settings(inProjects(cardanoOnchain, petri, core, integration, benchmark))
+
 // sbt 2 puts a project's test classes on classpaths as a jar, and packaging that jar picks a
 // `Main-Class` for its manifest from the test sources' main classes: every ScalaCheck
 // `Properties` object has a `main`, so it warns "multiple main classes detected" on every test
