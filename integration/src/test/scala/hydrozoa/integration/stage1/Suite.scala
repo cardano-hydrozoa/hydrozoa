@@ -28,7 +28,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonE
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.eutxol2.toUtxos
-import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.metrics.PeerMetrics
@@ -593,11 +593,14 @@ case class Suite(
                     )
                   )
                   _ <- consensusActorD.complete(consensusActor)
+                  depositRequestIds <- IO.ref(List.empty[RequestId])
               } yield Stage1Sut(
                 headAddress = multiNodeConfig.headConfig.headMultisigAddress,
                 system = system,
                 cardanoBackend = cardanoBackend,
                 agent = agent,
+                persistence = persistence,
+                depositRequestIds = depositRequestIds,
                 log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Sut")),
                 runId = runId,
               )

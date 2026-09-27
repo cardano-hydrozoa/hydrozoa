@@ -26,8 +26,10 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
 import hydrozoa.multisig.ledger.event.{RequestHash, RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import hydrozoa.multisig.persistence.DepositDecision
 import monocle.Lens
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
@@ -94,6 +96,10 @@ object Model:
         // Utxos used in the deposit enqueued as funding utxos.
         // We need this not to generate deposits that use the same utxos for funding many times.
         utxoLocked: Set[TransactionInput],
+
+        // The decision of every decided deposit and the block that made it, as the JointLedger
+        // persists them.
+        depositDecisions: Map[RequestId, DepositDecision] = Map.empty,
     ) {
         override def toString: String = "<model state (hidden)>"
 
@@ -323,14 +329,14 @@ object Model:
     // CompleteBlockCommand
     // ===================================
 
-    given ModelCommand[CompleteBlockCommand, BlockBrief, State] with {
+    given ModelCommand[CompleteBlockCommand, CompletedBlock, State] with {
 
         override def runState[M[_]: MonadThrow](
             cmd: CompleteBlockCommand
-        )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, BlockBrief] =
+        )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, CompletedBlock] =
             for
                 state <- StateT.get[M, State]
-                brief <- state.blockCycle match {
+                completed <- state.blockCycle match {
                     case BlockCycle.InProgress(_, _, prevVersion, accumulator) =>
                         // The digest comes from the request body the model holds, the way a peer
                         // derives it from the body it received (docs/spec/block-hash.md).
@@ -360,6 +366,23 @@ object Model:
                               absorbedThisBlock,
                               refundedThisBlock
                             )
+                            decisions <- recordDecisions[M](
+                              cmd.blockNumber,
+                              absorbedThisBlock,
+                              refundedThisBlock
+                            )
+                            depositMap <- StateT.inspect[M, State, DepositsMap](
+                              _.deposits.hydrozoaKnownRegisteredDeposits.foldLeft(
+                                DepositsMap.empty
+                              )((map, known) =>
+                                  map.append(
+                                    DepositsMap.Entry(
+                                      known.request.requestId,
+                                      known.depositRefundTxSeq.depositTx.depositProduced
+                                    )
+                                  )
+                              )
+                            )
                             // tick time
                             _ <- StateT.modify[M, State](
                               _.advanceCurrentTime(cmd.blockCreationEndTime.convert)
@@ -371,7 +394,7 @@ object Model:
                                     else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
                                 state.copy(blockCycle = nextBlockCycle)
                             }
-                        yield blockBrief
+                        yield CompletedBlock(blockBrief, depositMap, decisions)
                     case _ =>
                         StateT.liftF(
                           MonadThrow[M].raiseError(
@@ -379,7 +402,27 @@ object Model:
                           )
                         )
                 }
-            yield brief
+            yield completed
+
+        /** Record this block's deposit decisions the way the JointLedger persists them
+          * (`StoreKey.DepositDecisionIndex`): each absorbed or rejected deposit maps to this block.
+          * Returns the decisions of every deposit decided so far.
+          */
+        private def recordDecisions[M[_]: Applicative](
+            blockNumber: BlockNumber,
+            absorbed: Queue[Absorbed],
+            refunded: Queue[Refunded]
+        ): StateT[M, State, Map[RequestId, DepositDecision]] =
+            StateT { state =>
+                val decisions = state.depositDecisions
+                    ++ absorbed.map(
+                      _.cmd.request.requestId -> DepositDecision.Absorbed(blockNumber)
+                    )
+                    ++ refunded.map(
+                      _.cmd.request.requestId -> DepositDecision.Rejected(blockNumber)
+                    )
+                (state.copy(depositDecisions = decisions), decisions).pure[M]
+            }
 
         private def getBlockCreationStartTime[M[_]: Applicative]
             : StateT[M, State, BlockCreationStartTime] =
