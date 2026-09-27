@@ -6,6 +6,11 @@ import sbt.hydrozoa.CompileProblems
 // mainClass, launcher script) therefore lives inside the `core` project's `.settings(...)` /
 // `.enablePlugins(...)` block below, not at the top level.
 
+// HYDROZOA_BUILD_TIME (epoch seconds), when set, is the build time `hydrozoa.BuildInfo` reports.
+// Not SOURCE_DATE_EPOCH: every nix shell sets that one (to 1980), release builds included.
+lazy val fixedBuildTimeMillis: Option[Long] =
+    sys.env.get("HYDROZOA_BUILD_TIME").flatMap(_.trim.toLongOption).map(_ * 1000L)
+
 // The git revision baked into the Docker image labels; matches `hydrozoa.BuildInfo.gitCommit`.
 lazy val gitRevision: String =
     scala.util
@@ -379,7 +384,14 @@ lazy val core: Project = (project in file("."))
         }
       ),
       // BuildTime forces a regenerate each build, keeping gitCommit current within a warm session.
-      buildInfoOptions += BuildInfoOption.BuildTime,
+      // With HYDROZOA_BUILD_TIME set (a CI job sets it once, at its start), the build time is
+      // that instead, so BuildInfo.scala is identical in every sbt run of the job and is not
+      // recompiled by each one.
+      buildInfoOptions ++= (if (fixedBuildTimeMillis.isEmpty) Seq(BuildInfoOption.BuildTime) else Nil),
+      buildInfoKeys ++= fixedBuildTimeMillis.toSeq.flatMap { ms =>
+          val fmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSSZ")
+          Seq[BuildInfoKey]("builtAtString" -> fmt.format(ms), "builtAtMillis" -> ms)
+      },
       // Fork JVM to properly pass system properties
       run / fork := true,
       // Silence the JVM's restricted-method warnings (blst-java JNI `System::load`, Scala

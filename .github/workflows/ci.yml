@@ -132,6 +132,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # Every sbt run in this job reports this build time, so each generates the same BuildInfo
+      # source and none recompiles it (HYDROZOA_BUILD_TIME in build.sbt).
+      - name: Fix the build time
+        run: echo "HYDROZOA_BUILD_TIME=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Install Nix
         # Nix's own installer, pinned and verified; see the script.
         # Its download of the Nix tarball has no retry or timeout of its own.
@@ -255,6 +260,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # Every sbt run in this job reports this build time, so each generates the same BuildInfo
+      # source and none recompiles it (HYDROZOA_BUILD_TIME in build.sbt).
+      - name: Fix the build time
+        run: echo "HYDROZOA_BUILD_TIME=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Install Nix
         timeout-minutes: 5
         env:
@@ -339,6 +349,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # Every sbt run in this job reports this build time, so each generates the same BuildInfo
+      # source and none recompiles it (HYDROZOA_BUILD_TIME in build.sbt).
+      - name: Fix the build time
+        run: echo "HYDROZOA_BUILD_TIME=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Install Nix
         timeout-minutes: 5
