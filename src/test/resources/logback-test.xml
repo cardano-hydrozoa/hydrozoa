@@ -1,7 +1,7 @@
 <configuration>
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>{HH:mm:ss} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
             </pattern>
         </encoder>
     </appender>
@@ -43,7 +43,11 @@
     <logger name="SettlementTx" level="warn"/>
     <logger name="Generators" level="warn"/>
     <logger name="scalus" level="warn"/>
-    <!-- Fixtures for Slf4jTracerTest: prove the level gate skips (or forces) rendering. -->
+    <!-- Fixtures for Slf4jTracerTest: prove the level gate skips (or forces) rendering. The test
+         reads the gate's decision, not the output, so `on` writes nowhere. -->
+    <appender name="NOWHERE" class="ch.qos.logback.core.helpers.NOPAppender"/>
     <logger name="hydrozoa.test.gated.off" level="off"/>
-    <logger name="hydrozoa.test.gated.on" level="debug"/>
+    <logger name="hydrozoa.test.gated.on" level="debug" additivity="false">
+        <appender-ref ref="NOWHERE"/>
+    </logger>
 </configuration>
