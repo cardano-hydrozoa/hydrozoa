@@ -757,11 +757,11 @@ object MultiPeerHeadHarness:
       * store. No real restart can produce that, because the old process is gone before the new one
       * opens the store.
       *
-      * The subtree is marked as crashed on purpose first, so the messages its actors lose, as a
+      * The subtree is marked as stopped on purpose first, so the messages its actors lose, as a
       * real crash would, are logged as that and not counted as dead letters while running.
       */
     private def stopAndAwait(actors: HydrozoaActorSystem, ref: NoSendActorRef[IO]): IO[Unit] =
-        actors.markCrashed(ref) >> SubtreeStop.stopAndAwait(actors.system, ref)
+        actors.expectDeadLetters(ref) >> SubtreeStop.stopAndAwait(actors.system, ref)
 
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns everything;
       * release cancels the CL tick fibers.

@@ -100,23 +100,25 @@ class HandoffDetachTest extends AnyFunSuite {
     private def handOff(detach: Boolean): (Vector[String], Int) = {
         val run = for {
             deadLetters <- Ref[IO].of(0)
-            steps <- HydrozoaActorSystem
-                .withoutRoot(
-                  s"handoff-detach-$detach",
-                  {
-                      case Debug(_, _, dl: DeadLetter[?]) if isPull(dl) =>
-                          deadLetters.update(_ + 1)
-                      case _ => IO.unit
-                  }
-                )
-                .use { system =>
+            steps <- HydrozoaActorSystem(
+              s"handoff-detach-$detach",
+              {
+                  case Debug(_, _, dl: DeadLetter[?]) if isPull(dl) =>
+                      deadLetters.update(_ + 1)
+                  case _ => IO.unit
+              }
+            )
+                .use { actors =>
                     for {
                         registry <- InProcessPeerTransport.emptyRegistry
                         ownT <- InProcessPeerTransport.create(own, registry)
                         remoteT <- InProcessPeerTransport.create(remote, registry)
                         log <- Ref[IO].of(Vector.empty[String])
                         events <- Ref[IO].of(Vector.empty[HeadRegimeManagerEvent])
-                        manager <- system.actorOf(new StubManager(ownT, detach, log, events))
+                        manager <- actors.actorOf(new StubManager(ownT, detach, log, events))
+                        // The control provokes its dead letter on purpose; don't count it as one
+                        // lost while the system ran, in CI's summary. This test counts it itself.
+                        _ <- IO.unlessA(detach)(actors.expectDeadLetters(manager))
                         _ <- await(events)(_.contains(LifecycleEvent.WatchingActors))
                         _ <- remoteT.send(own, pull)
                         _ <- manager ! HandoffToRuleBased
