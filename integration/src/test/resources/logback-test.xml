@@ -42,9 +42,14 @@
     <appender name="MERMAID" class="ch.qos.logback.core.FileAppender">
         <file>stage4-peers-interaction.mmd</file>
         <append>false</append>
-        <layout class="hydrozoa.integration.MermaidSequenceDiagramLayout">
-            <pattern>%msg%n</pattern>
-        </layout>
+        <!-- A layout inside a LayoutWrappingEncoder, not a bare <layout>: logback reports the bare
+             form as a WARN status, and a WARN status makes it print its whole configuration
+             status (about 30 |-INFO lines) to the console of every JVM. -->
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="hydrozoa.integration.MermaidSequenceDiagramLayout">
+                <pattern>%msg%n</pattern>
+            </layout>
+        </encoder>
     </appender>
     <logger name="Mermaid.PeerLiaison" level="info" additivity="false">
         <appender-ref ref="MERMAID"/>
