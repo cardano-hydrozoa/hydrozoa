@@ -22,7 +22,7 @@ import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperatio
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos, generateScriptReferenceUtxos as defaultScriptRefsGen}
 import hydrozoa.integration.yaci.DevKit
-import hydrozoa.lib.actor.HydrozoaActorSystem
+import hydrozoa.lib.actor.{HydrozoaActorSystem, SubtreeStop}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendBlockfrost, CardanoBackendEvent, CardanoBackendEventFormat, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}

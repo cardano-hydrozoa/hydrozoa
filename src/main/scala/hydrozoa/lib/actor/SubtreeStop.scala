@@ -1,4 +1,4 @@
-package hydrozoa.integration.harness
+package hydrozoa.lib.actor
 
 import cats.effect.{Deferred, IO}
 import cats.implicits.*
@@ -32,11 +32,27 @@ object SubtreeStop:
         ref: NoSendActorRef[IO],
         within: FiniteDuration = 1.minute,
     ): IO[Unit] =
-        stopDescendants(system, ref)
-            .flatMap(hadChildren => stopAllAndAwait(system, List(ref -> hadChildren)))
+        stopEachAndAwait(system, List(ref), within)
+
+    /** Stop each of `refs` and its subtree, children first, and wait until every actor in them has
+      * terminated. Siblings are stopped together, as cats-actors stops a parent's children. Fails,
+      * rather than hangs, if that takes longer than `within`.
+      */
+    def stopEachAndAwait(
+        system: ActorSystem[IO],
+        refs: List[NoSendActorRef[IO]],
+        within: FiniteDuration,
+    ): IO[Unit] =
+        refs
+            .parTraverse(ref => stopDescendants(system, ref).tupleLeft(ref))
+            .flatMap(stopAllAndAwait(system, _))
             .timeoutTo(
               within,
-              IO.raiseError(new IllegalStateException(s"$ref did not terminate within $within"))
+              IO.raiseError(
+                new IllegalStateException(
+                  s"${refs.mkString(", ")} did not terminate within $within"
+                )
+              )
             )
 
     /** Stop everything below `ref`, which keeps running, with no children once this returns.
@@ -112,10 +128,10 @@ object SubtreeStop:
             })
         yield terminated.get
 
-    private def childrenOf(ref: NoSendActorRef[IO]): IO[List[NoSendActorRef[IO]]] = ref match
+    private[actor] def childrenOf(ref: NoSendActorRef[IO]): IO[List[NoSendActorRef[IO]]] = ref match
         case r: InternalActorRef[IO, ?, ?] => r.assertCellActiveAndDo(_.children)
         case other => IO.raiseError(new IllegalArgumentException(s"not a local actor: $other"))
 
-    private def isTerminated(ref: NoSendActorRef[IO]): IO[Boolean] = ref match
+    private[actor] def isTerminated(ref: NoSendActorRef[IO]): IO[Boolean] = ref match
         case r: InternalActorRef[IO, ?, ?] => r.assertCellActiveAndDo(_.isTerminated)
         case other => IO.raiseError(new IllegalArgumentException(s"not a local actor: $other"))

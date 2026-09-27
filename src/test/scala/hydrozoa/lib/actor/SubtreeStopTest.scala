@@ -1,4 +1,4 @@
-package hydrozoa.integration.harness
+package hydrozoa.lib.actor
 
 import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Ref}
@@ -6,7 +6,6 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.DeadLetter
 import com.suprnation.actor.event.Debug
-import hydrozoa.lib.actor.HydrozoaActorSystem
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
 
