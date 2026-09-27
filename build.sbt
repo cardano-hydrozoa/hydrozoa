@@ -284,7 +284,7 @@ lazy val core: Project = (project in file("."))
         // PropertyM (QuickCheck-style monadic properties) extracted to its own repo, served via
         // JitPack. Package stays `org.scalacheck`; propagates to integration/examples via test->test.
         // JitPack strips the Scala `_3` suffix, hence a single `%`. Pins ScalaCheck 1.18.0 to match.
-        "com.github.cardano-hydrozoa" % "scalacheck-propertym" % "0.2.0" % Test,
+        "com.github.cardano-hydrozoa" % "scalacheck-propertym" % "0.2.1" % Test,
         "co.fs2" %% "fs2-io" % "3.12.2" % Test
       ),
       // Scalus compiler plugin — compiles on-chain `@Compile` code to UPLC (see `cardanoOnchain`
