@@ -47,13 +47,13 @@ class HydrozoaActorSystemTest extends AnyFunSuite {
             .unsafeRunSync()
 
     // `Error`s and bare `Throwable`s are what the user guardian's rules miss: with those, a failure
-    // left the JVM running with a dead actor system. `new Throwable` is the case the lint rule
-    // forbids in our own code; a library can still throw one.
+    // left the JVM running with a dead actor system. `checkNoBareThrowables` keeps our own classes
+    // under `Exception`, but a library can still throw either.
     private val kinds: List[(String, () => Throwable)] = List(
       "a RuntimeException" -> (() => new RuntimeException("boom")),
       "an AssertionError, as from `assert`" -> (() => new AssertionError("boom")),
       "a NotImplementedError, as from `???`" -> (() => new NotImplementedError("boom")),
-      "a bare Throwable" -> (() => new Throwable("boom")) // scalafix:ok
+      "a bare Throwable" -> (() => new Throwable("boom"))
     )
 
     for (kind, make) <- kinds; nested <- List(false, true) do {
