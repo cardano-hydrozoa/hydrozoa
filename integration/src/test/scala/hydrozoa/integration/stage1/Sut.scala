@@ -236,8 +236,8 @@ object SutCommands:
                   sut.log.error(
                     "Submit deposit errors:" + submissionErrors
                         .map(a =>
-                            s"\n\t- ${a._1._1},\n\terror:\n\t${a._2.left}" +
-                                s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(a._1._2)}" +
+                            s"\n\t- ${a._1._1},\n\terror:\n\t${a._2.fold(_.toString, _ => "")}" +
+                                s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(a._1._2).render(100)}" +
                                 s"\n\tcbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
                         )
                         .mkString
