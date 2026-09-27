@@ -1,20 +1,11 @@
 <!--
   CI logging for the integration tests (selected by the build when CI is set). Everything the
   loggers below pass, with the root at TRACE, goes to integration-tests.log, which the CI workflow
-  uploads as a short-lived artifact; the console, which GitHub keeps in the job log, gets WARN and
-  above only.
+  uploads as a short-lived artifact. Nothing goes to the console: the job log GitHub keeps is for
+  sbt's test results, and a warning a test provokes on purpose would read there as a failure.
 -->
 <configuration>
 
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
-            <level>WARN</level>
-        </filter>
-        <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
-            </pattern>
-        </encoder>
-    </appender>
     <appender name="FILE" class="ch.qos.logback.core.FileAppender">
         <file>integration-tests.log</file>
         <append>false</append>
@@ -46,7 +37,6 @@
     </logger>
 
     <root level="trace">
-        <appender-ref ref="STDOUT"/>
         <appender-ref ref="FILE"/>
     </root>
 
