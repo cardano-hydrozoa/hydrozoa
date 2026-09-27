@@ -328,17 +328,23 @@ final class WsPeerTransport private (
                             val verdict = admit(peerNum, protocolVersion, auth, nonce, head)
                             // One nonce, one handshake: a socket that already has a verdict keeps
                             // it, so a replayed handshake cannot re-bind an established session.
-                            verdictD.complete(verdict).flatMap {
-                                case false => tracer.traceWith(ServerRepeatHandshake(peerNum))
-                                case true =>
-                                    verdict match {
-                                        case Right(remote) =>
-                                            tracer.traceWith(ServerAccepted(remote))
-                                        case Left(refusal) =>
-                                            tracer.traceWith(
-                                              ServerRefusedHandshake(peerNum, refusal)
-                                            )
-                                    }
+                            // `tryGet` then `complete` is not a race: this pipe is the only thing
+                            // that completes `verdictD`, and it takes one frame at a time.
+                            verdictD.tryGet.flatMap {
+                                case Some(_) => tracer.traceWith(ServerRepeatHandshake(peerNum))
+                                case None    =>
+                                    // Traced BEFORE it is completed, because completing it is what
+                                    // acts on it. A refusal goes straight out and the socket
+                                    // closes, and the connection can be torn down, and this fiber
+                                    // with it, before a trace placed after it runs: a refusal on
+                                    // the wire that nobody logged.
+                                    verdict.fold(
+                                      refusal =>
+                                          tracer.traceWith(
+                                            ServerRefusedHandshake(peerNum, refusal)
+                                          ),
+                                      remote => tracer.traceWith(ServerAccepted(remote))
+                                    ) >> verdictD.complete(verdict).void
                             }
                         case Right(HeadFrame.Msg(payload)) =>
                             verdictD.tryGet.flatMap {
