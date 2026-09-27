@@ -25,7 +25,7 @@ object HeadMultisigRegimeManagerEventFormat:
             case LifecycleEvent.SupervisedFailureEscalated(cause) =>
                 LogEvent(
                   Level.Error,
-                  "A supervised actor failed; escalating to the guardian, which will stop the system.",
+                  "A supervised actor failed; escalating to the root, which will stop the system.",
                   cause = Some(cause),
                   routingKey = Some("Supervision")
                 )

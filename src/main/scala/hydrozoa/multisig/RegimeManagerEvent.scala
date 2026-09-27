@@ -35,9 +35,8 @@ object LifecycleEvent:
     final case class TerminatedActor(actor: Actors) extends LifecycleEvent
     final case class TerminatedDependency(dep: Dependencies) extends LifecycleEvent
 
-    /** A supervised child failed and the decider escalated to the guardian, which stops the system.
-      * Carries the original `cause`: escalation re-raises a secondary failure before the cause is
-      * reported, so this is the only record of why the node stopped.
+    /** A supervised child failed and the decider escalated to the root, which stops the system.
+      * Carries the original `cause`.
       */
     final case class SupervisedFailureEscalated(cause: Throwable) extends LifecycleEvent
 
