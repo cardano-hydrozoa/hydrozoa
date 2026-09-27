@@ -741,15 +741,15 @@ trait ModelBasedSuite {
       * clock moves on.
       *
       * A single `tc.advance(delay)` would instead make every timer inside the window due at once,
-      * at its end: a periodic task (a `CardanoLiaison` poll, every ≤100 ms in Stage 4) would then
-      * fire once instead of `delay / period` times, and a delayed delivery (the 5 s soft-block
-      * limiter) would land `delay` late, in whatever order the scheduler picks. That quantizes the
-      * SUT's notion of time to command arrivals and breaks its timing contract — e.g. the leader
-      * completing a block on L1 poll results `delay` old, rejecting a deposit its followers see
+      * at its end: a periodic task (a `CardanoLiaison` poll) would then fire once instead of
+      * `delay / period` times, and a delayed delivery (the soft-block limiter) would land up to
+      * `delay` late, in whatever order the scheduler picks. That quantizes the SUT's notion of time
+      * to command arrivals and breaks its timing contract — e.g. the leader completing a block on
+      * L1 poll results up to `delay` old, rejecting a deposit its followers see
       * (`TxTiming.cardanoLiaisonPollingPeriodSafetyFactor`).
       *
-      * Ready fibers are drained with `tickOne` before each step; the same 1 s ping loops that rule
-      * out `tickAll` are bounded here by `delay`.
+      * Ready fibers are drained with `tickOne` before each step; the same per-actor ping loops that
+      * rule out `tickAll` are bounded here by `delay`.
       */
     private def advanceThroughTimers[A](tc: TestControl[A], delay: FiniteDuration): IO[Unit] =
         tc.tickOne.flatMap {

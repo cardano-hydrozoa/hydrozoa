@@ -7,12 +7,12 @@ import scalus.cardano.ledger.ExUnits
   * [[EvacuationTx]]'s build loop guards with a component-wise ex-unit check.
   *
   * scalus's `Ordering[ExUnits]` (`scalus/cardano/ledger/Types.scala`) is lexicographic,
-  * memory-first, so `actual > max` is governed by `memory` alone whenever the memories differ. Up
-  * to scalus 1.0.0, `scalus.cardano.ledger.rules.ExUnitsTooBigValidator` decided "over the per-tx
-  * budget?" with that comparison and passed such a tx, which the real ledger rejects
-  * (`ExUnitsTooBigUTxO`). This surfaced on a Yaci devnet as an over-budget rule-based evacuation tx
-  * that the build never halved. From 1.1.0 the ordering is deprecated and the validator uses the
-  * component-wise `ExUnits.exceeds`, which is what this test now pins.
+  * memory-first, so `actual > max` is governed by `memory` alone whenever the memories differ: it
+  * calls such a tx within budget, although the real ledger rejects it (`ExUnitsTooBigUTxO`). The
+  * ordering is deprecated, and `scalus.cardano.ledger.rules.ExUnitsTooBigValidator` judges "over
+  * the per-tx budget?" with the component-wise `ExUnits.exceeds`, which this test pins.
+  *
+  * The name is from scalus 1.0.0, whose validator compared budgets with the ordering.
   */
 class ExUnitsOrderingScalusBugTest extends AnyFunSuite {
 

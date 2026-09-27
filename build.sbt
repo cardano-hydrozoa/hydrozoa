@@ -81,8 +81,9 @@ lazy val recordTestEvents: Seq[Setting[?]] = Seq(
   )
 )
 
-// And every compiler problem, from sbt's reporter, to `<target>/ci-events/compile-<config>.jsonl`
-// (project/CompileProblems.scala). A bare setting, so it reaches every project.
+// CI's summary also reads every compiler problem, recorded from sbt's reporter to
+// `<target>/ci-events/compile-<config>.jsonl` (project/CompileProblems.scala). A bare setting, so
+// it reaches every project.
 CompileProblems.settings(Compile) ++ CompileProblems.settings(Test)
 
 // Registering the wrapper is per-project, and forgetting it in a new subproject would silently
@@ -460,10 +461,11 @@ lazy val integration: Project = (project in file("integration"))
         "--sun-misc-unsafe-memory-access=allow",
         "-Dapi.version=1.44"
       ),
-      // Under CI, log through logback-ci.xml (console at WARN, everything to integration-tests.log,
-      // which the workflow uploads). A setting rather than an environment variable, because the
-      // forked test JVM inherits the environment of the sbt server, which a CI job starts in its
-      // first step; `Def.uncached` so the CI check is read on every run, not cached per machine.
+      // Under CI, log through logback-ci.xml (console at WARN, the detailed log to
+      // integration-tests.log, which the workflow uploads). A setting rather than an environment
+      // variable, because a forked test JVM inherits the environment of the sbt that forks it,
+      // which can be a server started by an earlier call; `Def.uncached` so the CI check is read
+      // on every run, not cached per machine.
       Test / javaOptions ++= Def.uncached(
         if (sys.env.contains("CI")) Seq("-Dlogback.configurationFile=logback-ci.xml") else Nil
       )

@@ -76,11 +76,11 @@ trait CoilMultisigRegimeManager(
             // and this ledger. Everything below reads what the join settles.
             transport = coilTransport(context)
             joinSettled <- Deferred[IO, Either[Throwable, Unit]]
-            // The hub answers an announcement by sending to whichever liaison the transport has
-            // registered AT THAT MOMENT, and a cold coil waits for that answer forever. The liaison
-            // announces from its own first message, which can run before `register` below — and
-            // then the answer goes to nobody (first boot) or to the previous, stopped liaison (a
-            // respawn), and the join never ends. So the announcement waits for the registration.
+            // The announcement waits for `register` below. The hub answers it by sending to
+            // whichever liaison the transport has registered at that moment, and a cold coil waits
+            // for that answer forever. The liaison announces from its own first message, which can
+            // run before `register`: the answer would then go to nobody (first boot) or to the
+            // previous, stopped liaison (a respawn), and the join would never end.
             registered <- Deferred[IO, Unit]
             hubLiaison <- context.actorOf(
               liaison.PeerLiaisonCoilToHub(

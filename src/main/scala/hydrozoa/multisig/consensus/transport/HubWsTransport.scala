@@ -102,8 +102,8 @@ final class HubWsTransport private (
       * **held** (the latest one) rather than dropped. A coil sends it once per dial and a healthy
       * link is never redialed, and without it the hub never answers, so a cold coil waits
       * indefinitely. The hub's server can be accepting before the node has built and registered its
-      * liaisons, so this ordering does occur. Pull traffic is still dropped: the coil's puller
-      * resends it.
+      * liaisons, so this ordering does occur. Pull traffic is dropped: the coil's puller resends
+      * it.
       */
     private def toLiaison(
         coil: CoilPeerNumber,

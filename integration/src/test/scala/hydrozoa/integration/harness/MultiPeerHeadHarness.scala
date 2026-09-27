@@ -674,9 +674,10 @@ object MultiPeerHeadHarness:
       * (cats-actors' `TerminateActorSystem`). From then on every `?` asked of an actor waits
       * forever, while the harness's own CL tick loops and the metrics samplers are plain fibers,
       * not actors, and keep scheduling timers. Under TestControl the clock therefore keeps
-      * advancing, nothing completes, and `TestControlDriver` ticks forever: the failure that caused
-      * it is never reported. Racing the body against termination ends the run at once with the
-      * errors the listener recorded.
+      * advancing, nothing completes, and `TestControlDriver` ticks until its horizon, then reports
+      * only that the program was still running: the failure that caused it is never reported.
+      * Racing the body against termination ends the run at once with the errors the listener
+      * recorded.
       */
     def useGuarded[H, A](inputs: Inputs, hooks: Hooks[H])(body: Harness[H] => IO[A]): IO[A] =
         resource(inputs, hooks).use(harness => guarded(harness)(body(harness)))
@@ -1905,9 +1906,9 @@ object MultiPeerHeadHarness:
         /** The actor system's event-stream listener: print every event as cats-actors' default
           * listener does, and append every uncaught actor exception to `sutErrors`.
           *
-          * It has to BE the listener. `ActorSystem` already runs one `take` loop over its event
-          * stream, and a second loop on the same queue splits the events between the two — each
-          * event reached exactly one of them, so an error could miss `sutErrors` entirely.
+          * It has to be the listener itself: `ActorSystem` already runs one `take` loop over its
+          * event stream, and a second loop on the same queue splits the events between the two,
+          * each event reaching exactly one of them, so an error could miss `sutErrors` entirely.
           */
         def listener(sutErrors: Ref[IO, List[String]]): Any => IO[Unit] = event =>
             // Uncancelable, recording first: the system cancels this listener as it terminates,

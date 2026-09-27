@@ -10,7 +10,7 @@ import sbt.testing.*
   * The format is `hydrozoa.test-events` version 1, described in `.github/scripts/test-summary.py`,
   * which reads it. Each line is written and flushed as it happens, so a suite that hangs or a JVM
   * that dies still leaves its `suite-start` behind; sbt's JUnit reports, by contrast, are written
-  * only when a suite ends, and record nothing for a cancelled test.
+  * only when a suite ends, and write a cancelled test with no status, so it reads as passed.
   *
   * Recording is on when the forked test JVM gets `-Dhydrozoa.ci.events=<dir>` (the build sets it
   * for the projects whose frameworks are wrapped in [[RecordingFramework]]); without it, the

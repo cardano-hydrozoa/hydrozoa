@@ -5,13 +5,15 @@ Usage: test-summary.py [--json FILE] [ROOT ...]   (default ROOT: target). Reads,
   - test events:        **/ci-events/tests-*.jsonl
   - compile problems:   **/ci-events/compile-*.jsonl
   - JUnit report NAMES: **/test-reports/TEST-*.xml (names only, as a cross-check; never parsed)
-skipping any file with a directory named `ci-canary` between the root and itself (the reporting
-canary's own project; the canary check passes its snapshot directory as the root), plus the test
-steps' outcomes from $TEST_STEPS ("unit=success integration=failure"; skipped steps didn't run by
-design and are left out) and the sbt version from ./project/build.properties.
+and skips any file with a directory named `ci-canary` between the root and itself: that is the
+reporting canary's own project, and the canary check passes its snapshot directory as the root.
+It also reads the test steps' outcomes from $TEST_STEPS ("unit=success integration=failure";
+skipped steps didn't run by design and are left out), and the sbt version from
+./project/build.properties.
+
 Writes a Markdown summary to $GITHUB_STEP_SUMMARY (stdout when unset), workflow-command
 annotations to stdout, and with --json the result below to FILE. Exit status is always 0: the
-test steps decide pass or fail; this reports.
+test steps decide pass or fail, and this only reports.
 
 FORMATS, version 1 (the canonical description; the Scala writers point here)
 ============================================================================
@@ -43,7 +45,8 @@ Lines, in order of writing (suites run in parallel, so lines of different suites
       suite), wildcard (with test), other (with text).
     - durationMs: as reported; -1 or negative means unknown. Don't rely on it.
     - throwable: null or {"class":"java.lang.AssertionError","message":"...","trace":"..."};
-      message capped at 16,000 chars and trace at 32,000 when written.
+      message cut after 16,000 chars and trace after 32,000 when written, each followed by a
+      note of how many chars were cut.
  5. suite-end: when that task's execute returns or throws ("threw": a throwable as above, or null):
     {"type":"suite-end","time":...,"runner":1,"task":7,"suite":"hydrozoa.FooTest","threw":null}
  6. run-end: when the framework's runner is done:
@@ -53,8 +56,9 @@ a runner-start without run-end. A hard kill may lose the line being written.
 
 Compile problems: `hydrozoa.compile-problems` v1. Written by a compiler-reporter wrapper in the
 build (sbt's JVM), one file per project and configuration:
-`<project's target>/ci-events/compile-<config>.jsonl`, truncated and restarted with a header each
-time that compilation starts (so it holds the latest compile's problems).
+`<project's target>/ci-events/compile-<config>.jsonl`, started over with a header the first time a
+compilation calls the reporter, so it holds the problems of the latest compilation that reported
+any (a compilation with nothing to report may not call it).
  1. header: {"type":"header","time":...,"schema":"hydrozoa.compile-problems","version":1,
              "project":"core","config":"test","sbt":"2.0.1","scala":"3.3.7"}
  2. problem: {"type":"problem","time":...,"severity":"Error","category":"...","code":"7",
@@ -73,8 +77,8 @@ HOW THIS READER JUDGES (never "passed" without positive evidence; unknown input 
 
 - A file whose first line is not a header naming the schema its file name implies, with version
   the JSON integer 1, is INVALID and its contents are not read. A malformed line (not UTF-8, not
-  JSON, not an object; an empty line) anywhere but last makes the file INVALID; its other lines
-  are still read, so failures stay visible. So do structural violations: a second header, a
+  JSON, not an object; an empty line) that ends in its `\\n` makes the file INVALID; its other
+  lines are still read, so failures stay visible. So do structural violations: a second header, a
   duplicate runner or task, an event or suite-end for a task that isn't running, a suite-start for
   an unknown runner. A test-events file whose last line lacks its `\\n` was cut off by a kill: DID
   NOT FINISH (in a compile file, a note). Colour codes (ESC[...m) are dropped from all text.
@@ -106,7 +110,8 @@ THE --json RESULT (`hydrozoa.test-summary` v1; for the reporting canary, which c
 ===================================================================================================
 
 One JSON object. Names are as written (colour codes dropped); files are relative to the current
-directory; lists are in file order (files sorted by path) unless marked sorted.
+directory; lists are in file order (files sorted by path) unless marked sorted. A field described
+by the things it counts holds their number.
   schema, version        "hydrozoa.test-summary", 1
   verdict                "passed", or the first of states
   states                 ["passed"], or every not-passed state, in this order: "failed",
@@ -131,9 +136,10 @@ directory; lists are in file order (files sorted by path) unless marked sorted.
   unfinishedJvms         [{file, pid, project, runners: [framework of each unended runner],
                          noRunner: bool, truncated: bool}] for each test-events file that did not
                          finish
-  jvms                   valid test-events files
+  jvms                   test-events files with a valid header
   compileErrors          [{file, line, column, code, category, message}]: every problem whose
-                         severity isn't Warn or Info, from every valid compile file, live or stale
+                         severity isn't Warn or Info, from every compile file with a valid
+                         header, live or stale
   compileErrorsLive      true when a step didn't succeed (the errors are shown and annotated)
   compileWarnings        problems with severity Warn or Info
   invalidFiles           [{file, reasons: [str]}]
@@ -548,7 +554,8 @@ def main():
     errs = [p for p in res.compile if p["severity"] not in ("Warn", "Info")]
     live = bool(not_ok)  # compile errors can explain a step that didn't succeed
 
-    # (title, message): error annotations, a state's warning annotations, other warnings
+    # errors, cautions and warnings hold (title, message) pairs: error annotations, a state's
+    # warning annotations, and other warnings.
     states, errors, cautions, warnings = [], [], [], []
 
     def state(name, title=None, message=None, level=errors):

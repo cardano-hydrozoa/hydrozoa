@@ -85,8 +85,8 @@ final class CoilPeerWsTransport private (
       * answers once per dial and a healthy link is never redialed, while a cold coil waits for its
       * answer indefinitely, so a dropped answer is never replaced and the coil never boots. The
       * dialer can be up before the node has built and registered its liaison, so this ordering does
-      * occur. Pull traffic is still dropped: it answers or asks for a pull no current liaison made,
-      * and the pullers resend.
+      * occur. Pull traffic is dropped: it answers or asks for a pull no current liaison made, and
+      * the pullers resend.
       */
     private def toLiaison(request: LiaisonProtocol.FromHub): IO[Unit] =
         inboundRef.get.flatMap {

@@ -39,8 +39,8 @@
           exec ${sbt0}/bin/sbt "-Dsbt.script=$self" "''${args[@]}"
         '';
         # The nixpkgs `sbt` package with `sbt` replaced by the BSP shim above. Its `sbtn` (the thin
-        # client, 2.0.0-RC13 on nixos-26.05) is the binary the launcher itself runs for a plain `sbt`
-        # on an sbt 2 build; `--server` runs sbt in-process instead.
+        # client) is the binary the launcher itself runs for a plain `sbt` on an sbt 2 build;
+        # `--server` runs sbt in-process instead.
         sbtWithBspShim = pkgs.symlinkJoin {
           name = "sbt-with-bsp-shim";
           paths = [ sbt0 ];
@@ -80,8 +80,8 @@
             ];
             inherit (pre-commit-check) shellHook;
           };
-          # What the CI workflow runs (`nix develop .#ci`): the JDK, sbt, and the recipes' `just` and
-          # `nixfmt`. No developer tools, and no pre-commit hook installed on entry.
+          # What the CI workflow runs (`nix develop .#ci`): only what the recipes need, with no
+          # developer tools and no pre-commit hook installed on entry.
           ci = pkgs.mkShell {
             JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
             packages = with pkgs; [
