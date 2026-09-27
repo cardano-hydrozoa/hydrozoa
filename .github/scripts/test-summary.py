@@ -157,8 +157,9 @@ Dead letters: `hydrozoa.dead-letters` v1. Written by the CI logging configs
 each forked test JVM, appended to `<project's Test/target>/ci-events/dead-letters.tsv`. Each JVM
 that opens the file writes the header line `#hydrozoa.dead-letters<TAB>1`; every other line is one
 dead letter: the level, a tab, and the message (`<message class> to <recipient path>[ from <sender
-path>] (system running|system stopping)`), tabs and newlines flattened. WARN means the actor system
-was running, DEBUG that it was stopping. A file whose first line isn't that header, or a line with
+path>] (system running|system stopping|recipient crashed on purpose)`), tabs and newlines
+flattened. WARN means the actor system was running; DEBUG that the dead letter was expected, the
+system stopping or a test having crashed the recipient on purpose. A file whose first line isn't that header, or a line with
 another level, is invalid.
 """
 
@@ -313,7 +314,7 @@ def read_jsonl(path, schema):
 
 def read_dead_letters(paths):
     """Dead letters from `hydrozoa.dead-letters` files: (messages sent while running, how many
-    while stopping, one reason per invalid file)."""
+    were expected, one reason per invalid file)."""
     running, stopping, invalid = [], 0, []
     for path in paths:
         try:
@@ -590,7 +591,7 @@ def main():
         res.read_tests(path)
     for path in find(roots, os.path.join("ci-events", "compile-*.jsonl"), excluded):
         res.read_compile(path)
-    dead, dead_stopping, dead_invalid = read_dead_letters(
+    dead, dead_expected, dead_invalid = read_dead_letters(
         find(roots, os.path.join("ci-events", "dead-letters.tsv"), excluded)
     )
     xml_files = find(roots, os.path.join("test-reports", "TEST-*.xml"), excluded)
@@ -746,7 +747,7 @@ def main():
             "compileErrorsLive": live, "compileWarnings": warns, "invalidFiles": res.invalid,
             "versionErrors": versions, "buildSbt": built, "testedSbt": TESTED_SBT,
             "junitOnly": only_xml, "eventsOnly": only_ev, "excludedCanaryFiles": len(excluded),
-            "deadLettersRunning": len(dead), "deadLettersStopping": dead_stopping,
+            "deadLettersRunning": len(dead), "deadLettersExpected": dead_expected,
             "deadLetterFilesInvalid": dead_invalid,
             "notes": notes,
         }  # fmt: skip
@@ -770,8 +771,8 @@ def main():
     if steps:
         out.add("Steps: " + ", ".join(f"{n} {o}" for n, o in steps.items()) + ".\n")
     out.add(
-        f"Dead letters: {len(dead)} while an actor system was running, {dead_stopping} while "
-        "one was stopping.\n"
+        f"Dead letters: {len(dead)} while an actor system was running, {dead_expected} expected "
+        "(the system stopping, or a test crashing the recipient on purpose).\n"
     )
     if errors or cautions or warnings:
         told = errors + cautions + warnings
