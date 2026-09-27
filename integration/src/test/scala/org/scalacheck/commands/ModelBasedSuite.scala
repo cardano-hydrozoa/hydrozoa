@@ -608,7 +608,16 @@ trait ModelBasedSuite {
                 for {
                     result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
                         acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
-                            if hasFailed then IO.pure((sut, p, s, lastCmd, true))
+                            // A command after a failure is skipped but still takes its turn at
+                            // the gate. The outer driver releases one gate per command; without
+                            // this it releases the shutdown gate below as a command's, then fails
+                            // the run with a tick error that hides the failed postcondition.
+                            if hasFailed then
+                                for {
+                                    gate <- Deferred[IO, Unit]
+                                    _ <- IO(pendingDelay.set(Some((Duration.Zero, gate))))
+                                    _ <- gate.get
+                                } yield (sut, p, s, lastCmd, true)
                             else
                                 for {
                                     gate <- Deferred[IO, Unit]
