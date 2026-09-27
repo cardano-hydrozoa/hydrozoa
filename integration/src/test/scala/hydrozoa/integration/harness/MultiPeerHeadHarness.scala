@@ -41,7 +41,7 @@ import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat, StoreIdentity}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus, SubmissionGate}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
 import io.circe.{Json, parser}
 import java.nio.file.{Files, Path}
@@ -862,6 +862,7 @@ object MultiPeerHeadHarness:
                       submissionClient <- Http.mkPeerSubmissionClient(
                         peerNum,
                         conns,
+                        peerMrms(peerNum).mrm.submissions,
                         multiNodeConfig,
                       )
                       h <- hooks.handle(PeerId.Head(peerNum), conns)
@@ -922,7 +923,12 @@ object MultiPeerHeadHarness:
                       Ticks.tickLoop(headPollingPeriodOf(peerNum), conns)
                     )
                     _ <- headTicks.update(_.updated(peerNum, tickFib.cancel))
-                    submissionClient <- Http.mkPeerSubmissionClient(peerNum, conns, multiNodeConfig)
+                    submissionClient <- Http.mkPeerSubmissionClient(
+                      peerNum,
+                      conns,
+                      mrm.submissions,
+                      multiNodeConfig
+                    )
                     h <- hooks.handle(PeerId.Head(peerNum), conns)
                     _ <- peerRuntime.update(
                       _.updated(peerNum, Mrm.Peer(mrm, ref, old.backendStore, old.l2Ledger))
@@ -1859,6 +1865,7 @@ object MultiPeerHeadHarness:
         def mkPeerSubmissionClient(
             peerNum: HeadPeerNumber,
             conns: HeadMultisigRegimeManager.Connections,
+            submissions: SubmissionGate,
             multiNodeConfig: MultiNodeConfig,
         ): IO[SubmissionClient] =
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
@@ -1881,6 +1888,7 @@ object MultiPeerHeadHarness:
               // Some: the harness builds a head node's routes, and only a head mounts the
               // submission and admin-finalize endpoints.
               Some(requestSequencer),
+              submissions,
               conns.blockWeaver,
               // The harness runs no head lifecycle, so readiness is a constant Active.
               IO.pure(NodeStatus.Active),

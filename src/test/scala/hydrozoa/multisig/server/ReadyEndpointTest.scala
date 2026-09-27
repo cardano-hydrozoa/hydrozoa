@@ -7,10 +7,10 @@ import hydrozoa.config.GenerateSampleConfig.{defaultSpec, testPeersSpec}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.ConsensusStoreReader
+import hydrozoa.multisig.{NodeStatus, SubmissionGate}
 import io.circe.Json
 import org.http4s.circe.*
 import org.http4s.implicits.*
@@ -51,6 +51,7 @@ class ReadyEndpointTest extends AnyFunSuite:
                     )
                     routes <- HydrozoaRoutes(
                       Some(requestSequencerStub),
+                      SubmissionGate.unsafeOpen(),
                       blockWeaverStub,
                       IO.pure(status),
                       ConsensusStoreReader.empty,

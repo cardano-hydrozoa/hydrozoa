@@ -7,7 +7,6 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -17,6 +16,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.ConsensusStoreReader
+import hydrozoa.multisig.{NodeStatus, SubmissionGate}
 import io.circe.{Json, Printer}
 import org.http4s.circe.*
 import org.http4s.implicits.*
@@ -92,6 +92,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     )
                     routes <- HydrozoaRoutes(
                       Some(requestSequencerStub),
+                      SubmissionGate.unsafeOpen(),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       ConsensusStoreReader.empty,
@@ -128,6 +129,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     )
                     routes <- HydrozoaRoutes(
                       Some(requestSequencerStub),
+                      SubmissionGate.unsafeOpen(),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       ConsensusStoreReader.empty,

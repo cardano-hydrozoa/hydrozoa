@@ -76,6 +76,11 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       */
     val nodeStatus: Ref[IO, NodeStatus] = Ref.unsafe[IO, NodeStatus](NodeStatus.Initializing)
 
+    /** User submissions, closed at the handoff to the rule-based regime before the actors that
+      * answer them stop (see [[SubmissionGate]]). The HTTP submission route admits through it.
+      */
+    val submissions: SubmissionGate = SubmissionGate.unsafeOpen()
+
     /** Every failure escalates, and the decider is **total**.
       *
       * Totality is what the `PartialFunction.fromFunction` wrapper buys: `isDefinedAt` is
@@ -132,7 +137,9 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
             tracer.traceWith(LifecycleEvent.TerminatedDependency(dependencyType))
         case HandoffToRuleBased =>
             nodeStatus.update(_.advanceTo(NodeStatus.HandedOffToRuleBased)) *>
-                onHandoffToRuleBased
+                submissions.closeAndDrain(10.seconds) *>
+                onHandoffToRuleBased *>
+                submissions.markAnswerersStopped
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
