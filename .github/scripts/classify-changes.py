@@ -5,13 +5,17 @@ Every changed path falls into one bucket; the first matching rule in BUCKETS win
   unit         under docs/api/: the unit tests check these schemas against the code
                (OpenApiSchemaTest), so they are test inputs, not documentation
   docs         under docs/, or any *.md file anywhere
+  reporting    what CI's test reporting depends on: the build (build.sbt, project/), Nix, the
+               justfile, .github/, the test-event recorder (src/test/scala/test/) and the reporting
+               canary (ci-canary/)
   core-test    under src/test/: the unit tests, and also a dependency of the integration suites,
                which build on core's test code (`core % "test->test"` in build.sbt)
   integration  under integration/
   other        anything else: production code, build, Nix, workflows, scripts, dotfiles
 A rename counts both its old and its new path; a deletion counts its path. What each bucket runs is
-in RUNS: `other` and `core-test` run everything; docs alone, or no files at all, run nothing heavy.
-Any event but pull_request (merge_group, workflow_dispatch, ...) runs everything.
+in RUNS: `other` and `core-test` run all the tests, and `reporting` also the reporting canary
+(`just ci-canary`); docs alone, or no files at all, run nothing heavy. Any event but pull_request
+(merge_group, workflow_dispatch, ...) runs everything, the canary included.
 
 The change set of a pull_request run is HEAD^1..HEAD. For that event actions/checkout checks out
 GitHub's test merge (refs/pull/N/merge): a two-parent commit whose first parent is the base branch
@@ -28,7 +32,7 @@ Environment:
   GITHUB_EVENT_NAME    the triggering event (set by the runner)
   PR_HEAD_SHA          ${{ github.event.pull_request.head.sha }}; pull_request only
   PR_BASE_SHA          ${{ github.event.pull_request.base.sha }}; optional, only reported
-  GITHUB_OUTPUT        receives code=, unit=, integration= as true/false (optional locally)
+  GITHUB_OUTPUT        receives code=, unit=, integration=, canary= as true/false (optional locally)
   GITHUB_STEP_SUMMARY  receives a readable summary (optional locally)
 
 To try it locally, run it in a clone whose HEAD is a merge of a branch into its base, e.g.
@@ -45,6 +49,11 @@ import sys
 BUCKETS = [
     ("unit", lambda p: p.startswith("docs/api/")),
     ("docs", lambda p: p.startswith("docs/") or p.endswith(".md")),
+    (
+        "reporting",
+        lambda p: p in ("build.sbt", "flake.nix", "flake.lock", "justfile")
+        or p.startswith(("project/", ".github/", "src/test/scala/test/", "ci-canary/")),
+    ),
     ("core-test", lambda p: p.startswith("src/test/")),
     ("integration", lambda p: p.startswith("integration/")),
     ("other", lambda p: True),
@@ -53,11 +62,12 @@ BUCKETS = [
 RUNS = {
     "unit": {"unit"},
     "docs": set(),
+    "reporting": {"unit", "integration", "canary"},
     "core-test": {"unit", "integration"},
     "integration": {"integration"},
     "other": {"unit", "integration"},
 }
-OUTPUTS = ("unit", "integration")
+OUTPUTS = ("unit", "integration", "canary")
 # Above this many files the step summary shows the counts only; the log always lists them all.
 SUMMARY_FILE_LIMIT = 200
 
@@ -139,6 +149,8 @@ def plan_text(runs):
         parts.append("unit tests")
     if "integration" in runs:
         parts.append("integration tests (Yaci included)")
+    if "canary" in runs:
+        parts.append("the reporting canary")
     return ", ".join(parts)
 
 

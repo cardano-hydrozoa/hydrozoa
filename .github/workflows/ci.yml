@@ -36,6 +36,7 @@ jobs:
       code: ${{ steps.plan.outputs.code }}
       unit: ${{ steps.plan.outputs.unit }}
       integration: ${{ steps.plan.outputs.integration }}
+      canary: ${{ steps.plan.outputs.canary }}
     steps:
       # Depth 2 brings in both parents of the PR test merge that `pull_request` checks out, which
       # is what "Plan the run" diffs against.
@@ -58,7 +59,9 @@ jobs:
 
   tests:
     needs: plan
-    if: needs.plan.outputs.unit == 'true' || needs.plan.outputs.integration == 'true'
+    if: >-
+      needs.plan.outputs.unit == 'true' || needs.plan.outputs.integration == 'true' ||
+      needs.plan.outputs.canary == 'true'
     runs-on: ubuntu-24.04
     # Without this the job inherits GitHub's 6-hour default. The integration suite has wedged
     # before (real-clock properties), and each time it burned hours of a hosted runner and produced
@@ -109,6 +112,14 @@ jobs:
         if: ${{ !cancelled() && needs.plan.outputs.integration == 'true' }}
         timeout-minutes: 40
         run: nix develop .#ci --command just integration-fast
+
+      # Tests whose outcomes are known, and a compile error on purpose: the step passes only if the
+      # summary reports each of them exactly. Runs when the build or the reporting code changes.
+      - name: Reporting canary
+        id: canary
+        if: ${{ !cancelled() && needs.plan.outputs.canary == 'true' }}
+        timeout-minutes: 15
+        run: nix develop .#ci --command just ci-canary
 
       - name: Upload integration log
         if: always() && needs.plan.outputs.integration == 'true'
