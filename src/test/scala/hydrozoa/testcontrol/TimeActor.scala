@@ -1,6 +1,6 @@
 package hydrozoa.testcontrol
 
-import cats.effect.{Deferred, IO}
+import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import java.time.Instant
 import scala.concurrent.duration.*
@@ -8,8 +8,8 @@ import scala.concurrent.duration.*
 // Messages
 sealed trait TimeMsg
 case class GetTime(replyTo: Deferred[IO, Instant]) extends TimeMsg
-case class PrintTime() extends TimeMsg
-case class WaitAndPrint(delay: FiniteDuration) extends TimeMsg
+case class RecordTime(into: Ref[IO, Vector[Instant]]) extends TimeMsg
+case class Wait(delay: FiniteDuration) extends TimeMsg
 
 // Actor that uses IO.realTime
 class TimeActor extends Actor[IO, TimeMsg] {
@@ -23,18 +23,12 @@ class TimeActor extends Actor[IO, TimeMsg] {
                 _ <- replyTo.complete(now)
             } yield ()
 
-        case PrintTime() =>
+        case RecordTime(into) =>
             for {
                 now <- IO.realTimeInstant
-                _ <- IO.println(s"Current time: $now (${now.toEpochMilli})")
+                _ <- into.update(_ :+ now)
             } yield ()
 
-        case WaitAndPrint(delay) =>
-            for {
-                _ <- IO.println(s"Waiting for $delay...")
-                _ <- IO.sleep(delay)
-                now <- IO.realTimeInstant
-                _ <- IO.println(s"After waiting: $now (${now.toEpochMilli})")
-            } yield ()
+        case Wait(delay) => IO.sleep(delay)
     }
 }

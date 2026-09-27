@@ -45,7 +45,7 @@ class BallotBoxOutputSizeTest extends AnyFunSuite:
         val minAda = MinCoinSizedTransactionOutput.ensureMinAda(sized, config.cardanoProtocolParams)
         val bound: Int = FallbackContingency.Assumptions.maxBallotBoxBytes
         val funded: Coin = config.collectiveContingency.publicVoteDeposit
-        println(
+        info(
           f"voted ballot box  cborBytes=${sized.size}%4d  bound=$bound%4d  " +
               f"minAda=${minAda.value}%9d  funded=${funded.value}%9d lovelace"
         )

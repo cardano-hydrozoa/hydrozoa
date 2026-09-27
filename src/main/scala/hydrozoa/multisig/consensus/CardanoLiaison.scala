@@ -489,15 +489,62 @@ object CardanoLiaison:
         /** Represents noop action that may occur when the current time falls into the silence
           * period - the gap between a treasury's two disjoint validity windows, when the
           * settlement/finalization tx already expired but the fallback is not valid yet.
+          * `happyPathTxId` is that expired settlement/finalization tx.
           */
         final case class SilencePeriodNoop(
             currentTime: QuantizedInstant,
             happyPathTxTtl: QuantizedInstant,
-            fallbackValidityStart: FallbackTxStartTime
+            fallbackValidityStart: FallbackTxStartTime,
+            happyPathTxId: TransactionHash
         ) extends DirectAction {}
 
         /** Like [[PushForwardMultisig]] but starting from the initialization tx. */
         final case class InitializeHead(txs: Seq[EnrichedTx[?]]) extends Action
+    }
+
+    /** How loudly to log one dispatch of actions; see [[classifyDispatch]]. */
+    enum DispatchNotice:
+        /** No silence period and no fallback among the actions: the head's routine L1 work. */
+        case Routine
+
+        /** The liaison has just entered the silence period of a settlement/finalization tx (the tx
+          * missed its TTL, so the head will fall back), or is about to submit a fallback tx for the
+          * first time. Either is rare and means the head is leaving the multisig regime.
+          */
+        case FirstNotice
+
+        /** Only silence periods and fallbacks already noticed: a [[FirstNotice]] repeated on a
+          * later tick.
+          */
+        case Repeat
+
+    /** The tx a silence-period or fallback action is about, which gets its
+      * [[DispatchNotice.FirstNotice]] once: the expired settlement/finalization tx, or the fallback
+      * tx.
+      */
+    private[consensus] def noticeKey(action: Action): Option[TransactionHash] = action match
+        case Action.SilencePeriodNoop(_, _, _, happyPathTxId) => Some(happyPathTxId)
+        case Action.FallbackToRuleBased(fallback)             => Some(fallback.tx.id)
+        case _                                                => None
+
+    /** Classify one dispatch of `actions`, given the txs already noticed, and return the txs
+      * noticed after it. `runEffects` derives its actions afresh on every tick, so a silence
+      * period, and a fallback until it lands, is dispatched again on each one: at the default 10 s
+      * poll and 5 min silence period, about thirty times per peer. Only the first dispatch about a
+      * given tx is a [[DispatchNotice.FirstNotice]]; a dispatch made only of repeats is a
+      * [[DispatchNotice.Repeat]]; anything else is [[DispatchNotice.Routine]].
+      */
+    private[consensus] def classifyDispatch(
+        actions: Seq[Action],
+        noticed: Set[TransactionHash]
+    ): (DispatchNotice, Set[TransactionHash]) = {
+        val keys = actions.map(noticeKey)
+        val fresh = keys.flatten.filterNot(noticed)
+        val notice =
+            if fresh.nonEmpty then DispatchNotice.FirstNotice
+            else if keys.nonEmpty && keys.forall(_.isDefined) then DispatchNotice.Repeat
+            else DispatchNotice.Routine
+        (notice, noticed ++ fresh)
     }
 
 end CardanoLiaison
@@ -535,6 +582,12 @@ trait CardanoLiaison(
       * changes.
       */
     private val lastHandoffDispatchedFor = Ref.unsafe[IO, Option[TransactionInput]](None)
+
+    /** The settlement/finalization txs whose silence period, and the fallback txs whose submission,
+      * has been logged at WARN: see [[CardanoLiaison.classifyDispatch]]. A handful per head
+      * lifetime, since each means a fallback.
+      */
+    private val noticedTxs = Ref.unsafe[IO, Set[TransactionHash]](Set.empty)
 
     private def initializeConnections: IO[Env.Connected] = {
         val connections: IO[CardanoLiaison.Connections] =
@@ -800,17 +853,16 @@ trait CardanoLiaison(
 
                     // 4. Submit flattened txs for actions it there are some
                     _ <- IO.whenA(actionsToSubmit.nonEmpty) {
-                        val hasFallback =
-                            actionsToSubmit.exists(action =>
-                                action.isInstanceOf[Action.FallbackToRuleBased] ||
-                                    action.isInstanceOf[Action.SilencePeriodNoop]
+                        noticedTxs
+                            .modify(noticed => classifyDispatch(actionsToSubmit, noticed).swap)
+                            .flatMap(notice =>
+                                tracer.traceWith(
+                                  CardanoLiaisonEvent.ActionsDispatched(
+                                    actionsToSubmit.toList,
+                                    notice
+                                  )
+                                )
                             )
-                        tracer.traceWith(
-                          CardanoLiaisonEvent.ActionsDispatched(
-                            actionsToSubmit.toList,
-                            hasFallback
-                          )
-                        )
                     }
 
                     submitRet <-
@@ -996,11 +1048,11 @@ trait CardanoLiaison(
             .map(_.map(_.keySet.headOption))
 
     private def actionTxs(action: Action): Seq[EnrichedTx[?]] = action match {
-        case Action.FallbackToRuleBased(tx)    => Seq(tx)
-        case Action.PushForwardMultisig(txs)   => txs
-        case Action.Rollout(txs)               => txs
-        case Action.SilencePeriodNoop(_, _, _) => Seq.empty
-        case Action.InitializeHead(txs)        => txs
+        case Action.FallbackToRuleBased(tx)       => Seq(tx)
+        case Action.PushForwardMultisig(txs)      => txs
+        case Action.Rollout(txs)                  => txs
+        case Action.SilencePeriodNoop(_, _, _, _) => Seq.empty
+        case Action.InitializeHead(txs)           => txs
     }
 
     /** A polled utxo classified as a due direct-action trigger, so [[mkDirectAction]] is total over
@@ -1099,7 +1151,7 @@ trait CardanoLiaison(
                       )
                     )
                 else if currentTime >= fallbackStart then Some(FallbackToRuleBased(fallback))
-                else Some(SilencePeriodNoop(currentTime, happyTtl, fallbackStart))
+                else Some(SilencePeriodNoop(currentTime, happyTtl, fallbackStart, backboneTx.tx.id))
 
             // A tip fallback: submit it once its window opens.
             case DirectTrigger.TipFallback(fallback) =>

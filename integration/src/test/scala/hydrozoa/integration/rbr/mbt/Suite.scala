@@ -396,8 +396,12 @@ case class RbrMbtSuite(
             )
             // 2. Arm the firewall → the next settlement is dropped → fallback.
             _ <- sut.settlementFirewallArmed.set(true)
-            _ <- sut.fallbackDispatched.get.timeout(scenarioTimeout)
-            _ <- sut.evacuationDone.get.timeout(scenarioTimeout)
+            _ <- MultiPeerHeadHarness.guarded(sut.harness)(
+              sut.fallbackDispatched.get.timeout(scenarioTimeout)
+            )
+            _ <- MultiPeerHeadHarness.guarded(sut.harness)(
+              sut.evacuationDone.get.timeout(scenarioTimeout)
+            )
             _ <- IO.sleep(quiescenceDelay)
             utxos <- sut.harness.l1Snapshot
             payouts <- sut.firstPayoutsLeft.get

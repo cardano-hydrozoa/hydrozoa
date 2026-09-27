@@ -136,6 +136,7 @@ trait HeadMultisigRegimeManager(
                         case (remoteId, localLiaison) =>
                             transport.register(remoteId, localLiaison)
                     }
+                    _ <- detachAtHandoff(remoteIds.traverse_(transport.unregister))
                     proxies <- remoteIds.traverse { remoteId =>
                         context
                             .actorOf(RemotePeerProxy(remoteId, transport))
@@ -212,6 +213,9 @@ trait HeadMultisigRegimeManager(
                                     (coilNum, localLiaison) =>
                                         transport.register(coilNum, localLiaison)
                                 }
+                                _ <- detachAtHandoff(
+                                  hubbedCoilPeers.traverse_(transport.unregister)
+                                )
                                 proxies <- hubbedCoilPeers.traverse { coilNum =>
                                     context
                                         .actorOf(RemoteCoilProxy(coilNum, transport))

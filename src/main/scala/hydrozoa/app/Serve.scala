@@ -9,12 +9,13 @@ import cats.syntax.semigroup.*
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import com.comcast.ip4s.{Host, Port}
 import com.monovore.decline.{Command, Opts}
-import com.suprnation.actor.{ActorContext, ActorSystem}
+import com.suprnation.actor.ActorContext
 import hydrozoa.BuildInfo
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.StartupRefusal
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.CoilStartPoint
@@ -206,8 +207,8 @@ object Serve {
             //    interrupted: SIGTERM does nothing and the process survives to be force-killed by
             //    `shutdownHookTimeout`. Out here, on the app fiber, a wait is ordinary cancelable
             //    IO and the node stops when it is asked to.
-            // 2. Exit code. A `StartupRefusal` raised inside the actor system escalates to the
-            //    guardian, which terminates on its own path and exits 1 — which
+            // 2. Exit code. A `StartupRefusal` raised inside the actor system stops the system,
+            //    which exits 1 — which
             //    `RestartPreventExitStatus=2` does not catch, so the refusal crash-loops. Raised
             //    here it reaches `StartupRefusal.guard` and exits 2, as intended.
             //
@@ -224,7 +225,7 @@ object Serve {
                 verifyProtocolParams(backend)
             }
 
-            system <- ActorSystem[IO]("Hydrozoa Demo")
+            system <- HydrozoaActorSystem("Hydrozoa Demo")
 
             // ⛔ ORDER IS LOAD-BEARING. Resource finalizers run in reverse acquisition order, so
             // acquiring this AFTER the ActorSystem makes it release BEFORE the system is torn down.
@@ -768,7 +769,7 @@ object Serve {
 
     private def runHeadNode(
         nodeConfig: NodeConfig,
-        system: ActorSystem[IO],
+        system: HydrozoaActorSystem,
         mrm: HeadMultisigRegimeManager,
         consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
@@ -792,7 +793,7 @@ object Serve {
             // `surround`, not `start.void`: the server is bound for exactly as long as the node
             // waits, and its finalizer runs when the actor system terminates. `runCoilNode` has
             // the same shape and spells out what the old one leaked.
-            _ <- HydrozoaServer
+            failure <- HydrozoaServer
                 .create(
                   // Always present on a head; the `Option` exists for the coil.
                   Some(
@@ -800,6 +801,7 @@ object Serve {
                       sys.error("RequestSequencer required on head peers")
                     )
                   ),
+                  mrm.submissions,
                   connections.blockWeaver,
                   mrm.nodeStatus.get,
                   consensusReader,
@@ -815,7 +817,7 @@ object Serve {
                 )
                 .surround(system.waitForTermination)
 
-            exit <- abnormalTermination
+            exit <- abnormalTermination(failure)
         } yield exit
 
     /** A coil peer runs the same HTTP server as a head, minus the mutating routes: it passes `None`
@@ -828,7 +830,7 @@ object Serve {
       */
     private def runCoilNode(
         nodeConfig: NodeConfig,
-        system: ActorSystem[IO],
+        system: HydrozoaActorSystem,
         mrm: CoilMultisigRegimeManager,
         consensusReader: ConsensusStoreReader[IO],
         metrics: PeerMetrics,
@@ -851,10 +853,11 @@ object Serve {
             // dropped the fiber handle, so nothing could cancel it and the finalizer never ran: the
             // port stayed bound and answering after the node was dead, and a bind failure could not
             // fail the node because no one joined the fiber's outcome.
-            _ <- HydrozoaServer
+            failure <- HydrozoaServer
                 .create(
                   // None on a coil — this is what removes the mutating routes.
                   connections.requestSequencer,
+                  mrm.submissions,
                   connections.blockWeaver,
                   mrm.nodeStatus.get,
                   consensusReader,
@@ -869,19 +872,20 @@ object Serve {
                 )
                 .surround(system.waitForTermination)
 
-            exit <- abnormalTermination
+            exit <- abnormalTermination(failure)
         } yield exit
 
     /** Nothing here shuts the actor system down deliberately, and an interrupted `serve` is
       * cancelled rather than resumed past `waitForTermination`. So reaching this point means an
-      * actor escalated to the guardian and took the system with it: exit non-zero, or a process
-      * supervisor will treat a crashed node as a clean stop. cats-actors 2.1.0 clears the cause
-      * before it can be re-raised, which is why this can only point at the log.
+      * actor failed and took the system with it: exit non-zero, or a process supervisor will treat
+      * a crashed node as a clean stop.
       */
-    private def abnormalTermination: IO[ExitCode] =
-        log.info(
-          "Actor system terminated: an actor escalated to the guardian. " +
-              "See the [EventBus] error and stack trace above for the cause."
+    private def abnormalTermination(failure: Option[Throwable]): IO[ExitCode] =
+        log.error(
+          failure.fold("The actor system terminated without an actor failure.")(e =>
+              s"An actor failed, which stopped the actor system: $e"
+          ),
+          failure
         ).as(ExitCode.Error)
 
     private sealed trait NodeRun

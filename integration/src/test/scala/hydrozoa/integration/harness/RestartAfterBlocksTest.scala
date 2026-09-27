@@ -123,7 +123,7 @@ class RestartAfterBlocksTest extends AnyFunSuite {
           handle = MultiPeerHeadHarness.requestSequencerHandle,
         )
 
-        val program = MultiPeerHeadHarness.resource(inputs, hooks).use { harness =>
+        val program = MultiPeerHeadHarness.useGuarded(inputs, hooks) { harness =>
             def kickFor(window: FiniteDuration): IO[Unit] =
                 List
                     .range(0, (window / kickEvery).toInt)
