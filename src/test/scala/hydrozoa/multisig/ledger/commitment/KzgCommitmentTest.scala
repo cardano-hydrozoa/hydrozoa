@@ -73,7 +73,7 @@ private object Schoolbook {
     private def expand(binomials: SList[Scalar]): SList[Scalar] = {
         val zero = Scalar(BigInteger.ZERO)
         val one = Scalar(BigInteger.ONE)
-        binomials.foldLeft(SList.single(one.dup())) { (acc, term) =>
+        binomials.foldLeft(SList.singleton(one.dup())) { (acc, term) =>
             // `mul` mutates its receiver, so both operands are cloned before they are combined.
             val shifted: SList[Scalar] = SList.Cons(zero.dup(), acc.map(_.dup))
             val multiplied = acc.map(s => s.mul(term)).appended(zero.dup())

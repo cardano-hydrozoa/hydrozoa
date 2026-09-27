@@ -5,9 +5,9 @@ import cats.effect.kernel.Ref
 import cats.effect.unsafe.implicits.global
 import cats.syntax.contravariant.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -58,40 +58,44 @@ class SlowConsensusActorRecoveryTest extends AnyFunSuite:
         InMemoryBackendStore
             .open(persistenceTracer)
             .use(backend =>
-                ActorSystem[IO]("sca-recovery-test").use(system =>
-                    for {
-                        persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        // `Markers.recoverHardConfirmed` reads only the KEY, so a dummy value byte
-                        // is enough (the typed value's leaf txs have no public constructors).
-                        _ <- persistence.backend.put(
-                          Cf.HardConfirmation,
-                          StoreKey.HardConfirmation(StackNumber(confirmed)).encode,
-                          Array[Byte](0)
-                        )
-                        // Derived from the SEEDED store, not `Markers.cold`: the fixture writes a
-                        // HardConfirmation key above, and a cold bundle would leave `lastConfirmed`
-                        // None — the surplus guard under test would never arm and the suite would
-                        // pass while asserting nothing.
-                        markers <- Markers.derive(persistence, config.ownPeerId)
-                        seen <- Ref.of[IO, Vector[SlowConsensusActorEvent]](Vector.empty)
-                        tracer = ContraTracer[IO, SlowConsensusActorEvent](e => seen.update(_ :+ e))
-                        sc <- system.actorOf(SinkActor[StackComposer.Request]())
-                        cl <- system.actorOf(SinkActor[CardanoLiaison.Request]())
-                        sca <- system.actorOf(
-                          SlowConsensusActor(
-                            config,
-                            SlowConsensusActor.Connections(sc, cl, Nil),
-                            tracer,
-                            persistence,
-                            PeerMetrics.create(0L, Vector.empty),
-                            markers
-                          )
-                        )
-                        _ <- sca ! remoteAck(peer = 1, stack = ackStack)
-                        _ <- IO.sleep(1.second) // let PreStart and the ack drain
-                        evs <- seen.get
-                    } yield evs
-                )
+                HydrozoaActorSystem
+                    .withoutRoot("sca-recovery-test")
+                    .use(system =>
+                        for {
+                            persistence <- Persistence.fromBackend(backend, persistenceTracer)
+                            // `Markers.recoverHardConfirmed` reads only the KEY, so a dummy value byte
+                            // is enough (the typed value's leaf txs have no public constructors).
+                            _ <- persistence.backend.put(
+                              Cf.HardConfirmation,
+                              StoreKey.HardConfirmation(StackNumber(confirmed)).encode,
+                              Array[Byte](0)
+                            )
+                            // Derived from the SEEDED store, not `Markers.cold`: the fixture writes a
+                            // HardConfirmation key above, and a cold bundle would leave `lastConfirmed`
+                            // None — the surplus guard under test would never arm and the suite would
+                            // pass while asserting nothing.
+                            markers <- Markers.derive(persistence, config.ownPeerId)
+                            seen <- Ref.of[IO, Vector[SlowConsensusActorEvent]](Vector.empty)
+                            tracer = ContraTracer[IO, SlowConsensusActorEvent](e =>
+                                seen.update(_ :+ e)
+                            )
+                            sc <- system.actorOf(SinkActor[StackComposer.Request]())
+                            cl <- system.actorOf(SinkActor[CardanoLiaison.Request]())
+                            sca <- system.actorOf(
+                              SlowConsensusActor(
+                                config,
+                                SlowConsensusActor.Connections(sc, cl, Nil),
+                                tracer,
+                                persistence,
+                                PeerMetrics.create(0L, Vector.empty),
+                                markers
+                              )
+                            )
+                            _ <- sca ! remoteAck(peer = 1, stack = ackStack)
+                            _ <- IO.sleep(1.second) // let PreStart and the ack drain
+                            evs <- seen.get
+                        } yield evs
+                    )
             )
             .unsafeRunSync()
 

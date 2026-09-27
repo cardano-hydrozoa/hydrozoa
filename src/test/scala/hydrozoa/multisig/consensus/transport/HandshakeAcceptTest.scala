@@ -36,6 +36,12 @@ class HandshakeAcceptTest extends AnyFunSuite {
 
     private val quietServerTracer = ContraTracer[IO, NodeWsServerEvent](_ => IO.unit)
 
+    /** How long a slow tracer takes over each event: far longer than it takes a refused peer to
+      * read its refusal and hang up, so a trace that only starts once the refusal is out is still
+      * running when the peer has gone.
+      */
+    private val slowTrace: FiniteDuration = 250.millis
+
     // ---- the hub link ----
 
     test("the hub's first frame is a challenge, before the coil has said anything") {
@@ -59,6 +65,21 @@ class HandshakeAcceptTest extends AnyFunSuite {
         assertHubRefuses(
           answerAsCoil(1, HandshakeFixture.strangerWallet),
           HandshakeRefusal.BadSignature
+        )
+    }
+
+    test("the hub traces a refusal before it sends it, however slow its tracer") {
+        val run = runHubWith(answerAsCoil(1, HandshakeFixture.strangerWallet), slowTrace)
+        val _ = assert(
+          refusalsOnWire(run.replies) == List(HandshakeRefusal.BadSignature),
+          s"expected one BadSignature on the wire; got ${refusalsOnWire(run.replies)}"
+        )
+        assert(
+          run.tracedByClose.contains(
+            HubWsTransportEvent.ServerRefusedHandshake(1, HandshakeRefusal.BadSignature)
+          ),
+          "the refusal must be traced by the time the coil has it; traced by then " +
+              s"${run.tracedByClose}, and in all ${run.traced}"
         )
     }
 
@@ -162,6 +183,22 @@ class HandshakeAcceptTest extends AnyFunSuite {
         )
     }
 
+    test("the mesh traces a refusal before it sends it, however slow its tracer") {
+        val run = runMeshWith(answerAsHead(0, HandshakeFixture.strangerWallet), slowTrace)
+        val onWire = meshRefusalsOnWire(run.replies)
+        val _ = assert(
+          onWire == List(HandshakeRefusal.BadSignature),
+          s"expected one BadSignature on the wire; got $onWire"
+        )
+        assert(
+          run.tracedByClose.contains(
+            PeerTransportEvent.ServerRefusedHandshake(0, HandshakeRefusal.BadSignature)
+          ),
+          "the refusal must be traced by the time the dialer has it; traced by then " +
+              s"${run.tracedByClose}, and in all ${run.traced}"
+        )
+    }
+
     test("a proof made for the hub link does not open a mesh link") {
         // What binding the link into the preimage buys. Everything else about this handshake is
         // genuine: head peer 0's own key, its own number, this very socket's nonce — and a proof
@@ -238,12 +275,15 @@ class HandshakeAcceptTest extends AnyFunSuite {
             .compile
             .toList
 
-    /** One hub exchange: the opening frame, the frames that followed, and what the hub traced. */
-    /** Wait for the server's tracer write to land, bounded.
+    /** Wait for the server's tracer write to land, bounded, while the server is still up.
       *
-      * `exchange` returns when the CLIENT has its reply; the server traces its verdict on its own
+      * A refusal is traced before it is sent, so by the time `exchange` returns it has landed. An
+      * acceptance has no frame for the client to wait on, though: the server traces it on its own
       * fiber, so reading the ref straight after races it. Sampling once and finding `Vector()`
       * reads as "the server said nothing" when it simply had not written yet.
+      *
+      * Only worth doing before the server is released: releasing it cancels its connection fibers,
+      * so a trace still pending then never lands, however long the wait.
       *
       * Returns whatever it has at the budget rather than raising: a caller asserting that nothing
       * was traced is legitimate, and its assertion is the one that should speak.
@@ -258,28 +298,66 @@ class HandshakeAcceptTest extends AnyFunSuite {
         go(5.seconds)
     }
 
-    private def runHub(
-        reply: String => Option[String]
-    ): (String, List[String], Vector[HubWsTransportEvent]) = {
+    /** One exchange against a bound server: the opening frame, the frames that followed, what the
+      * server had traced by the time the client had seen the socket close, and what it traced in
+      * all.
+      */
+    private final case class Run[E](
+        opening: String,
+        replies: List[String],
+        tracedByClose: Vector[E],
+        traced: Vector[E]
+    )
+
+    /** Run one exchange against the route `link` binds, tracing into a ref. With a `traceDelay`,
+      * each trace takes that long before it lands, as a tracer writing somewhere slow would.
+      */
+    private def runLink[E](
+        link: ContraTracer[IO, E] => Resource[IO, Uri],
+        reply: String => Option[String],
+        traceDelay: FiniteDuration
+    ): Run[E] = {
         val prog = for {
-            seen <- Ref[IO].of(Vector.empty[HubWsTransportEvent])
-            tracer = ContraTracer[IO, HubWsTransportEvent](e => seen.update(_ :+ e))
-            result <- hubLink(tracer).use { uri => exchange(uri)(reply) }
-            events <- awaitTraced(seen)
-        } yield (result._1, result._2, events)
+            seen <- Ref[IO].of(Vector.empty[E])
+            record = (e: E) => seen.update(_ :+ e)
+            tracer = ContraTracer[IO, E](e =>
+                if traceDelay > Duration.Zero then IO.sleep(traceDelay) >> record(e) else record(e)
+            )
+            run <- link(tracer).use { uri =>
+                for {
+                    frames <- exchange(uri)(reply)
+                    byClose <- seen.get
+                    events <- awaitTraced(seen)
+                } yield Run(frames._1, frames._2, byClose, events)
+            }
+        } yield run
         prog.timeout(30.seconds).unsafeRunSync()
     }
 
+    private def runHubWith(
+        reply: String => Option[String],
+        traceDelay: FiniteDuration
+    ): Run[HubWsTransportEvent] = runLink(hubLink, reply, traceDelay)
+
+    private def runMeshWith(
+        reply: String => Option[String],
+        traceDelay: FiniteDuration
+    ): Run[PeerTransportEvent] = runLink(meshLink, reply, traceDelay)
+
+    /** One hub exchange: the opening frame, the frames that followed, and what the hub traced. */
+    private def runHub(
+        reply: String => Option[String]
+    ): (String, List[String], Vector[HubWsTransportEvent]) = {
+        val run = runHubWith(reply, Duration.Zero)
+        (run.opening, run.replies, run.traced)
+    }
+
+    /** One mesh exchange: the opening frame, the frames that followed, and what the mesh traced. */
     private def runMesh(
         reply: String => Option[String]
     ): (String, List[String], Vector[PeerTransportEvent]) = {
-        val prog = for {
-            seen <- Ref[IO].of(Vector.empty[PeerTransportEvent])
-            tracer = ContraTracer[IO, PeerTransportEvent](e => seen.update(_ :+ e))
-            result <- meshLink(tracer).use { uri => exchange(uri)(reply) }
-            events <- awaitTraced(seen)
-        } yield (result._1, result._2, events)
-        prog.timeout(30.seconds).unsafeRunSync()
+        val run = runMeshWith(reply, Duration.Zero)
+        (run.opening, run.replies, run.traced)
     }
 
     /** The hub route on a bound server, hubbing coil peers 0 and 1. */
@@ -350,9 +428,7 @@ class HandshakeAcceptTest extends AnyFunSuite {
         expected: HandshakeRefusal
     ): Assertion = {
         val (_, replies, events) = runMesh(reply)
-        val onWire = replies.flatMap(l => HeadFrame.parse(l).toOption).collect {
-            case HeadFrame.Refused(r) => r
-        }
+        val onWire = meshRefusalsOnWire(replies)
         val _ = assert(
           onWire == List(expected),
           s"expected one $expected on the wire; got $onWire (frames: $replies, traced $events)"
@@ -368,6 +444,9 @@ class HandshakeAcceptTest extends AnyFunSuite {
 
     private def refusalsOnWire(replies: List[String]): List[HandshakeRefusal] =
         replies.flatMap(l => CoilFrame.parse(l).toOption).collect { case CoilFrame.Refused(r) => r }
+
+    private def meshRefusalsOnWire(replies: List[String]): List[HandshakeRefusal] =
+        replies.flatMap(l => HeadFrame.parse(l).toOption).collect { case HeadFrame.Refused(r) => r }
 
     private def hubNonce(opening: String): Option[HandshakeNonce] =
         CoilFrame.parse(opening).toOption.collect { case c: CoilFrame.Challenge => c.nonce }

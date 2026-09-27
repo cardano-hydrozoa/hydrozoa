@@ -1,0 +1,48 @@
+<!--
+  CI logging for core's tests (selected by the build when CI is set). The console gets nothing
+  from the loggers: a passing unit-test step shows sbt's test lines and nothing else, and warnings
+  that tests provoke on purpose don't read as problems. Everything the loggers pass, with the root
+  at TRACE, goes to target/unit-tests.log, which the CI workflow uploads as a short-lived
+  artifact; a failing test's context is there.
+
+  Not named logback-ci.xml: core's test resources are also on the integration tests' classpath,
+  where that name is the integration config.
+-->
+<configuration>
+
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>target/unit-tests.log</file>
+        <append>false</append>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{64} %n%msg%n
+            </pattern>
+        </encoder>
+    </appender>
+
+    <!-- Every dead letter, one per line, for CI's summary (.github/scripts/test-summary.py reads
+         this format, `hydrozoa.dead-letters` version 1): the level (WARN while the actor system
+         runs, DEBUG once it is stopping), a tab, and the message with tabs and newlines flattened.
+         In the directory the build gives the forked JVM for its test events. -->
+    <appender name="DEAD_LETTERS" class="ch.qos.logback.core.FileAppender">
+        <file>${hydrozoa.ci.events}/dead-letters.tsv</file>
+        <append>true</append>
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="ch.qos.logback.classic.PatternLayout">
+                <fileHeader>#hydrozoa.dead-letters&#9;1</fileHeader>
+                <pattern>%level&#9;%replace(%msg){'[\t\r\n]+', ' '}%n</pattern>
+            </layout>
+        </encoder>
+    </appender>
+    <logger name="DeadLetters" level="trace">
+        <appender-ref ref="DEAD_LETTERS"/>
+    </logger>
+
+    <!-- Fixtures for Slf4jTracerTest, as in logback-test.xml. The root's TRACE would enable `off`. -->
+    <logger name="hydrozoa.test.gated.off" level="off"/>
+    <logger name="hydrozoa.test.gated.on" level="debug"/>
+
+    <root level="trace">
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>

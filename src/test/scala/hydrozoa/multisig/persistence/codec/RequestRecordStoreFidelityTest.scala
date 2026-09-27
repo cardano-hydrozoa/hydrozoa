@@ -5,6 +5,7 @@ import java.util.ArrayList as JArrayList
 import org.rocksdb.{ColumnFamilyDescriptor, ColumnFamilyHandle, DBOptions, Options, RocksDB}
 import org.scalatest.funsuite.AnyFunSuite
 import scala.jdk.CollectionConverters.*
+import test.RequiresNodeStore
 
 /** Does [[RequestRecordCodec]] carry every request a real head has actually held?
   *
@@ -35,7 +36,10 @@ class RequestRecordStoreFidelityTest extends AnyFunSuite {
       */
     private val stampBytes = 12
 
-    test("every Request record in a real store survives a decode/encode round trip") {
+    test(
+      "every Request record in a real store survives a decode/encode round trip",
+      RequiresNodeStore
+    ) {
         val _ = assume(Files.isDirectory(storePath), s"no store at $storePath")
         RocksDB.loadLibrary()
 

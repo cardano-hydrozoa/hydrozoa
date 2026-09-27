@@ -23,6 +23,12 @@ final class InProcessPeerTransport private (
     ): IO[Unit] =
         inboundRef.update(_.updated(remote, localLiaison))
 
+    /** Removes the route: inbound from [[remote]] is then dropped silently, like any other inbound
+      * with no liaison to take it (this harness transport has no tracer to tell the two apart).
+      */
+    override def unregister(remote: HeadPeerId): IO[Unit] =
+        inboundRef.update(_ - remote)
+
     override def send(
         remote: HeadPeerId,
         request: LiaisonProtocol.MeshEmitted
