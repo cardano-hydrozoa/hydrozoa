@@ -20,5 +20,7 @@ object LimiterEventFormat:
                 )
             case QueueDepthUnexpected(n) =>
                 warn(s"Limiter[$label] has $n throttled messages queued; expected at most 1.")
+            case Quiesced(held) =>
+                debug(s"Limiter[$label] quiesced, holding $held messages.")
         }
     }

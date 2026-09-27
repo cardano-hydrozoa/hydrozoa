@@ -4,6 +4,7 @@ import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.node.operation.multisig.RateLimits
+import hydrozoa.lib.actor.{Quiesce, Quiescent}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.metrics.PeerMetrics
 import scala.concurrent.duration.DurationLong
@@ -56,9 +57,12 @@ final case class Limiter[Msg](
     tracer: ContraTracer[IO, LimiterEvent],
     gate: Option[LimiterGate] = None,
     metrics: Option[PeerMetrics] = None
-) extends Actor[IO, Msg | LimiterControl] {
+) extends Actor[IO, Msg | LimiterControl | Quiesce.type],
+      Quiescent {
 
     given RateLimits.Section = config
+
+    private type Inbox = Msg | LimiterControl | Quiesce.type
 
     /** Actor-private state, read and written only from inside `receive`. cats-actors drains a
       * mailbox serially, so read-modify-write across a `flatMap` needs no further synchronisation.
@@ -69,16 +73,26 @@ final case class Limiter[Msg](
     override def preStart: IO[Unit] =
         tracer.traceWith(LimiterEvent.Started)
 
-    override def receive: Receive[IO, Msg | LimiterControl] = PartialFunction.fromFunction {
+    override def quiesce: IO[Unit] = self ! Quiesce
+
+    override def receive: Receive[IO, Inbox] = PartialFunction.fromFunction {
+        // Arms no further tick. What is held stays held, and is dropped when the limiter stops.
+        case Quiesce =>
+            stateRef
+                .updateAndGet(_.copy(quiesced = true))
+                .flatMap(st => tracer.traceWith(LimiterEvent.Quiesced(st.queue.size)))
+
         case LimiterControl.Tick =>
-            stateRef.update(_.copy(tickArmed = false)) >> pumpAndArm
+            stateRef
+                .updateAndGet(_.copy(tickArmed = false))
+                .flatMap(st => IO.unlessA(st.quiesced)(pumpAndArm))
 
         case LimiterControl.DownstreamDrained =>
             onDrained
 
         case msg =>
-            // Safe by disjointness: `LimiterControl` is matched above and is not part of any lane's
-            // message type. `Msg` is erased, so this is a no-op cast.
+            // Safe by disjointness: `LimiterControl` and `Quiesce` are matched above and are not
+            // part of any lane's message type. `Msg` is erased, so this is a no-op cast.
             enqueue(msg.asInstanceOf[Msg]) >> pumpAndArm
     }
 
@@ -102,7 +116,9 @@ final case class Limiter[Msg](
 
     /** Release everything currently due, then arm a tick if something is still waiting. */
     private def pumpAndArm: IO[Unit] =
-        pump.flatMap(st => if st.queue.isEmpty || st.tickArmed then IO.unit else armTick(st))
+        pump.flatMap(st =>
+            if st.queue.isEmpty || st.tickArmed || st.quiesced then IO.unit else armTick(st)
+        )
 
     private def pump: IO[Limiter.State[Msg]] =
         stateRef.get.flatMap { st =>
@@ -236,13 +252,16 @@ object Limiter {
       * @param holdStartedMs
       *   monotonic millis at which the current hold began; `None` when nothing is held. Exists only
       *   so a hold is traced once rather than once per slice.
+      * @param quiesced
+      *   the limiter was asked to quiesce: it arms no more ticks
       */
     final case class State[Msg](
         lastReleaseMs: Option[Long],
         queue: Vector[Msg],
         tickArmed: Boolean,
         holdStartedMs: Option[Long],
-        gateState: LimiterGate.State
+        gateState: LimiterGate.State,
+        quiesced: Boolean = false
     )
 
     object State {
