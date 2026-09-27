@@ -53,12 +53,13 @@ final class HydrozoaActorSystem private (
     def waitForTermination: IO[Option[Throwable]] =
         system.waitForTermination >> failure.tryGet
 
-    /** For a test that crashes an actor on purpose, before it stops it: a message to `ref` or its
-      * subtree from now on is lost as a real crash would lose it, so its dead letter is logged at
-      * DEBUG as crashed on purpose, not as lost while the system runs.
+    /** For a test that stops an actor on purpose while messages may still reach it, as a simulated
+      * crash does, or a negative control: a message to `ref` or its subtree from now on is expected
+      * to go nowhere, so its dead letter is logged at DEBUG as stopped on purpose, not counted as
+      * lost while the system runs.
       */
-    def markCrashed(ref: NoSendActorRef[IO]): IO[Unit] =
-        expected.crashed.update(_ + ref.path.toString)
+    def expectDeadLetters(ref: NoSendActorRef[IO]): IO[Unit] =
+        expected.stoppedOnPurpose.update(_ + ref.path.toString)
 
 object HydrozoaActorSystem:
 
@@ -181,32 +182,35 @@ object HydrozoaActorSystem:
   * system's own events, and `DeadLetters` for messages that reached no actor. A dead letter is WARN
   * while the system is running, because a message nobody received can be lost work; and DEBUG when
   * it is expected to go nowhere: once the system is stopping, with messages still in flight, or
-  * when a test crashed its recipient on purpose ([[HydrozoaActorSystem.markCrashed]]).
+  * when a test stopped its recipient on purpose ([[HydrozoaActorSystem.expectDeadLetters]]).
   */
 object ActorSystemEvents:
 
     /** When a dead letter is expected: the system is stopping, or its recipient is in a subtree a
-      * test crashed on purpose (the paths of those subtrees' roots).
+      * test stopped on purpose (the paths of those subtrees' roots).
       */
-    final class Expected private (val stopping: Ref[IO, Boolean], val crashed: Ref[IO, Set[String]])
+    final class Expected private (
+        val stopping: Ref[IO, Boolean],
+        val stoppedOnPurpose: Ref[IO, Set[String]]
+    )
 
     object Expected:
         def apply(): IO[Expected] =
             for
                 stopping <- Ref[IO].of(false)
-                crashed <- Ref[IO].of(Set.empty[String])
-            yield new Expected(stopping, crashed)
+                stoppedOnPurpose <- Ref[IO].of(Set.empty[String])
+            yield new Expected(stopping, stoppedOnPurpose)
 
     def log(expected: Expected)(event: Any): IO[Unit] =
         for
             stopping <- expected.stopping.get
-            crashed <- expected.crashed.get
-            _ <- Slf4jTracer.sink.traceWith(toLogEvent(event, stopping, crashed))
+            onPurpose <- expected.stoppedOnPurpose.get
+            _ <- Slf4jTracer.sink.traceWith(toLogEvent(event, stopping, onPurpose))
         yield ()
 
-    def toLogEvent(event: Any, stopping: Boolean, crashed: Set[String] = Set.empty): LogEvent =
+    def toLogEvent(event: Any, stopping: Boolean, onPurpose: Set[String] = Set.empty): LogEvent =
         event match
-            case Debug(_, _, dl: DeadLetter[?]) => deadLetter(dl, stopping, crashed)
+            case Debug(_, _, dl: DeadLetter[?]) => deadLetter(dl, stopping, onPurpose)
             case e: ActorError =>
                 LogEvent(
                   Level.Error,
@@ -225,7 +229,7 @@ object ActorSystemEvents:
     private def system(level: Level, source: String, message: Any): LogEvent =
         LogEvent(level, s"$source: $message", routingKey = Some(SystemLogger))
 
-    private def deadLetter(dl: DeadLetter[?], stopping: Boolean, crashed: Set[String]): LogEvent =
+    private def deadLetter(dl: DeadLetter[?], stopping: Boolean, onPurpose: Set[String]): LogEvent =
         // The message cats-actors wraps is often an `Envelope` around the real one; name the real
         // one, and keep its full text for TRACE-level reading of the file log.
         val inner = dl.message match
@@ -233,13 +237,14 @@ object ActorSystemEvents:
             case e: EnvelopeWithDeferred[?, ?] => e.envelope.message
             case m                             => m
         val recipient = dl.recipient.actorRef.path.toString
-        val crashedOnPurpose = crashed.exists(r => recipient == r || recipient.startsWith(r + "/"))
+        val stoppedOnPurpose =
+            onPurpose.exists(r => recipient == r || recipient.startsWith(r + "/"))
         LogEvent(
-          if stopping || crashedOnPurpose then Level.Debug else Level.Warn,
+          if stopping || stoppedOnPurpose then Level.Debug else Level.Warn,
           s"${inner.getClass.getName} to $recipient" +
               s"${dl.sender.fold("")(s => s" from ${s.path}")}" +
               (if stopping then " (system stopping)"
-               else if crashedOnPurpose then " (recipient crashed on purpose)"
+               else if stoppedOnPurpose then " (recipient stopped on purpose)"
                else " (system running)"),
           ctx = Map.empty,
           routingKey = Some(DeadLetterLogger)

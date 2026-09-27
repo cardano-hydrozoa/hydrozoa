@@ -114,9 +114,9 @@ class HydrozoaActorSystemTest extends AnyFunSuite {
         assert(stopping.level == Level.Debug)
     }
 
-    test("a dead letter to a subtree crashed on purpose is DEBUG; one beside it is still a WARN") {
+    test("a dead letter to a subtree stopped on purpose is DEBUG; one beside it is still a WARN") {
         val (inside, beside) = HydrozoaActorSystem
-            .withoutRoot("crashed-test")
+            .withoutRoot("stopped-on-purpose-test")
             .use(system =>
                 for
                     victim <- system.actorOf(new Thrower, "victim")
@@ -128,15 +128,15 @@ class HydrozoaActorSystemTest extends AnyFunSuite {
                           classOf[DeadLetter[?]],
                           DeadLetter[IO](new RuntimeException("late"), None, Receiver(ref))
                         )
-                    crashed = Set(victim.path.toString)
+                    onPurpose = Set(victim.path.toString)
                 yield (
-                  ActorSystemEvents.toLogEvent(toEvent(victim), stopping = false, crashed),
-                  ActorSystemEvents.toLogEvent(toEvent(other), stopping = false, crashed)
+                  ActorSystemEvents.toLogEvent(toEvent(victim), stopping = false, onPurpose),
+                  ActorSystemEvents.toLogEvent(toEvent(other), stopping = false, onPurpose)
                 )
             )
             .unsafeRunSync()
         val _ = assert(inside.level == Level.Debug)
-        val _ = assert(inside.render.value.msg.endsWith("(recipient crashed on purpose)"))
+        val _ = assert(inside.render.value.msg.endsWith("(recipient stopped on purpose)"))
         assert(beside.level == Level.Warn)
     }
 }

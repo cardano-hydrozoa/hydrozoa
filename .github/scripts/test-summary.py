@@ -80,9 +80,9 @@ Dead letters: `hydrozoa.dead-letters` v1. Written by the CI logging configs
 each forked test JVM, appended to `<project's Test/target>/ci-events/dead-letters.tsv`. Each JVM
 that opens the file writes the header line `#hydrozoa.dead-letters<TAB>1`; every other line is one
 dead letter: the level, a tab, and the message (`<message class> to <recipient path>[ from <sender
-path>] (system running|system stopping|recipient crashed on purpose)`), tabs and newlines
+path>] (system running|system stopping|recipient stopped on purpose)`), tabs and newlines
 flattened. WARN means the actor system was running; DEBUG that the dead letter was expected (the
-system stopping, or a test having crashed the recipient on purpose). A file whose first line isn't
+system stopping, or a test having stopped the recipient on purpose). A file whose first line isn't
 that header, or a line with another level, is invalid.
 
 HOW THIS READER JUDGES (never "passed" without positive evidence; unknown input is never a pass)
@@ -161,7 +161,7 @@ by the things it counts holds their number.
   junitOnly, eventsOnly  sorted suite names with a JUnit report and no suite-end, and the reverse
   excludedCanaryFiles    files skipped for a `ci-canary` directory
   deadLettersRunning     dead letters at WARN (sent while an actor system ran)
-  deadLettersExpected    dead letters at DEBUG (the system stopping, or a recipient crashed on
+  deadLettersExpected    dead letters at DEBUG (the system stopping, or a recipient stopped on
                          purpose)
   deadLetterFilesInvalid [str]: a reason per dead-letters file that couldn't be read
   notes                  [str]
@@ -779,7 +779,7 @@ def main():
         out.add("Steps: " + ", ".join(f"{n} {o}" for n, o in steps.items()) + ".\n")
     out.add(
         f"Dead letters: {len(dead)} while an actor system was running, {dead_expected} expected "
-        "(the system stopping, or a test crashing the recipient on purpose).\n"
+        "(the system stopping, or a test stopping the recipient on purpose).\n"
     )
     if errors or cautions or warnings:
         told = errors + cautions + warnings
