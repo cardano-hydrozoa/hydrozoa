@@ -26,10 +26,12 @@ object CoilMultisigRegimeManagerEventFormat:
         val ev = LogEvent.From.forPeer("CoilMultisigRegimeManager", syntheticLabel)
         import ev.*
         e match
-            case LifecycleEvent.StartingActors            => info("Starting multisig actors...")
-            case LifecycleEvent.WatchingActors            => info("Watching multisig actors...")
-            case LifecycleEvent.TerminatedActor(actor)    => warn(s"Terminated $actor actor")
-            case LifecycleEvent.TerminatedDependency(dep) => warn(s"Terminated dependency $dep")
+            case LifecycleEvent.StartingActors => info("Starting multisig actors...")
+            case LifecycleEvent.WatchingActors => info("Watching multisig actors...")
+            case LifecycleEvent.TerminatedActor(actor, true) =>
+                info(s"Terminated $actor actor (stopped at the handoff to the rule-based regime)")
+            case LifecycleEvent.TerminatedActor(actor, false) => warn(s"Terminated $actor actor")
+            case LifecycleEvent.TerminatedDependency(dep)     => warn(s"Terminated dependency $dep")
             case LifecycleEvent.SupervisedFailureEscalated(cause) =>
                 LogEvent(
                   Level.Error,

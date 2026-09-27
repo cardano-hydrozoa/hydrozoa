@@ -81,6 +81,11 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       */
     val submissions: SubmissionGate = SubmissionGate.unsafeOpen()
 
+    /** Set on [[HandoffToRuleBased]], before [[onHandoffToRuleBased]] stops the multisig actors:
+      * from then on a child's termination is this manager's own doing, not a failure.
+      */
+    private val handedOff = Ref.unsafe[IO, Boolean](false)
+
     /** Every failure escalates, and the decider is **total**.
       *
       * Totality is what the `PartialFunction.fromFunction` wrapper buys: `isDefinedAt` is
@@ -132,11 +137,14 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 (pendingConnections.complete(Left(e)) >> connectionsDeferred.complete(Left(e))).void
             )
         case TerminatedChild(childType, _) =>
-            tracer.traceWith(LifecycleEvent.TerminatedActor(childType))
+            handedOff.get.flatMap(stoppedByUs =>
+                tracer.traceWith(LifecycleEvent.TerminatedActor(childType, stoppedByUs))
+            )
         case TerminatedDependency(dependencyType, _) =>
             tracer.traceWith(LifecycleEvent.TerminatedDependency(dependencyType))
         case HandoffToRuleBased =>
             nodeStatus.update(_.advanceTo(NodeStatus.HandedOffToRuleBased)) *>
+                handedOff.set(true) *>
                 submissions.closeAndDrain(10.seconds) *>
                 onHandoffToRuleBased *>
                 submissions.markAnswerersStopped
