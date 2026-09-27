@@ -275,6 +275,10 @@ object Serve {
                       ownCoilNum,
                     )
             }
+            // Acquired last, so released first: the actors stop in order after the HTTP server has
+            // closed and while the peer transports, the L2 ledger and the store are all still up.
+            // Releasing the actor system would do it too, but only after those are gone.
+            _ <- Resource.onFinalize(system.shutdown)
             // Read-only consensus-store view behind the /head/blocks queries.
             consensusReader = ConsensusStoreReader.fromPersistence(
               persistence,

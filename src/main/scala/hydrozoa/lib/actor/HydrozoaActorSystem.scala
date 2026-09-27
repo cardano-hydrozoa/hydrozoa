@@ -22,6 +22,8 @@ import scala.concurrent.duration.DurationInt
   *     it so that everything walking the guardian's subtree, `waitForIdle` included, still sees our
   *     actors.
   *   - The system's event stream goes to SLF4J (see [[ActorSystemEvents]]) instead of stdout.
+  *   - Releasing it stops the actors in order first ([[shutdown]]). cats-actors' own release stops
+  *     them all at once and runs no actor's `postStop`.
   *
   * Start actors with [[actorOf]], not `system.actorOf`, so their failures reach the root.
   */
@@ -30,6 +32,7 @@ final class HydrozoaActorSystem private (
     rootContext: ActorContext[IO, Any, Any],
     failure: Deferred[IO, Throwable],
     expected: ActorSystemEvents.Expected,
+    orderlyShutdown: IO[Unit],
 ):
 
     /** Start `props` as a child of the root. */
@@ -61,10 +64,27 @@ final class HydrozoaActorSystem private (
     def expectDeadLetters(ref: NoSendActorRef[IO]): IO[Unit] =
         expected.stoppedOnPurpose.update(_ + ref.path.toString)
 
+    /** Stop every actor under the root with [[OrderlyShutdown]]: quiesce them, wait until they are
+      * idle, then stop them, leaves first, within [[ShutdownBounds]] in all. Runs once: later
+      * calls, including the one releasing this system makes, wait for the first. Does nothing if
+      * the system has already terminated.
+      *
+      * Releasing the system runs it, so call it only when something else must outlive the actors: a
+      * transport their liaisons use, or a store they write to, released before the system.
+      */
+    def shutdown: IO[Unit] = orderlyShutdown
+
 object HydrozoaActorSystem:
 
     /** The root's name; its path is `/user/hydrozoa`. */
     val RootName: String = "hydrozoa"
+
+    /** [[HydrozoaActorSystem.shutdown]]'s bounds. Their sum must stay well inside the time a signal
+      * gives the whole process to exit (`Main.runtimeConfig`), which also has to close the
+      * transports and the store.
+      */
+    val ShutdownBounds: OrderlyShutdown.Bounds =
+        OrderlyShutdown.Bounds(quiesce = 3.seconds, idle = 5.seconds, stop = 5.seconds)
 
     /** Rules for an actor whose children's failures must reach the root: escalate every one. */
     def escalateAll: SupervisionStrategy[IO] =
@@ -87,7 +107,41 @@ object HydrozoaActorSystem:
             started <- Resource.eval(Deferred[IO, ActorContext[IO, Any, Any]])
             _ <- Resource.eval(system.actorOf(Root(failure, started), RootName))
             rootContext <- Resource.eval(started.get)
-        yield new HydrozoaActorSystem(system, rootContext, failure, expected)
+            shutdown <- Resource.eval(orderlyShutdown(system, rootContext.self, expected).memoize)
+            // Acquired after the root, so released before the system: its actors stop in order
+            // while the system still runs.
+            _ <- Resource.onFinalize(shutdown)
+        yield new HydrozoaActorSystem(system, rootContext, failure, expected, shutdown)
+
+    /** Stop the root's children in order. The system counts as stopping from the start, so a dead
+      * letter this cannot prevent is logged as a shutdown's dead letters always were.
+      */
+    private def orderlyShutdown(
+        system: ActorSystem[IO],
+        root: NoSendActorRef[IO],
+        expected: ActorSystemEvents.Expected,
+    ): IO[Unit] =
+        system.isTerminated.ifM(
+          IO.unit,
+          expected.stopping.set(true) >>
+              IO.race(
+                system.waitForTermination,
+                SubtreeStop
+                    .childrenOf(root)
+                    .flatMap(OrderlyShutdown.run(system, _, ShutdownBounds))
+              ).flatMap {
+                  case Right(outcome) => Slf4jTracer.sink.traceWith(shutdownLogEvent(outcome))
+                  case Left(())       => IO.unit
+              }
+        )
+
+    private def shutdownLogEvent(outcome: OrderlyShutdown.Outcome): LogEvent =
+        LogEvent(
+          if outcome.complete then Level.Info else Level.Warn,
+          s"stopped the actors in order: ${outcome.describe}",
+          cause = outcome.failures.headOption,
+          routingKey = Some(ActorSystemEvents.SystemLogger)
+        )
 
     /** A plain cats-actors system whose events go to SLF4J and then to `onEvent`, with no root: for
       * tests of single actors that want the system's own guardian.

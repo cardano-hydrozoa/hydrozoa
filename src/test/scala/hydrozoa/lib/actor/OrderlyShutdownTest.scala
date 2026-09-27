@@ -11,7 +11,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 /** [[OrderlyShutdown]] stops actors that message each other, and one that messages itself on a
-  * timer, without losing a message.
+  * timer, without losing a message; and releasing a [[HydrozoaActorSystem]] runs it.
   */
 class OrderlyShutdownTest extends AnyFunSuite {
 
@@ -143,5 +143,54 @@ class OrderlyShutdownTest extends AnyFunSuite {
         }
         val _ = assert(!outcome.idleInTime && !outcome.stoppedInTime, outcome.describe)
         assert(took < 3.seconds, s"took $took")
+    }
+
+    test("releasing a HydrozoaActorSystem quiesces and stops its actors, leaves first") {
+        val stopped = Ref.unsafe[IO, List[String]](Nil)
+        final class Leaf(name: String) extends Actor[IO, Unit] {
+            override def postStop: IO[Unit] = stopped.update(name :: _)
+            override def receive: Receive[IO, Unit] = PartialFunction.fromFunction(_ => IO.unit)
+        }
+        val quiesced = Ref.unsafe[IO, Boolean](false)
+        HydrozoaActorSystem("orderly-release")
+            .use(actors =>
+                actors
+                    .actorOf(new Actor[IO, Unit] {
+                        override def preStart: IO[Unit] =
+                            context.actorOf(new Leaf("leaf")) >> context
+                                .actorOf(new Ticker(quiesced))
+                                .void
+                        override def postStop: IO[Unit] = stopped.update("parent" :: _)
+                        override def receive: Receive[IO, Unit] =
+                            PartialFunction.fromFunction(_ => IO.unit)
+                    })
+                    .void
+            )
+            .timeout(30.seconds)
+            .unsafeRunSync()
+        val order = stopped.get.unsafeRunSync().reverse
+        val _ = assert(quiesced.get.unsafeRunSync(), "the ticker was never told to quiesce")
+        assert(order == List("leaf", "parent"), s"postStop order: $order")
+    }
+
+    test("releasing a HydrozoaActorSystem an actor failure already stopped does not wait") {
+        val took = HydrozoaActorSystem("orderly-release-failed")
+            .use(actors =>
+                for {
+                    failing <- actors.actorOf(new Actor[IO, Unit] {
+                        override def receive: Receive[IO, Unit] =
+                            PartialFunction.fromFunction(_ =>
+                                IO.raiseError(new RuntimeException("on purpose"))
+                            )
+                    })
+                    _ <- failing ! (())
+                    _ <- actors.waitForTermination
+                } yield ()
+            )
+            .timed
+            .map(_._1)
+            .timeout(30.seconds)
+            .unsafeRunSync()
+        assert(took < 5.seconds, s"took $took")
     }
 }
