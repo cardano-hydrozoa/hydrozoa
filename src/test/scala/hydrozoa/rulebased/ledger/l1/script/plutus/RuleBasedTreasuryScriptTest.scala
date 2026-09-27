@@ -235,11 +235,13 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
               )
             )
         scala.util.Try(
-          RuleBasedTreasuryValidator.spend(
-            Option.Some(datum(inAccumulator).toData),
-            redeemer.toData,
-            txInfo,
-            treasuryRef
+          quietTraces(
+            RuleBasedTreasuryValidator.spend(
+              Option.Some(datum(inAccumulator).toData),
+              redeemer.toData,
+              txInfo,
+              treasuryRef
+            )
           )
         )
     }
@@ -302,7 +304,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         Data.fromData[ScriptContext](ctxData)
         // println(ctx)
 
-        RuleBasedTreasuryValidator.validate(ctxData)
+        quietTraces(RuleBasedTreasuryValidator.validate(ctxData))
     }
 
 }

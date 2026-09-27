@@ -69,11 +69,13 @@ class RuleBasedRegimeScriptTest extends AnyFunSuite {
           id = TxId(ByteString.fromHex("cd" * 32))
         )
         scala.util.Try(
-          RuleBasedRegimeValidator.spend(
-            Option.Some(regimeDatum.toData),
-            RegimeRedeemer.Deinit.toData,
-            txInfo,
-            regimeRef
+          quietTraces(
+            RuleBasedRegimeValidator.spend(
+              Option.Some(regimeDatum.toData),
+              RegimeRedeemer.Deinit.toData,
+              txInfo,
+              regimeRef
+            )
           )
         )
     }
