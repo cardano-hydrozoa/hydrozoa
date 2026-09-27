@@ -4,6 +4,7 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Resource}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
@@ -12,7 +13,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{HeadConfig, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.lib.actor.HydrozoaActorSystem
+import hydrozoa.lib.actor.{HydrozoaActorSystem, Quiesce}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
@@ -135,7 +136,9 @@ object BlockWeaverTestHelpers {
       */
     def mkBlockWeaverActorWithEvents(
         peerNumber: HeadPeerNumber
-    ): BWTest[(BlockWeaver.Handle, AtomicReference[Vector[BlockWeaverEvent]])] =
+    ): BWTest[
+      (ActorRef[IO, BlockWeaver.Request | Quiesce.type], AtomicReference[Vector[BlockWeaverEvent]])
+    ] =
         for {
             env <- ask
             config = env.multiNodeConfig.nodeConfigs(peerNumber)
