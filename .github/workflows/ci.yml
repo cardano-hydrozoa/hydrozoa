@@ -197,7 +197,6 @@ jobs:
           name: integration-log-attempt-${{ github.run_attempt }}
           path: |
             integration/integration-tests.log
-            integration/stage4-peers-interaction.mmd
           if-no-files-found: ignore
           retention-days: 3
 

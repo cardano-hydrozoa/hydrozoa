@@ -33,26 +33,11 @@
         <appender-ref ref="DEAD_LETTERS"/>
     </logger>
 
-    <appender name="MERMAID" class="ch.qos.logback.core.FileAppender">
-        <file>stage4-peers-interaction.mmd</file>
-        <append>false</append>
-        <!-- A layout inside a LayoutWrappingEncoder, not a bare <layout>: logback reports the bare
-             form as a WARN status, and a WARN status makes it print its whole configuration
-             status (about 30 |-INFO lines) to the console of every JVM. -->
-        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
-            <layout class="hydrozoa.integration.MermaidSequenceDiagramLayout">
-                <pattern>%msg%n</pattern>
-            </layout>
-        </encoder>
-    </appender>
     <logger name="CoilPeerWsTransport" level="warn"/>
     <logger name="CoilJoin" level="info"/>
     <logger name="PeerTransport" level="warn"/>
     <!-- The only record of why a supervised actor failed; never quiet it. -->
     <logger name="Supervision" level="error"/>
-    <logger name="Mermaid.PeerLiaison" level="info" additivity="false">
-        <appender-ref ref="MERMAID"/>
-    </logger>
 
     <root level="trace">
         <appender-ref ref="FILE"/>
