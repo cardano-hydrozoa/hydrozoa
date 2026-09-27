@@ -28,7 +28,7 @@ class RegimeOutputSizeTest extends AnyFunSuite:
 
         val sized = Sized[TransactionOutput](RuleBasedRegimeOutput.toOutput(using config))
         val bound: Int = FallbackContingency.Assumptions.maxRegimeUtxoBytes
-        println(
+        info(
           f"regime output  peers=${config.nHeadPeers.toInt}%2d  cborBytes=${sized.size}%5d  bound=$bound%5d"
         )
 
