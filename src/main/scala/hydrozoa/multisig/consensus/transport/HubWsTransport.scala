@@ -228,23 +228,30 @@ final class HubWsTransport private (
                                 admit(coilNum, protocolVersion, auth, nonce, head)
                             // One nonce, one handshake: a socket that already has a verdict
                             // keeps it, so a replayed handshake cannot re-bind an
-                            // established session.
-                            verdictD.complete(verdict).flatMap {
-                                case false =>
+                            // established session. `tryGet` then `complete` is not a race:
+                            // this pipe is the only thing that completes `verdictD`, and it
+                            // takes one frame at a time.
+                            verdictD.tryGet.flatMap {
+                                case Some(_) =>
                                     tracer.traceWith(ServerRepeatHandshake(coilNum))
-                                case true =>
-                                    verdict match {
-                                        case Right(coil) =>
-                                            // Bind the socket BEFORE announcing the link, so
-                                            // the start point the liaison decides on has an
-                                            // outbox to leave by.
-                                            tracer.traceWith(ServerAccepted(coilNum)) >>
-                                                toLiaison(coil, marks)
-                                        case Left(refusal) =>
-                                            tracer.traceWith(
-                                              ServerRefusedHandshake(coilNum, refusal)
-                                            )
-                                    }
+                                case None =>
+                                    // Traced BEFORE it is completed, because completing it is
+                                    // what acts on it. A refusal goes straight out and the
+                                    // socket closes, and the connection can be torn down, and
+                                    // this fiber with it, before a trace placed after it runs:
+                                    // a refusal on the wire that nobody logged.
+                                    verdict.fold(
+                                      refusal =>
+                                          tracer.traceWith(
+                                            ServerRefusedHandshake(coilNum, refusal)
+                                          ),
+                                      _ => tracer.traceWith(ServerAccepted(coilNum))
+                                    ) >>
+                                        verdictD.complete(verdict) >>
+                                        // Bind the socket BEFORE announcing the link, so the
+                                        // start point the liaison decides on has an outbox to
+                                        // leave by.
+                                        verdict.traverse_(coil => toLiaison(coil, marks))
                             }
                         case Right(CoilFrame.Msg(payload)) =>
                             verdictD.tryGet.flatMap {
