@@ -14,6 +14,13 @@ hydrozoa := "target/universal/stage/bin/hydrozoa"
 #   HYDROZOA_HOME=./head/release/preprod just deploy-scripts-and-g2-setup
 export HYDROZOA_HOME := env_var_or_default("HYDROZOA_HOME", "head/demo")
 
+# How the recipes run sbt. A plain `sbt` on an sbt 2 build is a thin client that hands the command
+# to a background sbt server, started by the first call and reused by the later ones. CI sets
+# SBT="sbt --server --batch" to run sbt in-process in every step instead: the thin client's native
+# socket code can crash while connecting, failing the step, and a reused server evaluates the build
+# with the environment of the call that started it.
+sbt := env_var_or_default("SBT", "sbt")
+
 # This justfile is configured to send notifications when commands complete.
 # To enable this, add a `./.just/notify` file.
 #
@@ -26,22 +33,22 @@ export HYDROZOA_HOME := env_var_or_default("HYDROZOA_HOME", "head/demo")
 fmt:
   #!/usr/bin/env bash
   trap 'just notify "fmt"' EXIT
-  sbt fmtAll
+  {{sbt}} fmtAll
 
 fmt-check:
   #!/usr/bin/env bash
   trap 'just notify "fmt-check"' EXIT
-  sbt fmtCheckAll
+  {{sbt}} fmtCheckAll
 
 lint:
   #!/usr/bin/env bash
   trap 'just notify "lint"' EXIT
-  sbt lintAll
+  {{sbt}} lintAll
 
 lint-check:
   #!/usr/bin/env bash
   trap 'just notify "lint-check"' EXIT
-  sbt lintCheckAll
+  {{sbt}} lintCheckAll
 
 nixfmt:
   #!/usr/bin/env bash
@@ -56,7 +63,7 @@ nixfmt-check:
 test:
   #!/usr/bin/env bash
   trap 'just notify "test"' EXIT
-  sbt test
+  {{sbt}} test
 
 # Compile all sources (main + test) with -Werror, mirroring CI.
 # `--server` runs sbt in this process. A plain `sbt` hands the command to an already-running sbt
@@ -72,17 +79,17 @@ integration-fast:
   trap 'just notify "integration-fast"' EXIT
   # The -s 10 / (extended) filter now live in build.sbt, scoped to the ScalaCheck framework —
   # passing them here handed them to ScalaTest too, which rejects -s and fails the run.
-  sbt "integration/testOnly *"
+  {{sbt}} "integration/testOnly *"
 
 integration:
   #!/usr/bin/env bash
   trap 'just notify "integration"' EXIT
-  sbt "integration/test"
+  {{sbt}} "integration/test"
 
 integration-yaci:
   #!/usr/bin/env bash
   trap 'just notify "integration-yaci"' EXIT
-  sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
+  {{sbt}} "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
 
 # Yaci suites that spin up their own devnet via Testcontainers (require Docker).
 # Bypasses the build.sbt Tests.Exclude that keeps these out of `just integration`.
@@ -96,19 +103,19 @@ integration-yaci-docker:
   #!/usr/bin/env bash
   set -eo pipefail
   trap 'just notify "integration-yaci-docker"' EXIT
-  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
-  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
+  {{sbt}} "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
+  {{sbt}} "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
 
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
 export:
   #!/usr/bin/env bash
   trap 'just notify "export"' EXIT
-  sbt "runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export"
+  {{sbt}} "runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export"
 
 export-test:
   #!/usr/bin/env bash
   trap 'just notify "export-test"' EXIT
-  sbt "testOnly *ExportTest*"
+  {{sbt}} "testOnly *ExportTest*"
 
 # Render the RBR HLPN net to an SVG and open it in a browser. Runs the DOT visualizer test
 # (writes target/rbr-net.dot), renders it with graphviz, then opens it via $BROWSER (else xdg-open).
@@ -116,7 +123,7 @@ graphviz:
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "graphviz"' EXIT
-  sbt "integration/testOnly hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNetDotTest"
+  {{sbt}} "integration/testOnly hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNetDotTest"
   # one SVG per transition, gathered into a single scrollable index page
   for f in target/rbr-net/*.dot; do dot -Tsvg "$f" -o "${f%.dot}.svg"; done
   {
@@ -136,12 +143,12 @@ integration-rbr-preview:
   #!/usr/bin/env bash
   set -eo pipefail
   trap 'just notify "integration-rbr-preview"' EXIT
-  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
+  {{sbt}} "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
 
 # Fail if any project registers ScalaCheck's own sbt framework instead of the wrapper that keeps
 # a suite's property events in one batch. See `ScalaCheckFrameworkFixed` for why that matters.
 scalacheck-framework-check:
-  sbt checkScalaCheckFramework
+  {{sbt}} checkScalaCheckFramework
 
 precommit: lint-check fmt-check nixfmt-check scalacheck-framework-check
   just notify "precommit"
@@ -166,7 +173,7 @@ stage:
   # native-packager's `stage` doesn't rewrite bin/hydrozoa when its content is unchanged, so its
   # mtime would keep pointing at the first-ever stage. Touch it so `_require-launcher`'s staleness
   # check sees a real "last staged" time.
-  sbt stage && touch "{{hydrozoa}}"
+  {{sbt}} stage && touch "{{hydrozoa}}"
 
 # Build the hydrozoa Docker image locally — tagged cardano-hydrozoa/hydrozoa:<version> plus
 # ghcr.io/cardano-hydrozoa/hydrozoa at :<version> and :latest, so the composition's default image
@@ -174,13 +181,13 @@ stage:
 docker-image:
   #!/usr/bin/env bash
   trap 'just notify "docker-image"' EXIT
-  sbt Docker/publishLocal
+  {{sbt}} Docker/publishLocal
 
 # Write the Docker build context to target/docker/stage without building it (what the release workflow builds).
 docker-stage:
   #!/usr/bin/env bash
   trap 'just notify "docker-stage"' EXIT
-  sbt Docker/stage
+  {{sbt}} Docker/stage
 
 # ================================ Deployment ================================
 #
