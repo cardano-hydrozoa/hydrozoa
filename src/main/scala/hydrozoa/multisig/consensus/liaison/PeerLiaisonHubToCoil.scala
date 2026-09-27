@@ -12,6 +12,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{Join, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
+import hydrozoa.multisig.consensus.liaison.PeerLiaisonHubToCoil.*
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CoilAckSequencer, CoilStartPoint, SlowConsensusActor, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
@@ -43,35 +44,9 @@ abstract class PeerLiaisonHubToCoil(
     decideStartPoint: Join.Connected => IO[CoilStartPoint]
 ) extends Actor[IO, LiaisonProtocol.HubLiaisonMessage] {
 
-    // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
-    // codec in `persistInbound` picks it up.
-    private given CardanoNetwork.Section = config
-
-    /** Resolve connections — projected from the shared regime `Connections` (remote coil handle
-      * from the in-process `remoteCoilLiaisons` map) or supplied directly.
-      */
-    private def resolveConnections: IO[PeerLiaisonHubToCoil.Connections] =
-        pendingConnections match {
-            case shared: HeadMultisigRegimeManager.PendingConnections =>
-                shared.get
-                    .flatMap(IO.fromEither)
-                    .flatMap(s =>
-                        s.coilAckSequencer.fold(
-                          IO.raiseError(
-                            IllegalStateException("Hub→coil liaison requires a CoilAckSequencer.")
-                          )
-                        )(seq =>
-                            IO.pure(
-                              PeerLiaisonHubToCoil.Connections(
-                                slowConsensusActor = s.slowConsensusActor,
-                                coilAckSequencer = seq,
-                                remote = s.remoteCoilLiaisons(coil)
-                              )
-                            )
-                        )
-                    )
-            case own: PeerLiaisonHubToCoil.Connections => IO.pure(own)
-        }
+    // `Env extends CardanoNetwork.Section`, so this given also supplies the section the
+    // inbound-lane `WriteBatch` codec in `persistInbound` needs.
+    private given env: Env = Env(config, tracer, persistence)
 
     private val headPeerNums: List[HeadPeerNumber] = config.headPeerNums.toList
     private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
@@ -164,9 +139,6 @@ abstract class PeerLiaisonHubToCoil(
           _.increment
         )
 
-    // ---- Connections ----------------------------------------------------------------------------
-    private val connections = Ref.unsafe[IO, Option[PeerLiaisonHubToCoil.Connections]](None)
-
     // The one pull a coil may have outstanding while this link's start point is being decided,
     // held across join mode and replayed by `becomeRegular`. One slot is the whole backlog: the
     // pull chain is strictly request/reply, so a coil never has two in flight.
@@ -175,13 +147,6 @@ abstract class PeerLiaisonHubToCoil(
     // Handle to the resend-timer fiber ([[startResendTimer]]); cancelled in [[postStop]] so it
     // doesn't outlive the actor.
     private val resendFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
-
-    private def getConnections: IO[PeerLiaisonHubToCoil.Connections] =
-        connections.get.flatMap(
-          _.fold(IO.raiseError(IllegalStateException("Hub→coil liaison missing its connections.")))(
-            IO.pure
-          )
-        )
 
     // ---- Serve half (population) ----------------------------------------------------------------
     // Every lane is ceilinged here, unlike the symmetric mesh: a hub serves the whole population
@@ -286,11 +251,6 @@ abstract class PeerLiaisonHubToCoil(
             case _ => IO.unit
         }
 
-    private val server =
-        new Server[Population.Get, Population.New]("Population.Get", serve)(n =>
-            getConnections.flatMap(_.remote ! n)
-        )
-
     /** Route an artifact relayed to this hub onto its outbox lane, keyed by embedded author. */
     private def appendArtifact(
         artifact: BlockBrief.Next | StackBrief | UserRequestWithId | SoftAck | HardAck |
@@ -350,22 +310,34 @@ abstract class PeerLiaisonHubToCoil(
     /** The coil peer's own hard-ack → the hub's quorum (`SlowConsensusActor`) and
       * `CoilAckSequencer` (which re-sequences it onto this hub's `HubHardAckLane`).
       */
-    private def dispatch(own: OwnHardAck.New): IO[Unit] =
-        getConnections.flatMap { conn =>
-            own.hardAck.traverse_(ack =>
-                (conn.slowConsensusActor ! ack) >> (conn.coilAckSequencer ! ack)
-            )
-        }
+    private def dispatch(own: OwnHardAck.New)(using env: Env.Connected): IO[Unit] =
+        own.hardAck.traverse_(ack =>
+            (env.connections.slowConsensusActor ! ack) >> (env.connections.coilAckSequencer ! ack)
+        )
 
-    private val puller = new Puller[OwnHardAck.Get, OwnHardAck.New](
-      initialGet = initialGet,
-      buildGet = buildGet,
-      accept = accept,
-      dispatch = dispatch,
-      numberOfBatchRequest = _.batchNum,
-      numberOfBatch = _.batchNum,
-      tracer = tracer
-    )(g => getConnections.flatMap(_.remote ! g))
+    // ---- Composed halves ------------------------------------------------------------------------
+    /** The serve / pull engines, wired to the coil peer over the post-barrier `connections`. Both
+      * carry per-link `Ref` state, so they are built exactly once (in `PreStart`, after the
+      * barrier) and threaded through [[regular]] and [[joining]] alike: this actor cycles between
+      * the two modes on every coil redial, and each mode must see the same engines.
+      */
+    private final class Engines(using val env: Env.Connected) {
+        val server: Server[Population.Get, Population.New] =
+            new Server[Population.Get, Population.New]("Population.Get", serve)(n =>
+                env.connections.remote ! n
+            )
+
+        val puller: Puller[OwnHardAck.Get, OwnHardAck.New] =
+            new Puller[OwnHardAck.Get, OwnHardAck.New](
+              initialGet = initialGet,
+              buildGet = buildGet,
+              accept = accept,
+              dispatch = own => dispatch(own),
+              numberOfBatchRequest = _.batchNum,
+              numberOfBatch = _.batchNum,
+              tracer = tracer
+            )(g => env.connections.remote ! g)
+    }
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
@@ -380,13 +352,16 @@ abstract class PeerLiaisonHubToCoil(
       * and does not pause because one coil's link is renegotiating; an artifact dropped here is
       * production missing from this coil's outbox lane forever.
       */
-    private def joining: Receive[IO, HubLiaisonMessage] = PartialFunction.fromFunction {
-        // Join mode is only ever entered from `regular`, which has already run this.
-        case PreStart                  => IO.unit
-        case connected: Join.Connected => handleConnected(connected)
+    private def joining(engines: Engines): Receive[IO, HubLiaisonMessage] =
+        PartialFunction.fromFunction(joiningTotal(engines))
+
+    private def joiningTotal(engines: Engines)(req: HubLiaisonMessage): IO[Unit] = req match {
+        // PreStart is handled once, before the barrier; join mode is only ever entered after it.
+        case PreStart => IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
+        case connected: Join.Connected => handleConnected(engines)(connected)
         case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId | _: SoftAck |
             _: HardAck | _: HardAckWithId) =>
-            appendArtifact(artifact) >> server.afterAppend
+            appendArtifact(artifact) >> engines.server.afterAppend
         // Held, not dropped. The coil's pull chain has exactly one request outstanding, so one
         // slot is the whole backlog, and it is replayed the moment the decision lands. Dropping it
         // would instead cost this link `peerLiaisonResendInterval` of silence on every reconnect —
@@ -402,30 +377,65 @@ abstract class PeerLiaisonHubToCoil(
     /** Regular mode: the ordinary serve/pull liaison, with `Join.Connected` as the one arm that
       * leaves it.
       */
-    private def regular: Receive[IO, HubLiaisonMessage] = PartialFunction.fromFunction {
-        case ResendCurrent       => puller.resend
-        case get: Population.Get => server.handleGet(get)
-        case own: OwnHardAck.New => puller.handleReply(own)
+    private def regular(engines: Engines): Receive[IO, HubLiaisonMessage] =
+        PartialFunction.fromFunction(regularTotal(engines))
+
+    private def regularTotal(engines: Engines)(req: HubLiaisonMessage): IO[Unit] = req match {
+        case ResendCurrent       => engines.puller.resend
+        case get: Population.Get => engines.server.handleGet(get)
+        case own: OwnHardAck.New => engines.puller.handleReply(own)
         // The coil redialled. Re-open the decision rather than serving the new socket from where
         // the old one left off — that is the case seeding exists for.
         case connected: Join.Connected =>
-            context.become(joining) >> handleConnected(connected)
+            context.become(joining(engines)) >> handleConnected(engines)(connected)
         case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId | _: SoftAck |
             _: HardAck | _: HardAckWithId) =>
-            appendArtifact(artifact) >> server.afterAppend
-        case PreStart => preStartLocal
+            appendArtifact(artifact) >> engines.server.afterAppend
+        case PreStart => IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
     }
 
-    /** The hub starts **regular**: at boot no coil has dialled in yet, so there is no decision
-      * outstanding and the lanes restore and start pulling exactly as they always have. Join mode
-      * is the transient state a link-up drops this actor into.
+    /** The start barrier, then **regular**: at boot no coil has dialled in yet, so there is no
+      * decision outstanding and the lanes restore and start pulling exactly as they always have.
+      * Join mode is the transient state a link-up drops this actor into.
       */
-    override def receive: Receive[IO, HubLiaisonMessage] = regular
+    override def receive: Receive[IO, HubLiaisonMessage] = PartialFunction.fromFunction {
+        case PreStart =>
+            for {
+                // Suspends on the start barrier, so connections are in place before any real
+                // message is processed.
+                connected <- initializeConnections
+                engines = new Engines(using connected)
+                _ <- restoreAndStart(engines)
+                _ <- context.become(regular(engines))
+            } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
+    }
+
+    private def initializeConnections: IO[Env.Connected] = {
+        val connections: IO[PeerLiaisonHubToCoil.Connections] =
+            HeadMultisigRegimeManager.resolveConnectionsF(pendingConnections)(s =>
+                s.coilAckSequencer.fold(
+                  IO.raiseError(
+                    IllegalStateException("Hub→coil liaison requires a CoilAckSequencer.")
+                  )
+                )(seq =>
+                    IO.pure(
+                      PeerLiaisonHubToCoil.Connections(
+                        slowConsensusActor = s.slowConsensusActor,
+                        coilAckSequencer = seq,
+                        remote = s.remoteCoilLiaisons(coil)
+                      )
+                    )
+                )
+            )
+        connections.map(env.connected)
+    }
 
     /** Leave join mode, replaying whatever pull arrived while the decision was outstanding. */
-    private def becomeRegular: IO[Unit] =
-        context.become(regular) >>
-            heldPull.getAndSet(None).flatMap(_.traverse_(server.handleGet))
+    private def becomeRegular(engines: Engines): IO[Unit] =
+        context.become(regular(engines)) >>
+            heldPull.getAndSet(None).flatMap(_.traverse_(engines.server.handleGet))
 
     /** Answer a coil peer whose link has just come up.
       *
@@ -433,7 +443,7 @@ abstract class PeerLiaisonHubToCoil(
       * store, and a liaison is a transport. What belongs here is only what the answer does to this
       * link's own state.
       */
-    private def handleConnected(connected: Join.Connected): IO[Unit] =
+    private def handleConnected(engines: Engines)(connected: Join.Connected): IO[Unit] =
         decideStartPoint(connected).flatMap {
             case CoilStartPoint.Offer(offer) =>
                 // Move this link's inbound cursor to the index the offer promises BEFORE the offer
@@ -444,26 +454,26 @@ abstract class PeerLiaisonHubToCoil(
                     tracer.traceWith(
                       PeerLiaisonEvent.CoilSeeded(offer.startStack, offer.ownHardAck)
                     ) >>
-                    getConnections.flatMap(_.remote ! offer) >>
+                    (engines.env.connections.remote ! offer) >>
                     // Re-open the pull chain from the cursor just moved. Advancing alone is not
                     // enough: the outstanding pull still names the old index, and `resend` repeats
                     // that same one verbatim — so the chain would never ask for anything the
                     // seeded coil is going to produce, and the link would sit there looking idle
                     // rather than broken.
-                    puller.start >> becomeRegular
+                    engines.puller.start >> becomeRegular(engines)
             case CoilStartPoint.CatchUp =>
                 tracer.traceWith(PeerLiaisonEvent.CoilCaughtUp) >>
-                    noOffer("within catch-up range") >> becomeRegular
+                    noOffer(engines)("within catch-up range") >> becomeRegular(engines)
             case CoilStartPoint.Unavailable(reason) =>
                 tracer.traceWith(PeerLiaisonEvent.CoilNotSeeded(reason.toString)) >>
-                    noOffer(reason.toString) >> becomeRegular
+                    noOffer(engines)(reason.toString) >> becomeRegular(engines)
         }
 
     /** Answer a handshake the hub has no start point for. Sent rather than left silent so the coil
       * can tell this apart from an unreachable hub — see [[Join.NoOffer]].
       */
-    private def noOffer(reason: String): IO[Unit] =
-        getConnections.flatMap(_.remote ! Join.NoOffer(reason))
+    private def noOffer(engines: Engines)(reason: String): IO[Unit] =
+        engines.env.connections.remote ! Join.NoOffer(reason)
 
     /** Restore each population outbox lane's high-water from its backing journal, leaving the
       * outboxes empty. The Server half answers the coil peer's `Population.Get` from the store
@@ -501,10 +511,8 @@ abstract class PeerLiaisonHubToCoil(
                 .flatMap(ownHardAckLane.restoreCursor)
         } yield ()
 
-    private def preStartLocal: IO[Unit] =
+    private def restoreAndStart(engines: Engines): IO[Unit] =
         for {
-            c <- resolveConnections
-            _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
             // Restore each lane's high-water; the Server half reads older population entries
             // from the store on the coil peer's Population.Get, and live CoilRelay production
@@ -512,7 +520,7 @@ abstract class PeerLiaisonHubToCoil(
             _ <- restoreHighWaters
             // Restore the inbound coil-ack receive cursor so we re-pull only NEW acks.
             _ <- restoreInboundCursors
-            _ <- puller.start
+            _ <- engines.puller.start
             _ <- startResendTimer
         } yield ()
 
@@ -568,5 +576,22 @@ object PeerLiaisonHubToCoil {
         coilAckSequencer: CoilAckSequencer.Handle,
         remote: LiaisonProtocol.CoilLiaisonHandle
     )
+
+    private final case class Env(
+        config: Config,
+        tracer: ContraTracer[IO, PeerLiaisonEvent],
+        persistence: Persistence[IO]
+    ) extends CardanoNetwork.Section {
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+    }
+
+    private object Env {
+
+        final class Connected(env: Env, val connections: Connections)
+            extends CardanoNetwork.Section {
+            export env.*
+        }
+    }
 
 }
