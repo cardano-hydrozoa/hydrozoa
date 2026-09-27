@@ -20,7 +20,8 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
   * Stopping the leaves first gives every actor a live parent to report its death to, so no death
   * reaches dead letters, and the watch on the subtree's root fires only once nothing below it is
   * running. Messages the subtree's actors were still sending one another, or that arrive from
-  * outside it, can still reach an actor that has stopped: a stop can't prevent those.
+  * outside it, can still reach an actor that has stopped: a stop can't prevent those, and
+  * [[OrderlyShutdown]] stops that traffic before it stops anything.
   */
 object SubtreeStop:
 
