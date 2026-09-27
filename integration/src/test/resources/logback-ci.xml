@@ -15,6 +15,24 @@
         </encoder>
     </appender>
 
+    <!-- Every dead letter, one per line, for CI's summary (.github/scripts/test-summary.py reads
+         this format, `hydrozoa.dead-letters` version 1): the level (WARN while the actor system
+         runs, DEBUG once it is stopping), a tab, and the message with tabs and newlines flattened.
+         In the directory the build gives the forked JVM for its test events. -->
+    <appender name="DEAD_LETTERS" class="ch.qos.logback.core.FileAppender">
+        <file>${hydrozoa.ci.events}/dead-letters.tsv</file>
+        <append>true</append>
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="ch.qos.logback.classic.PatternLayout">
+                <fileHeader>#hydrozoa.dead-letters&#9;1</fileHeader>
+                <pattern>%level&#9;%replace(%msg){'[\t\r\n]+', ' '}%n</pattern>
+            </layout>
+        </encoder>
+    </appender>
+    <logger name="DeadLetters" level="trace">
+        <appender-ref ref="DEAD_LETTERS"/>
+    </logger>
+
     <appender name="MERMAID" class="ch.qos.logback.core.FileAppender">
         <file>stage4-peers-interaction.mmd</file>
         <append>false</append>

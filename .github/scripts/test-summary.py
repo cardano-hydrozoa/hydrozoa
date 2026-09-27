@@ -4,6 +4,7 @@
 Usage: test-summary.py [--json FILE] [ROOT ...]   (default ROOT: target). Reads, under each root,
   - test events:        **/ci-events/tests-*.jsonl
   - compile problems:   **/ci-events/compile-*.jsonl
+  - dead letters:       **/ci-events/dead-letters.tsv
   - JUnit report NAMES: **/test-reports/TEST-*.xml (names only, as a cross-check; never parsed)
 and skips any file with a directory named `ci-canary` between the root and itself: that is the
 reporting canary's own project, and the canary check passes its snapshot directory as the root.
@@ -17,6 +18,8 @@ test steps decide pass or fail, and this only reports.
 
 FORMATS, version 1 (the canonical description; the Scala writers point here)
 ============================================================================
+
+Dead letters: `hydrozoa.dead-letters` v1, a text format described after the JSON ones.
 
 Two JSON-lines formats: one JSON object per line, UTF-8, `\\n`-terminated, each line flushed as
 written. Every object has "type" and "time" (epoch milliseconds). Readers must reject a file whose
@@ -148,8 +151,18 @@ by the things it counts holds their number.
   junitOnly, eventsOnly  sorted suite names with a JUnit report and no suite-end, and the reverse
   excludedCanaryFiles    files skipped for a `ci-canary` directory
   notes                  [str]
+
+Dead letters: `hydrozoa.dead-letters` v1. Written by the CI logging configs
+(src/test/resources/logback-core-ci.xml, integration/src/test/resources/logback-ci.xml) inside
+each forked test JVM, appended to `<project's Test/target>/ci-events/dead-letters.tsv`. Each JVM
+that opens the file writes the header line `#hydrozoa.dead-letters<TAB>1`; every other line is one
+dead letter: the level, a tab, and the message (`<message class> to <recipient path>[ from <sender
+path>] (system running|system stopping)`), tabs and newlines flattened. WARN means the actor system
+was running, DEBUG that it was stopping. A file whose first line isn't that header, or a line with
+another level, is invalid.
 """
 
+import collections
 import glob
 import json
 import os
@@ -172,6 +185,8 @@ STATUSES = {
 CANARY_DIR = "ci-canary"
 TRACE_LINES = 12
 DETAIL_CHARS = 8_000
+DEAD_LETTERS_HEADER = "#hydrozoa.dead-letters\t1"
+DEAD_LETTERS_SHOWN = 20
 SUMMARY_BUDGET = 512 * 1024
 DETAIL_BUDGET = SUMMARY_BUDGET // 2
 TITLE_CHARS = 200
@@ -294,6 +309,34 @@ def read_jsonl(path, schema):
     if not (is_int(first.get("version")) and first["version"] == 1):
         return None, [], [], bool(tail), f"schema version {s(first.get('version'))}, not 1"
     return first, records, problems, bool(tail), None
+
+
+def read_dead_letters(paths):
+    """Dead letters from `hydrozoa.dead-letters` files: (messages sent while running, how many
+    while stopping, one reason per invalid file)."""
+    running, stopping, invalid = [], 0, []
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+        except OSError as e:
+            invalid.append(f"{rel(path)}: can't read ({type(e).__name__}: {e})")
+            continue
+        if lines and lines[0] != DEAD_LETTERS_HEADER:
+            invalid.append(f"{rel(path)}: first line is {lines[0][:80]!r}, not the v1 header")
+            continue
+        for line in lines:
+            level, _, message = line.partition("\t")
+            if line == DEAD_LETTERS_HEADER:
+                continue
+            if level == "WARN":
+                running.append(message)
+            elif level == "DEBUG":
+                stopping += 1
+            else:
+                invalid.append(f"{rel(path)}: a line with level {level[:20]!r}")
+                break
+    return running, stopping, invalid
 
 
 def build_sbt_version():
@@ -547,6 +590,9 @@ def main():
         res.read_tests(path)
     for path in find(roots, os.path.join("ci-events", "compile-*.jsonl"), excluded):
         res.read_compile(path)
+    dead, dead_stopping, dead_invalid = read_dead_letters(
+        find(roots, os.path.join("ci-events", "dead-letters.tsv"), excluded)
+    )
     xml_files = find(roots, os.path.join("test-reports", "TEST-*.xml"), excluded)
     xml_suites = {os.path.basename(f)[len("TEST-") : -len(".xml")] for f in xml_files}
     only_xml = sorted(xml_suites - res.finished_suites)
@@ -626,6 +672,8 @@ def main():
             f"{len(only_xml)} suites have a JUnit report but no suite-end in the test events, so "
             "they ran without being recorded; see the job summary",
         )
+    if dead_invalid:
+        warnings.append(("Dead-letter files unreadable", "; ".join(dead_invalid)))
     if only_ev:
         warnings.append(
             (
@@ -698,6 +746,8 @@ def main():
             "compileErrorsLive": live, "compileWarnings": warns, "invalidFiles": res.invalid,
             "versionErrors": versions, "buildSbt": built, "testedSbt": TESTED_SBT,
             "junitOnly": only_xml, "eventsOnly": only_ev, "excludedCanaryFiles": len(excluded),
+            "deadLettersRunning": len(dead), "deadLettersStopping": dead_stopping,
+            "deadLetterFilesInvalid": dead_invalid,
             "notes": notes,
         }  # fmt: skip
         try:
@@ -719,6 +769,10 @@ def main():
     )
     if steps:
         out.add("Steps: " + ", ".join(f"{n} {o}" for n, o in steps.items()) + ".\n")
+    out.add(
+        f"Dead letters: {len(dead)} while an actor system was running, {dead_stopping} while "
+        "one was stopping.\n"
+    )
     if errors or cautions or warnings:
         told = errors + cautions + warnings
         out.add("\n".join(f"- **{t}**: {one_line(m)}" for t, m in told) + "\n")
@@ -740,6 +794,13 @@ def main():
         [
             (f"- {code(i['file'])}: {code('; '.join(i['reasons']), 2000)}", None)
             for i in res.invalid
+        ],
+    )
+    out.section(
+        "Dead letters while an actor system was running",
+        [
+            (f"- {n}× {code(m)}", None)
+            for m, n in collections.Counter(dead).most_common(DEAD_LETTERS_SHOWN)
         ],
     )
     out.section(
