@@ -405,6 +405,23 @@ lazy val core: Project = (project in file("."))
       Test / javaOptions ++= Def.uncached(
         if (sys.env.contains("CI")) Seq("-Dlogback.configurationFile=logback-core-ci.xml") else Nil
       ),
+      // Tests that need what CI lacks: a Blockfrost API key (`RequiresBlockfrostApiKey`) or a
+      // real node's store (`test.RequiresNodeStore`). They cancel without it, so under CI they are
+      // excluded by tag rather than reported as cancelled every run; local runs keep them. Scoped
+      // to the ScalaTest framework this build records, since `-l` means nothing to ScalaCheck.
+      Test / testOptions ++= Def.uncached(
+        if (sys.env.contains("CI"))
+          Seq(
+            Tests.Argument(
+              recordedScalaTest,
+              "-l",
+              "requires-blockfrost-api-key",
+              "-l",
+              "requires-node-store"
+            )
+          )
+        else Nil
+      ),
     )
     .settings(recordTestEvents)
 
