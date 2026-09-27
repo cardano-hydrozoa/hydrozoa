@@ -858,6 +858,15 @@ object ModelBasedSuite {
     private[commands] def recordTestCase(labels: List[String]): Unit =
         passedTestCases.add(labels): Unit
 
+    /** The run's totals, logged once when the test JVM exits: TestControl's simulated and real
+      * time, and the distribution of commands over the passed test cases (how well the generators
+      * covered the command set).
+      */
+    private val statsLog: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(
+          Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite.Stats")
+        )
+
     // TODO: make optional
     Runtime.getRuntime.addShutdownHook(new Thread {
         override def run(): Unit = {
@@ -882,40 +891,40 @@ object ModelBasedSuite {
             val realMins = realSecs / 60L
             val realRemSec = realSecs % 60L
 
-            println
-            println(
-              s"---- TestControl ---- GRAND TOTAL simulated time: $simTimeStr (across all test cases)"
-            )
-            println(
+            val timeTotals = List(
+              s"---- TestControl ---- GRAND TOTAL simulated time: $simTimeStr (across all test cases)",
               s"---- TestControl ---- GRAND TOTAL real time:      ${realMins}m ${realRemSec}s"
             )
 
             val cases = passedTestCases.toArray(Array.empty[List[String]])
-            if cases.nonEmpty then {
-                val lengths = cases.map(_.count(_ != "NoOp"))
-                val totalCases = cases.length
-                val avgLen = lengths.sum.toDouble / totalCases
-                val maxLen = lengths.max
+            val commandStats =
+                if cases.isEmpty then Nil
+                else {
+                    val lengths = cases.map(_.count(_ != "NoOp"))
+                    val totalCases = cases.length
+                    val avgLen = lengths.sum.toDouble / totalCases
+                    val maxLen = lengths.max
 
-                val labelCounts = cases.flatten
-                    .groupBy(identity)
-                    .map { case (label, occurrences) => label -> occurrences.length }
-                    .toList
-                    .sortBy(_._1)
+                    val labelCounts = cases.flatten
+                        .groupBy(identity)
+                        .map { case (label, occurrences) => label -> occurrences.length }
+                        .toList
+                        .sortBy(_._1)
 
-                val totalCommands = labelCounts.map(_._2).sum
+                    val totalCommands = labelCounts.map(_._2).sum
 
-                println
-                println(s"---- Command stats ---- passed test cases: $totalCases")
-                println(f"---- Command stats ---- sequence length: avg=${avgLen}%.1f  max=$maxLen")
-                println(s"---- Command stats ---- command distribution (total $totalCommands):")
-                val labelWidth = labelCounts.map(_._1.length).maxOption.getOrElse(0)
-                labelCounts.foreach { case (label, count) =>
-                    val pct = count.toDouble / totalCommands * 100
-                    val paddedLabel = label.padTo(labelWidth, ' ')
-                    println(f"  $paddedLabel  $count%6d  ($pct%5.1f%%)")
+                    val labelWidth = labelCounts.map(_._1.length).maxOption.getOrElse(0)
+                    List(
+                      s"---- Command stats ---- passed test cases: $totalCases",
+                      f"---- Command stats ---- sequence length: avg=${avgLen}%.1f  max=$maxLen",
+                      s"---- Command stats ---- command distribution (total $totalCommands):"
+                    ) ++ labelCounts.map { case (label, count) =>
+                        val pct = count.toDouble / totalCommands * 100
+                        val paddedLabel = label.padTo(labelWidth, ' ')
+                        f"  $paddedLabel  $count%6d  ($pct%5.1f%%)"
+                    }
                 }
-            }
+            statsLog.info((timeTotals ++ commandStats).mkString("\n")).unsafeRunSync()
         }
     })
 
