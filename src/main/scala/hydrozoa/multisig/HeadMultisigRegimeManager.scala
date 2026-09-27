@@ -43,8 +43,8 @@ trait HeadMultisigRegimeManager(
     override protected lazy val tracers: MrmTracers = MrmTracers.fromRoot(tracer)
 
     /** Non-CL child refs, populated once every actor is spawned in [[preStartLocal]]. On
-      * [[HandoffToRuleBased]], `onHandoffToRuleBased` reads them and issues `context.stop` to each;
-      * CL stays alive to process refunds and finish rollouts.
+      * [[HandoffToRuleBased]], `onHandoffToRuleBased` reads them and stops them in order
+      * ([[stopInOrder]]); CL stays alive to process refunds and finish rollouts.
       */
     private val nonClChildren: Ref[IO, List[NoSendActorRef[IO]]] =
         Ref.unsafe(List.empty)
@@ -313,7 +313,7 @@ trait HeadMultisigRegimeManager(
         nonClChildren.getAndSet(Nil).flatMap {
             case Nil => IO.unit
             case refs =>
-                refs.traverse_(context.stop) >>
+                stopInOrder(refs) >>
                     context
                         .actorOf(
                           RuleBasedRegimeManager(

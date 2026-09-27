@@ -20,10 +20,15 @@ object HeadMultisigRegimeManagerEventFormat:
         e match
             case LifecycleEvent.StartingActors => info("Starting multisig actors...")
             case LifecycleEvent.WatchingActors => info("Watching multisig actors...")
-            case LifecycleEvent.TerminatedActor(actor, true) =>
+            case LifecycleEvent.TerminatedActor(actor, Some(LifecycleEvent.Stopping.AtHandoff)) =>
                 info(s"Terminated $actor actor (stopped at the handoff to the rule-based regime)")
-            case LifecycleEvent.TerminatedActor(actor, false) => warn(s"Terminated $actor actor")
-            case LifecycleEvent.TerminatedDependency(dep)     => warn(s"Terminated dependency $dep")
+            case LifecycleEvent.TerminatedActor(actor, Some(LifecycleEvent.Stopping.AtShutdown)) =>
+                info(s"Terminated $actor actor (stopped as the node shuts down)")
+            case LifecycleEvent.TerminatedActor(actor, None) => warn(s"Terminated $actor actor")
+            case LifecycleEvent.ChildrenStopped(children, outcome) =>
+                val msg = s"Stopped $children actors at the handoff: ${outcome.describe}"
+                if outcome.complete then info(msg) else warn(msg)
+            case LifecycleEvent.TerminatedDependency(dep) => warn(s"Terminated dependency $dep")
             case LifecycleEvent.SupervisedFailureEscalated(cause) =>
                 LogEvent(
                   Level.Error,

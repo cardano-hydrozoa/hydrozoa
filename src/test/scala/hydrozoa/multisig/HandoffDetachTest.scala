@@ -123,8 +123,8 @@ class HandoffDetachTest extends AnyFunSuite {
                         _ <- remoteT.send(own, pull)
                         _ <- manager ! HandoffToRuleBased
                         _ <- await(events)(_.exists {
-                            case LifecycleEvent.TerminatedActor(_, true) => true
-                            case _                                       => false
+                            case LifecycleEvent.TerminatedActor(_, Some(_)) => true
+                            case _                                          => false
                         })
                         // A repeated handoff, as a second L1 observation fires one: no second
                         // unregister, no second stop.

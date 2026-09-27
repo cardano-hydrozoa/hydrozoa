@@ -1,7 +1,6 @@
 package hydrozoa.multisig
 
 import cats.effect.{Deferred, IO, Ref, Resource}
-import cats.syntax.all.*
 import com.suprnation.actor.ActorContext
 import com.suprnation.actor.ActorRef.NoSendActorRef
 import hydrozoa.config.node.NodeConfig
@@ -195,7 +194,7 @@ trait CoilMultisigRegimeManager(
         nonClChildren.getAndSet(Nil).flatMap {
             case Nil => IO.unit
             case refs =>
-                refs.traverse_(context.stop) >>
+                stopInOrder(refs) >>
                     context
                         .actorOf(
                           RuleBasedRegimeManager(

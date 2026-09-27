@@ -8,6 +8,7 @@ import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.{Directive, Escalate}
 import com.suprnation.actor.{ActorContext, OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
+import hydrozoa.lib.actor.{OrderlyShutdown, Quiescent}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
 import hydrozoa.multisig.MultisigRegimeManagerBase.CoreActors
@@ -31,7 +32,8 @@ import scala.concurrent.duration.DurationInt
   * the tracer is wired in via abstract-member override instead).
   */
 trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
-    extends Actor[IO, Request] {
+    extends Actor[IO, Request],
+      Quiescent {
 
     /** Regime-wide tracer, supplied by the subclass (typically as an `override val` constructor
       * parameter). The cell type `E` constrains which categories the subclass may emit;
@@ -81,10 +83,11 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       */
     val submissions: SubmissionGate = SubmissionGate.unsafeOpen()
 
-    /** Set on [[HandoffToRuleBased]], before [[onHandoffToRuleBased]] stops the multisig actors:
-      * from then on a child's termination is this manager's own doing, not a failure.
+    /** Set on [[HandoffToRuleBased]], before [[onHandoffToRuleBased]] stops the multisig actors, or
+      * on [[quiesce]], before the node stops them all: from then on a child's termination is
+      * expected, not a failure.
       */
-    private val handedOff = Ref.unsafe[IO, Boolean](false)
+    private val stopping = Ref.unsafe[IO, Option[LifecycleEvent.Stopping]](None)
 
     /** Unregisters every liaison this manager wired on a transport; accumulated by the subclass's
       * [[preStartLocal]] through [[detachAtHandoff]] as it registers them.
@@ -143,6 +146,18 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
 
     override def preStart: IO[Unit] = context.self ! PreStart
 
+    /** Close this manager's inputs before the node stops its actors ([[OrderlyShutdown]]): close
+      * the submission gate, waiting briefly for the admitted submissions to be answered, and
+      * unregister the liaisons from their transports. The children quiesce themselves.
+      */
+    override def quiesce: IO[Unit] =
+        stopping.set(Some(LifecycleEvent.Stopping.AtShutdown)) >>
+            submissions.closeAndDrain(2.seconds) >>
+            detachLiaisons.getAndSet(IO.unit).flatten
+
+    /** Its children are all stopped by now, so nothing will answer a submission still waiting. */
+    override def postStop: IO[Unit] = submissions.markAnswerersStopped
+
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
@@ -154,14 +169,14 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 (pendingConnections.complete(Left(e)) >> connectionsDeferred.complete(Left(e))).void
             )
         case TerminatedChild(childType, _) =>
-            handedOff.get.flatMap(stoppedByUs =>
-                tracer.traceWith(LifecycleEvent.TerminatedActor(childType, stoppedByUs))
+            stopping.get.flatMap(why =>
+                tracer.traceWith(LifecycleEvent.TerminatedActor(childType, why))
             )
         case TerminatedDependency(dependencyType, _) =>
             tracer.traceWith(LifecycleEvent.TerminatedDependency(dependencyType))
         case HandoffToRuleBased =>
             nodeStatus.update(_.advanceTo(NodeStatus.HandedOffToRuleBased)) *>
-                handedOff.set(true) *>
+                stopping.set(Some(LifecycleEvent.Stopping.AtHandoff)) *>
                 submissions.closeAndDrain(10.seconds) *>
                 // After the drain: the liaisons carry the head's traffic until the admitted
                 // submissions are answered. `getAndSet` makes a repeated handoff a no-op here.
@@ -183,6 +198,19 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       * runs, the liaisons are already unregistered from their transports ([[detachAtHandoff]]).
       */
     protected def onHandoffToRuleBased: IO[Unit]
+
+    /** Stop the multisig children at the handoff with [[OrderlyShutdown]], so that no message
+      * between them is lost: they quiesce, run until idle, and stop.
+      *
+      * It runs inside this manager's handler, which blocks meanwhile, for at most the sum of
+      * [[HandoffStopBounds]]. The children's deaths queue up behind it and are traced after.
+      */
+    protected def stopInOrder(children: List[NoSendActorRef[IO]]): IO[Unit] =
+        OrderlyShutdown
+            .run(context.system, children, MultisigRegimeManagerBase.HandoffStopBounds)
+            .flatMap(outcome =>
+                tracer.traceWith(LifecycleEvent.ChildrenStopped(children.size, outcome))
+            )
 
     /** Fan a list of (actorRef, actor-kind) pairs into per-child death watches that fire
       * `TerminatedChild` back to this manager.
@@ -283,6 +311,12 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
 }
 
 object MultisigRegimeManagerBase {
+
+    /** [[MultisigRegimeManagerBase.stopInOrder]]'s bounds. Quiescing is a message to each child;
+      * once the inputs are closed, the traffic between the children dies out in milliseconds.
+      */
+    val HandoffStopBounds: OrderlyShutdown.Bounds =
+        OrderlyShutdown.Bounds(quiesce = 1.second, idle = 5.seconds, stop = 5.seconds)
 
     /** The actors spawned by [[MultisigRegimeManagerBase.spawnCoreActors]] — present on every
       * multisig peer regardless of role.
