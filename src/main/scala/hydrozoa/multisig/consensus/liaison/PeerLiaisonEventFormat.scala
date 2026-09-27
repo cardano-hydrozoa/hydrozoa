@@ -21,6 +21,7 @@ object PeerLiaisonEventFormat:
         e match {
             case Started =>
                 info(s"starting, remote peer: $remoteLabel")
+            case Quiesced => info("quiesced: resending no more")
             case BatchRequested(batchNum, detail) =>
                 debug(s"-> GetMsgBatch=$batchNum ${detail.value}")
             case BatchReceived(batchNum, detail) =>

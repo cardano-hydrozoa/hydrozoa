@@ -8,6 +8,7 @@ import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
+import hydrozoa.lib.actor.{Quiesce, Quiescent}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
@@ -39,7 +40,8 @@ abstract class PeerLiaisonHeadToHead(
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO],
     metrics: PeerMetrics
-) extends Actor[IO, LiaisonProtocol.MeshLiaisonMessage] {
+) extends Actor[IO, LiaisonProtocol.MeshLiaisonMessage | Quiesce.type],
+      Quiescent {
 
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codecs in `persistInbound` pick it up.
@@ -177,6 +179,9 @@ abstract class PeerLiaisonHeadToHead(
     // Handle to the resend-timer fiber ([[startResendTimer]]); cancelled in [[postStop]] so it
     // doesn't outlive the actor.
     private val resendFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
+
+    // Set by [[Quiesce]]: from then on a queued `ResendCurrent` does nothing.
+    private val quiesced = Ref.unsafe[IO, Boolean](false)
 
     private def getConnections: IO[PeerLiaisonHeadToHead.Connections] =
         connections.get.flatMap(
@@ -447,12 +452,16 @@ abstract class PeerLiaisonHeadToHead(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, MeshLiaisonMessage] =
+    override def quiesce: IO[Unit] = self ! Quiesce
+
+    override def receive: Receive[IO, MeshLiaisonMessage | Quiesce.type] =
         PartialFunction.fromFunction(receiveTotal)
 
-    private def receiveTotal(req: MeshLiaisonMessage): IO[Unit] = req match {
-        case PreStart                   => preStartLocal
-        case ResendCurrent              => puller.resend
+    private def receiveTotal(req: MeshLiaisonMessage | Quiesce.type): IO[Unit] = req match {
+        case PreStart => preStartLocal
+        case Quiesce =>
+            quiesced.set(true) >> cancelResendTimer >> tracer.traceWith(PeerLiaisonEvent.Quiesced)
+        case ResendCurrent              => quiesced.get.ifM(IO.unit, puller.resend)
         case get: Mesh.Get              => server.handleGet(get)
         case m: Mesh.New                => puller.handleReply(m)
         case hw: SoftConfirmedHighWater =>
@@ -506,7 +515,9 @@ abstract class PeerLiaisonHeadToHead(
       * when fallback tears down the multisig regime and this liaison — instead of leaking a fiber
       * that keeps delivering `ResendCurrent` to a dead actor (dead letters).
       */
-    override def postStop: IO[Unit] =
+    override def postStop: IO[Unit] = cancelResendTimer
+
+    private def cancelResendTimer: IO[Unit] =
         resendFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 }
 

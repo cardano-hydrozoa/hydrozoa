@@ -25,6 +25,11 @@ object PeerLiaisonEvent:
     /** Emitted once from a liaison's pre-start, after its connections resolve. */
     case object Started extends PeerLiaisonEvent
 
+    /** Asked to quiesce: the resend timer (and a coil's join timer) is cancelled, and none is
+      * started again.
+      */
+    case object Quiesced extends PeerLiaisonEvent
+
     /** A `GetMsgBatch` pull sent to the remote (initial, retransmit, or the next after a reply).
       * `detail` summarizes the requested cursors — including the backpressure `requestCeiling` — so
       * the mesh's request-flow throttling is visible. High-frequency: DEBUG.

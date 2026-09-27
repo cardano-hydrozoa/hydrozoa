@@ -7,6 +7,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
+import hydrozoa.lib.actor.{Quiesce, Quiescent}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
@@ -41,7 +42,10 @@ abstract class PeerLiaisonHubToCoil(
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO],
     decideStartPoint: Join.Connected => IO[CoilStartPoint]
-) extends Actor[IO, LiaisonProtocol.HubLiaisonMessage] {
+) extends Actor[IO, LiaisonProtocol.HubLiaisonMessage | Quiesce.type],
+      Quiescent {
+
+    private type Inbox = HubLiaisonMessage | Quiesce.type
 
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codec in `persistInbound` picks it up.
@@ -175,6 +179,9 @@ abstract class PeerLiaisonHubToCoil(
     // Handle to the resend-timer fiber ([[startResendTimer]]); cancelled in [[postStop]] so it
     // doesn't outlive the actor.
     private val resendFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
+
+    // Set by [[Quiesce]]: from then on a queued `ResendCurrent` does nothing.
+    private val quiesced = Ref.unsafe[IO, Boolean](false)
 
     private def getConnections: IO[PeerLiaisonHubToCoil.Connections] =
         connections.get.flatMap(
@@ -380,9 +387,10 @@ abstract class PeerLiaisonHubToCoil(
       * and does not pause because one coil's link is renegotiating; an artifact dropped here is
       * production missing from this coil's outbox lane forever.
       */
-    private def joining: Receive[IO, HubLiaisonMessage] = PartialFunction.fromFunction {
+    private def joining: Receive[IO, Inbox] = PartialFunction.fromFunction {
         // Join mode is only ever entered from `regular`, which has already run this.
         case PreStart                  => IO.unit
+        case Quiesce                   => onQuiesce
         case connected: Join.Connected => handleConnected(connected)
         case artifact @ (_: BlockBrief.Next | _: StackBrief | _: UserRequestWithId | _: SoftAck |
             _: HardAck | _: HardAckWithId) =>
@@ -402,8 +410,9 @@ abstract class PeerLiaisonHubToCoil(
     /** Regular mode: the ordinary serve/pull liaison, with `Join.Connected` as the one arm that
       * leaves it.
       */
-    private def regular: Receive[IO, HubLiaisonMessage] = PartialFunction.fromFunction {
-        case ResendCurrent       => puller.resend
+    private def regular: Receive[IO, Inbox] = PartialFunction.fromFunction {
+        case ResendCurrent       => quiesced.get.ifM(IO.unit, puller.resend)
+        case Quiesce             => onQuiesce
         case get: Population.Get => server.handleGet(get)
         case own: OwnHardAck.New => puller.handleReply(own)
         // The coil redialled. Re-open the decision rather than serving the new socket from where
@@ -420,7 +429,12 @@ abstract class PeerLiaisonHubToCoil(
       * outstanding and the lanes restore and start pulling exactly as they always have. Join mode
       * is the transient state a link-up drops this actor into.
       */
-    override def receive: Receive[IO, HubLiaisonMessage] = regular
+    override def receive: Receive[IO, Inbox] = regular
+
+    override def quiesce: IO[Unit] = self ! Quiesce
+
+    private def onQuiesce: IO[Unit] =
+        quiesced.set(true) >> cancelResendTimer >> tracer.traceWith(PeerLiaisonEvent.Quiesced)
 
     /** Leave join mode, replaying whatever pull arrived while the decision was outstanding. */
     private def becomeRegular: IO[Unit] =
@@ -533,7 +547,9 @@ abstract class PeerLiaisonHubToCoil(
       * when fallback tears down the multisig regime and this liaison — instead of leaking a fiber
       * that keeps delivering `ResendCurrent` to a dead actor (dead letters).
       */
-    override def postStop: IO[Unit] =
+    override def postStop: IO[Unit] = cancelResendTimer
+
+    private def cancelResendTimer: IO[Unit] =
         resendFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 }
 
