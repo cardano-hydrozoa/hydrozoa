@@ -129,7 +129,7 @@ class CoilRejoinTest extends AnyFunSuite {
                 )
 
         val program =
-            MultiPeerHeadHarness.resource(inputs, hooks).use { harness =>
+            MultiPeerHeadHarness.useGuarded(inputs, hooks) { harness =>
                 for
                     _ <- kickUntil(harness, runUpCap)(
                       sawMajor(harness.peers(HeadPeerNumber(0)).backendStore)

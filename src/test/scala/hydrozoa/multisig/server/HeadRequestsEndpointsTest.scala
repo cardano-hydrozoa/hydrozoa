@@ -1,11 +1,11 @@
 package hydrozoa.multisig.server
+
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.UserRequest.{DepositRequest, TransactionRequest}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -16,14 +16,17 @@ import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackEffects, StackNumber}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, DepositDecision, RequestBlockEntry, Timestamped}
+import hydrozoa.multisig.{NodeStatus, SubmissionGate}
 import io.circe.Json
 import java.time.Instant
 import org.http4s.circe.*
+import org.http4s.client.Client
 import org.http4s.implicits.*
 import org.http4s.{HttpApp, Method, Request, Status, Uri}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
+import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.TransactionHash
 import scalus.uplc.builtin.ByteString
 
@@ -114,8 +117,12 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
             def wallClockOf(stamp: ArrivalStamp): IO[Instant] =
                 IO.pure(instantOf(stamp))
 
-    private def withRoutes(reader: ConsensusStoreReader[IO])(check: HttpApp[IO] => IO[Unit]): Unit =
-        ActorSystem[IO]("HeadRequestsEndpointsTest")
+    private def withRoutes(
+        reader: ConsensusStoreReader[IO],
+        submissions: SubmissionGate = SubmissionGate.unsafeOpen()
+    )(check: HttpApp[IO] => IO[Unit]): Unit =
+        HydrozoaActorSystem
+            .withoutRoot("HeadRequestsEndpointsTest")
             .use { system =>
                 for {
                     requestSequencerStub <- system.actorOf(
@@ -131,6 +138,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                     )
                     routes <- HydrozoaRoutes(
                       Some(requestSequencerStub),
+                      submissions,
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       reader,
@@ -328,7 +336,8 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
       * follower accepts no user requests — and run `check`.
       */
     private def withCoilRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
-        ActorSystem[IO]("HeadRequestsEndpointsTest-coil")
+        HydrozoaActorSystem
+            .withoutRoot("HeadRequestsEndpointsTest-coil")
             .use { system =>
                 for {
                     blockWeaverStub <- system.actorOf(
@@ -338,6 +347,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                     )
                     routes <- HydrozoaRoutes(
                       None,
+                      SubmissionGate.unsafeOpen(),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       stubReader(Map.empty),
@@ -352,6 +362,46 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 } yield ()
             }
             .unsafeRunSync()
+
+    test("POST /head/requests is refused with a 503 once the head has handed off") {
+        val submissions = SubmissionGate.unsafeOpen()
+        val body = Json.obj(
+          "type" -> Json.fromString("transaction"),
+          "l2Payload" -> Json.fromString("00"),
+          "requestHash" -> Json.fromString("00" * 32)
+        )
+        withRoutes(stubReader(Map.empty), submissions) { app =>
+            for {
+                _ <- submissions.closeAndDrain(0.seconds)
+                resp <- app.run(
+                  Request[IO](Method.POST, Uri.unsafeFromString("/head/requests")).withEntity(body)
+                )
+                error <- resp.as[Json].map(_.hcursor.get[String]("error"))
+            } yield {
+                val _ = assert(resp.status == Status.ServiceUnavailable, error)
+                val _ = assert(error == Right(HydrozoaRoutes.SubmissionsClosed))
+                ()
+            }
+        }
+    }
+
+    test("SubmissionClient.http returns Closed, not an error, for that 503") {
+        val submissions = SubmissionGate.unsafeOpen()
+        withRoutes(stubReader(Map.empty), submissions) { app =>
+            val client = SubmissionClient.http(Client.fromHttpApp(app), Uri.unsafeFromString("/"))
+            for {
+                _ <- submissions.closeAndDrain(0.seconds)
+                outcome <- client.trySubmit(
+                  TransactionRequest(TransactionRequestBody(ByteString.empty))
+                )
+            } yield {
+                val _ = assert(
+                  outcome == SubmissionClient.Outcome.Closed(HydrozoaRoutes.SubmissionsClosed)
+                )
+                ()
+            }
+        }
+    }
 
     test(
       "on a coil peer (no request sequencer) the mutating routes are absent, reads still serve"

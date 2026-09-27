@@ -12,8 +12,24 @@ object CoilPeerWsTransportEvent:
 
     // ---- inbound dispatch ----
 
-    /** An inbound frame arrived from the hub but no local hub-liaison is registered. */
+    /** An inbound frame arrived from the hub but no local hub-liaison was ever registered. */
     case object NoLiaisonForInbound extends CoilPeerWsTransportEvent
+
+    /** The local hub-liaison was unregistered on purpose (the handoff to the rule-based regime),
+      * just before it is stopped.
+      */
+    case object LiaisonUnregistered extends CoilPeerWsTransportEvent
+
+    /** An inbound frame arrived from the hub after the local hub-liaison was unregistered on
+      * purpose, and was dropped. Expected: the hub does not know this coil handed off, and keeps
+      * pulling until it hands off itself.
+      */
+    case object InboundAfterUnregister extends CoilPeerWsTransportEvent
+
+    /** The hub's join answer arrived while no local liaison was registered — before the first one,
+      * or after one was unregistered; it is held and handed to the next liaison registered.
+      */
+    case object JoinAnswerHeld extends CoilPeerWsTransportEvent
 
     /** Received an inbound wire payload from the hub that is not in the hub-emitted subset. */
     final case class UnexpectedInboundWire(payload: CoilFrame.Wire) extends CoilPeerWsTransportEvent

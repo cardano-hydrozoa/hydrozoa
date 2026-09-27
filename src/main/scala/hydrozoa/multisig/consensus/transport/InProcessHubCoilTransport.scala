@@ -49,6 +49,11 @@ object InProcessHubCoilTransport {
                 )
             )
 
+        /** Clears the hub end: sends to it are then dropped silently, as for an unregistered one.
+          */
+        override def unregister(coil: CoilPeerNumber): IO[Unit] =
+            registry.update(m => m.updatedWith(coil)(_.map(_.copy(hubInbound = None))))
+
         override def send(
             coil: CoilPeerNumber,
             request: Join.Answer | LiaisonProtocol.HubEmitted
@@ -89,6 +94,11 @@ object InProcessHubCoilTransport {
                   m.getOrElse(ownCoilNum, Endpoints.empty).copy(coilInbound = Some(localLiaison))
                 )
             )
+
+        /** Clears the coil end: sends to it are then dropped silently, as for an unregistered one.
+          */
+        override def unregister: IO[Unit] =
+            registry.update(m => m.updatedWith(ownCoilNum)(_.map(_.copy(coilInbound = None))))
 
         override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
             registry.get.flatMap { m =>

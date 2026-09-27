@@ -3,6 +3,8 @@ package hydrozoa.rulebased
 import cats.effect.*
 import cats.syntax.foldable.*
 import com.suprnation.actor.Actor.*
+import com.suprnation.actor.SupervisionStrategy
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonEvent}
@@ -34,6 +36,11 @@ case class RuleBasedRegimeManager(
     ownLiaison: Option[RuleBasedRegimeManager.OwnLiaison],
 )(using config: RuleBasedRegimeManager.Config)
     extends Actor[IO, Unit] {
+
+    /** Every failure escalates, up to the root, which stops the node. cats-actors' default would
+      * restart the failing actor, and our actors can't be restarted yet.
+      */
+    override def supervisorStrategy: SupervisionStrategy[IO] = HydrozoaActorSystem.escalateAll
 
     override def preStart: IO[Unit] =
         for {

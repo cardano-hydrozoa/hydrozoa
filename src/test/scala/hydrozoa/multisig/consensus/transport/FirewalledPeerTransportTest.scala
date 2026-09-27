@@ -41,6 +41,7 @@ class FirewalledPeerTransportTest extends AnyFunSuite:
                 remote: HeadPeerId,
                 localLiaison: LiaisonProtocol.MeshLiaisonHandle,
             ): IO[Unit] = IO.unit
+            override def unregister(remote: HeadPeerId): IO[Unit] = IO.unit
             override def send(
                 remote: HeadPeerId,
                 request: LiaisonProtocol.MeshEmitted,

@@ -11,6 +11,7 @@ import java.util.ArrayList as JArrayList
 import org.rocksdb.{ColumnFamilyDescriptor, ColumnFamilyHandle, DBOptions, Options, RocksDB}
 import org.scalatest.funsuite.AnyFunSuite
 import scala.jdk.CollectionConverters.*
+import test.RequiresNodeStore
 
 /** Does the current derivation reproduce the commitments a real head already signed?
   *
@@ -40,7 +41,10 @@ class KzgCommitmentOnChainConformanceTest extends AnyFunSuite {
         def cardanoNetwork: CardanoNetwork = CardanoNetwork.Mainnet
     }
 
-    test("every commitment a real head signed is reproduced by the current derivation") {
+    test(
+      "every commitment a real head signed is reproduced by the current derivation",
+      RequiresNodeStore
+    ) {
         val _ = assume(Files.isDirectory(storePath), s"no store at $storePath")
         RocksDB.loadLibrary()
 

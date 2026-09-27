@@ -3,7 +3,8 @@ package test
 import java.util.concurrent.{Callable, ExecutorService, Executors}
 import sbt.testing.*
 
-/** ScalaCheck's sbt integration, with a suite's property events delivered as one batch.
+/** ScalaCheck's sbt integration, with a suite's property events delivered as one batch, and
+  * recorded for CI by [[RecordingFramework]].
   *
   * ⚠️ Without this, a falsified property is reported as `Passed: Total 1` with exit code 0. sbt's
   * forked worker keys a task's events on `taskDef.fullyQualifiedName()`, and ScalaCheck enumerates
@@ -16,7 +17,16 @@ import sbt.testing.*
   * typelevel/scalacheck#1195 and sbt/sbt#9642; remove this wrapper once either fix ships in a
   * version the build resolves.
   */
-final class ScalaCheckFrameworkFixed extends Framework {
+final class ScalaCheckFrameworkFixed
+    extends RecordingFramework(
+      new ScalaCheckBatchingFramework,
+      classOf[org.scalacheck.ScalaCheckFramework]
+    )
+
+/** ScalaCheck's framework with each suite's sub-tasks run inside the suite's own task; see
+  * [[ScalaCheckFrameworkFixed]].
+  */
+final class ScalaCheckBatchingFramework extends Framework {
     private val underlying = new org.scalacheck.ScalaCheckFramework
 
     def name(): String = underlying.name()
@@ -45,7 +55,7 @@ final class ScalaCheckFrameworkFixed extends Framework {
             var pending = root.execute(handler, loggers).toList
             while pending.nonEmpty do
                 val futures = pending.map(task =>
-                    ScalaCheckFrameworkFixed.properties.submit(new Callable[Array[Task]] {
+                    ScalaCheckBatchingFramework.properties.submit(new Callable[Array[Task]] {
                         def call(): Array[Task] = task.execute(handler, loggers)
                     })
                 )
@@ -55,7 +65,7 @@ final class ScalaCheckFrameworkFixed extends Framework {
     }
 }
 
-object ScalaCheckFrameworkFixed {
+object ScalaCheckBatchingFramework {
 
     /** One pool for every suite in this JVM, sized to the box: 4 threads on a CI runner, more on a
       * workstation. It replaces sbt's own scheduling of the per-property tasks, so a suite's

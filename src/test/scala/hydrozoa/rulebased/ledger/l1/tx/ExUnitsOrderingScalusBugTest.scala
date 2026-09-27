@@ -1,27 +1,18 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
 import org.scalatest.funsuite.AnyFunSuite
-import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.ExUnits
 
-/** Pins a KNOWN scalus bug that [[EvacuationTx]]'s build loop works around with a component-wise
-  * ex-unit check.
+/** Pins how scalus judges a tx that is over the per-tx CPU budget but under the memory one, which
+  * [[EvacuationTx]]'s build loop guards with a component-wise ex-unit check.
   *
   * scalus's `Ordering[ExUnits]` (`scalus/cardano/ledger/Types.scala`) is lexicographic,
-  * memory-FIRST:
-  * {{{
-  *   given Ordering[ExUnits] = (x, y) =>
-  *       if x.memory != y.memory then x.memory.compareTo(y.memory) else x.steps.compareTo(y.steps)
-  * }}}
-  * So `actual > max` — the comparison `scalus.cardano.ledger.rules.ExUnitsTooBigValidator` uses to
-  * decide "over the per-tx budget?" — is governed by `memory` alone whenever the memories differ. A
-  * tx whose CPU `steps` exceed the max while its `memory` is under it compares as NOT over budget,
-  * so the validator passes it — but the real ledger checks each component independently and rejects
-  * it (`ExUnitsTooBigUTxO`). This surfaced on a Yaci devnet as an over-budget rule-based evacuation
-  * tx that the build never halved.
+  * memory-first, so `actual > max` is governed by `memory` alone whenever the memories differ: it
+  * calls such a tx within budget, although the real ledger rejects it (`ExUnitsTooBigUTxO`). The
+  * ordering is deprecated, and `scalus.cardano.ledger.rules.ExUnitsTooBigValidator` judges "over
+  * the per-tx budget?" with the component-wise `ExUnits.exceeds`, which this test pins.
   *
-  * Reported upstream (see the PR description). When scalus fixes the ordering/validator the `BUG`
-  * assertion below flips; delete this test and the [[EvacuationTx]] workaround at that point.
+  * The name is from scalus 1.0.0, whose validator compared budgets with the ordering.
   */
 class ExUnitsOrderingScalusBugTest extends AnyFunSuite {
 
@@ -35,10 +26,8 @@ class ExUnitsOrderingScalusBugTest extends AnyFunSuite {
         assert(overOnStepsOnly.steps > max.steps)
     }
 
-    test("BUG: `actual > max` reports it as NOT over budget (memory-first Ordering[ExUnits])") {
-        // Correct answer is `true`; scalus returns `false`. Pinned as `!(_ > _)` so the suite stays
-        // green until upstream fixes it, at which point this assertion flips.
-        assert(!(overOnStepsOnly > max))
+    test("`exceeds`, which scalus's ExUnitsTooBigValidator uses, reports it as over budget") {
+        assert(overOnStepsOnly.exceeds(max))
     }
 
     test("the component-wise check EvacuationTx.Build uses instead is correct") {

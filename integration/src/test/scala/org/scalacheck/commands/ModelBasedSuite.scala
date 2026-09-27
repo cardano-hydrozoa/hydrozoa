@@ -233,6 +233,16 @@ trait ModelBasedSuite {
           Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite")
         )
 
+    /** The TestControl scheduler seed of each test case, under a logger of its own so that a
+      * logging config can keep it while it quiets the suite's routine lines. It is logged before
+      * the run because a hung run reports it nowhere else: neither a falsified property's labels
+      * nor an exception is ever produced.
+      */
+    private val replayLog: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(
+          Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite.Replay")
+        )
+
     /** Represent [some parts of] the environment on which a test case is run.
       *
       * The flow of every test case is as follows (a bit simplified):
@@ -341,6 +351,15 @@ trait ModelBasedSuite {
       * See `docs/testcontrol-driver.md` for full design documentation.
       */
     def useTestControl: Boolean
+
+    /** How much virtual time the startup pump and the shutdown drain may each advance, under
+      * TestControl, before the case fails as stuck. Both advance to the next timer whenever no
+      * fiber is eligible, and the per-actor ping loops always leave a next timer, so without a
+      * bound a SUT that will never signal (its actor system terminated, say) is driven forever
+      * while memory grows. Counted from the first advance on, which in the startup pump is the jump
+      * from virtual zero to the start time.
+      */
+    def tickHorizon: FiniteDuration = 2.hours
 
     // ===================================
     // Property entry point
@@ -472,7 +491,9 @@ trait ModelBasedSuite {
                       s"Last executed command: $lastCmd"
                 )
             else IO(ModelBasedSuite.recordTestCase(testCase.commands.map(_.label)))
-    } yield prop :| "Property failed, see the log above for details"
+    } yield prop :| ("Property failed: its commands and states are in the \"Property is " +
+        "falsified\" warning of org.scalacheck.commands.ModelBasedSuite (under CI, in " +
+        "integration-tests.log)")
 
     private def prettyCmdsRes(rs: List[AnyCommand[State, Sut]], lastCmd: Int) = {
         def formatDuration(d: FiniteDuration): String = {
@@ -564,7 +585,8 @@ trait ModelBasedSuite {
       *
       * Outer:
       *   1. Read `(delay, gate)` from `pendingDelay`.
-      *   2. Advance the virtual clock by exactly `delay` (skipped when zero).
+      *   2. Advance the virtual clock by exactly `delay`, running every SUT timer that falls due
+      *      inside it at its own instant ([[advanceThroughTimers]]).
       *   3. `gate.complete(())` — unblock the inner.
       *   4. `tickUntil`: tick until `tickOne → false` (all fibers exhausted), then assert signal.
       *
@@ -618,13 +640,23 @@ trait ModelBasedSuite {
                 } yield (sut, prop && beforeFinalizeProp, s, lastCmd, testCase)
             }
 
+        // TestControl's scheduler seed decides the order of fibers that become ready at the same
+        // virtual instant, so ScalaCheck's seed alone does not replay a failure. It is logged
+        // before the run (a hung run never reaches the end), attached to a falsified property's
+        // labels and to any exception, and `TESTCONTROL_SEED` pins it to replay a reported one.
+        val tcSeed = new AtomicReference[String]("<not started>")
+
         // Outer driver: advances the virtual clock and drives tickOne loops between commands.
         // tickAll / tick are not used — they iterate indefinitely over the per-actor 1 s ping loop.
         // Instead, drainAll/tickUntil stop when the inner signals via pendingDelay (a Deferred gate).
-        for {
+        (for {
             _ <- log.debug("Using TestControl to run the test case...")
             // 1. Start the inner on the mocked runtime. It's paused — nothing runs yet.
-            tc <- TestControl.execute(innerIO)
+            tc <- TestControl.execute(innerIO, seed = sys.env.get("TESTCONTROL_SEED"))
+            _ <- IO(tcSeed.set(tc.seed))
+            _ <- replayLog.info(
+              s"TestControl scheduler seed: ${tc.seed} (replay: TESTCONTROL_SEED)"
+            )
             totalAdvanced <- IO(new java.util.concurrent.atomic.AtomicLong(0L))
 
             // 2. Pump until the first signal.
@@ -639,7 +671,8 @@ trait ModelBasedSuite {
                   if pending then IO.pure(true)
                   else tc.results.map(_.isDefined)
               },
-              advanceTracer = log
+              advanceTracer = log,
+              phase = "startup"
             )
 
             // 3. Guard: if the inner already finished (empty command list), skip the loop.
@@ -661,9 +694,9 @@ trait ModelBasedSuite {
                                     (delay, gate) = ret
                                     _ <- IO(totalAdvanced.addAndGet(delay.toNanos): Unit)
 
-                                    // 6. Advance exactly `delay` (tc.advance requires > 0).
-                                    _ <-
-                                        if delay > Duration.Zero then tc.advance(delay) else IO.unit
+                                    // 6. Advance exactly `delay`, stepping through every timer
+                                    // that falls due inside it (see `advanceThroughTimers`).
+                                    _ <- advanceThroughTimers(tc, delay)
 
                                     // 7. Release the inner to run the command.
                                     _ <- log.info("Opening the gate")
@@ -690,7 +723,8 @@ trait ModelBasedSuite {
             } >> tickUntilAdvancing(
               tc,
               tc.results.map(_.isDefined),
-              advanceTracer = ContraTracer.nullTracer
+              advanceTracer = ContraTracer.nullTracer,
+              phase = "shutdown drain"
             )
 
             // 10. Extract the result
@@ -702,16 +736,47 @@ trait ModelBasedSuite {
             }
             _ <- log.info(s"---- TC ---- seed: ${tc.seed}  simulated: ${days} days")
         } yield result match {
-            case Some(cats.effect.Outcome.Succeeded(value)) => value
-            case Some(cats.effect.Outcome.Errored(e))       => throw e
+            case Some(cats.effect.Outcome.Succeeded((sut, prop, state, lastCmd, tcase))) =>
+                (sut, prop :| s"TestControl seed: ${tc.seed}", state, lastCmd, tcase)
+            case Some(cats.effect.Outcome.Errored(e)) => throw e
             case Some(cats.effect.Outcome.Canceled()) =>
                 throw new RuntimeException("Inner program was canceled")
             case None =>
                 throw new RuntimeException(
                   "Inner program did not produce a result (deadlock or non-termination)"
                 )
+        }).adaptError { case e =>
+            new RuntimeException(s"${e.getMessage} [TestControl seed: ${tcSeed.get}]", e)
         }
     }
+
+    /** Advance the virtual clock by exactly `delay`, stepping from timer to timer so that every SUT
+      * fiber sleeping into the window wakes at its own instant, in time order, and runs before the
+      * clock moves on.
+      *
+      * A single `tc.advance(delay)` would instead make every timer inside the window due at once,
+      * at its end: a periodic task (a `CardanoLiaison` poll) would then fire once instead of
+      * `delay / period` times, and a delayed delivery (the soft-block limiter) would land up to
+      * `delay` late, in whatever order the scheduler picks. That quantizes the SUT's notion of time
+      * to command arrivals and breaks its timing contract — e.g. the leader completing a block on
+      * L1 poll results up to `delay` old, rejecting a deposit its followers see
+      * (`TxTiming.cardanoLiaisonPollingPeriodSafetyFactor`).
+      *
+      * Ready fibers are drained with `tickOne` before each step; the same per-actor ping loops that
+      * rule out `tickAll` are bounded here by `delay`.
+      */
+    private def advanceThroughTimers[A](tc: TestControl[A], delay: FiniteDuration): IO[Unit] =
+        tc.tickOne.flatMap {
+            case true => advanceThroughTimers(tc, delay)
+            case false =>
+                if delay <= Duration.Zero then IO.unit
+                else
+                    tc.nextInterval.flatMap { next =>
+                        // `nextInterval` is zero when nothing is scheduled: take the whole rest.
+                        val step = if next > Duration.Zero && next < delay then next else delay
+                        tc.advance(step) >> advanceThroughTimers(tc, delay - step)
+                    }
+        }
 
     /** Strict variant: ticks until `tickOne` returns `false` (all eligible fibers exhausted), then
       * checks `done`. If `done` is false at that point, raises an error — between commands the SUT
@@ -738,36 +803,50 @@ trait ModelBasedSuite {
       * time — one or two advances per trial, worth logging) and the shutdown drain (`waitForIdle`
       * polls with `IO.sleep`, per-actor 1-second ping loops fire — hundreds to thousands of small
       * advances per trial, would drown the log). The caller passes the tracer that the per-advance
-      * warn should route through: [[log]] from the startup pump, [[ContraTracer.nullTracer]] from
-      * the shutdown drain. A genuine deadlock (no eligible fibers + `nextInterval == 0`) is still
-      * surfaced via the framework [[log]] and `IO.raiseError` regardless of the passed tracer.
+      * debug line should route through: [[log]] from the startup pump, [[ContraTracer.nullTracer]]
+      * from the shutdown drain. It is a debug line, not a warning, because the startup pump
+      * advances on every test case. A genuine deadlock (no eligible fibers + `nextInterval == 0`)
+      * is still surfaced via the framework [[log]] and `IO.raiseError` regardless of the passed
+      * tracer, and so is a phase that advances past [[tickHorizon]] without `done` (`elapsed` is
+      * the virtual time advanced so far, `None` before the first advance).
       */
     private def tickUntilAdvancing[A](
         tc: TestControl[A],
         done: IO[Boolean],
-        advanceTracer: ContraTracer[IO, Slf4jMsg]
+        advanceTracer: ContraTracer[IO, Slf4jMsg],
+        phase: String,
+        elapsed: Option[FiniteDuration] = None
     ): IO[Unit] =
         tc.tickOne.flatMap {
-            case true => tickUntilAdvancing(tc, done, advanceTracer)
+            case true => tickUntilAdvancing(tc, done, advanceTracer, phase, elapsed)
             case false =>
                 done.flatMap {
                     case true =>
-                        log.info("tickUntilAdvancing is done")
+                        log.info(
+                          s"tickUntilAdvancing ($phase) is done after " +
+                              s"${elapsed.getOrElse(Duration.Zero).toSeconds} s of virtual time"
+                        )
                     case false =>
                         tc.nextInterval.flatMap { next =>
-                            if next > Duration.Zero then
-                                advanceTracer.warn(
-                                  s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
-                                ) >> tc.advance(next) >> tickUntilAdvancing(tc, done, advanceTracer)
-                            else {
+                            val after = elapsed.map(_ + next).orElse(Some(Duration.Zero))
+                            if next <= Duration.Zero then {
                                 val msg =
                                     "TestControl deadlock: no eligible fibers and predicate not satisfied"
                                 log.error(msg) >> IO.raiseError(new RuntimeException(msg))
-                            }
+                            } else if after.exists(_ > tickHorizon) then {
+                                val msg =
+                                    s"tickUntilAdvancing ($phase): not done after $tickHorizon of " +
+                                        "virtual time; the SUT is stuck (e.g. its actor system " +
+                                        "terminated while a wait for its signals continued)"
+                                log.error(msg) >> IO.raiseError(new RuntimeException(msg))
+                            } else
+                                advanceTracer.debug(
+                                  s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
+                                ) >> tc.advance(next) >>
+                                    tickUntilAdvancing(tc, done, advanceTracer, phase, after)
                         }
                 }
         }
-
 }
 
 object ModelBasedSuite {
@@ -780,6 +859,15 @@ object ModelBasedSuite {
 
     private[commands] def recordTestCase(labels: List[String]): Unit =
         passedTestCases.add(labels): Unit
+
+    /** The run's totals, logged once when the test JVM exits: TestControl's simulated and real
+      * time, and the distribution of commands over the passed test cases (how well the generators
+      * covered the command set).
+      */
+    private val statsLog: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(
+          Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite.Stats")
+        )
 
     // TODO: make optional
     Runtime.getRuntime.addShutdownHook(new Thread {
@@ -805,40 +893,40 @@ object ModelBasedSuite {
             val realMins = realSecs / 60L
             val realRemSec = realSecs % 60L
 
-            println
-            println(
-              s"---- TestControl ---- GRAND TOTAL simulated time: $simTimeStr (across all test cases)"
-            )
-            println(
+            val timeTotals = List(
+              s"---- TestControl ---- GRAND TOTAL simulated time: $simTimeStr (across all test cases)",
               s"---- TestControl ---- GRAND TOTAL real time:      ${realMins}m ${realRemSec}s"
             )
 
             val cases = passedTestCases.toArray(Array.empty[List[String]])
-            if cases.nonEmpty then {
-                val lengths = cases.map(_.count(_ != "NoOp"))
-                val totalCases = cases.length
-                val avgLen = lengths.sum.toDouble / totalCases
-                val maxLen = lengths.max
+            val commandStats =
+                if cases.isEmpty then Nil
+                else {
+                    val lengths = cases.map(_.count(_ != "NoOp"))
+                    val totalCases = cases.length
+                    val avgLen = lengths.sum.toDouble / totalCases
+                    val maxLen = lengths.max
 
-                val labelCounts = cases.flatten
-                    .groupBy(identity)
-                    .map { case (label, occurrences) => label -> occurrences.length }
-                    .toList
-                    .sortBy(_._1)
+                    val labelCounts = cases.flatten
+                        .groupBy(identity)
+                        .map { case (label, occurrences) => label -> occurrences.length }
+                        .toList
+                        .sortBy(_._1)
 
-                val totalCommands = labelCounts.map(_._2).sum
+                    val totalCommands = labelCounts.map(_._2).sum
 
-                println
-                println(s"---- Command stats ---- passed test cases: $totalCases")
-                println(f"---- Command stats ---- sequence length: avg=${avgLen}%.1f  max=$maxLen")
-                println(s"---- Command stats ---- command distribution (total $totalCommands):")
-                val labelWidth = labelCounts.map(_._1.length).maxOption.getOrElse(0)
-                labelCounts.foreach { case (label, count) =>
-                    val pct = count.toDouble / totalCommands * 100
-                    val paddedLabel = label.padTo(labelWidth, ' ')
-                    println(f"  $paddedLabel  $count%6d  ($pct%5.1f%%)")
+                    val labelWidth = labelCounts.map(_._1.length).maxOption.getOrElse(0)
+                    List(
+                      s"---- Command stats ---- passed test cases: $totalCases",
+                      f"---- Command stats ---- sequence length: avg=${avgLen}%.1f  max=$maxLen",
+                      s"---- Command stats ---- command distribution (total $totalCommands):"
+                    ) ++ labelCounts.map { case (label, count) =>
+                        val pct = count.toDouble / totalCommands * 100
+                        val paddedLabel = label.padTo(labelWidth, ' ')
+                        f"  $paddedLabel  $count%6d  ($pct%5.1f%%)"
+                    }
                 }
-            }
+            statsLog.info((timeTotals ++ commandStats).mkString("\n")).unsafeRunSync()
         }
     })
 
