@@ -29,6 +29,7 @@ final class HydrozoaActorSystem private (
     val system: ActorSystem[IO],
     rootContext: ActorContext[IO, Any, Any],
     failure: Deferred[IO, Throwable],
+    expected: ActorSystemEvents.Expected,
 ):
 
     /** Start `props` as a child of the root. */
@@ -52,6 +53,13 @@ final class HydrozoaActorSystem private (
     def waitForTermination: IO[Option[Throwable]] =
         system.waitForTermination >> failure.tryGet
 
+    /** For a test that crashes an actor on purpose, before it stops it: a message to `ref` or its
+      * subtree from now on is lost as a real crash would lose it, so its dead letter is logged at
+      * DEBUG as crashed on purpose, not as lost while the system runs.
+      */
+    def markCrashed(ref: NoSendActorRef[IO]): IO[Unit] =
+        expected.crashed.update(_ + ref.path.toString)
+
 object HydrozoaActorSystem:
 
     /** The root's name; its path is `/user/hydrozoa`. */
@@ -72,12 +80,13 @@ object HydrozoaActorSystem:
         onEvent: Any => IO[Unit] = _ => IO.unit,
     ): Resource[IO, HydrozoaActorSystem] =
         for
-            system <- withoutRoot(name, onEvent)
+            built <- logged(name, onEvent)
+            (system, expected) = built
             failure <- Resource.eval(Deferred[IO, Throwable])
             started <- Resource.eval(Deferred[IO, ActorContext[IO, Any, Any]])
             _ <- Resource.eval(system.actorOf(Root(failure, started), RootName))
             rootContext <- Resource.eval(started.get)
-        yield new HydrozoaActorSystem(system, rootContext, failure)
+        yield new HydrozoaActorSystem(system, rootContext, failure, expected)
 
     /** A plain cats-actors system whose events go to SLF4J and then to `onEvent`, with no root: for
       * tests of single actors that want the system's own guardian.
@@ -86,18 +95,24 @@ object HydrozoaActorSystem:
         name: String,
         onEvent: Any => IO[Unit] = _ => IO.unit,
     ): Resource[IO, ActorSystem[IO]] =
+        logged(name, onEvent).map(_._1)
+
+    private def logged(
+        name: String,
+        onEvent: Any => IO[Unit],
+    ): Resource[IO, (ActorSystem[IO], ActorSystemEvents.Expected)] =
         for
-            stopping <- Resource.eval(Ref[IO].of(false))
+            expected <- Resource.eval(ActorSystemEvents.Expected())
             // Uncancelable, `onEvent` first: the system cancels its listener as it terminates, which
             // is exactly when the failure that terminated it is being handled here.
             system <- ActorSystem[IO](
               name,
-              event => (onEvent(event) >> ActorSystemEvents.log(stopping)(event)).uncancelable
+              event => (onEvent(event) >> ActorSystemEvents.log(expected)(event)).uncancelable
             )
             // Acquired after the system, so released before it: a dead letter logged from here on
             // was in flight when the system was told to stop.
-            _ <- Resource.onFinalize(stopping.set(true))
-        yield system
+            _ <- Resource.onFinalize(expected.stopping.set(true))
+        yield (system, expected)
 
     /** The root. It receives nothing: everything it does, it does as its children's supervisor.
       * Having no parent to escalate to, it must never fail itself, so its handler is total and does
@@ -164,27 +179,45 @@ object HydrozoaActorSystem:
   * cats-actors' default listener prints every event to stdout, dead letters included, at a few
   * hundred characters each. Here each goes to a logger at its own level: `ActorSystem` for the
   * system's own events, and `DeadLetters` for messages that reached no actor. A dead letter is WARN
-  * while the system is running, because a message nobody received can be lost work; and DEBUG once
-  * the system is stopping, when messages still in flight are expected to go nowhere.
+  * while the system is running, because a message nobody received can be lost work; and DEBUG when
+  * it is expected to go nowhere: once the system is stopping, with messages still in flight, or
+  * when a test crashed its recipient on purpose ([[HydrozoaActorSystem.markCrashed]]).
   */
 object ActorSystemEvents:
 
-    def log(stopping: Ref[IO, Boolean])(event: Any): IO[Unit] =
-        stopping.get.flatMap(s => Slf4jTracer.sink.traceWith(toLogEvent(event, stopping = s)))
+    /** When a dead letter is expected: the system is stopping, or its recipient is in a subtree a
+      * test crashed on purpose (the paths of those subtrees' roots).
+      */
+    final class Expected private (val stopping: Ref[IO, Boolean], val crashed: Ref[IO, Set[String]])
 
-    def toLogEvent(event: Any, stopping: Boolean): LogEvent = event match
-        case Debug(_, _, dl: DeadLetter[?]) => deadLetter(dl, stopping)
-        case e: ActorError =>
-            LogEvent(
-              Level.Error,
-              s"${e.logSource}: ${e.message}",
-              cause = Option.when(e.cause != ActorError.NoCause)(e.cause),
-              routingKey = Some(SystemLogger)
-            )
-        case Warning(source, _, message) => system(Level.Warn, source, message)
-        case Info(source, _, message)    => system(Level.Info, source, message)
-        case Debug(source, _, message)   => system(Level.Debug, source, message)
-        case other                       => system(Level.Debug, "event stream", other)
+    object Expected:
+        def apply(): IO[Expected] =
+            for
+                stopping <- Ref[IO].of(false)
+                crashed <- Ref[IO].of(Set.empty[String])
+            yield new Expected(stopping, crashed)
+
+    def log(expected: Expected)(event: Any): IO[Unit] =
+        for
+            stopping <- expected.stopping.get
+            crashed <- expected.crashed.get
+            _ <- Slf4jTracer.sink.traceWith(toLogEvent(event, stopping, crashed))
+        yield ()
+
+    def toLogEvent(event: Any, stopping: Boolean, crashed: Set[String] = Set.empty): LogEvent =
+        event match
+            case Debug(_, _, dl: DeadLetter[?]) => deadLetter(dl, stopping, crashed)
+            case e: ActorError =>
+                LogEvent(
+                  Level.Error,
+                  s"${e.logSource}: ${e.message}",
+                  cause = Option.when(e.cause != ActorError.NoCause)(e.cause),
+                  routingKey = Some(SystemLogger)
+                )
+            case Warning(source, _, message) => system(Level.Warn, source, message)
+            case Info(source, _, message)    => system(Level.Info, source, message)
+            case Debug(source, _, message)   => system(Level.Debug, source, message)
+            case other                       => system(Level.Debug, "event stream", other)
 
     val SystemLogger: String = "ActorSystem"
     val DeadLetterLogger: String = "DeadLetters"
@@ -192,18 +225,22 @@ object ActorSystemEvents:
     private def system(level: Level, source: String, message: Any): LogEvent =
         LogEvent(level, s"$source: $message", routingKey = Some(SystemLogger))
 
-    private def deadLetter(dl: DeadLetter[?], stopping: Boolean): LogEvent =
+    private def deadLetter(dl: DeadLetter[?], stopping: Boolean, crashed: Set[String]): LogEvent =
         // The message cats-actors wraps is often an `Envelope` around the real one; name the real
         // one, and keep its full text for TRACE-level reading of the file log.
         val inner = dl.message match
             case e: Envelope[?, ?]             => e.message
             case e: EnvelopeWithDeferred[?, ?] => e.envelope.message
             case m                             => m
+        val recipient = dl.recipient.actorRef.path.toString
+        val crashedOnPurpose = crashed.exists(r => recipient == r || recipient.startsWith(r + "/"))
         LogEvent(
-          if stopping then Level.Debug else Level.Warn,
-          s"${inner.getClass.getName} to ${dl.recipient.actorRef.path}" +
+          if stopping || crashedOnPurpose then Level.Debug else Level.Warn,
+          s"${inner.getClass.getName} to $recipient" +
               s"${dl.sender.fold("")(s => s" from ${s.path}")}" +
-              (if stopping then " (system stopping)" else " (system running)"),
+              (if stopping then " (system stopping)"
+               else if crashedOnPurpose then " (recipient crashed on purpose)"
+               else " (system running)"),
           ctx = Map.empty,
           routingKey = Some(DeadLetterLogger)
         )

@@ -756,9 +756,12 @@ object MultiPeerHeadHarness:
       * writes can land after the wipe, or after the successor has read its recovery marks from the
       * store. No real restart can produce that, because the old process is gone before the new one
       * opens the store.
+      *
+      * The subtree is marked as crashed on purpose first, so the messages its actors lose, as a
+      * real crash would, are logged as that and not counted as dead letters while running.
       */
-    private def stopAndAwait(system: ActorSystem[IO], ref: NoSendActorRef[IO]): IO[Unit] =
-        SubtreeStop.stopAndAwait(system, ref)
+    private def stopAndAwait(actors: HydrozoaActorSystem, ref: NoSendActorRef[IO]): IO[Unit] =
+        actors.markCrashed(ref) >> SubtreeStop.stopAndAwait(actors.system, ref)
 
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns everything;
       * release cancels the CL tick fibers.
@@ -926,7 +929,7 @@ object MultiPeerHeadHarness:
                     // and the mesh re-attaches.
                     _ <- headTicks.get.flatMap(_.getOrElse(peerNum, IO.unit))
                     network <- transports.rebuildHeadNetwork(peerNum)
-                    _ <- stopAndAwait(system, old.ref)
+                    _ <- stopAndAwait(actors, old.ref)
                     gen <- restartGen.updateAndGet(_ + 1)
                     spawned <- Mrm
                         .spawnPeer(
@@ -1021,7 +1024,7 @@ object MultiPeerHeadHarness:
             restartCoilPeer = { (coilNum: CoilPeerNumber) =>
                 coilRuntime.get
                     .map(_(coilNum))
-                    .flatMap(old => cutOffCoil(coilNum) >> stopAndAwait(system, old.ref)) >>
+                    .flatMap(old => cutOffCoil(coilNum) >> stopAndAwait(actors, old.ref)) >>
                     respawnStoppedCoil(coilNum)
             }
             rejoinCoilPeer = { (coilNum: CoilPeerNumber) =>
@@ -1030,7 +1033,7 @@ object MultiPeerHeadHarness:
                     .flatMap(old =>
                         // Wipe only once the coil has stopped, so nothing is writing while we do
                         // it, or after.
-                        cutOffCoil(coilNum) >> stopAndAwait(system, old.ref) >>
+                        cutOffCoil(coilNum) >> stopAndAwait(actors, old.ref) >>
                             old.backendStore.wipeData >>
                             old.l2Ledger.wipe.value.flatMap(IO.fromEither)
                     ) >> respawnStoppedCoil(coilNum)
