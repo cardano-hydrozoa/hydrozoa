@@ -233,6 +233,16 @@ trait ModelBasedSuite {
           Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite")
         )
 
+    /** The TestControl scheduler seed of each test case, under a logger of its own so that a
+      * logging config can keep it while it quiets the suite's routine lines. It is logged before
+      * the run because a hung run reports it nowhere else: neither a falsified property's labels
+      * nor an exception is ever produced.
+      */
+    private val replayLog: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(
+          Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite.Replay")
+        )
+
     /** Represent [some parts of] the environment on which a test case is run.
       *
       * The flow of every test case is as follows (a bit simplified):
@@ -642,7 +652,9 @@ trait ModelBasedSuite {
             // 1. Start the inner on the mocked runtime. It's paused — nothing runs yet.
             tc <- TestControl.execute(innerIO, seed = sys.env.get("TESTCONTROL_SEED"))
             _ <- IO(tcSeed.set(tc.seed))
-            _ <- log.warn(s"TestControl scheduler seed: ${tc.seed} (replay: TESTCONTROL_SEED)")
+            _ <- replayLog.info(
+              s"TestControl scheduler seed: ${tc.seed} (replay: TESTCONTROL_SEED)"
+            )
             totalAdvanced <- IO(new java.util.concurrent.atomic.AtomicLong(0L))
 
             // 2. Pump until the first signal.
