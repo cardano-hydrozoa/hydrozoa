@@ -137,7 +137,7 @@ ci-canary:
 integration-e2e-docker:
   #!/usr/bin/env bash
   trap 'just notify "integration-e2e-docker"' EXIT
-  sbt "Docker/publishLocal; stage; set integration/Test/testOptions ~= (_.filterNot(_.isInstanceOf[Tests.Exclude])); integration/testOnly hydrozoa.integration.e2e.DockerSmokeTest"
+  {{sbt}} "Docker/publishLocal; stage; set integration/Test/testOptions ~= (_.filterNot(_.isInstanceOf[Tests.Exclude])); integration/testOnly hydrozoa.integration.e2e.DockerSmokeTest"
 
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
 export:
