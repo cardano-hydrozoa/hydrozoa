@@ -144,6 +144,12 @@ object Stage4Runner:
 // Test entry points
 // ===================================
 
+// The takeoff of every real-clock (WebSocket) Stage 4 property. It has to cover only case
+// generation (initial state, commands, command table), which runs before the harness's first step
+// and takes a few seconds at most, even for a JVM's cold first case at 20 peers and 500 commands.
+// The peers' actor and WS setup runs after the anchor, so it does not count against this.
+private val wsTakeoff = 15.seconds
+
 // N.B.: The tests default to 10 commands. Mark longer ones with (extended) to filter them out in CI
 object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
@@ -168,18 +174,6 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Twenty-peers head works") =
         Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
 
-    // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
-    // takeoff trick — `genInitialState` anchors `startTime` at `Instant.now() + 60s` when
-    // `useTestControl = false`, and `sutResource` sleeps the wall clock until that anchor, so
-    // model time and wall clock coincide at command 1. Inter-arrival delays from the
-    // superposition generator now elapse in real time.
-    val _ = property("Two-peers head works WS") = Stage4Suite(
-      label = "stage4-ws-two-peers",
-      nPeers = 2,
-      transportMode = TransportMode.WebSocket,
-      backendMode = BackendMode.RocksDb()
-    ).property()
-
     // Extended variants: large command sequences or high peer counts
     val _ = property("Two-peers head works (extended)") =
         Stage4Suite(label = "stage4-two-peers-extended", nPeers = 2, nCommands = 500).property()
@@ -202,6 +196,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       nPeers = 2,
       nCommands = 500,
       transportMode = TransportMode.WebSocket,
+      takeoffOffset = wsTakeoff,
       backendMode = BackendMode.RocksDb()
     ).property()
 
@@ -210,6 +205,33 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       nPeers = 10,
       nCommands = 500,
       transportMode = TransportMode.WebSocket,
+      takeoffOffset = wsTakeoff,
+      backendMode = BackendMode.RocksDb()
+    ).property()
+
+// WebSocket variants run on the real clock: each case waits out its takeoff and then its
+// inter-arrival delays in real time, so a case costs its whole model duration in wall-clock time
+// where a Direct case costs seconds. The Direct properties above exercise the command model at the
+// configured case count; these exist for the transport, which every case drives end to end over
+// real WS connections, so they run half that count. Their extended variants are in
+// `Stage4Properties` above, at the full count of a deep run.
+object Stage4WsProperties extends YetAnotherProperties("Integration Stage 4 WS"):
+
+    // Halves whatever `-s` asked for: ScalaCheck applies command-line parameters first and
+    // `overrideParameters` last, so a fixed count here would silently ignore `-s`.
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withWorkers(1).withMinSuccessfulTests(math.max(1, p.minSuccessfulTests / 2))
+
+    // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
+    // takeoff trick — `genInitialState` anchors `startTime` at `Instant.now() + wsTakeoff` when
+    // `useTestControl = false`, and `sutResource` sleeps the wall clock until that anchor, so
+    // model time and wall clock coincide at command 1. Inter-arrival delays from the
+    // superposition generator then elapse in real time.
+    val _ = property("Two-peers head works WS") = Stage4Suite(
+      label = "stage4-ws-two-peers",
+      nPeers = 2,
+      transportMode = TransportMode.WebSocket,
+      takeoffOffset = wsTakeoff,
       backendMode = BackendMode.RocksDb()
     ).property()
 
@@ -221,6 +243,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       nPeers = 2,
       nCoilPeers = 1,
       transportMode = TransportMode.WebSocket,
+      takeoffOffset = wsTakeoff,
     ).property()
 
 // ===================================

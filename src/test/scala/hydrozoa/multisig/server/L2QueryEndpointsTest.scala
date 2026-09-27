@@ -1,12 +1,12 @@
 package hydrozoa.multisig.server
+
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -16,6 +16,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.metrics.PeerMetrics
 import hydrozoa.multisig.persistence.ConsensusStoreReader
+import hydrozoa.multisig.{NodeStatus, SubmissionGate}
 import io.circe.{Json, Printer}
 import org.http4s.circe.*
 import org.http4s.implicits.*
@@ -28,12 +29,18 @@ import scalus.cardano.address.ShelleyAddress
 /** End-to-end demo + test for the L2 query endpoints (`GET /l2/cardano-eutxo/utxos/{address}`,
   * `GET /l2/cardano-eutxo/transactions`). Boots an in-memory [[EutxoL2Ledger]], seeds it (genesis
   * utxos plus a few applied commands), builds the real [[HydrozoaRoutes]] against it with stub
-  * consensus actors, and drives both endpoints through the HTTP layer — asserting the responses and
-  * printing the JSON so the flow can be shown in a screen recording.
+  * consensus actors, and drives both endpoints through the HTTP layer — asserting the responses.
+  * With `HYDROZOA_DEMO=1` in the environment it also prints each request and its JSON response, so
+  * the flow can be shown in a screen recording; otherwise it prints nothing.
   */
 class L2QueryEndpointsTest extends AnyFunSuite:
 
     private val printer = Printer.spaces2.copy(dropNullValues = false)
+
+    private def demo(request: String, body: Json): IO[Unit] =
+        IO.whenA(sys.env.get("HYDROZOA_DEMO").contains("1"))(
+          IO.println(s"[demo] $request") >> IO.println(printer.print(body))
+        )
 
     /** A deterministic single-generator config; nodeConfig is the EUTXO ledger config, headConfig
       * feeds the routes.
@@ -65,7 +72,8 @@ class L2QueryEndpointsTest extends AnyFunSuite:
     private def withSeededRoutes(
         check: (HttpApp[IO], EutxoL2Ledger) => IO[Unit]
     ): Unit =
-        ActorSystem[IO]("L2QueryEndpointsTest")
+        HydrozoaActorSystem
+            .withoutRoot("L2QueryEndpointsTest")
             .use { system =>
                 for {
                     store <- InMemoryL2Store.create
@@ -90,6 +98,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     )
                     routes <- HydrozoaRoutes(
                       Some(requestSequencerStub),
+                      SubmissionGate.unsafeOpen(),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       ConsensusStoreReader.empty,
@@ -109,7 +118,8 @@ class L2QueryEndpointsTest extends AnyFunSuite:
       * `check`. No ledger is seeded because a remote-ledger node exposes no L2-query state.
       */
     private def withNoReaderRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
-        ActorSystem[IO]("L2QueryEndpointsTest-noReader")
+        HydrozoaActorSystem
+            .withoutRoot("L2QueryEndpointsTest-noReader")
             .use { system =>
                 for {
                     requestSequencerStub <- system.actorOf(
@@ -125,6 +135,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     )
                     routes <- HydrozoaRoutes(
                       Some(requestSequencerStub),
+                      SubmissionGate.unsafeOpen(),
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
                       ConsensusStoreReader.empty,
@@ -168,8 +179,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                 expected <- ledger.utxosByAddress(shelley)
                 result <- get(app, s"/l2/cardano-eutxo/utxos/$bech32")
                 (status, body) = result
-                _ <- IO.println(s"[demo] GET /l2/cardano-eutxo/utxos/$bech32")
-                _ <- IO.println(printer.print(body))
+                _ <- demo(s"GET /l2/cardano-eutxo/utxos/$bech32", body)
                 _ <- IO(assert(status == Status.Ok))
                 _ <- IO(assert(expected.nonEmpty, "the chosen genesis address controls no utxos"))
                 _ <- IO(
@@ -228,8 +238,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
             for {
                 result <- get(app, "/l2/cardano-eutxo/transactions?count=10")
                 (status, body) = result
-                _ <- IO.println("[demo] GET /l2/cardano-eutxo/transactions?count=10")
-                _ <- IO.println(printer.print(body))
+                _ <- demo("GET /l2/cardano-eutxo/transactions?count=10", body)
                 _ <- IO(assert(status == Status.Ok))
                 entries = body.asArray.getOrElse(Vector.empty)
                 _ <- IO(assert(entries.size == 3, s"expected 3 entries, got ${entries.size}"))

@@ -16,7 +16,6 @@ object TrustedSetup:
     private def readFromResource[G1, G2](using
         JsonValueCodec[TrustedSetup[G1, G2]]
     ): TrustedSetup[G1, G2] = {
-        println("reading trusted setup from resource")
         val input = getClass.getResourceAsStream("/trusted_setup_32768.json")
         readFromStream[TrustedSetup[G1, G2]](input)
     }

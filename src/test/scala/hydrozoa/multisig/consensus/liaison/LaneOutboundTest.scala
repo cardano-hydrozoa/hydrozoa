@@ -99,6 +99,53 @@ class LaneOutboundTest extends AnyFunSuite {
         )
     }
 
+    test(
+      "a cursor ahead of the lane but inside the journal waits instead of flagging out-of-bounds"
+    ) {
+        // The journal holds 0..3 but only 0..1 are appended: 2 and 3 are between their write and
+        // their append (CR4 write-before-send). A remote seeded from the journal — a rejoining coil
+        // peer's start point — may already ask for 3 or 4.
+        val lane = contiguousFrom(0, serveFromJournal = journalOf(0 to 3))
+        lane.append(0).unsafeRunSync()
+        lane.append(1).unsafeRunSync()
+        // Every predecessor from the bound (2) up is durable: nothing yet, not a desync...
+        val _ = assert(lane.reply(3).unsafeRunSync() == Items(Nil))
+        val _ = assert(lane.reply(4).unsafeRunSync() == Items(Nil))
+        // ...but a cursor past what the journal holds still is one.
+        val _ = assert(
+          lane.reply(5).unsafeRunSync() == OutOfBounds(asked = "5", bound = "2", lastAppended = "1")
+        )
+        // Once the pending appends land, the same cursor is served as usual.
+        lane.append(2).unsafeRunSync()
+        lane.append(3).unsafeRunSync()
+        lane.append(4).unsafeRunSync()
+        assert(lane.reply(4).unsafeRunSync() == Items(List(4)))
+    }
+
+    test("a gap in the journal between the bound and the cursor is still out of bounds") {
+        val lane = contiguousFrom(0, serveFromJournal = journalOf(List(0, 1, 3)))
+        lane.seedHighWater(Some(1)).unsafeRunSync()
+        assert(
+          lane.reply(4).unsafeRunSync() == OutOfBounds(asked = "4", bound = "2", lastAppended = "1")
+        )
+    }
+
+    test("the durable window is read in pages, however small the outbox") {
+        // Depth 1, one item per reply: a page of one. The window 2..9 takes eight pages.
+        val journal = StubJournal(0 to 9)
+        val lane = contiguousFrom(0, outboxDepth = 1, serveFromJournal = journal.read)
+        lane.seedHighWater(Some(1)).unsafeRunSync()
+        val _ = assert(lane.reply(10).unsafeRunSync() == Items(Nil))
+        val _ = assert(journal.reads >= 8)
+        assert(
+          lane.reply(11).unsafeRunSync() == OutOfBounds(
+            asked = "11",
+            bound = "2",
+            lastAppended = "1"
+          )
+        )
+    }
+
     test("request-style lane batches up to maxPerReply") {
         val lane = contiguousFrom(0, maxPerReply = 2)
         (0 to 4).foreach(n => lane.append(n).unsafeRunSync())
