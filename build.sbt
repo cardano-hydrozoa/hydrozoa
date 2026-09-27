@@ -1,4 +1,5 @@
 import com.typesafe.sbt.packager.docker._
+import sbt.hydrozoa.CompileProblems
 
 // NB (sbt 2): bare settings written at the top level of build.sbt are applied to *every*
 // subproject, not just the root. Anything specific to the root application (Docker packaging,
@@ -59,14 +60,42 @@ lazy val useFixedScalaCheck: Setting[Seq[TestFramework]] =
   testFrameworks := testFrameworks.value.filterNot(_ == TestFrameworks.ScalaCheck) :+
     scalaCheckFramework
 
+// CI's summary reads every test event from a JSON-lines file each forked test JVM writes
+// (`test.CiTestEvents`; the format is described in .github/scripts/test-summary.py). ScalaCheck's
+// events are recorded by `ScalaCheckFrameworkFixed`; ScalaTest's by `ScalaTestFrameworkRecorded`,
+// registered in place of ScalaTest's own framework. Both live in core's test sources, so only core
+// and the projects with its test classpath can load them: those are `testEventProjects`, and
+// `checkScalaCheckFramework` fails the build if one of them runs ScalaTest unrecorded.
+lazy val recordedScalaTest: TestFramework = new TestFramework("test.ScalaTestFrameworkRecorded")
+
+lazy val recordTestEvents: Seq[Setting[?]] = Seq(
+  testFrameworks := testFrameworks.value.map(f =>
+    if (f == TestFrameworks.ScalaTest) recordedScalaTest else f
+  ),
+  Test / javaOptions ++= Def.uncached(
+    Seq(
+      s"-Dhydrozoa.ci.events=${((Test / target).value / "ci-events").getAbsolutePath}",
+      s"-Dhydrozoa.ci.project=${thisProject.value.id}",
+      s"-Dhydrozoa.ci.sbt=${sbtVersion.value}"
+    )
+  )
+)
+
+// And every compiler problem, from sbt's reporter, to `<target>/ci-events/compile-<config>.jsonl`
+// (project/CompileProblems.scala). A bare setting, so it reaches every project.
+CompileProblems.settings(Compile) ++ CompileProblems.settings(Test)
+
 // Registering the wrapper is per-project, and forgetting it in a new subproject would silently
 // restore the dropped-failure behaviour — a green build, the same signature as the bug itself. This
 // check fails the run instead. It inspects every project, so it also covers projects that never
 // applied `useFixedScalaCheck`, which is precisely the case a per-project check would miss.
 lazy val checkScalaCheckFramework =
-  taskKey[Unit]("Fail if any project registers ScalaCheck's own sbt framework.")
+  taskKey[Unit](
+    "Fail if any project registers ScalaCheck's own sbt framework, or runs ScalaTest unrecorded."
+  )
 
 lazy val everyProject = ScopeFilter(inAnyProject)
+lazy val testEventProjects = ScopeFilter(inProjects(core, integration, examples, ciCanary))
 
 useFixedScalaCheck
 
@@ -79,6 +108,18 @@ checkScalaCheckFramework := Def.uncached {
         if fws.contains(TestFrameworks.ScalaCheck) &&
           cp.exists(_.data.id.contains("scalacheck_")) =>
       id
+  }
+  val unrecorded = thisProject.all(testEventProjects).value.map(_.id)
+    .zip((Test / testFrameworks).all(testEventProjects).value)
+    .collect {
+      case (id, fws) if fws.contains(TestFrameworks.ScalaTest) || !fws.contains(recordedScalaTest) =>
+        id
+    }
+  if (unrecorded.nonEmpty) {
+    sys.error(
+      s"${unrecorded.mkString(", ")} runs ScalaTest without recording its events, so CI's summary " +
+        "would not see those suites. Apply `recordTestEvents` to it."
+    )
   }
   if (offenders.nonEmpty) {
     sys.error(
@@ -338,10 +379,12 @@ lazy val core: Project = (project in file("."))
         "--sun-misc-unsafe-memory-access=allow"
       ),
     )
+    .settings(recordTestEvents)
 
 // Integration tests
 lazy val integration: Project = (project in file("integration"))
     .dependsOn(core % "compile->compile;test->test", petri)
+    .settings(recordTestEvents)
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
@@ -425,6 +468,7 @@ lazy val integration: Project = (project in file("integration"))
 // `sbt "examples/testOnly *TransientTokenDemo*"`. See examples/README.md.
 lazy val examples: Project = (project in file("examples"))
     .dependsOn(core % "compile->compile;test->test", integration % "test->test")
+    .settings(recordTestEvents)
     .settings(
       name := "hydrozoa-examples",
       publish / skip := true,
@@ -433,6 +477,23 @@ lazy val examples: Project = (project in file("examples"))
         "org.typelevel" %% "cats-effect" % "3.6.3" % Test
       )
     )
+
+// The reporting canary: tests with known outcomes (a failure, a cancelled, an ignored and a pending
+// test, a falsified property, and a suite that halts its JVM on request) and, on request, a compile
+// error in `ci-canary/broken`. `just ci-canary` runs them and checks that CI's summary reports each
+// exactly. Nothing aggregates, lints or otherwise runs this project.
+lazy val ciCanary: Project = (project in file("ci-canary"))
+    .dependsOn(core % "test->test")
+    .settings(
+      name := "ci-canary",
+      publish / skip := true,
+      Test / fork := true,
+      Test / javaOptions ++= Seq(
+        "--enable-native-access=ALL-UNNAMED",
+        "--sun-misc-unsafe-memory-access=allow"
+      )
+    )
+    .settings(recordTestEvents)
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.7"
@@ -477,7 +538,7 @@ addCommandAlias(
 // No `testFrameworks` entry for ScalaTest: sbt's default list already carries it, as
 // `TestFramework(org.scalatest.tools.Framework, org.scalatest.tools.ScalaTestFramework)`. Adding it
 // again registers a *second* framework that resolves to the same runner, and sbt then runs every
-// suite once per entry — twice.
+// suite once per entry — twice. `recordTestEvents` replaces that entry rather than adding one.
 
 // Tests are wall-clock/sleep-bound (real System timestamps in the cats-actors), so run more
 // suites concurrently than CPU cores to overlap the waits. sbt's default caps concurrency at the
