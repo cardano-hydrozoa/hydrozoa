@@ -156,7 +156,7 @@ lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
       // to *every* subproject, and enabling the plugin on a project that lacks the `scalus` library
       // on its classpath (e.g. `petri`) fails compilation with `package scalus.compiler ... does not
       // have a member method compile`. Published with CrossVersion.full → scalus-plugin_<full-scala>.
-      addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
+      addCompilerPlugin(("org.scalus" % "scalus-plugin" % scalusVersion).cross(CrossVersion.full)),
     )
 
 // Standalone petri net framework
@@ -337,7 +337,7 @@ lazy val core: Project = (project in file("."))
       ),
       // Scalus compiler plugin — compiles on-chain `@Compile` code to UPLC (see `cardanoOnchain`
       // for why this is scoped per-project rather than declared once at the top level).
-      addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
+      addCompilerPlugin(("org.scalus" % "scalus-plugin" % scalusVersion).cross(CrossVersion.full)),
       // Bake the version, git revision, and build time into `hydrozoa.BuildInfo` so they can be
       // logged at startup, served from `GET /version`, and stamped onto the Docker image labels.
       //
