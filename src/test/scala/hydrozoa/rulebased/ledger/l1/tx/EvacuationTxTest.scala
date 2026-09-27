@@ -76,7 +76,6 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
         case Right(evacMap) <- genUtxosL2(l2UtxoCount).map(
           _.toEvacuationMap(config.headConfig)
         )
-        _ = println(s"evac map: ${evacMap.size}")
 
         // Calculate the whole L2 utxo set commitment
         utxoCommitment = evacMap.kzgCommitment
@@ -85,12 +84,7 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
         // TODO: find the limit with refscripts
         wn <- Gen.choose(1, evacMap.size)
         evacuatees0 <- Gen.pick(wn, evacMap)
-        _ = println(s"evacuatees length: ${evacuatees0.length}")
         evacuatees = EvacuationMap.from(evacuatees0)
-
-        // Calculate and validate the membership proof
-        theRest = evacMap.removedAll(Set.from(evacuatees.keys))
-        _ = println(s"theRest: ${theRest.size}")
 
         fallbackTxId <- Arbitrary.arbitrary[TransactionHash]
 
