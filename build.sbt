@@ -107,6 +107,13 @@ useFixedScalaCheck
 // run by `lintAll` and `lintCheckAll`, over the projects they lint.
 NoBareThrowables.settings(ScopeFilter(inProjects(cardanoOnchain, petri, core, integration, benchmark)))
 
+// sbt 2 puts a project's test classes on classpaths as a jar, and packaging that jar picks a
+// `Main-Class` for its manifest from the test sources' main classes: every ScalaCheck
+// `Properties` object has a `main`, so it warns "multiple main classes detected" on every test
+// run. No test jar is meant to be run, so name none. A bare setting, so it reaches every project;
+// `Test / run` still offers the discovered mains.
+Test / packageBin / mainClass := None
+
 checkScalaCheckFramework := Def.uncached {
   val ids = thisProject.all(everyProject).value.map(_.id)
   val frameworks = (Test / testFrameworks).all(everyProject).value
