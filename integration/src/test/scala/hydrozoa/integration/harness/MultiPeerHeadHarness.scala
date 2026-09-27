@@ -23,6 +23,7 @@ import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperatio
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos, generateScriptReferenceUtxos as defaultScriptRefsGen}
 import hydrozoa.integration.yaci.DevKit
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendBlockfrost, CardanoBackendEvent, CardanoBackendEventFormat, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
@@ -670,14 +671,13 @@ object MultiPeerHeadHarness:
     /** Run `body` against a fresh [[resource]], failing — instead of hanging — if the actor system
       * terminates underneath it.
       *
-      * A failure that escalates to the user guardian terminates the whole actor system
-      * (cats-actors' `TerminateActorSystem`). From then on every `?` asked of an actor waits
-      * forever, while the harness's own CL tick loops and the metrics samplers are plain fibers,
-      * not actors, and keep scheduling timers. Under TestControl the clock therefore keeps
-      * advancing, nothing completes, and `TestControlDriver` ticks until its horizon, then reports
-      * only that the program was still running: the failure that caused it is never reported.
-      * Racing the body against termination ends the run at once with the errors the listener
-      * recorded.
+      * A failure that reaches the root actor terminates the whole actor system
+      * ([[HydrozoaActorSystem]]). From then on every `?` asked of an actor waits forever, while the
+      * harness's own CL tick loops and the metrics samplers are plain fibers, not actors, and keep
+      * scheduling timers. Under TestControl the clock therefore keeps advancing, nothing completes,
+      * and `TestControlDriver` ticks until its horizon, then reports only that the program was
+      * still running: the failure that caused it is never reported. Racing the body against
+      * termination ends the run at once with the errors the listener recorded.
       */
     def useGuarded[H, A](inputs: Inputs, hooks: Hooks[H])(body: Harness[H] => IO[A]): IO[A] =
         resource(inputs, hooks).use(harness => guarded(harness)(body(harness)))
@@ -758,7 +758,8 @@ object MultiPeerHeadHarness:
             // Recorded by the system's own event-stream listener, the stream's only consumer: a
             // second `take` loop on the same queue would see only the events the listener did not.
             sutErrors <- Resource.eval(Ref[IO].of(List.empty[String]))
-            system <- ActorSystem[IO](label, ErrorDrainer.listener(sutErrors))
+            actors <- HydrozoaActorSystem(label, ErrorDrainer.record(sutErrors))
+            system = actors.system
             backendAndSnapshot <- Resource.eval(
               CardanoBackend.mk(
                 cardanoBackendMode,
@@ -782,7 +783,7 @@ object MultiPeerHeadHarness:
                     Mrm
                         .buildPeer(
                           peerNum,
-                          system,
+                          actors,
                           hooks.wrapBackend(PeerId.Head(peerNum), cardanoBackend),
                           multiNodeConfig,
                           backendMode,
@@ -815,7 +816,7 @@ object MultiPeerHeadHarness:
                         .buildCoil(
                           coilConfig,
                           coilNum,
-                          system,
+                          actors,
                           hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                           transports.coilUplinks(coilNum),
                           hooks.tracer.contramap(Event.Coil(coilNum, _)),
@@ -901,7 +902,7 @@ object MultiPeerHeadHarness:
                         .spawnPeer(
                           s"hmrm-$peerNum-r$gen",
                           peerNum,
-                          system,
+                          actors,
                           cardanoBackend,
                           multiNodeConfig,
                           network,
@@ -945,7 +946,7 @@ object MultiPeerHeadHarness:
                         .spawnCoil(
                           s"cmrm-${coilNum.convert}-r$gen",
                           old.config,
-                          system,
+                          actors,
                           hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                           transports.coilUplinks(coilNum),
                           hooks.tracer.contramap(Event.Coil(coilNum, _)),
@@ -1651,7 +1652,7 @@ object MultiPeerHeadHarness:
 
         def buildPeer(
             peerNum: HeadPeerNumber,
-            system: ActorSystem[IO],
+            actors: HydrozoaActorSystem,
             cardanoBackend: L1Backend[IO],
             multiNodeConfig: MultiNodeConfig,
             backendMode: StorageBackend.Mode,
@@ -1685,7 +1686,7 @@ object MultiPeerHeadHarness:
                         spawned <- spawnPeer(
                           s"hmrm-$peerNum",
                           peerNum,
-                          system,
+                          actors,
                           cardanoBackend,
                           multiNodeConfig,
                           network,
@@ -1711,7 +1712,7 @@ object MultiPeerHeadHarness:
         def spawnPeer(
             actorName: String,
             peerNum: HeadPeerNumber,
-            system: ActorSystem[IO],
+            actors: HydrozoaActorSystem,
             cardanoBackend: L1Backend[IO],
             multiNodeConfig: MultiNodeConfig,
             network: Transport.HeadNetwork,
@@ -1759,13 +1760,13 @@ object MultiPeerHeadHarness:
                   peerFactory,
                   hubFactory,
                 )
-                ref <- Resource.eval(system.actorOf(mrm, actorName))
+                ref <- Resource.eval(actors.actorOf(mrm, actorName))
             yield (mrm, ref: NoSendActorRef[IO])
 
         def buildCoil(
             coilConfig: NodeConfig,
             coilNum: CoilPeerNumber,
-            system: ActorSystem[IO],
+            actors: HydrozoaActorSystem,
             cardanoBackend: L1Backend[IO],
             uplink: Transport.ContextFn[CoilTransport],
             callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
@@ -1779,7 +1780,7 @@ object MultiPeerHeadHarness:
                     spawned <- spawnCoil(
                       s"cmrm-${coilNum.convert}",
                       coilConfig,
-                      system,
+                      actors,
                       cardanoBackend,
                       uplink,
                       callerTracer,
@@ -1801,7 +1802,7 @@ object MultiPeerHeadHarness:
         def spawnCoil(
             actorName: String,
             coilConfig: NodeConfig,
-            system: ActorSystem[IO],
+            actors: HydrozoaActorSystem,
             cardanoBackend: L1Backend[IO],
             uplink: Transport.ContextFn[CoilTransport],
             callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
@@ -1838,7 +1839,7 @@ object MultiPeerHeadHarness:
                   callerTracer,
                   uplinkFactory,
                 )
-                ref <- Resource.eval(system.actorOf(mrm, actorName))
+                ref <- Resource.eval(actors.actorOf(mrm, actorName))
             yield (mrm, ref: NoSendActorRef[IO])
 
     // ===================================
@@ -1903,19 +1904,13 @@ object MultiPeerHeadHarness:
     // ===================================
 
     object ErrorDrainer:
-        /** The actor system's event-stream listener: print every event as cats-actors' default
-          * listener does, and append every uncaught actor exception to `sutErrors`.
+        /** Append `event` to `sutErrors` if it is an uncaught actor exception.
           *
-          * It has to be the listener itself: `ActorSystem` already runs one `take` loop over its
-          * event stream, and a second loop on the same queue splits the events between the two,
-          * each event reaching exactly one of them, so an error could miss `sutErrors` entirely.
+          * Handed to [[HydrozoaActorSystem]] as its `onEvent`, so it runs inside the system's own
+          * event-stream listener: `ActorSystem` already runs one `take` loop over its event stream,
+          * and a second loop on the same queue splits the events between the two, each event
+          * reaching exactly one of them, so an error could miss `sutErrors` entirely.
           */
-        def listener(sutErrors: Ref[IO, List[String]]): Any => IO[Unit] = event =>
-            // Uncancelable, recording first: the system cancels this listener as it terminates,
-            // which is exactly when the error that terminated it is being handled here.
-            (record(sutErrors)(event) >> IO.println(s"[EventBus] => $event")).uncancelable
-
-        /** Append `event` to `sutErrors` if it is an uncaught actor exception. */
         def record(sutErrors: Ref[IO, List[String]])(event: Any): IO[Unit] = event match {
             case e: ActorError if e.cause != ActorError.NoCause =>
                 sutErrors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
