@@ -106,6 +106,31 @@ integration-yaci-docker:
   {{sbt}} "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
   {{sbt}} "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
 
+# The reporting canary: runs the ci-canary project's tests, whose outcomes are known (a failure, a
+# cancelled, an ignored and a pending test, a falsified property, a halted test JVM), then compiles
+# it with an error added on purpose, and checks that CI's summary reports each exactly. Run it after
+# changing the build, the reporting code or the sbt version; CI runs it when those change. sbt runs
+# in-process (`--server --batch`), so the stages' `set` commands don't linger in a running server.
+ci-canary:
+  #!/usr/bin/env bash
+  set -uo pipefail
+  trap 'just notify "ci-canary"' EXIT
+  out=target/ci-canary
+  rm -rf "${out}"
+  stage() {
+    local name=$1 command=$2
+    rm -rf target/out/jvm/scala-*/ci-canary/ci-events
+    sbt --server --batch "${command}"
+    local status=$?
+    mkdir -p "${out}/${name}"
+    cp -r target/out/jvm/scala-*/ci-canary/ci-events "${out}/${name}/" 2>/dev/null
+    echo "${status}" > "${out}/${name}/sbt-exit-status"
+  }
+  stage outcomes "ciCanary/test"
+  stage halt 'set ciCanary/Test/javaOptions += "-Dcanary.halt=1"; ciCanary/testOnly canary.CanaryHalt'
+  stage compile-error 'set ciCanary/Test/unmanagedSourceDirectories += (ciCanary/baseDirectory).value / "broken"; ciCanary/Test/compile'
+  python3 .github/scripts/check-canary.py "${out}"
+
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
 export:
   #!/usr/bin/env bash
