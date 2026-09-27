@@ -4,11 +4,11 @@ import cats.effect.{ExitCode, IO, Resource}
 import cats.syntax.apply.*
 import cats.syntax.contravariant.*
 import com.monovore.decline.{Command, Opts}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.BuildInfo
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
+import hydrozoa.lib.actor.HydrozoaActorSystem
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.CardanoLiaisonEventFormat
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -141,7 +141,7 @@ object Evacuate {
                 Persistence.fromBackendReadOnly(backendStore, persistenceTracer)
             }
 
-            system <- ActorSystem[IO]("Hydrozoa Evacuate")
+            system <- HydrozoaActorSystem("Hydrozoa Evacuate")
         } yield (backend, nodeConfig, labelNum, persistence, system)
 
         resource.use { case (backend, nodeConfig, labelNum, persistence, system) =>
@@ -160,8 +160,12 @@ object Evacuate {
                   "RuleBasedRegimeManager"
                 )
                 _ <- log.info("Evacuation node started; polling L1 for rule-based utxos")
-                _ <- system.waitForTermination
-            } yield ExitCode.Success
+                failure <- system.waitForTermination
+                exit <- failure.fold(IO.pure(ExitCode.Success))(e =>
+                    log.error(s"An actor failed, which stopped the evacuation: $e", Some(e))
+                        .as(ExitCode.Error)
+                )
+            } yield exit
         }
     }
 }

@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.transport
 
-import cats.effect.std.Queue
+import cats.effect.std.{Mutex, Queue}
 import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.*
 import fs2.Stream
@@ -28,6 +28,12 @@ trait HubTransport {
       */
     def register(coil: CoilPeerNumber, localLiaison: LiaisonProtocol.HubLiaisonHandle): IO[Unit]
 
+    /** Stop dispatching inbound from [[coil]] to the liaison [[register]] wired for it, before that
+      * liaison is stopped. The coil does not know this hub stopped it and keeps sending; from now
+      * on its frames are dropped as expected rather than delivered to a stopped actor.
+      */
+    def unregister(coil: CoilPeerNumber): IO[Unit]
+
     /** Enqueue a hub→coil batch for delivery to [[coil]]. */
     def send(coil: CoilPeerNumber, request: Join.Answer | LiaisonProtocol.HubEmitted): IO[Unit]
 }
@@ -51,18 +57,38 @@ final class HubWsTransport private (
     private val outboxes: Map[CoilPeerNumber, Queue[IO, String]],
     private val coilPeers: CoilPeers,
     private val headParamsHash: Hash32,
-    private val inboundRef: Ref[IO, Map[CoilPeerNumber, LiaisonProtocol.HubLiaisonHandle]],
+    private val inboundRef: Ref[
+      IO,
+      Map[CoilPeerNumber, InboundRoute[LiaisonProtocol.HubLiaisonHandle]]
+    ],
+    private val heldPositions: Ref[IO, Map[CoilPeerNumber, Join.Connected]],
+    private val registering: Mutex[IO],
     private val ownHead: HeadIdentity,
     private val keepAlivePing: FiniteDuration,
     private val tracer: ContraTracer[IO, HubWsTransportEvent],
 )(using CardanoNetwork.Section)
     extends HubTransport {
 
+    /** Hands the liaison the coil's position if it arrived before it, then routes that coil's
+      * inbound to it.
+      *
+      * The held position goes first and the handle is published after it, both under
+      * [[registering]], so a frame a socket delivers on the fast path never overtakes it.
+      */
     override def register(
         coil: CoilPeerNumber,
         localLiaison: LiaisonProtocol.HubLiaisonHandle
     ): IO[Unit] =
-        inboundRef.update(_.updated(coil, localLiaison))
+        registering.lock.surround(
+          heldPositions
+              .modify(held => (held - coil, held.get(coil)))
+              .flatMap(_.traverse_(localLiaison ! _)) >>
+              inboundRef.update(_.updated(coil, InboundRoute.Live(localLiaison)))
+        )
+
+    override def unregister(coil: CoilPeerNumber): IO[Unit] =
+        registering.lock.surround(inboundRef.update(_.updated(coil, InboundRoute.Closed))) >>
+            tracer.traceWith(LiaisonUnregistered(coil))
 
     override def send(
         coil: CoilPeerNumber,
@@ -83,15 +109,41 @@ final class HubWsTransport private (
                 tracer.traceWith(UnexpectedInboundWire(coil, other))
         }
 
+    /** Route a coil frame to that coil's registered liaison.
+      *
+      * Before registration, the coil's position (the `Join.Connected` its handshake carries) is
+      * **held** (the latest one) rather than dropped. A coil sends it once per dial and a healthy
+      * link is never redialed, and without it the hub never answers, so a cold coil waits
+      * indefinitely. The hub's server can be accepting before the node has built and registered its
+      * liaisons, so this ordering does occur. Pull traffic is dropped: the coil's puller resends
+      * it.
+      *
+      * A position is held the same way after the liaison was unregistered, since a later register
+      * would otherwise wait on an answer to a position it never saw. Pull traffic then is the coil
+      * not knowing this hub handed off, and is dropped as expected rather than as a fault.
+      */
     private def toLiaison(
         coil: CoilPeerNumber,
         request: LiaisonProtocol.FromCoil
     ): IO[Unit] =
-        inboundRef.get.flatMap { m =>
-            m.get(coil) match {
-                case Some(liaison) => liaison ! request
-                case None          => tracer.traceWith(NoLiaisonForInbound(coil))
-            }
+        inboundRef.get.map(_.get(coil)).flatMap {
+            case Some(InboundRoute.Live(liaison)) => liaison ! request
+            case _ =>
+                registering.lock.surround(inboundRef.get.map(_.get(coil)).flatMap {
+                    case Some(InboundRoute.Live(liaison)) => liaison ! request
+                    case route =>
+                        request match {
+                            case position: Join.Connected =>
+                                heldPositions.update(_.updated(coil, position)) >>
+                                    tracer.traceWith(JoinPositionHeld(coil))
+                            case _ =>
+                                route match {
+                                    case Some(InboundRoute.Closed) =>
+                                        tracer.traceWith(InboundAfterUnregister(coil))
+                                    case _ => tracer.traceWith(NoLiaisonForInbound(coil))
+                                }
+                        }
+                })
         }
 
     /** The ordered verdict on one inbound handshake.
@@ -176,23 +228,30 @@ final class HubWsTransport private (
                                 admit(coilNum, protocolVersion, auth, nonce, head)
                             // One nonce, one handshake: a socket that already has a verdict
                             // keeps it, so a replayed handshake cannot re-bind an
-                            // established session.
-                            verdictD.complete(verdict).flatMap {
-                                case false =>
+                            // established session. `tryGet` then `complete` is not a race:
+                            // this pipe is the only thing that completes `verdictD`, and it
+                            // takes one frame at a time.
+                            verdictD.tryGet.flatMap {
+                                case Some(_) =>
                                     tracer.traceWith(ServerRepeatHandshake(coilNum))
-                                case true =>
-                                    verdict match {
-                                        case Right(coil) =>
-                                            // Bind the socket BEFORE announcing the link, so
-                                            // the start point the liaison decides on has an
-                                            // outbox to leave by.
-                                            tracer.traceWith(ServerAccepted(coilNum)) >>
-                                                toLiaison(coil, marks)
-                                        case Left(refusal) =>
-                                            tracer.traceWith(
-                                              ServerRefusedHandshake(coilNum, refusal)
-                                            )
-                                    }
+                                case None =>
+                                    // Traced BEFORE it is completed, because completing it is
+                                    // what acts on it. A refusal goes straight out and the
+                                    // socket closes, and the connection can be torn down, and
+                                    // this fiber with it, before a trace placed after it runs:
+                                    // a refusal on the wire that nobody logged.
+                                    verdict.fold(
+                                      refusal =>
+                                          tracer.traceWith(
+                                            ServerRefusedHandshake(coilNum, refusal)
+                                          ),
+                                      _ => tracer.traceWith(ServerAccepted(coilNum))
+                                    ) >>
+                                        verdictD.complete(verdict) >>
+                                        // Bind the socket BEFORE announcing the link, so the
+                                        // start point the liaison decides on has an outbox to
+                                        // leave by.
+                                        verdict.traverse_(coil => toLiaison(coil, marks))
                             }
                         case Right(CoilFrame.Msg(payload)) =>
                             verdictD.tryGet.flatMap {
@@ -235,12 +294,18 @@ object HubWsTransport {
             outboxes <- coils
                 .traverse(c => Queue.unbounded[IO, String].map(c -> _))
                 .map(_.toMap)
-            inboundRef <- Ref[IO].of(Map.empty[CoilPeerNumber, LiaisonProtocol.HubLiaisonHandle])
+            inboundRef <- Ref[IO].of(
+              Map.empty[CoilPeerNumber, InboundRoute[LiaisonProtocol.HubLiaisonHandle]]
+            )
+            heldPositions <- Ref[IO].of(Map.empty[CoilPeerNumber, Join.Connected])
+            registering <- Mutex[IO]
         } yield new HubWsTransport(
           outboxes,
           coilPeers,
           headParamsHash,
           inboundRef,
+          heldPositions,
+          registering,
           ownHead,
           keepAlivePing,
           tracer

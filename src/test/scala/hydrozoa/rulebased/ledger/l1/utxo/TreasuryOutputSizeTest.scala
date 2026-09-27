@@ -51,7 +51,7 @@ class TreasuryOutputSizeTest extends AnyFunSuite:
             val sized = Sized(output)
             val minAda =
                 MinCoinSizedTransactionOutput.ensureMinAda(sized, config.cardanoProtocolParams)
-            println(f"$name%12s  cborBytes=${sized.size}%5d  minAda=${minAda.value}%9d lovelace")
+            info(f"$name%12s  cborBytes=${sized.size}%5d  minAda=${minAda.value}%9d lovelace")
             (name, sized.size, minAda)
         }
 

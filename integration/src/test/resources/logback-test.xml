@@ -42,9 +42,14 @@
     <appender name="MERMAID" class="ch.qos.logback.core.FileAppender">
         <file>stage4-peers-interaction.mmd</file>
         <append>false</append>
-        <layout class="hydrozoa.integration.MermaidSequenceDiagramLayout">
-            <pattern>%msg%n</pattern>
-        </layout>
+        <!-- A layout inside a LayoutWrappingEncoder, not a bare <layout>: logback reports the bare
+             form as a WARN status, and a WARN status makes it print its whole configuration
+             status (about 30 |-INFO lines) to the console of every JVM. -->
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="hydrozoa.integration.MermaidSequenceDiagramLayout">
+                <pattern>%msg%n</pattern>
+            </layout>
+        </encoder>
     </appender>
     <logger name="Mermaid.PeerLiaison" level="info" additivity="false">
         <appender-ref ref="MERMAID"/>
@@ -58,6 +63,10 @@
          init-tx Preview rejection) while diagnosing the public-testnet run; restore to `error`. -->
     <logger name="FirewalledCardanoBackend" level="info"/>
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
+    <!-- Each test case's TestControl seed: what replays a hung run (TESTCONTROL_SEED). -->
+    <logger name="org.scalacheck.commands.ModelBasedSuite.Replay" level="info"/>
+    <!-- The run's totals (simulated time, command distribution), once at JVM exit. -->
+    <logger name="org.scalacheck.commands.ModelBasedSuite.Stats" level="info"/>
     <!-- Run-scoped scenario summary, printed once at the end of a dispute-flow run. -->
     <logger name="Scenario.Summary" level="info"/>
     <logger name="test.CardanoBackendMock" level="warn"/>

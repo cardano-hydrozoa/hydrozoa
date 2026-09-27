@@ -77,7 +77,7 @@ class CoilCrashRestartTest extends AnyFunSuite {
                           )
                       else persistence,
                 )
-                outcome <- MultiPeerHeadHarness.resource(inputs, hooks).use { harness =>
+                outcome <- MultiPeerHeadHarness.useGuarded(inputs, hooks) { harness =>
                     for
                         _ <- crashSignal.get.timeoutTo(
                           3.minutes,

@@ -17,6 +17,20 @@ object HubWsTransportEventFormat:
                 warn(s"send: no outbox for coil=${coil.convert}")
             case NoLiaisonForInbound(coil) =>
                 warn(s"inbound from coil=${coil.convert} but no liaison registered")
+            case LiaisonUnregistered(coil) =>
+                info(
+                  s"unregistered the liaison for coil=${coil.convert}; its inbound is dropped " +
+                      "from now on"
+                )
+            case InboundAfterUnregister(coil) =>
+                debug(
+                  s"inbound from coil=${coil.convert} after its liaison was unregistered; dropping"
+                )
+            case JoinPositionHeld(coil) =>
+                info(
+                  s"coil=${coil.convert}'s position arrived with no liaison registered to take " +
+                      "it; holding it for the next one"
+                )
             case UnexpectedInboundWire(coil, payload) =>
                 warn(s"unexpected hub-bound wire from coil=${coil.convert}: $payload")
             case ServerAccepted(coilNum) =>

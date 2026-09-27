@@ -389,11 +389,12 @@ object TestPeersTest extends Properties("Test peers") {
     override def overrideParameters(p: Parameters): Parameters =
         p.withMinSuccessfulTests(500)
 
+    // Generation succeeding for every spec is the property.
     val _ = property("generates") = Prop.forAll(
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)
-    )(testPeers => Prop.collect(testPeers)(Prop.passed))
+    )(_ => Prop.passed)
 
     /** [[TestPeers.walletCache]] is keyed by `(mnemonic, ordinal)` with no network component, which
       * is only sound because [[TestPeers.deriveScalusWallet]] is a pure function of the seed and

@@ -18,14 +18,16 @@ object HeadMultisigRegimeManagerEventFormat:
         val ev = LogEvent.From.forPeer("HeadMultisigRegimeManager", peerNum)
         import ev.*
         e match
-            case LifecycleEvent.StartingActors            => info("Starting multisig actors...")
-            case LifecycleEvent.WatchingActors            => info("Watching multisig actors...")
-            case LifecycleEvent.TerminatedActor(actor)    => warn(s"Terminated $actor actor")
-            case LifecycleEvent.TerminatedDependency(dep) => warn(s"Terminated dependency $dep")
+            case LifecycleEvent.StartingActors => info("Starting multisig actors...")
+            case LifecycleEvent.WatchingActors => info("Watching multisig actors...")
+            case LifecycleEvent.TerminatedActor(actor, true) =>
+                info(s"Terminated $actor actor (stopped at the handoff to the rule-based regime)")
+            case LifecycleEvent.TerminatedActor(actor, false) => warn(s"Terminated $actor actor")
+            case LifecycleEvent.TerminatedDependency(dep)     => warn(s"Terminated dependency $dep")
             case LifecycleEvent.SupervisedFailureEscalated(cause) =>
                 LogEvent(
                   Level.Error,
-                  "A supervised actor failed; escalating to the guardian, which will stop the system.",
+                  "A supervised actor failed; escalating to the root, which will stop the system.",
                   cause = Some(cause),
                   routingKey = Some("Supervision")
                 )

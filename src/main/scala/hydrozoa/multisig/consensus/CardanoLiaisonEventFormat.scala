@@ -68,10 +68,13 @@ object CardanoLiaisonEventFormat:
                 error(s"error when getting init tx info: $err")
             case RuleBasedTreasuryQueryError(err) =>
                 error(s"error when probing the rule-based treasury: $err")
-            case ActionsDispatched(actions, hasFallback) =>
+            case ActionsDispatched(actions, notice) =>
                 def text =
                     "Liaison's actions:" + actions.map(a => s"\n\t- ${actionMsg(a)}").mkString
-                if hasFallback then warn(text) else info(text)
+                notice match
+                    case DispatchNotice.FirstNotice => warn(text)
+                    case DispatchNotice.Routine     => info(text)
+                    case DispatchNotice.Repeat      => debug(text)
             case FallbackToRuleBasedDispatched(txId) =>
                 warn(s"FallbackToRuleBased dispatched: $txId — head entering rule-based regime")
             case TxSubmitting(txId) =>
@@ -87,8 +90,8 @@ object CardanoLiaisonEventFormat:
     private def actionMsg(action: Action): String =
         import Action.*
         action match
-            case FallbackToRuleBased(tx)         => s"FallbackToRuleBased (${tx.tx.id})"
-            case PushForwardMultisig(txs)        => s"PushForwardMultisig (${txs.map(_.tx.id)})"
-            case Rollout(txs)                    => s"Rollout (${txs.map(_.tx.id)})"
-            case sp @ SilencePeriodNoop(_, _, _) => s"$sp"
-            case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.tx.id)})"
+            case FallbackToRuleBased(tx)            => s"FallbackToRuleBased (${tx.tx.id})"
+            case PushForwardMultisig(txs)           => s"PushForwardMultisig (${txs.map(_.tx.id)})"
+            case Rollout(txs)                       => s"Rollout (${txs.map(_.tx.id)})"
+            case sp @ SilencePeriodNoop(_, _, _, _) => s"$sp"
+            case InitializeHead(txs)                => s"InitializeHead (${txs.map(_.tx.id)})"

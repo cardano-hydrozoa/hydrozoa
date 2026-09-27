@@ -92,7 +92,9 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
         for
             ctx <- ask
             fiber <- lift(
-              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitKickRequest(
+              // Runs into the fallback: a kick made at or after the handoff comes back closed,
+              // which is expected, so `try`.
+              (IO.sleep(1.second) >> MultiPeerHeadHarness.trySubmitKickRequest(
                 ctx.harness
               )).foreverM.start
             )
@@ -102,7 +104,11 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
     private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+            _ <- lift(
+              MultiPeerHeadHarness.guarded(ctx.harness)(
+                ctx.fallbackDispatched.get.timeout(scenarioTimeout)
+              )
+            )
         yield ()
 
     /** Cancel the request loop, let the fallback tx settle (the dispute is frozen, so no dispute tx

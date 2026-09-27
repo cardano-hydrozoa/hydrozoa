@@ -9,6 +9,7 @@ import java.util.ArrayList as JArrayList
 import org.rocksdb.{ColumnFamilyDescriptor, ColumnFamilyHandle, DBOptions, Options, RocksDB}
 import org.scalatest.funsuite.AnyFunSuite
 import scala.jdk.CollectionConverters.*
+import test.RequiresNodeStore
 
 /** Does the accumulator library agree with the textbook formulation on the maps a real head has
   * actually committed to?
@@ -41,7 +42,10 @@ class KzgCommitmentStoreFidelityTest extends AnyFunSuite {
         def cardanoNetwork: CardanoNetwork = CardanoNetwork.Mainnet
     }
 
-    test("every evacuation map in a real store commits to the same point both ways") {
+    test(
+      "every evacuation map in a real store commits to the same point both ways",
+      RequiresNodeStore
+    ) {
         val _ = assume(Files.isDirectory(storePath), s"no store at $storePath")
         RocksDB.loadLibrary()
 

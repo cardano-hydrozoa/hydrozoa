@@ -5,7 +5,6 @@ import cats.syntax.traverse.*
 import hydrozoa.BuildInfo
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.transport.ProtocolVersion
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
@@ -16,6 +15,7 @@ import hydrozoa.multisig.persistence.{ArchiveWatermarks, Cf, ConsensusStoreReade
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.TapirJson.*
+import hydrozoa.multisig.{NodeStatus, SubmissionGate}
 import java.time.Instant
 import org.http4s.HttpRoutes
 import scala.util.Try
@@ -46,6 +46,10 @@ class HydrozoaRoutes(
       * that fails at request time.
       */
     requestSequencer: Option[RequestSequencer.Handle],
+    /** Admits the submissions forwarded to [[requestSequencer]]; the regime manager closes it at
+      * the handoff to the rule-based regime (see [[SubmissionGate]]).
+      */
+    submissions: SubmissionGate,
     blockWeaver: BlockWeaver.Handle,
     nodeStatus: IO[NodeStatus],
     consensusReader: ConsensusStoreReader[IO],
@@ -63,7 +67,7 @@ class HydrozoaRoutes(
     metrics: PeerMetrics,
     tracer: ContraTracer[IO, HydrozoaHttpEvent]
 ) {
-    import HydrozoaRoutes.{apiTitle, apiVersion, l2ApiTitle}
+    import HydrozoaRoutes.{SubmissionsClosed, apiTitle, apiVersion, l2ApiTitle}
 
     /** Decomposes hard-confirmed stacks' effects onto blocks for the effect queries. */
     private val effectsResolver: EffectsResolver = EffectsResolver(consensusReader)
@@ -819,15 +823,21 @@ class HydrozoaRoutes(
                     case Right(request) => IO.pure(request)
                 }
                 _ <- tracer.traceWith(HydrozoaRoutes.decodedEvent(path, userRequest))
-                result <- (sequencer ?: userRequest).flatMap {
-                    case Right(id) =>
+                answer <- submissions.admit(None)((sequencer ?: userRequest).map(Some(_)))
+                result <- answer match {
+                    case Some(Right(id)) =>
                         IO.pure(Right(ApiDto.mkRequestAcceptedResponse(id)))
                     // Screening / backpressure rejection: an expected 400, not a fault — log the
                     // client-facing reason concisely (no exception/stack) instead of raising.
-                    case Left(rejected) =>
+                    case Some(Left(rejected)) =>
                         tracer
                             .traceWith(RequestRejected(path, rejected.reason))
                             .as(Left(fail(StatusCode.BadRequest, rejected.reason)))
+                    // The head handed off to the rule-based regime: nothing takes requests now.
+                    case None =>
+                        tracer
+                            .traceWith(RequestRejected(path, SubmissionsClosed))
+                            .as(Left(fail(StatusCode.ServiceUnavailable, SubmissionsClosed)))
                 }
             } yield result
 
@@ -1117,11 +1127,16 @@ object HydrozoaRoutes {
                 RequestDecoded(path, "Transaction", body.l2Payload.size)
 
     val apiTitle: String = "Hydrozoa node API"
+
+    /** The reason given for a submission refused because the head has left the multisig regime. */
+    val SubmissionsClosed: String =
+        "The head has handed off to the rule-based regime and takes no more requests."
     val l2ApiTitle: String = "Hydrozoa EUTXO L2 ledger API"
     val apiVersion: String = "0.1.0"
 
     def apply(
         requestSequencer: Option[RequestSequencer.Handle],
+        submissions: SubmissionGate,
         blockWeaver: BlockWeaver.Handle,
         nodeStatus: IO[NodeStatus],
         consensusReader: ConsensusStoreReader[IO],
@@ -1135,6 +1150,7 @@ object HydrozoaRoutes {
         IO.pure(
           new HydrozoaRoutes(
             requestSequencer,
+            submissions,
             blockWeaver,
             nodeStatus,
             consensusReader,
