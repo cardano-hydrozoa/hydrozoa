@@ -34,7 +34,7 @@ jobs:
 
       - name: Stage the Docker build context
         # Native-packager writes the Dockerfile + app under target/docker/stage (no daemon needed).
-        run: nix develop .#ci --command sbt Docker/stage
+        run: nix develop .#ci --command sbt --server --batch Docker/stage
 
       # The staged context is JVM bytecode plus a Dockerfile whose only RUN steps
       # are chmod and useradd, and both native dependencies (blst-java,

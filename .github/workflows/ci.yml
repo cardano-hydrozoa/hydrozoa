@@ -15,6 +15,12 @@ concurrency:
 permissions:
   contents: read
 
+# Every sbt call runs sbt in-process, through the justfile's `sbt` variable, rather than as the thin
+# client of a server that a previous step started: the client can crash while connecting, failing
+# the step, and a server keeps the environment of the step that started it.
+env:
+  SBT: sbt --server --batch
+
 # Four jobs: `plan` decides from a PR's changed paths what runs; `tests` (precommit, unit and
 # integration suites) and `yaci` (the suites against a real Cardano devnet) run side by side; and
 # `build` reports their outcome. We do NOT path-filter the workflow itself: `build` is the
@@ -172,7 +178,7 @@ jobs:
       # reads as one rather than as a Yaci failure.
       - name: Compile
         id: compile
-        run: nix develop .#ci --command sbt integration/Test/compile
+        run: nix develop .#ci --command sbt --server --batch integration/Test/compile
 
       # Median about 7 minutes on a compiled tree. It has hung until the job timeout three times;
       # 20 minutes fails a hang fast and still leaves room for a slow image pull.
