@@ -2,9 +2,9 @@ package hydrozoa.testcontrol
 
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
-import cats.effect.{Deferred, IO}
-import com.suprnation.typelevel.actors.syntax.*
+import cats.effect.{Deferred, IO, Ref}
 import hydrozoa.lib.actor.HydrozoaActorSystem
+import com.suprnation.typelevel.actors.syntax.*
 import java.time.Instant
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -81,14 +81,14 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
         program.unsafeRunSync() // Executes instantly!
     }
 
-    "TimeActor" should "handle delayed prints instantly" in {
+    "TimeActor" should "handle delayed work instantly" in {
         val program = TestControl.executeEmbed {
             HydrozoaActorSystem.withoutRoot("test-system").use { system =>
                 for {
                     actorRef <- system.actorOf(new TimeActor, "time-actor")
 
-                    // Tell actor to wait 20 minutes then print
-                    _ <- actorRef ! WaitAndPrint(20.minutes)
+                    // Tell actor to wait 20 minutes
+                    _ <- actorRef ! Wait(20.minutes)
 
                     // Get current time to verify it advanced
                     reply <- Deferred[IO, Instant]
@@ -147,26 +147,35 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
         program.unsafeRunSync()
     }
 
-    "TimeActor" should "print times during test (visible in console)" in {
+    "TimeActor" should "record the virtual time at each request" in {
         val program = TestControl.executeEmbed {
             HydrozoaActorSystem.withoutRoot("test-system").use { system =>
                 for {
                     actorRef <- system.actorOf(new TimeActor, "time-actor")
+                    recorded <- Ref[IO].of(Vector.empty[Instant])
 
-                    // Print at T=0
-                    _ <- actorRef ! PrintTime()
+                    // Record at T=0
+                    _ <- actorRef ! RecordTime(recorded)
                     _ <- IO.sleep(1.milli)
 
-                    // Advance and print at T=1h
+                    // Advance and record at T=1h
                     _ <- IO.sleep(1.hour)
-                    _ <- actorRef ! PrintTime()
+                    _ <- actorRef ! RecordTime(recorded)
 
-                    // Advance and print at T=2h
+                    // Advance and record at T=2h
                     _ <- IO.sleep(1.hour)
-                    _ <- actorRef ! PrintTime()
+                    _ <- actorRef ! RecordTime(recorded)
 
                     // This requires `import com.suprnation.typelevel.actors.syntax.*`
                     _ <- system.waitForIdle()
+                    times <- recorded.get
+                    _ <- IO {
+                        times.map(_.toEpochMilli) shouldBe Vector(
+                          0L,
+                          (1.milli + 1.hour).toMillis,
+                          (1.milli + 2.hours).toMillis
+                        )
+                    }
                 } yield ()
             }
         }
