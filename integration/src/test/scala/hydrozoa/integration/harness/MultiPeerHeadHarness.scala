@@ -836,8 +836,8 @@ object MultiPeerHeadHarness:
             // Every CL tick fiber — initial and restart-spawned — is owned by this Supervisor, which
             // cancels all outstanding fibers on release. The `headTicks`/`coilTicks` refs it returns
             // index the per-peer/coil cancel actions so a crash-restart can retire the victim's old
-            // tick — which would otherwise keep poking its stopped CardanoLiaison, a dead-letter
-            // flood — before spawning a fresh one.
+            // tick before stopping it — it would otherwise keep poking a stopped CardanoLiaison, a
+            // dead-letter flood — and spawn a fresh one after.
             tickSupervisor <- Supervisor[IO]
             headTicks <- Ticks.superviseAll(tickSupervisor, peerConnections, headPollingPeriodOf)
             coilTicks <- Ticks.superviseAll(tickSupervisor, coilConnections, coilPollingPeriodOf)
@@ -879,11 +879,16 @@ object MultiPeerHeadHarness:
             restartHeadPeer = { (peerNum: HeadPeerNumber) =>
                 for
                     old <- peerRuntime.get.map(_(peerNum))
-                    // Stop the old subtree, then re-spawn against the SAME store + L2 ledger; the
-                    // rebuilt network re-registers in the shared registry so the mesh re-attaches.
+                    // Cut the peer off from its inputs, stop the old subtree, then re-spawn against
+                    // the SAME store + L2 ledger. Its CL tick is retired, and the rebuilt network
+                    // re-registers in the shared registry with no liaisons yet, so the other peers'
+                    // sends to this one are dropped, as they would be to a crashed process, rather
+                    // than reaching the old actors as they stop. The re-spawned liaisons register
+                    // and the mesh re-attaches.
+                    _ <- headTicks.get.flatMap(_.getOrElse(peerNum, IO.unit))
+                    network <- transports.rebuildHeadNetwork(peerNum)
                     _ <- stopAndAwait(system, old.ref)
                     gen <- restartGen.updateAndGet(_ + 1)
-                    network <- transports.rebuildHeadNetwork(peerNum)
                     spawned <- Mrm
                         .spawnPeer(
                           s"hmrm-$peerNum-r$gen",
@@ -901,9 +906,8 @@ object MultiPeerHeadHarness:
                         .map(_._1)
                     (mrm, ref) = spawned
                     conns <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
-                    // Cancel the victim's previous tick (its CardanoLiaison is now stopped), then
-                    // start a fresh supervised tick against the new connections.
-                    _ <- headTicks.get.flatMap(_.getOrElse(peerNum, IO.unit))
+                    // A fresh supervised tick against the new connections (the old one was
+                    // retired before the stop).
                     tickFib <- tickSupervisor.supervise(
                       Ticks.tickLoop(headPollingPeriodOf(peerNum), conns)
                     )
@@ -925,10 +929,11 @@ object MultiPeerHeadHarness:
                   handle = h,
                 )
             }
-            // Re-spawn a coil whose old subtree has already terminated, against the same store +
-            // L2 ledger (or the wiped one, for a rejoin). The coil's uplink is reused: the hub-coil
-            // registry is keyed by coil number and the re-spawned liaison's `register` overwrites
-            // the coil-inbound endpoint, so the hub's next send lands on the new actor.
+            // Re-spawn a coil whose old subtree has already terminated, and whose CL tick is
+            // retired, against the same store + L2 ledger (or the wiped one, for a rejoin). The
+            // coil's uplink is reused: the hub-coil registry is keyed by coil number and the
+            // re-spawned liaison's `register` overwrites the coil-inbound endpoint, so the hub's
+            // next send lands on the new actor.
             respawnStoppedCoil = { (coilNum: CoilPeerNumber) =>
                 for
                     old <- coilRuntime.get.map(_(coilNum))
@@ -949,7 +954,6 @@ object MultiPeerHeadHarness:
                         .map(_._1)
                     (mrm, ref) = spawned
                     conns <- mrm.connectionsDeferred.get.flatMap(IO.fromEither)
-                    _ <- coilTicks.get.flatMap(_.getOrElse(coilNum, IO.unit))
                     tickFib <- tickSupervisor.supervise(
                       Ticks.tickLoop(coilPollingPeriodOf(coilNum), conns)
                     )
@@ -967,10 +971,18 @@ object MultiPeerHeadHarness:
                   handle = h,
                 )
             }
+            // A coil is cut off from its inputs before it stops, as a head is above: its CL tick
+            // is retired and its hub's sends to it are dropped. The re-spawned liaison's
+            // `register` puts it back on the network.
+            cutOffCoil = { (coilNum: CoilPeerNumber) =>
+                coilTicks.get.flatMap(_.getOrElse(coilNum, IO.unit)) >>
+                    transports.disconnectCoil(coilNum)
+            }
             restartCoilPeer = { (coilNum: CoilPeerNumber) =>
                 coilRuntime.get
                     .map(_(coilNum))
-                    .flatMap(old => stopAndAwait(system, old.ref)) >> respawnStoppedCoil(coilNum)
+                    .flatMap(old => cutOffCoil(coilNum) >> stopAndAwait(system, old.ref)) >>
+                    respawnStoppedCoil(coilNum)
             }
             rejoinCoilPeer = { (coilNum: CoilPeerNumber) =>
                 coilRuntime.get
@@ -978,7 +990,8 @@ object MultiPeerHeadHarness:
                     .flatMap(old =>
                         // Wipe only once the coil has stopped, so nothing is writing while we do
                         // it, or after.
-                        stopAndAwait(system, old.ref) >> old.backendStore.wipeData >>
+                        cutOffCoil(coilNum) >> stopAndAwait(system, old.ref) >>
+                            old.backendStore.wipeData >>
                             old.l2Ledger.wipe.value.flatMap(IO.fromEither)
                     ) >> respawnStoppedCoil(coilNum)
             }
@@ -1291,8 +1304,13 @@ object MultiPeerHeadHarness:
             bringUpNetwork: Resource[IO, Unit],
             // Rebuild ONE head peer's transport bundle for a crash-restart, re-registering it in the
             // shared registry so the other peers' next sends resolve to the new transport (Direct
-            // only; unsupported under WS, which disables the TestControl clock anyway).
+            // only; unsupported under WS, which disables the TestControl clock anyway). Until the
+            // peer's liaisons register with it, the other peers' and its coils' sends to it are
+            // dropped.
             rebuildHeadNetwork: HeadPeerNumber => IO[HeadNetwork],
+            // Take ONE coil peer off the network for a crash-restart: its hub's sends to it are
+            // dropped until a liaison registers for it again (Direct only; a no-op under WS).
+            disconnectCoil: CoilPeerNumber => IO[Unit],
         )
 
         /** Per-peer transport bundle: the head-mesh transport and an optional hub-side hub-coil
@@ -1379,13 +1397,27 @@ object MultiPeerHeadHarness:
               coilTransports,
               Resource.unit,
               rebuildHeadNetwork = peerNum =>
-                  directHeadNetwork(
-                    peerNum,
-                    multiNodeConfig,
-                    inProcessRegistry,
-                    hubCoilRegistry
-                  ).allocated
-                      .map(_._1),
+                  // The coils it hubs lose it too, until its re-spawned liaisons register.
+                  hubCoilRegistry.traverse_(
+                    _.update(registry =>
+                        multiNodeConfig.headConfig
+                            .hubbedCoilPeerNums(peerNum)
+                            .foldLeft(registry)((acc, coilNum) =>
+                                acc.updatedWith(coilNum)(_.map(_.copy(hubInbound = None)))
+                            )
+                    )
+                  ) >>
+                      directHeadNetwork(
+                        peerNum,
+                        multiNodeConfig,
+                        inProcessRegistry,
+                        hubCoilRegistry
+                      ).allocated
+                          .map(_._1),
+              disconnectCoil = coilNum =>
+                  hubCoilRegistry.traverse_(
+                    _.update(_.updatedWith(coilNum)(_.map(_.copy(coilInbound = None))))
+                  ),
             )
 
         /** WebSocket (real-clock) bring-up: split into a creation phase (this method) and a
@@ -1459,6 +1491,8 @@ object MultiPeerHeadHarness:
                       "peer crash-restart is unsupported under WebSocket transport"
                     )
                   ),
+              // Not modelled under WS: a coil restart there leaves its link as it was.
+              disconnectCoil = _ => IO.unit,
             )
 
         /** Per-peer parts produced in WS Phase 1: the transport bundle exposed to the MRM, the
