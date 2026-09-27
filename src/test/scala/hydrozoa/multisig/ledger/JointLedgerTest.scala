@@ -13,7 +13,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.lib.actor.{HydrozoaActorSystem, SyncRequest}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
@@ -139,7 +139,7 @@ object JointLedgerTestHelpers {
             .map { multiNodeConfig =>
                 val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
                 for {
-                    system <- ActorSystem[IO]("JointLedger")
+                    system <- HydrozoaActorSystem.withoutRoot("JointLedger")
                     consensusAgent <- Resource.eval(system.actorOf(ConsensusAgent()))
                     stackComposerSink <- Resource.eval(system.actorOf(StackComposerSink()))
 

@@ -3,8 +3,8 @@ package hydrozoa.testcontrol
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO}
-import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import java.time.Instant
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -14,7 +14,7 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
 
     "TimeActor" should "use virtual time in TestControl" in {
         val program = TestControl.executeEmbed {
-            ActorSystem[IO]("test-system").use { system =>
+            HydrozoaActorSystem.withoutRoot("test-system").use { system =>
                 for {
                     // Spawn actor inside TestControl
                     actorRef <- system.actorOf(new TimeActor, "time-actor")
@@ -48,7 +48,7 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
 
     "TimeActor" should "use virtual time in TestControl with ActorSystem.use" in {
         val program = TestControl.executeEmbed {
-            ActorSystem[IO]("test-system").use { system =>
+            HydrozoaActorSystem.withoutRoot("test-system").use { system =>
                 for {
                     // Spawn actor inside TestControl
                     actorRef <- system.actorOf(new TimeActor, "time-actor")
@@ -83,7 +83,7 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
 
     "TimeActor" should "handle delayed prints instantly" in {
         val program = TestControl.executeEmbed {
-            ActorSystem[IO]("test-system").use { system =>
+            HydrozoaActorSystem.withoutRoot("test-system").use { system =>
                 for {
                     actorRef <- system.actorOf(new TimeActor, "time-actor")
 
@@ -109,7 +109,7 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
 
     "TimeActor" should "handle multiple time queries" in {
         val program = TestControl.executeEmbed {
-            ActorSystem[IO]("test-system").use { system =>
+            HydrozoaActorSystem.withoutRoot("test-system").use { system =>
                 for {
                     actorRef <- system.actorOf(new TimeActor, "time-actor")
 
@@ -149,7 +149,7 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
 
     "TimeActor" should "print times during test (visible in console)" in {
         val program = TestControl.executeEmbed {
-            ActorSystem[IO]("test-system").use { system =>
+            HydrozoaActorSystem.withoutRoot("test-system").use { system =>
                 for {
                     actorRef <- system.actorOf(new TimeActor, "time-actor")
 

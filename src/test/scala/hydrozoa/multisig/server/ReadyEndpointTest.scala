@@ -1,10 +1,11 @@
 package hydrozoa.multisig.server
+
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.GenerateSampleConfig.{defaultSpec, testPeersSpec}
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
@@ -33,7 +34,8 @@ class ReadyEndpointTest extends AnyFunSuite:
 
     /** Build the routes with the given lifecycle status and run `GET /ready`. */
     private def getReady(status: NodeStatus): (Status, Json) =
-        ActorSystem[IO]("ReadyEndpointTest")
+        HydrozoaActorSystem
+            .withoutRoot("ReadyEndpointTest")
             .use { system =>
                 for {
                     requestSequencerStub <- system.actorOf(

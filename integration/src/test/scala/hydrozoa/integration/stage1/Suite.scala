@@ -5,7 +5,6 @@ import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.InitParamsType
 import hydrozoa.config.head.initialization.{CappedValueGen, InitializationParametersGenTopDown}
@@ -19,6 +18,7 @@ import hydrozoa.integration.stage1.Model.{BlockCycle, CurrentTime}
 import hydrozoa.integration.stage1.SuiteCardano.*
 import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, info, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
@@ -489,7 +489,7 @@ case class Suite(
                 _ <- log.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
             } yield ())
             // Actor system — terminates automatically when the Resource is finalized.
-            system <- ActorSystem[IO]("Stage1")
+            system <- HydrozoaActorSystem.withoutRoot("Stage1")
             // Note: Actor exceptions are logged by the supervision strategy but don't
             // automatically fail tests. To treat them as test failures check that the
             // system was not terminated in the [[beforeFinalize]] action.

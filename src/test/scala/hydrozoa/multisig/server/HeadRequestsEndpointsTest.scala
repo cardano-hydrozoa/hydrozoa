@@ -1,9 +1,10 @@
 package hydrozoa.multisig.server
+
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.UserRequest.{DepositRequest, TransactionRequest}
@@ -115,7 +116,8 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 IO.pure(instantOf(stamp))
 
     private def withRoutes(reader: ConsensusStoreReader[IO])(check: HttpApp[IO] => IO[Unit]): Unit =
-        ActorSystem[IO]("HeadRequestsEndpointsTest")
+        HydrozoaActorSystem
+            .withoutRoot("HeadRequestsEndpointsTest")
             .use { system =>
                 for {
                     requestSequencerStub <- system.actorOf(
@@ -328,7 +330,8 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
       * follower accepts no user requests — and run `check`.
       */
     private def withCoilRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
-        ActorSystem[IO]("HeadRequestsEndpointsTest-coil")
+        HydrozoaActorSystem
+            .withoutRoot("HeadRequestsEndpointsTest-coil")
             .use { system =>
                 for {
                     blockWeaverStub <- system.actorOf(
