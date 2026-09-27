@@ -568,6 +568,19 @@ scalacOptions ++= Def.uncached(Seq(
   "-Yretain-trees", // Essential for incremental compilation
 ) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil))
 
+// Under CI, Scalafix's compile keeps -Werror, so a CI job compiles with one set of options.
+// Whenever a scalafix command runs, sbt-scalafix drops -Werror from `compile / scalacOptions`, so
+// that its fixes can apply to code with warnings. Zinc records the options of every compile, even
+// one that compiles nothing, so the next -Werror compile would see them changed and recompile
+// every source. CI only checks, and a warning fails it either way. Elsewhere the plugin's
+// relaxation stands, so `lintAll` still fixes code that has warnings.
+Seq(Compile, Test).map(config =>
+  config / compile / scalacOptions := Def.uncached(
+    if (sys.env.contains("CI")) (config / scalacOptions).value
+    else (config / compile / scalacOptions).value
+  )
+)
+
 // Custom commands to format and lint all subprojects
 addCommandAlias(
   "fmtAll",
