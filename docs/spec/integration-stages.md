@@ -104,6 +104,8 @@ Every `CompleteBlockCommand` returns a synchronous `BlockBrief.Next` from `Agent
 
 For deposits, the model predicts each block's absorbed and rejected deposits by the rules of `DepositsMap.partition`: a deposit is absorbed once it is mature, unexpired and on L1 (at most `maxDepositsAbsorbedPerBlock` per block), and rejected once it has expired, or is mature but not on L1. `CompleteBlockCommand` reads the head address's UTxOs from the backend at block completion, so a deposit is on L1 exactly when the scenario submitted it. The mock backend starts from the L1 as it stands after the initialization tx, which stage 1 has no slow side to submit.
 
+The same postcondition checks the deposit rows the `JointLedger` persisted with the block: the block's deposits map (`StoreKey.DepositMap`), which the model expects to hold only the deposits still undecided, and the decision row (`StoreKey.DepositDecisionIndex`) of every deposit registered so far, which it expects to name the deciding block, or to be absent while the deposit is undecided.
+
 `shutdownSut` adds:
 
 - **Actor-error surfacing** — any exception raised inside an actor (e.g. a fee miscalculation rejected by Yaci, a witness assembly bug) is reported and fails the property.
