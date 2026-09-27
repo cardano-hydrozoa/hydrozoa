@@ -100,6 +100,10 @@ lazy val testEventProjects = ScopeFilter(inProjects(core, integration, examples,
 
 useFixedScalaCheck
 
+// No class of ours may extend Throwable other than through Exception (project/NoBareThrowables.scala);
+// run by `lintAll` and `lintCheckAll`, over the projects they lint.
+NoBareThrowables.settings(ScopeFilter(inProjects(cardanoOnchain, petri, core, integration, benchmark)))
+
 checkScalaCheckFramework := Def.uncached {
   val ids = thisProject.all(everyProject).value.map(_.id)
   val frameworks = (Test / testFrameworks).all(everyProject).value
@@ -536,11 +540,11 @@ addCommandAlias(
 )
 addCommandAlias(
   "lintAll",
-  ";cardanoOnchain/scalafixAll ;petri/scalafixAll ;core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll"
+  ";cardanoOnchain/scalafixAll ;petri/scalafixAll ;core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll ;checkNoBareThrowables"
 )
 addCommandAlias(
   "lintCheckAll",
-  ";cardanoOnchain/scalafixAll --check ;petri/scalafixAll --check ;core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check"
+  ";cardanoOnchain/scalafixAll --check ;petri/scalafixAll --check ;core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check ;checkNoBareThrowables"
 )
 
 // No `testFrameworks` entry for ScalaTest: sbt's default list already carries it, as
