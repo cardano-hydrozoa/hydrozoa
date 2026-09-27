@@ -43,9 +43,10 @@ case class Stage4Suite(
     nCommands: Int = 10,
     transportMode: TransportMode = TransportMode.Direct,
     backendMode: BackendMode = BackendMode.InMemory,
-    // Real-clock runs only: how far past case generation the head's start is anchored. It has to
-    // cover only what runs before `PreSystem.align` (initial-state sampling, command generation,
-    // the command table); the actor/WS setup runs after the anchor. Ignored under TestControl.
+    // Real-clock runs only: how far past the start of case generation the head's start is
+    // anchored. It has to cover only what runs before `PreSystem.align` (initial-state sampling,
+    // command generation, the command table); the actor/WS setup runs after the anchor. Ignored
+    // under TestControl.
     takeoffOffset: FiniteDuration = 60.seconds,
 ) extends ModelBasedSuite:
 

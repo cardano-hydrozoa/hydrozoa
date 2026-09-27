@@ -16,8 +16,8 @@ import os
 import sys
 
 PLAN = "plan"
-# The plan's outputs, which must agree with OUTPUTS in classify-changes.py, the plan job's `outputs:`
-# and the test jobs' `if:` conditions in ci.yml.
+# The plan's outputs: `code` plus OUTPUTS in classify-changes.py. They must agree with the plan
+# job's `outputs:` and the test jobs' `if:` conditions in ci.yml.
 PLAN_OUTPUTS = ("code", "unit", "integration", "canary")
 # Test job -> the plan outputs that call for it. It may be skipped only if all of them are "false".
 TEST_JOBS = {

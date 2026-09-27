@@ -20,9 +20,9 @@ import xsbti.{Position, Problem, Reporter, Severity}
   * compilation calls the reporter. A compilation served from sbt's cache calls nothing, so the file
   * can outlive the problems it lists; the summary only uses it to explain a test step that failed.
   *
-  * It wraps sbt's own reporter, which still prints everything as before. `compilerReporter` is an
-  * internal, experimental sbt key; if a future sbt stops calling it, the file stays empty, and the
-  * reporting canary is what notices.
+  * It wraps sbt's own reporter and passes every call on, so sbt's own output is unchanged.
+  * `compilerReporter` is an internal, experimental sbt key; if a future sbt stops calling it, no
+  * file is written, and the reporting canary is what notices.
   */
 object CompileProblems {
     val Schema: String = "hydrozoa.compile-problems"

@@ -11,7 +11,7 @@ Every changed path falls into one bucket; the first matching rule in BUCKETS win
   core-test    under src/test/: the unit tests, and also a dependency of the integration suites,
                which build on core's test code (`core % "test->test"` in build.sbt)
   integration  under integration/
-  other        anything else: production code, build, Nix, workflows, scripts, dotfiles
+  other        anything else, such as production code and the root dotfiles
 A rename counts both its old and its new path; a deletion counts its path. What each bucket runs is
 in RUNS: `other` and `core-test` run all the tests, and `reporting` also the reporting canary
 (`just ci-canary`); docs alone, or no files at all, run nothing heavy. Any event but pull_request

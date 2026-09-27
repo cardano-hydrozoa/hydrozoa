@@ -66,12 +66,12 @@ test:
   {{sbt}} test
 
 # Compile all sources (main + test) with -Werror, mirroring CI.
-# `--server` runs sbt in this process. A plain `sbt` hands the command to an already-running sbt
-# server, which evaluates the build with the environment it was started in, so this run's CI=true
-# would be ignored. `--batch` closes stdin, so sbt never waits at a prompt.
 build-werror:
   #!/usr/bin/env bash
   trap 'just notify "build-werror"' EXIT
+  # `--server` runs sbt in this process. A plain `sbt` hands the command to an already-running sbt
+  # server, which evaluates the build with the environment it was started in, so this run's CI=true
+  # would be ignored. `--batch` closes stdin, so sbt never waits at a prompt.
   CI=true sbt --server --batch "Test/compile; integration/Test/compile"
 
 integration-fast:
@@ -106,11 +106,10 @@ integration-yaci-docker:
   {{sbt}} "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
   {{sbt}} "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
 
-# The reporting canary: runs the ci-canary project's tests, whose outcomes are known (a failure, a
-# cancelled, an ignored and a pending test, a falsified property, a halted test JVM), then compiles
-# it with an error added on purpose, and checks that CI's summary reports each exactly. Run it after
-# changing the build, the reporting code or the sbt version; CI runs it when those change. sbt runs
-# in-process (`--server --batch`), so the stages' `set` commands don't linger in a running server.
+# Runs the ci-canary project's tests, whose outcomes are known (see `ciCanary` in build.sbt), then a
+# suite that halts its test JVM, then a compile with an error added on purpose. Run it after
+# changing the build, the reporting code or the sbt version; CI runs it when those change.
+# The reporting canary: checks that CI's summary reports each known outcome exactly.
 ci-canary:
   #!/usr/bin/env bash
   set -uo pipefail
@@ -120,6 +119,7 @@ ci-canary:
   stage() {
     local name=$1 command=$2
     rm -rf target/out/jvm/scala-*/ci-canary/ci-events
+    # In-process, so the stages' `set` commands don't linger in a running server.
     sbt --server --batch "${command}"
     local status=$?
     mkdir -p "${out}/${name}"
@@ -180,10 +180,10 @@ precommit: lint-check fmt-check nixfmt-check scalacheck-framework-check
 
 # Like precommit, but cleans first — matches CI's fresh-target behaviour so
 # stale SemanticDB can't hide unused-import / lint failures.
-# In-process for the same reason as build-werror.
 ci-check:
   #!/usr/bin/env bash
   trap 'just notify "ci-check"' EXIT
+  # In-process (`--server`), so CI=true reaches the build even when an sbt server is running.
   CI=true sbt --server --batch "clean; fmtCheckAll; lintCheckAll"
   just nixfmt-check
 

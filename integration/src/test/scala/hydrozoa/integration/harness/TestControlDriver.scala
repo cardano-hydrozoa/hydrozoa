@@ -12,14 +12,16 @@ import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
   * tick every eligible fiber, and when none is eligible advance the clock to the next timer — until
   * the program (including its resource teardown) has produced a result.
   *
-  * **Bounded.** Those same ping loops mean a program that will never finish still always has a next
-  * timer, so an unbounded driver cannot tell "slow" from "stuck" and ticks forever. The run fails
-  * once `horizon` of virtual time has passed. The TestContext seed is named on every failure; set
-  * `TESTCONTROL_SEED` to it (or pass it as `seed`) to replay the same interleaving
-  * (`TestControl.execute` otherwise draws a random one per run). `ModelBasedSuite` reads the same
-  * variable, so one setting replays either driver. The horizon is counted from the first advance
-  * on, because the first advance is the harness's jump from virtual zero to the real epoch
+  * **Bounded.** The run fails once `horizon` of virtual time has passed. Those same ping loops mean
+  * a program that will never finish still always has a next timer, so an unbounded driver cannot
+  * tell "slow" from "stuck" and ticks forever. The horizon is counted from the first advance on,
+  * because the first advance is the harness's jump from virtual zero to the real epoch
   * (`PreSystem.align`).
+  *
+  * **Replayable.** The TestContext seed is named on every failure; set `TESTCONTROL_SEED` to it (or
+  * pass it as `seed`) to replay the same interleaving (`TestControl.execute` otherwise draws a
+  * random one per run). `ModelBasedSuite` reads the same variable, so one setting replays either
+  * driver.
   */
 object TestControlDriver:
 
