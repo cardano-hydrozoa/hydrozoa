@@ -5,12 +5,12 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Ref}
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber}
@@ -205,42 +205,44 @@ class ReplayActorTest extends AnyFunSuite:
         InMemoryBackendStore
             .open(persistenceTracer)
             .use(backend =>
-                ActorSystem[IO]("replay-test").use(system =>
-                    for {
-                        persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
-                        fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
-                        scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
-                        scSink <- Ref.of[IO, Vector[StackComposer.Request]](Vector.empty)
-                        bw <- system.actorOf(Recorder[BlockWeaver.Request](bwSink))
-                        fca <- system.actorOf(Recorder[FastConsensusActor.Request](fcaSink))
-                        sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
-                        sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
-                        seqSink <- Ref.of[IO, Vector[CoilAckSequencer.Request]](Vector.empty)
-                        seq <- system.actorOf(Recorder[CoilAckSequencer.Request](seqSink))
-                        _ <- seed(persistence)
-                        markers <- Markers.derive(persistence, PeerId.Head(own))
-                        outcome <- ReplayActor
-                            .replay(
-                              persistence,
-                              PollResults.empty,
-                              ReplayActor.Targets(bw, fca, sca, sc, Some(seq)),
-                              PeerId.Head(own),
-                              peers,
-                              hubs,
-                              coils,
-                              leadsFastBlock = ownLeadsFastBlock,
-                              markers = markers
-                            )
-                            .attempt
-                        _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
-                        bwMsgs <- bwSink.get
-                        fcaMsgs <- fcaSink.get
-                        scaMsgs <- scaSink.get
-                        scMsgs <- scSink.get
-                        seqMsgs <- seqSink.get
-                    } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, seqMsgs, outcome)
-                )
+                HydrozoaActorSystem
+                    .withoutRoot("replay-test")
+                    .use(system =>
+                        for {
+                            persistence <- Persistence.fromBackend(backend, persistenceTracer)
+                            bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
+                            fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
+                            scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
+                            scSink <- Ref.of[IO, Vector[StackComposer.Request]](Vector.empty)
+                            bw <- system.actorOf(Recorder[BlockWeaver.Request](bwSink))
+                            fca <- system.actorOf(Recorder[FastConsensusActor.Request](fcaSink))
+                            sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
+                            sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
+                            seqSink <- Ref.of[IO, Vector[CoilAckSequencer.Request]](Vector.empty)
+                            seq <- system.actorOf(Recorder[CoilAckSequencer.Request](seqSink))
+                            _ <- seed(persistence)
+                            markers <- Markers.derive(persistence, PeerId.Head(own))
+                            outcome <- ReplayActor
+                                .replay(
+                                  persistence,
+                                  PollResults.empty,
+                                  ReplayActor.Targets(bw, fca, sca, sc, Some(seq)),
+                                  PeerId.Head(own),
+                                  peers,
+                                  hubs,
+                                  coils,
+                                  leadsFastBlock = ownLeadsFastBlock,
+                                  markers = markers
+                                )
+                                .attempt
+                            _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
+                            bwMsgs <- bwSink.get
+                            fcaMsgs <- fcaSink.get
+                            scaMsgs <- scaSink.get
+                            scMsgs <- scSink.get
+                            seqMsgs <- seqSink.get
+                        } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, seqMsgs, outcome)
+                    )
             )
             .unsafeRunSync()
 
@@ -254,40 +256,42 @@ class ReplayActorTest extends AnyFunSuite:
         InMemoryBackendStore
             .open(persistenceTracer)
             .use(backend =>
-                ActorSystem[IO]("replay-coil-test").use(system =>
-                    for {
-                        persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
-                        fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
-                        scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
-                        scSink <- Ref.of[IO, Vector[StackComposer.Request]](Vector.empty)
-                        bw <- system.actorOf(Recorder[BlockWeaver.Request](bwSink))
-                        fca <- system.actorOf(Recorder[FastConsensusActor.Request](fcaSink))
-                        sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
-                        sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
-                        _ <- seed(persistence)
-                        markers <- Markers.derive(persistence, PeerId.Coil(CoilPeerNumber(0)))
-                        outcome <- ReplayActor
-                            .replay(
-                              persistence,
-                              PollResults.empty,
-                              ReplayActor.Targets(bw, fca, sca, sc),
-                              PeerId.Coil(CoilPeerNumber(0)),
-                              peers,
-                              hubs,
-                              Nil,
-                              // A coil peer never leads a fast block.
-                              leadsFastBlock = _ => false,
-                              markers = markers
-                            )
-                            .attempt
-                        _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
-                        bwMsgs <- bwSink.get
-                        fcaMsgs <- fcaSink.get
-                        scaMsgs <- scaSink.get
-                        scMsgs <- scSink.get
-                    } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, Vector.empty, outcome)
-                )
+                HydrozoaActorSystem
+                    .withoutRoot("replay-coil-test")
+                    .use(system =>
+                        for {
+                            persistence <- Persistence.fromBackend(backend, persistenceTracer)
+                            bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
+                            fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
+                            scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
+                            scSink <- Ref.of[IO, Vector[StackComposer.Request]](Vector.empty)
+                            bw <- system.actorOf(Recorder[BlockWeaver.Request](bwSink))
+                            fca <- system.actorOf(Recorder[FastConsensusActor.Request](fcaSink))
+                            sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
+                            sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
+                            _ <- seed(persistence)
+                            markers <- Markers.derive(persistence, PeerId.Coil(CoilPeerNumber(0)))
+                            outcome <- ReplayActor
+                                .replay(
+                                  persistence,
+                                  PollResults.empty,
+                                  ReplayActor.Targets(bw, fca, sca, sc),
+                                  PeerId.Coil(CoilPeerNumber(0)),
+                                  peers,
+                                  hubs,
+                                  Nil,
+                                  // A coil peer never leads a fast block.
+                                  leadsFastBlock = _ => false,
+                                  markers = markers
+                                )
+                                .attempt
+                            _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
+                            bwMsgs <- bwSink.get
+                            fcaMsgs <- fcaSink.get
+                            scaMsgs <- scaSink.get
+                            scMsgs <- scSink.get
+                        } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, Vector.empty, outcome)
+                    )
             )
             .unsafeRunSync()
 

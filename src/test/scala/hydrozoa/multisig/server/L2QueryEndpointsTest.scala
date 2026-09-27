@@ -1,10 +1,11 @@
 package hydrozoa.multisig.server
+
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -65,7 +66,8 @@ class L2QueryEndpointsTest extends AnyFunSuite:
     private def withSeededRoutes(
         check: (HttpApp[IO], EutxoL2Ledger) => IO[Unit]
     ): Unit =
-        ActorSystem[IO]("L2QueryEndpointsTest")
+        HydrozoaActorSystem
+            .withoutRoot("L2QueryEndpointsTest")
             .use { system =>
                 for {
                     store <- InMemoryL2Store.create
@@ -109,7 +111,8 @@ class L2QueryEndpointsTest extends AnyFunSuite:
       * `check`. No ledger is seeded because a remote-ledger node exposes no L2-query state.
       */
     private def withNoReaderRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
-        ActorSystem[IO]("L2QueryEndpointsTest-noReader")
+        HydrozoaActorSystem
+            .withoutRoot("L2QueryEndpointsTest-noReader")
             .use { system =>
                 for {
                     requestSequencerStub <- system.actorOf(

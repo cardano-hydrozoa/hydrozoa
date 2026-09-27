@@ -5,10 +5,10 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO}
 import cats.syntax.contravariant.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
@@ -176,36 +176,38 @@ class StackComposerRecoveryTest extends AnyFunSuite:
         InMemoryBackendStore
             .open(persistenceTracer)
             .use(backend =>
-                ActorSystem[IO]("sc-recovery").use(system =>
-                    for {
-                        persistence <- Persistence.fromBackend(backend, persistenceTracer)
-                        _ <- seed(persistence)
-                        // From the SEEDED store: this case is about recovering a real anchor, so a
-                        // cold bundle would make the actor bootstrap instead and assert nothing.
-                        markers <- Markers.derive(persistence, config.ownPeerId)
-                        gotHandoff <- Deferred[IO, SlowConsensusActor.StackHandoff]
-                        probe <- system.actorOf(HandoffProbe(gotHandoff))
-                        jlSink <- system.actorOf(NoopSink[JointLedger.Requests.Request]())
-                        fcaSink <- system.actorOf(NoopSink[FastConsensusActor.Request]())
-                        _ <- system.actorOf(
-                          StackComposer(
-                            config,
-                            StackComposer.Connections(
-                              jointLedger = jlSink,
-                              fastConsensusActor = fcaSink,
-                              slowConsensusActor = probe,
-                              headPeerLiaisons = List()
-                            ),
-                            ContraTracer.nullTracer[IO, StackComposerEvent],
-                            persistence,
-                            l2StateReader,
-                            PeerMetrics.create(0L, Vector.empty),
-                            markers
-                          )
-                        )
-                        r <- check(gotHandoff)
-                    } yield r
-                )
+                HydrozoaActorSystem
+                    .withoutRoot("sc-recovery")
+                    .use(system =>
+                        for {
+                            persistence <- Persistence.fromBackend(backend, persistenceTracer)
+                            _ <- seed(persistence)
+                            // From the SEEDED store: this case is about recovering a real anchor, so a
+                            // cold bundle would make the actor bootstrap instead and assert nothing.
+                            markers <- Markers.derive(persistence, config.ownPeerId)
+                            gotHandoff <- Deferred[IO, SlowConsensusActor.StackHandoff]
+                            probe <- system.actorOf(HandoffProbe(gotHandoff))
+                            jlSink <- system.actorOf(NoopSink[JointLedger.Requests.Request]())
+                            fcaSink <- system.actorOf(NoopSink[FastConsensusActor.Request]())
+                            _ <- system.actorOf(
+                              StackComposer(
+                                config,
+                                StackComposer.Connections(
+                                  jointLedger = jlSink,
+                                  fastConsensusActor = fcaSink,
+                                  slowConsensusActor = probe,
+                                  headPeerLiaisons = List()
+                                ),
+                                ContraTracer.nullTracer[IO, StackComposerEvent],
+                                persistence,
+                                l2StateReader,
+                                PeerMetrics.create(0L, Vector.empty),
+                                markers
+                              )
+                            )
+                            r <- check(gotHandoff)
+                        } yield r
+                    )
             )
             .unsafeRunSync()
 

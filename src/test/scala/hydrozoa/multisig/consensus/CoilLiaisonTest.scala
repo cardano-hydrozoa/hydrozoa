@@ -12,6 +12,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
@@ -163,7 +164,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
             .open(persistenceTracer)
             .use { backend =>
                 Persistence.fromBackend(backend, persistenceTracer).flatMap { persistence =>
-                    ActorSystem[IO]("coil-liaison-test").use { system =>
+                    HydrozoaActorSystem.withoutRoot("coil-liaison-test").use { system =>
                         for {
                             headPending <- Deferred[IO, Either[
                               Throwable,

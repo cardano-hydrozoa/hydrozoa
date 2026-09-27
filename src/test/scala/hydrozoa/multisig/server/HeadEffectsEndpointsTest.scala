@@ -1,12 +1,13 @@
 package hydrozoa.multisig.server
+
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
@@ -159,7 +160,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
     private def withRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
         mkMinorBrief1
             .flatMap(brief =>
-                ActorSystem[IO]("HeadEffectsEndpointsTest").use { system =>
+                HydrozoaActorSystem.withoutRoot("HeadEffectsEndpointsTest").use { system =>
                     for {
                         reqStub <- system.actorOf(new Actor[IO, RequestSequencer.Request] {
                             override def receive: Receive[IO, RequestSequencer.Request] =

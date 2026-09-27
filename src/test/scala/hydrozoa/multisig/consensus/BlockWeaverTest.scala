@@ -13,6 +13,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{HeadConfig, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
@@ -54,7 +55,7 @@ object BlockWeaverTestHelpers {
             .pick[IO, MultiNodeConfig](genConfig)
             .map { multiNodeConfig =>
                 for {
-                    system <- ActorSystem[IO]("Weaver SUT")
+                    system <- HydrozoaActorSystem.withoutRoot("Weaver SUT")
                     jointLedgerMock = JointLedgerMock()
                     jointLedgerMockActor <- Resource.eval(
                       system.actorOf(jointLedgerMock.trackWithCache("joint-ledger-mock"))

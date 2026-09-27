@@ -1,10 +1,11 @@
 package hydrozoa.multisig.server
+
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
@@ -158,7 +159,8 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
 
     private def withRoutes(reader: ConsensusStoreReader[IO])(check: HttpApp[IO] => IO[Unit]): Unit =
-        ActorSystem[IO]("HeadBlocksEndpointsTest")
+        HydrozoaActorSystem
+            .withoutRoot("HeadBlocksEndpointsTest")
             .use { system =>
                 for {
                     requestSequencerStub <- system.actorOf(

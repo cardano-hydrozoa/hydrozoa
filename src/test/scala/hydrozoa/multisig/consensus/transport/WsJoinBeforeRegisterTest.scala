@@ -4,7 +4,7 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Ref, Resource}
 import com.comcast.ip4s.{Port, host}
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Join
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol
@@ -57,7 +57,7 @@ class WsJoinBeforeRegisterTest extends AnyFunSuite {
     test(
       "a hub answer that reaches the coil before its liaison registers is delivered on register"
     ) {
-        val delivered = ActorSystem[IO]("ws-join-coil-side").use { system =>
+        val delivered = HydrozoaActorSystem.withoutRoot("ws-join-coil-side").use { system =>
             for {
                 hub <- newHub
                 hubSeen <- Ref[IO].of(Vector.empty[LiaisonProtocol.FromCoil])
@@ -86,7 +86,7 @@ class WsJoinBeforeRegisterTest extends AnyFunSuite {
     test(
       "a coil position that reaches the hub before its liaison registers is delivered on register"
     ) {
-        val delivered = ActorSystem[IO]("ws-join-hub-side").use { system =>
+        val delivered = HydrozoaActorSystem.withoutRoot("ws-join-hub-side").use { system =>
             for {
                 hubEvents <- Ref[IO].of(Vector.empty[HubWsTransportEvent])
                 hub <- newHub(ContraTracer[IO, HubWsTransportEvent](e => hubEvents.update(_ :+ e)))
