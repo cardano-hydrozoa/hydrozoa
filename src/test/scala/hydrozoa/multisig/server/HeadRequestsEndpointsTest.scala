@@ -20,6 +20,7 @@ import hydrozoa.multisig.{NodeStatus, SubmissionGate}
 import io.circe.Json
 import java.time.Instant
 import org.http4s.circe.*
+import org.http4s.client.Client
 import org.http4s.implicits.*
 import org.http4s.{HttpApp, Method, Request, Status, Uri}
 import org.scalacheck.Gen
@@ -379,6 +380,24 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
             } yield {
                 val _ = assert(resp.status == Status.ServiceUnavailable, error)
                 val _ = assert(error == Right(HydrozoaRoutes.SubmissionsClosed))
+                ()
+            }
+        }
+    }
+
+    test("SubmissionClient.http returns Closed, not an error, for that 503") {
+        val submissions = SubmissionGate.unsafeOpen()
+        withRoutes(stubReader(Map.empty), submissions) { app =>
+            val client = SubmissionClient.http(Client.fromHttpApp(app), Uri.unsafeFromString("/"))
+            for {
+                _ <- submissions.closeAndDrain(0.seconds)
+                outcome <- client.trySubmit(
+                  TransactionRequest(TransactionRequestBody(ByteString.empty))
+                )
+            } yield {
+                val _ = assert(
+                  outcome == SubmissionClient.Outcome.Closed(HydrozoaRoutes.SubmissionsClosed)
+                )
                 ()
             }
         }
