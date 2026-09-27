@@ -2,10 +2,9 @@ package hydrozoa.integration.harness
 
 import cats.data.ReaderT
 import cats.effect.std.Supervisor
-import cats.effect.{Deferred, IO, Ref, Resource}
+import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import com.comcast.ip4s.{Port, host}
-import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.{ActorContext, ActorSystem}
@@ -709,33 +708,19 @@ object MultiPeerHeadHarness:
                 yield result
         }
 
-    /** Stop `ref` and wait until it and its whole subtree have terminated.
+    /** Stop `ref` and wait until it and its whole subtree have terminated, leaves first (see
+      * [[SubtreeStop]]).
       *
-      * `ActorRef.stop` only enqueues a `Terminate` and returns while the subtree is still running;
-      * each child finishes the message it is handling, and keeps handling its mailbox until its
-      * parent's `Terminate` reaches it. A restart or rejoin that re-spawns against the same store
-      * without waiting here races the old subtree: its writes can land after the wipe, or after the
-      * successor has read its recovery marks from the store. No real restart can produce that,
-      * because the old process is gone before the new one opens the store.
-      *
-      * The death watch is placed before the stop is sent (the watcher's `preStart` runs inside
-      * `actorOf`), so the notification cannot be missed. The watched actor terminates only after
-      * its last child has.
+      * `ActorRef.stop` alone only enqueues a `Terminate`, and cats-actors lets the stopped actor
+      * terminate, and its watchers hear of it, before its children have: they may still be
+      * finishing the message they are handling, and then their own `postStop`. A restart or rejoin
+      * that re-spawns against the same store without waiting for the whole subtree races it: its
+      * writes can land after the wipe, or after the successor has read its recovery marks from the
+      * store. No real restart can produce that, because the old process is gone before the new one
+      * opens the store.
       */
     private def stopAndAwait(system: ActorSystem[IO], ref: NoSendActorRef[IO]): IO[Unit] =
-        for
-            terminated <- Deferred[IO, Unit]
-            _ <- system.actorOf(new Actor[IO, Unit] {
-                override def preStart: IO[Unit] = context.watch(ref, ()).void
-                override def receive: Receive[IO, Unit] =
-                    PartialFunction.fromFunction(_ => terminated.complete(()) >> context.self.stop)
-            })
-            _ <- ref.stop
-            _ <- terminated.get.timeoutTo(
-              1.minute,
-              IO.raiseError(new IllegalStateException(s"$ref did not terminate within 1 minute"))
-            )
-        yield ()
+        SubtreeStop.stopAndAwait(system, ref)
 
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns everything;
       * release cancels the CL tick fibers.
