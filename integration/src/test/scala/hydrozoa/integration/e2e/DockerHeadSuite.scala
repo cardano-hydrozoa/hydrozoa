@@ -455,15 +455,15 @@ abstract class DockerHeadSuite(topology: DockerTopology, scenarioName: String) e
                 )
         }
 
-    /** [[runProcess]] that returns stdout. Stderr still goes to the console, so a failing command
-      * reports itself the same way.
+    /** [[runProcess]] that returns stdout. Stderr is still logged, so a failing command reports
+      * itself the same way.
       */
     private def captureProcess(cmd: Seq[String], extraEnv: Seq[(String, String)]): IO[String] =
         IO.blocking {
             val captured = new StringBuilder
             val logger = ProcessLogger(
               line => { val _ = captured.append(line).append('\n') },
-              line => println(s"$Tag $line")
+              line => out.info(s"$Tag $line").unsafeRunSync()
             )
             val code = Process(cmd, None, extraEnv*).!(logger)
             if code != 0 then
