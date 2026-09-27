@@ -1,10 +1,10 @@
 package hydrozoa.lib.actor
 
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import cats.effect.{Deferred, IO}
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.DeadLetter
 import com.suprnation.actor.event.Debug
+import com.suprnation.actor.{DeadLetter, Envelope, Receiver}
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.lib.logging.Level
 import org.scalatest.funsuite.AnyFunSuite
@@ -83,32 +83,34 @@ class HydrozoaActorSystemTest extends AnyFunSuite {
         assert(paths.exists(_.endsWith("/user/hydrozoa/child")), paths)
     }
 
+    // Builds the event cats-actors publishes for a dead letter rather than provoking one: a real
+    // dead letter here would be logged, and counted in every CI summary.
     test("a dead letter is a WARN while the system runs, and names its message and recipient") {
-        val (event, logged) = (for
-            seen <- Deferred[IO, Any]
-            result <- HydrozoaActorSystem
-                .withoutRoot(
-                  "dead-letter-test",
-                  onEvent = {
-                      case e @ Debug(_, _, _: DeadLetter[?]) => seen.complete(e).void
-                      case _                                 => IO.unit
-                  }
-                )
-                .use(system =>
-                    for
-                        ref <- system.actorOf(new Thrower, "stopped")
-                        _ <- ref.stop
-                        _ <- IO.sleep(200.millis)
-                        _ <- ref ! new RuntimeException("late")
-                        event <- seen.get.timeout(5.seconds)
-                    yield (event, ActorSystemEvents.toLogEvent(event, stopping = false))
-                )
-        yield result).unsafeRunSync()
-        val _ = assert(logged.level == Level.Warn)
-        val _ = assert(logged.routingKey.contains(ActorSystemEvents.DeadLetterLogger))
-        val message = logged.render.value.msg
+        val (running, stopping) = HydrozoaActorSystem
+            .withoutRoot("dead-letter-test")
+            .use(system =>
+                system.actorOf(new Thrower, "recipient").map { ref =>
+                    val event = Debug(
+                      "dead-letter",
+                      classOf[DeadLetter[?]],
+                      DeadLetter[IO](
+                        Envelope(new RuntimeException("late"), None, Receiver(ref)),
+                        None,
+                        Receiver(ref)
+                      )
+                    )
+                    (
+                      ActorSystemEvents.toLogEvent(event, stopping = false),
+                      ActorSystemEvents.toLogEvent(event, stopping = true)
+                    )
+                }
+            )
+            .unsafeRunSync()
+        val _ = assert(running.level == Level.Warn)
+        val _ = assert(running.routingKey.contains(ActorSystemEvents.DeadLetterLogger))
+        val message = running.render.value.msg
         val _ = assert(message.contains("java.lang.RuntimeException to "), message)
-        val _ = assert(message.contains("/user/stopped"), message)
-        assert(ActorSystemEvents.toLogEvent(event, stopping = true).level == Level.Debug)
+        val _ = assert(message.contains("/user/recipient"), message)
+        assert(stopping.level == Level.Debug)
     }
 }
