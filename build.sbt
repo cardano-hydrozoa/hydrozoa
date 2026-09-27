@@ -399,6 +399,12 @@ lazy val core: Project = (project in file("."))
         "--enable-native-access=ALL-UNNAMED",
         "--sun-misc-unsafe-memory-access=allow"
       ),
+      // Under CI, log through logback-core-ci.xml: nothing on the console, and everything to
+      // target/unit-tests.log, which the workflow uploads. Selected the way `integration` selects
+      // its CI config; see there for why it is an uncached setting.
+      Test / javaOptions ++= Def.uncached(
+        if (sys.env.contains("CI")) Seq("-Dlogback.configurationFile=logback-core-ci.xml") else Nil
+      ),
     )
     .settings(recordTestEvents)
 
