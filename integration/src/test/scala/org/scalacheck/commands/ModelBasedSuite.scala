@@ -789,11 +789,12 @@ trait ModelBasedSuite {
       * time — one or two advances per trial, worth logging) and the shutdown drain (`waitForIdle`
       * polls with `IO.sleep`, per-actor 1-second ping loops fire — hundreds to thousands of small
       * advances per trial, would drown the log). The caller passes the tracer that the per-advance
-      * warn should route through: [[log]] from the startup pump, [[ContraTracer.nullTracer]] from
-      * the shutdown drain. A genuine deadlock (no eligible fibers + `nextInterval == 0`) is still
-      * surfaced via the framework [[log]] and `IO.raiseError` regardless of the passed tracer, and
-      * so is a phase that advances past [[tickHorizon]] without `done` (`elapsed` is the virtual
-      * time advanced so far, `None` before the first advance).
+      * debug line should route through: [[log]] from the startup pump, [[ContraTracer.nullTracer]]
+      * from the shutdown drain. It is a debug line, not a warning, because the startup pump
+      * advances on every test case. A genuine deadlock (no eligible fibers + `nextInterval == 0`)
+      * is still surfaced via the framework [[log]] and `IO.raiseError` regardless of the passed
+      * tracer, and so is a phase that advances past [[tickHorizon]] without `done` (`elapsed` is
+      * the virtual time advanced so far, `None` before the first advance).
       */
     private def tickUntilAdvancing[A](
         tc: TestControl[A],
@@ -825,7 +826,7 @@ trait ModelBasedSuite {
                                         "terminated while a wait for its signals continued)"
                                 log.error(msg) >> IO.raiseError(new RuntimeException(msg))
                             } else
-                                advanceTracer.warn(
+                                advanceTracer.debug(
                                   s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
                                 ) >> tc.advance(next) >>
                                     tickUntilAdvancing(tc, done, advanceTracer, phase, after)
