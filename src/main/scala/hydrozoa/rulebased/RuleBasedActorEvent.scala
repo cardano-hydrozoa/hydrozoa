@@ -77,6 +77,9 @@ object RuleBasedActorEvent:
           */
         final case class RecoverableRetry(reason: String) extends RuleBasedActorEvent
 
+        /** Asked to quiesce: the tick fiber is cancelled and the actor polls no more. */
+        case object Quiesced extends RuleBasedActorEvent
+
     object Tx:
         final case class Building(family: String) extends RuleBasedActorEvent
         final case class Submitting(tx: EnrichedTx[?]) extends RuleBasedActorEvent

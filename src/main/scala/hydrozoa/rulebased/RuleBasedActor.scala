@@ -14,6 +14,7 @@ import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
+import hydrozoa.lib.actor.{Quiesce, Quiescent}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddress}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
@@ -65,11 +66,15 @@ final case class RuleBasedActor(
     cardanoBackend: CardanoBackend[IO],
     tracer: ContraTracer[IO, RuleBasedActorEvent]
 )(using config: Config)
-    extends Actor[IO, RuleBasedActor.Requests.Request] {
+    extends Actor[IO, RuleBasedActor.Requests.Request | Quiesce.type],
+      Quiescent {
 
     // Handle to the self-tick fiber ([[startTickTimer]]); cancelled in [[postStop]] so it doesn't
     // outlive the actor.
     private val tickFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
+
+    // Set by [[Quiesce]]: from then on a queued `Tick` does nothing.
+    private val quiesced = Ref.unsafe[IO, Boolean](false)
 
     /** Rule-based backend queries used by this actor. Each helper bakes in tracing of its specific
       * backend-error event and lifts recoverable errors into `Error.RecoverableErrors`.
@@ -1137,12 +1142,19 @@ final case class RuleBasedActor(
     /** Cancel the self-tick fiber so it stops pinging `self` once the actor has stopped, instead of
       * leaking a fiber that keeps delivering `Tick` to a dead actor (dead letters).
       */
-    override def postStop: IO[Unit] =
+    override def postStop: IO[Unit] = cancelTickTimer
+
+    private def cancelTickTimer: IO[Unit] =
         tickFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 
-    override def receive: Receive[IO, Requests.Request] = {
+    override def quiesce: IO[Unit] = self ! Quiesce
+
+    override def receive: Receive[IO, Requests.Request | Quiesce.type] = {
         case _: Requests.PreStart.type => preStartLocal
-        case _: Requests.Tick.type     => handleTick.void
+        case _: Requests.Tick.type     => quiesced.get.ifM(IO.unit, handleTick.void)
+        case Quiesce =>
+            quiesced.set(true) >> cancelTickTimer >>
+                tracer.traceWith(RuleBasedActorEvent.Tick.Quiesced)
     }
 
     /** Query and parse the dispute address's utxos into a flat list of `BallotBox[VoteStatus]`,
