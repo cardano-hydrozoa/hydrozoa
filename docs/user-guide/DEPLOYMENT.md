@@ -270,7 +270,7 @@ For local development and testing, run the head against a local
 repeatable. This is row 3 of the table above: a chain with no baked-in description, so you describe
 it once and pass the description to `keygen-fleet`.
 
-`scripts/yaci-devnet.sh` owns every devnet-specific step, and the Docker smoke-test calls the same
+`integration/yaci/yaci-devnet.sh` owns every devnet-specific step, and the Docker smoke-test calls the same
 script — so these commands stay exercised rather than drifting from what the suite runs.
 
 Unlike the rest of this guide, the devnet path **needs this repo checked out** (the script and the
@@ -287,7 +287,7 @@ just yaci-devnet up                          # create a devnet, wait until both 
 just yaci-devnet network head/network.json   # write its chain description
 ```
 
-The devnet is added to the head directory's `docker-compose.yml` by the `docker-compose.yaci.yml`
+The devnet is added to the head directory's `docker-compose.yml` by the `integration/yaci/docker-compose.yaci.yml`
 overlay — composed *on top of* it, never instead of it, so what you run locally is the deployment
 the shipped file describes. Drop the overlay and the same peers run against Blockfrost.
 
@@ -528,7 +528,7 @@ overlay lives in the repo, the deployment file in the head directory, so run thi
 
 ```bash
 cd "$HYDROZOA_HOME"
-docker compose -f docker-compose.yml -f "$HYDROZOA_REPO/docker-compose.yaci.yml" up -d
+docker compose -f docker-compose.yml -f "$HYDROZOA_REPO/integration/yaci/docker-compose.yaci.yml" up -d
 ```
 
 Tear the whole thing down with the same file pair plus `down -v`. To replace just the chain and keep

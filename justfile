@@ -311,7 +311,7 @@ build-head-config L2_LEDGER *ARGS: _require-launcher
 # testnet wallet). Commands: `up`, `network [OUT]`, `topup ADDRESS [ADA]`, `down`; run without
 # arguments for the full usage. The Docker smoke-test calls the same script.
 yaci-devnet *ARGS:
-  scripts/yaci-devnet.sh {{ARGS}}
+  integration/yaci/yaci-devnet.sh {{ARGS}}
 
 # Run a head node in the foreground from a generated head-config + a peer's private config.
 serve HEAD_CONFIG PRIVATE_CONFIG: _require-launcher

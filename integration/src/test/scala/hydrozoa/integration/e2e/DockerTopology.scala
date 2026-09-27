@@ -55,6 +55,6 @@ object DockerTopology {
       coilQuorum = 2,
       project = "hydrozoa-e2e",
       tag = "[smoke]",
-      composeOverlayNames = List("docker-compose.yaci.yml")
+      composeOverlayNames = List("integration/yaci/docker-compose.yaci.yml")
     )
 }

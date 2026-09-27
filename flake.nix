@@ -73,7 +73,7 @@
             packages = with pkgs; [
               git # otherwise `git` resolves to the broken macOS Xcode shim inside `nix develop`
               jdk
-              jq # JSON on the command line; used by scripts/yaci-devnet.sh
+              jq # JSON on the command line; used by integration/yaci/yaci-devnet.sh
               just # command runner, similar to `make`
               libnotify # used in justfile
               nixfmt

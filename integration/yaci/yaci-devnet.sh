@@ -4,7 +4,7 @@
 # smoke-test. This is the only place in the repo that knows anything about Yaci: `hydrozoa` itself
 # targets any Blockfrost-compatible backend and has no devnet-specific code path.
 #
-# Run `scripts/yaci-devnet.sh` with no arguments for the commands, or reach them as
+# Run `integration/yaci/yaci-devnet.sh` with no arguments for the commands, or reach them as
 # `just yaci-devnet <command>`. Intended as the one implementation of the devnet path — for a human
 # following docs/user-guide/DEPLOYMENT.md and for the Docker smoke-test alike, so the suite ends up
 # exercising the documented path instead of a lookalike.
@@ -16,7 +16,7 @@
 # See docs/user-guide/DEPLOYMENT.md.
 set -euo pipefail
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
 # The head directory the deployment file was scaffolded into — the same $HYDROZOA_HOME the `just`
 # recipes and `hydrozoa.sh` set, defaulting to the guide's head/demo.
@@ -56,7 +56,7 @@ main() {
 
 usage() {
     cat <<'EOF'
-usage: scripts/yaci-devnet.sh <command> [args]
+usage: integration/yaci/yaci-devnet.sh <command> [args]
 
   up                    create a fresh devnet and wait until both its APIs answer
                         (replaces the devnet already there, if any)
@@ -94,7 +94,7 @@ cmd_up() {
 
 # Write the running devnet's chain description, in the shape `--cardano-network-file` reads:
 #
-#   scripts/yaci-devnet.sh network network.json
+#   integration/yaci/yaci-devnet.sh network network.json
 #   hydrozoa keygen-fleet 2 4 2 --cardano-network-file network.json
 #
 # The protocol parameters come off the Blockfrost API like any other backend's. The chain's slot
@@ -185,7 +185,7 @@ compose() {
         die "no $head_compose — scaffold the head directory first ('hydrozoa scaffold $head_dir')"
     docker compose -p "${COMPOSE_PROJECT_NAME:-hydrozoa-local}" \
         -f "$head_compose" \
-        -f "$repo_root/docker-compose.yaci.yml" \
+        -f "$repo_root/integration/yaci/docker-compose.yaci.yml" \
         "$@"
 }
 
