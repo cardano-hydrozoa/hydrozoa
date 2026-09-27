@@ -76,6 +76,33 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       */
     val nodeStatus: Ref[IO, NodeStatus] = Ref.unsafe[IO, NodeStatus](NodeStatus.Initializing)
 
+    /** User submissions, closed at the handoff to the rule-based regime before the actors that
+      * answer them stop (see [[SubmissionGate]]). The HTTP submission route admits through it.
+      */
+    val submissions: SubmissionGate = SubmissionGate.unsafeOpen()
+
+    /** Set on [[HandoffToRuleBased]], before [[onHandoffToRuleBased]] stops the multisig actors:
+      * from then on a child's termination is this manager's own doing, not a failure.
+      */
+    private val handedOff = Ref.unsafe[IO, Boolean](false)
+
+    /** Unregisters every liaison this manager wired on a transport; accumulated by the subclass's
+      * [[preStartLocal]] through [[detachAtHandoff]] as it registers them.
+      *
+      * Run at the handoff before [[onHandoffToRuleBased]] stops the liaisons. The remote peers do
+      * not know this node handed off — each hands off on its own, when it observes the fallback on
+      * L1 — so they keep pulling, and a liaison still registered when it stops has their frames
+      * delivered to a stopped actor: dead letters, each looking like lost work. Unregistered first,
+      * the transport drops them as expected instead.
+      */
+    private val detachLiaisons = Ref.unsafe[IO, IO[Unit]](IO.unit)
+
+    /** Record how to unregister liaisons this manager just registered on a transport, so the
+      * handoff can do it before stopping them (see [[detachLiaisons]]).
+      */
+    protected def detachAtHandoff(unregister: IO[Unit]): IO[Unit] =
+        detachLiaisons.update(_ >> unregister)
+
     /** Every failure escalates, and the decider is **total**.
       *
       * Totality is what the `PartialFunction.fromFunction` wrapper buys: `isDefinedAt` is
@@ -127,12 +154,20 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 (pendingConnections.complete(Left(e)) >> connectionsDeferred.complete(Left(e))).void
             )
         case TerminatedChild(childType, _) =>
-            tracer.traceWith(LifecycleEvent.TerminatedActor(childType))
+            handedOff.get.flatMap(stoppedByUs =>
+                tracer.traceWith(LifecycleEvent.TerminatedActor(childType, stoppedByUs))
+            )
         case TerminatedDependency(dependencyType, _) =>
             tracer.traceWith(LifecycleEvent.TerminatedDependency(dependencyType))
         case HandoffToRuleBased =>
             nodeStatus.update(_.advanceTo(NodeStatus.HandedOffToRuleBased)) *>
-                onHandoffToRuleBased
+                handedOff.set(true) *>
+                submissions.closeAndDrain(10.seconds) *>
+                // After the drain: the liaisons carry the head's traffic until the admitted
+                // submissions are answered. `getAndSet` makes a repeated handoff a no-op here.
+                detachLiaisons.getAndSet(IO.unit).flatten *>
+                onHandoffToRuleBased *>
+                submissions.markAnswerersStopped
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
@@ -144,7 +179,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
     /** React to [[HandoffToRuleBased]] by stopping the multisig actors (except the still-live
       * [[CardanoLiaison]]) and spawning the rule-based regime manager. Subclass-supplied per role:
       * HMRM spawns [[hydrozoa.rulebased.RuleBasedRegimeManager]]; CMRM will spawn the coil-side
-      * equivalent. Abstract on purpose — a silent default would swallow the handoff.
+      * equivalent. Abstract on purpose — a silent default would swallow the handoff. By the time it
+      * runs, the liaisons are already unregistered from their transports ([[detachAtHandoff]]).
       */
     protected def onHandoffToRuleBased: IO[Unit]
 

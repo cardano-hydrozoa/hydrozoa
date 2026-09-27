@@ -879,7 +879,12 @@ differing only in which lanes each serves.
     exists so (a) the first post-crash `append` is legal — live production resumes at
     `high-water + 1`, and `append` is gap-free (requires `next(lastAppended)`), so a
     cold `None` would make it throw — and (b) it is `reply`'s out-of-bounds bound
-    (`next(lastAppended)`) for a remote that re-pulls before we append anything.
+    (`next(lastAppended)`) for a remote that re-pulls before we append anything. A
+    cursor past that bound is out of bounds only if the journal does not hold every
+    number up to it: a durable item not yet appended (between its write and its
+    append, CR4) is a pending append, and the pull is answered empty until it lands.
+    A hub seeds a rejoining coil's cursors from its journals, so such a cursor is
+    ordinary, not a desync.
   - **Serving is a DB-backed view.** On `GetMsgBatch` from R, `LaneOutbound.reply`
     returns the in-memory window if it holds R's cursor, else reads from the journal
     (`LaneOutgoingBacking.serveFromJournal`). Because every served entry is persisted,

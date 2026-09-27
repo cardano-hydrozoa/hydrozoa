@@ -31,6 +31,12 @@ trait PeerTransport {
       */
     def register(remote: HeadPeerId, localLiaison: LiaisonProtocol.MeshLiaisonHandle): IO[Unit]
 
+    /** Stop dispatching inbound from [[remote]] to the liaison [[register]] wired for it, before
+      * that liaison is stopped. The remote does not know this node stopped it and keeps sending;
+      * from now on its frames are dropped as expected rather than delivered to a stopped actor.
+      */
+    def unregister(remote: HeadPeerId): IO[Unit]
+
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. */
     def send(remote: HeadPeerId, request: LiaisonProtocol.MeshEmitted): IO[Unit]
 }
@@ -64,7 +70,9 @@ final class WsPeerTransport private (
     private val headParamsHash: Hash32,
     private val ownHead: HeadIdentity,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
-    private val inboundRef: Ref[IO, Map[HeadPeerId, LiaisonProtocol.MeshLiaisonHandle]],
+    private val inboundRef: Ref[IO, Map[HeadPeerId, InboundRoute[
+      LiaisonProtocol.MeshLiaisonHandle
+    ]]],
     private val keepAlivePing: FiniteDuration,
     private val tracer: ContraTracer[IO, PeerTransportEvent],
 )(using CardanoNetwork.Section)
@@ -74,7 +82,11 @@ final class WsPeerTransport private (
         remote: HeadPeerId,
         localLiaison: LiaisonProtocol.MeshLiaisonHandle
     ): IO[Unit] =
-        inboundRef.update(_.updated(remote, localLiaison))
+        inboundRef.update(_.updated(remote, InboundRoute.Live(localLiaison)))
+
+    override def unregister(remote: HeadPeerId): IO[Unit] =
+        inboundRef.update(_.updated(remote, InboundRoute.Closed)) >>
+            tracer.traceWith(LiaisonUnregistered(remote))
 
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. The message is held in
       * the per-remote outbox queue until the WS link drains it.
@@ -98,7 +110,8 @@ final class WsPeerTransport private (
     ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(remote) match {
-                case Some(liaison) => liaison ! payload
+                case Some(InboundRoute.Live(liaison)) => liaison ! payload
+                case Some(InboundRoute.Closed) => tracer.traceWith(InboundAfterUnregister(remote))
                 // TODO This may be panic, but then there will be a very simple way to shut down any peer
                 case None => tracer.traceWith(NoLiaisonForInbound(remote))
             }
@@ -315,17 +328,23 @@ final class WsPeerTransport private (
                             val verdict = admit(peerNum, protocolVersion, auth, nonce, head)
                             // One nonce, one handshake: a socket that already has a verdict keeps
                             // it, so a replayed handshake cannot re-bind an established session.
-                            verdictD.complete(verdict).flatMap {
-                                case false => tracer.traceWith(ServerRepeatHandshake(peerNum))
-                                case true =>
-                                    verdict match {
-                                        case Right(remote) =>
-                                            tracer.traceWith(ServerAccepted(remote))
-                                        case Left(refusal) =>
-                                            tracer.traceWith(
-                                              ServerRefusedHandshake(peerNum, refusal)
-                                            )
-                                    }
+                            // `tryGet` then `complete` is not a race: this pipe is the only thing
+                            // that completes `verdictD`, and it takes one frame at a time.
+                            verdictD.tryGet.flatMap {
+                                case Some(_) => tracer.traceWith(ServerRepeatHandshake(peerNum))
+                                case None    =>
+                                    // Traced BEFORE it is completed, because completing it is what
+                                    // acts on it. A refusal goes straight out and the socket
+                                    // closes, and the connection can be torn down, and this fiber
+                                    // with it, before a trace placed after it runs: a refusal on
+                                    // the wire that nobody logged.
+                                    verdict.fold(
+                                      refusal =>
+                                          tracer.traceWith(
+                                            ServerRefusedHandshake(peerNum, refusal)
+                                          ),
+                                      remote => tracer.traceWith(ServerAccepted(remote))
+                                    ) >> verdictD.complete(verdict).void
                             }
                         case Right(HeadFrame.Msg(payload)) =>
                             verdictD.tryGet.flatMap {
@@ -414,7 +433,9 @@ object WsPeerTransport {
             outboxes <- remoteIds
                 .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                 .map(_.toMap)
-            inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, LiaisonProtocol.MeshLiaisonHandle])
+            inboundRef <- Ref[IO].of(
+              Map.empty[HeadPeerId, InboundRoute[LiaisonProtocol.MeshLiaisonHandle]]
+            )
         } yield new WsPeerTransport(
           ownPeerId,
           ownWallet,

@@ -3,14 +3,15 @@ package hydrozoa.multisig.server
 import cats.effect.IO
 import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.server.ApiDto.ErrorResponse
 import hydrozoa.multisig.server.ApiResponse.RequestAccepted
 import hydrozoa.multisig.server.JsonCodecs.given
 import io.circe.Json
 import io.circe.syntax.*
 import org.http4s.circe.CirceEntityDecoder.*
 import org.http4s.circe.CirceEntityEncoder.*
-import org.http4s.client.Client
-import org.http4s.{Method, Request as Http4sRequest, Uri}
+import org.http4s.client.{Client, UnexpectedStatus}
+import org.http4s.{Method, Request as Http4sRequest, Status, Uri}
 
 /** A client-side handle for submitting [[UserRequest]]s to a Hydrozoa peer and awaiting its
   * assigned [[RequestId]]. Abstracts over the transport: an in-process actor send, an in-memory
@@ -23,18 +24,39 @@ import org.http4s.{Method, Request as Http4sRequest, Uri}
   * commands with the harness keeping its own. [[direct]] has no callers at all and can go with it.
   */
 trait SubmissionClient:
-    def submit(userRequest: UserRequest): IO[RequestId]
+
+    /** Submit, and tell an accepted request from a head that has closed its submissions. */
+    def trySubmit(userRequest: UserRequest): IO[SubmissionClient.Outcome]
+
+    /** Submit, expecting the request to be accepted: a closed head is an error here. */
+    def submit(userRequest: UserRequest): IO[RequestId] =
+        trySubmit(userRequest).flatMap {
+            case SubmissionClient.Outcome.Accepted(id) => IO.pure(id)
+            case SubmissionClient.Outcome.Closed(reason) =>
+                IO.raiseError(new IllegalStateException(s"submissions closed: $reason"))
+        }
 
 object SubmissionClient:
+
+    /** What a submission came to, short of a failure. */
+    enum Outcome:
+        /** The head accepted the request and assigned it `id`. */
+        case Accepted(id: RequestId)
+
+        /** The head has handed off to the rule-based regime and takes no more requests: the
+          * submission endpoint's `503` carrying [[HydrozoaRoutes.SubmissionsClosed]]. Expected at
+          * and after a fallback, so a result rather than an error.
+          */
+        case Closed(reason: String)
 
     /** In-process impl that forwards to a peer's [[RequestSequencer]] actor via `?:`. Matches the
       * pre-HTTP integration path used by the multipeer harness.
       */
     def direct(handle: RequestSequencer.Handle): SubmissionClient =
         new SubmissionClient:
-            def submit(userRequest: UserRequest): IO[RequestId] =
+            def trySubmit(userRequest: UserRequest): IO[Outcome] =
                 (handle ?: userRequest).flatMap {
-                    case Right(id) => IO.pure(id)
+                    case Right(id) => IO.pure(Outcome.Accepted(id))
                     case Left(rejected) =>
                         IO.raiseError(new RuntimeException(s"request rejected: ${rejected.reason}"))
                 }
@@ -51,13 +73,27 @@ object SubmissionClient:
         baseUri: Uri,
     ): SubmissionClient =
         new SubmissionClient:
-            def submit(userRequest: UserRequest): IO[RequestId] =
+            def trySubmit(userRequest: UserRequest): IO[Outcome] =
                 val bodyJson = requestJson(userRequest)
                 val req = Http4sRequest[IO](
                   Method.POST,
                   baseUri.withPath(Uri.Path.unsafeFromString("/head/requests"))
                 ).withEntity(bodyJson)
-                client.expect[RequestAccepted](req).map(_.requestId)
+                // Any status but a success or the closed-submissions 503 raises, as `expect` did.
+                def unexpected(status: Status): IO[Outcome] =
+                    IO.raiseError(UnexpectedStatus(status, req.method, req.uri))
+                client.run(req).use { resp =>
+                    if resp.status.isSuccess then
+                        resp.as[RequestAccepted].map(a => Outcome.Accepted(a.requestId))
+                    else if resp.status == Status.ServiceUnavailable then
+                        resp.attemptAs[ErrorResponse].value.flatMap {
+                            case Right(ErrorResponse(reason))
+                                if reason == HydrozoaRoutes.SubmissionsClosed =>
+                                IO.pure(Outcome.Closed(reason))
+                            case _ => unexpected(resp.status)
+                        }
+                    else unexpected(resp.status)
+                }
 
     /** The submission body: the kind tag, the payloads, and the digest the submitter computed over
       * them. The head re-derives the digest and refuses the request on a mismatch, so this is the

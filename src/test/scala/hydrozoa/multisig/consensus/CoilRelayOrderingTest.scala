@@ -4,10 +4,10 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.actor.HydrozoaActorSystem
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.consensus.liaison.{LaneOutbound, LiaisonProtocol}
@@ -136,13 +136,13 @@ object CoilRelayOrderingTest extends Properties("CoilRelay block-lane ordering")
             raised <- cats.effect.Ref[IO].of(Vector.empty[Throwable])
             appended <- cats.effect.Ref[IO].of(0)
             delivered <- cats.effect.Ref[IO].of(List.empty[Int])
-            _ <- ActorSystem[IO]("coil-relay-ordering-test").use { system =>
+            _ <- HydrozoaActorSystem("coil-relay-ordering-test").use { actors =>
                 for {
                     now <- realTimeQuantizedInstant(headConfig.slotConfig)
                     lane = blockLane
                     _ <- lane.seedHighWater(Some(BlockNumber(4920)))
-                    liaison <- system.actorOf(new LiaisonStub(lane, raised, appended))
-                    relay <- system.actorOf(
+                    liaison <- actors.actorOf(new LiaisonStub(lane, raised, appended))
+                    relay <- actors.actorOf(
                       CoilRelay(CoilRelay.Connections(coilPeerLiaisons = List(liaison)))
                     )
                     _ <- IO.sleep(50.millis) // let CoilRelay.PreStart resolve its connections

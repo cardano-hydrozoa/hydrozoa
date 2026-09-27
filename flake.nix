@@ -1,7 +1,7 @@
 {
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     git-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -38,19 +38,17 @@
           done
           exec ${sbt0}/bin/sbt "-Dsbt.script=$self" "''${args[@]}"
         '';
-        # The nixpkgs `sbt` package also bundles the `sbtn` thin client (sbt 1.x), which cannot
-        # drive an sbt 2 server (it reports `unknown event: sbt/exec`). Strip it so only `sbt` is on
-        # PATH — nobody should reach for the broken client by habit. Restore once nixpkgs ships an
-        # sbt 2 `sbtn`. `sbt` itself is the BSP shim above.
-        sbtNoSbtn = pkgs.symlinkJoin {
-          name = "sbt-no-sbtn";
+        # The nixpkgs `sbt` package with `sbt` replaced by the BSP shim above. Its `sbtn` (the thin
+        # client) is the binary the launcher itself runs for a plain `sbt` on an sbt 2 build;
+        # `--server` runs sbt in-process instead.
+        sbtWithBspShim = pkgs.symlinkJoin {
+          name = "sbt-with-bsp-shim";
           paths = [ sbt0 ];
           postBuild = ''
-            rm -f $out/bin/sbtn $out/bin/sbt
+            rm -f $out/bin/sbt
             ln -s ${sbtBspShim}/bin/sbt $out/bin/sbt
           '';
         };
-        visualvm = pkgs.visualvm.override { jdk = jdk; };
         # Define the hooks
         pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
@@ -66,31 +64,33 @@
           };
         };
       in
-      rec {
-        devShell = pkgs.mkShell {
-          JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
-          # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
-          buildInputs = [ pkgs.bashInteractive ];
-          packages = with pkgs; [
-            ammonite # modernized scala repl: https://ammonite.io/
-            async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
-            git # otherwise `git` resolves to the broken macOS Xcode shim inside `nix develop`
-            jdk
-            just # command runner, similar to `make`
-            libnotify # used in justfile
-            ltex-ls # Language server for markdown: https://github.com/valentjn/ltex-ls
-            nixfmt
-            sbtNoSbtn
-            scala-cli
-            scalafix
-            scalafmt
-            # Visualize programs running on the JVM. May need _JAVA_AWT_WM_NONREPARENTING=1 on wayland:
-            #    https://github.com/oracle/visualvm/issues/403
-            visualvm
-            nodejs_24 # this is needed by IDEA's MCP Server
-            mermaid-cli
-          ];
-          inherit (pre-commit-check) shellHook;
+      {
+        devShells = {
+          default = pkgs.mkShell {
+            JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
+            # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
+            buildInputs = [ pkgs.bashInteractive ];
+            packages = with pkgs; [
+              git # otherwise `git` resolves to the broken macOS Xcode shim inside `nix develop`
+              jdk
+              just # command runner, similar to `make`
+              libnotify # used in justfile
+              nixfmt
+              sbtWithBspShim
+            ];
+            inherit (pre-commit-check) shellHook;
+          };
+          # What the CI workflow runs (`nix develop .#ci`): only what the recipes need, with no
+          # developer tools and no pre-commit hook installed on entry.
+          ci = pkgs.mkShell {
+            JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
+            packages = with pkgs; [
+              jdk
+              just
+              nixfmt
+              sbtWithBspShim
+            ];
+          };
         };
       }
     ));
