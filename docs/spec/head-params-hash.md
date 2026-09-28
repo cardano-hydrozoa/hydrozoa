@@ -182,6 +182,7 @@ headParamsHash = blake2b_256(
   -- scriptReferences
   || raw(HydrozoaBlueprint.treasuryScriptHash)
   || raw(HydrozoaBlueprint.disputeScriptHash)
+  || raw(HydrozoaBlueprint.regimeScriptHash)
   || raw(setupLadderAnchor.transactionId) || u32(setupLadderAnchor.index)
 
   -- initialBlockTiming, from blockBrief.header
@@ -247,7 +248,7 @@ and is not repeated.
 
 ### Pin the outref where the chain pins the outref
 
-The three script references are pinned three different ways, and the rule behind that is worth
+The four script references are pinned three different ways, and the rule behind that is worth
 stating: **pin an output reference exactly where the chain pins an output reference; pin the
 hash everywhere else.**
 
@@ -255,9 +256,10 @@ hash everywhere else.**
 |---|---|---|
 | `rulebasedTreasuryScriptUtxo` | `HydrozoaBlueprint.treasuryScriptHash` | determines the rule-based treasury address the fallback transaction pays to |
 | `disputeResolutionScriptUtxo` | `HydrozoaBlueprint.disputeScriptHash` | determines the dispute gate |
+| `rulebasedRegimeScriptUtxo` | `HydrozoaBlueprint.regimeScriptHash` | determines the rule-based regime address the fallback transaction pays the regime utxo to |
 | `setupLadderUtxos` | rung 0's `TransactionInput` | verbatim what `RuleBasedRegimeOutput.datum` writes as `setupG2Ladder` |
 
-The two Plutus script hashes are build constants, not configuration: `ScriptReferenceUtxos`
+The three Plutus script hashes are build constants, not configuration: `ScriptReferenceUtxos`
 already rejects a reference utxo whose script hash is not the blueprint's. Folding them in
 therefore catches nothing about a *config* mismatch — it catches a **build** mismatch, which
 nothing else does. Two peers on hydrozoa builds with different compiled validators each decode

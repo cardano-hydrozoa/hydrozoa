@@ -1,6 +1,7 @@
 package hydrozoa.config.head
 
 import cats.data.Validated
+import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -151,6 +152,23 @@ object HeadParamsHashTest extends Properties("HeadParamsHash") {
           hc.headPeers
         )
         mutated.headParamsHash != hc.headParamsHash
+    }
+
+    /** The validator script hashes are build constants, so they cannot be mutated like the fields
+      * above. Check instead that the preimage carries all three, adjacent and in the spec's order.
+      */
+    val _ = property("covers the three validator script hashes") = Prop.forAll(generateConfig) {
+        hc =>
+            val bytes =
+                HeadParamsHash
+                    .preimage(hc.headConfigBootstrap, hc.initialBlock.blockBrief.header)
+                    .bytes
+            val scripts = Array(
+              HydrozoaBlueprint.treasuryScriptHash,
+              HydrozoaBlueprint.disputeScriptHash,
+              HydrozoaBlueprint.regimeScriptHash
+            ).flatMap(_.bytes)
+            bytes.indexOfSlice(scripts) >= 0
     }
 
     val _ = property("excludes webSocketAddress") = Prop.forAll(generateConfig) { hc =>
