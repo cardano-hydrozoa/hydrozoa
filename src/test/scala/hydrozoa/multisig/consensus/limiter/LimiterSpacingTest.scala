@@ -5,8 +5,10 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import com.suprnation.actor.event.Debug
+import com.suprnation.actor.{DeadLetter, Envelope}
 import hydrozoa.config.node.operation.multisig.RateLimits
-import hydrozoa.lib.actor.HydrozoaActorSystem
+import hydrozoa.lib.actor.{HydrozoaActorSystem, OrderlyShutdown, SubtreeStop}
 import hydrozoa.lib.logging.ContraTracer
 import io.circe.parser.decode
 import java.time.Instant
@@ -107,6 +109,21 @@ class LimiterSpacingTest extends AnyFunSuite:
         // though the backlog is well past this gate's hard limit. That constancy between signals is
         // what stops the controller sawtoothing at the downstream cadence.
         assertNoStretch(seen, atMostMs = (PeriodMs * 1.6).toLong)
+    }
+
+    // ---- quiescing ----------------------------------------------------------------------------
+
+    // The limiter holds `Paced(1)` from a handler that sleeps until it is due and then sends itself
+    // a `Tick`. Stopped outright meanwhile, that `Tick` lands in a stopped mailbox.
+    test("stopped in order while holding a message, the limiter loses no tick") {
+        val (seen, letters) = stopWhileHolding(inOrder = true)
+        val _ = assert(letters.isEmpty, s"dead letters: $letters")
+        assert(seen.map(_._1) == Vector(0), s"only the first message is due before the stop: $seen")
+    }
+
+    test("control: stopped outright while holding a message, the limiter's tick is lost") {
+        val (_, letters) = stopWhileHolding(inOrder = false)
+        assert(letters.contains(LimiterControl.Tick), s"dead letters: $letters")
     }
 
     // ---- the backlog gate ---------------------------------------------------------------------
@@ -319,6 +336,55 @@ class LimiterSpacingTest extends AnyFunSuite:
                 } yield r
             )
             .unsafeRunSync()
+
+    /** Send two messages a period apart would space, stop the limiter while it holds the second,
+      * and return what reached the downstream and the messages that were dead-lettered.
+      */
+    private def stopWhileHolding(inOrder: Boolean): (Vector[(Int, Long)], List[Any]) =
+        (for {
+            letters <- Ref.of[IO, List[Any]](Nil)
+            result <- HydrozoaActorSystem(
+              "limiter-stop-test",
+              {
+                  case Debug(_, _, dl: DeadLetter[?]) =>
+                      letters.update(dl.message match {
+                          case e: Envelope[?, ?] => e.message :: _
+                          case other             => other :: _
+                      })
+                  case _ => IO.unit
+              }
+            ).use(actors =>
+                for {
+                    seen <- Ref.of[IO, Vector[(Int, Long)]](Vector.empty)
+                    sink <- actors.actorOf(Recorder(seen))
+                    lim <- actors.actorOf(
+                      Limiter[LaneMsg](
+                        sink,
+                        limits(),
+                        ContraTracer.nullTracer[IO, LimiterEvent]
+                      )
+                    )
+                    // The control loses its tick on purpose: logged as expected, not as lost
+                    // while the system runs.
+                    _ <- IO.unlessA(inOrder)(actors.expectDeadLetters(lim))
+                    _ <- (lim ! Paced(0)) >> (lim ! Paced(1))
+                    _ <- IO.sleep(50.millis)
+                    _ <-
+                        if inOrder then
+                            OrderlyShutdown
+                                .run(
+                                  actors.system,
+                                  List(lim),
+                                  OrderlyShutdown.Bounds(1.second, 2.seconds, 2.seconds)
+                                )
+                                .void
+                        else SubtreeStop.stopAndAwait(actors.system, lim, 2.seconds)
+                    _ <- IO.sleep(500.millis)
+                    r <- seen.get
+                } yield r
+            )
+            dead <- letters.get
+        } yield (result, dead)).unsafeRunSync()
 
     private def assertSpacing(seen: Vector[(Int, Long)], atLeastMs: Long): Unit =
         val gaps = seen.map(_._2).sliding(2).map(w => w(1) - w(0)).toList

@@ -67,3 +67,9 @@ object BlockWeaverEvent:
     final case class NonPositiveWakeupDelay(blockNum: BlockNumber) extends BlockWeaverEvent
 
     final case class WakeupFiberStarted(blockNum: BlockNumber) extends BlockWeaverEvent
+
+    /** Asked to quiesce: the armed wakeup is cancelled and no later one is armed. */
+    case object Quiesced extends BlockWeaverEvent
+
+    /** A wakeup for `blockNum` was due to be armed after the weaver quiesced, and was not. */
+    final case class WakeupNotArmed(blockNum: BlockNumber) extends BlockWeaverEvent

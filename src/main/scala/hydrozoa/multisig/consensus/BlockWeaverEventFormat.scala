@@ -64,5 +64,8 @@ object BlockWeaverEventFormat:
                 )
             case WakeupFiberStarted(blockNum) =>
                 trace(s"wakeup fiber scheduled for block ${blockNum: Int}")
+            case Quiesced => info("quiesced: wakeup cancelled, arming no more")
+            case WakeupNotArmed(blockNum) =>
+                debug(s"quiesced, not arming the wakeup for block ${blockNum: Int}")
         }
     }

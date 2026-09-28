@@ -77,6 +77,7 @@ object RuleBasedActorEventFormat:
                 // not up yet, no evacuatees left, deadline not elapsed, …) — the main signal that
                 // the actor is alive and why it is not progressing this tick.
                 info(s"Tick did not complete (recoverable); will retry. Reason: $reason")
+            case Tick.Quiesced => info("quiesced: polling no more")
 
             case Tx.Building(family) => info(s"Building $family")
             case Tx.Submitting(tx) =>

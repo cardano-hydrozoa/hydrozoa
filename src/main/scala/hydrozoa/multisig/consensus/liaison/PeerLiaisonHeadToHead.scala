@@ -8,6 +8,7 @@ import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
+import hydrozoa.lib.actor.{Quiesce, Quiescent}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
@@ -39,7 +40,8 @@ abstract class PeerLiaisonHeadToHead(
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO],
     metrics: PeerMetrics
-) extends Actor[IO, LiaisonProtocol.MeshLiaisonMessage] {
+) extends Actor[IO, LiaisonProtocol.MeshLiaisonMessage | Quiesce.type],
+      Quiescent {
     import PeerLiaisonHeadToHead.{Connections, Env}
 
     private given env: Env = Env(config, tracer, persistence, metrics)
@@ -164,6 +166,9 @@ abstract class PeerLiaisonHeadToHead(
     // Handle to the resend-timer fiber ([[startResendTimer]]); cancelled in [[postStop]] so it
     // doesn't outlive the actor.
     private val resendFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Nothing]]](None)
+
+    // Set by [[Quiesce]]: from then on a queued `ResendCurrent` does nothing.
+    private val quiesced = Ref.unsafe[IO, Boolean](false)
 
     // ---- Pull half (the remote head peer's production) ------------------------------------------
     private val initialGet: Mesh.Get = Mesh.Get(
@@ -431,22 +436,32 @@ abstract class PeerLiaisonHeadToHead(
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
-    override def receive: Receive[IO, MeshLiaisonMessage] = PartialFunction.fromFunction {
-        case PreStart =>
-            for {
-                // Suspends on the start barrier, so connections are in place before any real
-                // message is processed.
-                given Env.Connected <- initializeConnections
-                _ <- context.become(PartialFunction.fromFunction(receiveConnected))
-            } yield ()
-        case x =>
-            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
-    }
+    override def quiesce: IO[Unit] = self ! Quiesce
 
-    private def receiveConnected(req: MeshLiaisonMessage)(using env: Env.Connected): IO[Unit] =
+    private def onQuiesce: IO[Unit] =
+        quiesced.set(true) >> cancelResendTimer >> tracer.traceWith(PeerLiaisonEvent.Quiesced)
+
+    override def receive: Receive[IO, MeshLiaisonMessage | Quiesce.type] =
+        PartialFunction.fromFunction {
+            case PreStart =>
+                for {
+                    // Suspends on the start barrier, so connections are in place before any real
+                    // message is processed.
+                    given Env.Connected <- initializeConnections
+                    _ <- context.become(PartialFunction.fromFunction(receiveConnected))
+                } yield ()
+            case Quiesce => onQuiesce
+            case x =>
+                IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
+        }
+
+    private def receiveConnected(
+        req: MeshLiaisonMessage | Quiesce.type
+    )(using env: Env.Connected): IO[Unit] =
         req match {
             case PreStart                   => IO.raiseError(RuntimeException("Duplicate PreStart"))
-            case ResendCurrent              => env.puller.resend
+            case Quiesce                    => onQuiesce
+            case ResendCurrent              => quiesced.get.ifM(IO.unit, env.puller.resend)
             case get: Mesh.Get              => env.server.handleGet(get)
             case m: Mesh.New                => env.puller.handleReply(m)
             case hw: SoftConfirmedHighWater =>
@@ -481,7 +496,7 @@ abstract class PeerLiaisonHeadToHead(
             reqCursor <- requestLane.cursor
             _ <- confirmedRemoteRequestHighWater.set(reqCursor.previousOrZero)
             _ <- connected.puller.start
-            _ <- startResendTimer
+            _ <- quiesced.get.ifM(IO.unit, startResendTimer)
         } yield connected
 
     private def startResendTimer: IO[Unit] =
@@ -501,7 +516,9 @@ abstract class PeerLiaisonHeadToHead(
       * when fallback tears down the multisig regime and this liaison — instead of leaking a fiber
       * that keeps delivering `ResendCurrent` to a dead actor (dead letters).
       */
-    override def postStop: IO[Unit] =
+    override def postStop: IO[Unit] = cancelResendTimer
+
+    private def cancelResendTimer: IO[Unit] =
         resendFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 }
 

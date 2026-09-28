@@ -21,3 +21,8 @@ object LimiterEvent:
       * on this lane, so this says an invariant the gate's sizing assumes no longer holds.
       */
     final case class QueueDepthUnexpected(throttledPending: Int) extends LimiterEvent
+
+    /** Asked to quiesce, holding `held` messages: it arms no more ticks, so they stay held until it
+      * stops, and are dropped then.
+      */
+    final case class Quiesced(held: Int) extends LimiterEvent

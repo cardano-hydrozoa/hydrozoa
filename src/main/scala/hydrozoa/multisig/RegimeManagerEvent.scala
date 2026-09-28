@@ -1,5 +1,6 @@
 package hydrozoa.multisig
 
+import hydrozoa.lib.actor.OrderlyShutdown
 import hydrozoa.multisig.HeadMultisigRegimeManager.{Actors, Dependencies}
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
 import hydrozoa.multisig.consensus.limiter.LimiterEvent
@@ -33,10 +34,25 @@ object LifecycleEvent:
     case object StartingActors extends LifecycleEvent
     case object WatchingActors extends LifecycleEvent
 
-    /** A watched child terminated. `atHandoff`: the manager had already handed off to the
-      * rule-based regime, and stops its multisig children itself, so the termination is expected.
+    /** A watched child terminated. `stopping`: the manager had already begun to stop its children
+      * itself, and why, so the termination is expected; `None` means it was not.
       */
-    final case class TerminatedActor(actor: Actors, atHandoff: Boolean) extends LifecycleEvent
+    final case class TerminatedActor(actor: Actors, stopping: Option[Stopping])
+        extends LifecycleEvent
+
+    /** Why a regime manager stops its children. */
+    enum Stopping:
+        /** At the handoff to the rule-based regime, which keeps the Cardano liaison running. */
+        case AtHandoff
+
+        /** The node is shutting down: every child. */
+        case AtShutdown
+
+    /** The manager stopped `children` actors in order at the handoff ([[OrderlyShutdown]]). A phase
+      * that ran out of time leaves whatever was still in flight to dead letters.
+      */
+    final case class ChildrenStopped(children: Int, outcome: OrderlyShutdown.Outcome)
+        extends LifecycleEvent
     final case class TerminatedDependency(dep: Dependencies) extends LifecycleEvent
 
     /** A supervised child failed and the decider escalated to the root, which stops the system.

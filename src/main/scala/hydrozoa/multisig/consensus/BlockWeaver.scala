@@ -9,6 +9,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
+import hydrozoa.lib.actor.{Quiesce, Quiescent}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
@@ -39,10 +40,19 @@ final case class BlockWeaver(
       * `fastBlockMark` and `softConfirmed` out of them rather than re-reading the store.
       */
     markers: Markers,
-) extends Actor[IO, BlockWeaver.Request] {
+) extends Actor[IO, BlockWeaver.Request | Quiesce.type],
+      Quiescent {
     import BlockWeaver.*
 
+    private type Inbox = BlockWeaver.Request | Quiesce.type
+
     private given env: Env = Env(config, persistence, tracer, metrics)
+
+    /** The armed wakeup, and whether the weaver has quiesced; carried into every state through
+      * [[BlockWeaver.Connections]], and held here too so [[postStop]] can reach the fiber.
+      */
+    private val wakeupFiber: Ref[IO, Option[FiberIO[Unit]]] = Ref.unsafe(None)
+    private val quiesced: Ref[IO, Boolean] = Ref.unsafe(false)
 
     /** How far each head peer's request stream has advanced ([[RequestCursors]]). This actor's own
       * bookkeeping, not part of the weaving state: no [[BlockWeaver.State]] reads it, and the gate
@@ -57,22 +67,35 @@ final case class BlockWeaver(
         _ <- context.become(receive)
     } yield ()
 
+    override def quiesce: IO[Unit] = self ! Quiesce
+
+    /** Cancel the armed wakeup; every state stops arming one from here on. */
+    private def onQuiesce: IO[Unit] =
+        quiesced.set(true) >> cancelWakeup >> tracer.traceWith(BlockWeaverEvent.Quiesced)
+
+    private def cancelWakeup: IO[Unit] = wakeupFiber.getAndSet(None).flatMap(_.traverse_(_.cancel))
+
+    override def postStop: IO[Unit] = cancelWakeup
+
     private def become(state: BlockWeaver.State.Reactive)(using Env.Connected): IO[Unit] =
         context.become(
-          PartialFunction.fromFunction(req =>
-              for {
-                  // Refuse a request that breaks its author's stream, before any state sees it
-                  _ <- admitRequest(req)
-                  // Handle the request using the current state's handler
-                  mNewState <- state.react(req)
-                  // If the handler returns a new state, become that state.
-                  // Otherwise, stop the actor.
-                  _ <- mNewState.fold(context.self.stop)(newState => become(newState))
-              } yield ()
-          )
+          PartialFunction.fromFunction {
+              case Quiesce => onQuiesce
+              case req: Request =>
+                  for {
+                      // Refuse a request that breaks its author's stream, before any state sees it
+                      _ <- admitRequest(req)
+                      // Handle the request using the current state's handler
+                      mNewState <- state.react(req)
+                      // If the handler returns a new state, become that state.
+                      // Otherwise, stop the actor.
+                      _ <- mNewState.fold(context.self.stop)(newState => become(newState))
+                  } yield ()
+          }
         )
 
-    override def receive: Receive[IO, BlockWeaver.Request] = PartialFunction.fromFunction {
+    override def receive: Receive[IO, Inbox] = PartialFunction.fromFunction {
+        case Quiesce => onQuiesce
         case PreStart =>
             for {
                 // Suspends on the start barrier, so the base below is in place before any
@@ -134,9 +157,11 @@ final case class BlockWeaver(
                   blockWeaver = context.self,
                   jointLedger = c.jointLedger,
                   metrics = metrics,
-                  wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None)
+                  wakeupFiber = wakeupFiber,
+                  quiesced = quiesced
                 )
-            case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
+            case c: BlockWeaver.ConnectionsPartial =>
+                IO.pure(c(context.self, wakeupFiber, quiesced))
         }
         connections.map(env.connected)
     }
@@ -180,15 +205,22 @@ object BlockWeaver {
           * derives from `minSettlementDuration` — routinely hours. An uncancelled fiber therefore
           * outlives its block by that much, and at a high block rate they accumulate.
           */
-        wakeupFiber: Ref[IO, Option[FiberIO[Unit]]]
+        wakeupFiber: Ref[IO, Option[FiberIO[Unit]]],
+        /** Set once the weaver quiesces; no wakeup is armed after that. */
+        quiesced: Ref[IO, Boolean]
     )
 
     final case class ConnectionsPartial(jointLedger: JointLedger.Handle, metrics: PeerMetrics) {
-        def apply(blockWeaver: BlockWeaver.Handle): Connections = Connections(
+        def apply(
+            blockWeaver: BlockWeaver.Handle,
+            wakeupFiber: Ref[IO, Option[FiberIO[Unit]]],
+            quiesced: Ref[IO, Boolean]
+        ): Connections = Connections(
           blockWeaver = blockWeaver,
           jointLedger = jointLedger,
           metrics = metrics,
-          wakeupFiber = Ref.unsafe[IO, Option[FiberIO[Unit]]](None)
+          wakeupFiber = wakeupFiber,
+          quiesced = quiesced
         )
     }
 
@@ -1079,6 +1111,16 @@ object BlockWeaver {
                 }
 
                 private def scheduleWakeupFiber(
+                    bc: Block.SoftConfirmed.NonFinal
+                )(using env: Env.Connected): IO[Unit] =
+                    env.connections.quiesced.get.ifM(
+                      env.tracer.traceWith(
+                        BlockWeaverEvent.WakeupNotArmed(this.leadingBlockNumber)
+                      ),
+                      armWakeup(bc)
+                    )
+
+                private def armWakeup(
                     bc: Block.SoftConfirmed.NonFinal
                 )(using env: Env.Connected): IO[Unit] = {
                     import env.*

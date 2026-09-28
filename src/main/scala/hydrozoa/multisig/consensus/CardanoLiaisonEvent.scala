@@ -13,6 +13,9 @@ object CardanoLiaisonEvent:
 
     case object TimeoutReceived extends CardanoLiaisonEvent
 
+    /** Asked to quiesce: the liaison stops polling L1 and submits nothing more. */
+    case object Quiesced extends CardanoLiaisonEvent
+
     final case class StackHardConfirmedReceived(stackNum: StackNumber) extends CardanoLiaisonEvent
 
     /** The hard-confirmed initial stack's L1 effects (settlement + fallback overrides) have been

@@ -8,6 +8,7 @@ import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
+import hydrozoa.lib.actor.{Quiesce, Quiescent}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
@@ -46,8 +47,11 @@ abstract class PeerLiaisonCoilToHub(
       * one the rest of the node should boot from.
       */
     joinSettled: Deferred[IO, Either[Throwable, Unit]]
-) extends Actor[IO, LiaisonProtocol.CoilLiaisonMessage] {
+) extends Actor[IO, LiaisonProtocol.CoilLiaisonMessage | Quiesce.type],
+      Quiescent {
     import PeerLiaisonCoilToHub.*
+
+    private type Inbox = CoilLiaisonMessage | Quiesce.type
 
     // `Env extends CardanoNetwork.Section`, so this given also supplies the section the inbound-lane
     // `WriteBatch` codecs in `persistInbound` need.
@@ -160,6 +164,10 @@ abstract class PeerLiaisonCoilToHub(
     // Handle to the join-mode timer ([[armJoinTimer]]); cancelled on leaving join mode and again
     // in [[postStop]], under the same single-fiber discipline as [[resendFiber]].
     private val joinFiber = Ref.unsafe[IO, Option[Fiber[IO, Throwable, Unit]]](None)
+
+    // Set by [[Quiesce]]: from then on neither timer is armed, and a queued `ResendCurrent` or
+    // `JoinWaitElapsed` does nothing.
+    private val quiesced = Ref.unsafe[IO, Boolean](false)
 
     // ---- Pull half (population) -----------------------------------------------------------------
     // Cold ceilings: nothing is confirmed yet, so these are the tightest correct bounds. `start`
@@ -378,9 +386,10 @@ abstract class PeerLiaisonCoilToHub(
       * is nothing to keep. The local cases cannot arrive at all — the actors that send them are not
       * spawned until this mode exits. Every case is named, so the behaviour stays total.
       */
-    private def joining: Receive[IO, CoilLiaisonMessage] = PartialFunction.fromFunction {
+    private def joining: Receive[IO, Inbox] = PartialFunction.fromFunction {
         case PreStart        => startJoin
-        case JoinWaitElapsed => hubSilent
+        case Quiesce         => onQuiesce
+        case JoinWaitElapsed => quiesced.get.ifM(IO.unit, hubSilent)
         case offer: Join.Offer =>
             tracer.traceWith(PeerLiaisonEvent.JoinAdopting(offer.startStack)) >>
                 adoptOffer(offer) >>
@@ -396,11 +405,12 @@ abstract class PeerLiaisonCoilToHub(
     }
 
     /** Regular mode: the ordinary pull/serve liaison, entered once the start point is settled. */
-    private def regular(engines: Engines): Receive[IO, CoilLiaisonMessage] =
+    private def regular(engines: Engines): Receive[IO, Inbox] =
         PartialFunction.fromFunction(regularTotal(engines))
 
-    private def regularTotal(engines: Engines)(req: CoilLiaisonMessage): IO[Unit] = req match {
-        case ResendCurrent       => engines.puller.resend
+    private def regularTotal(engines: Engines)(req: Inbox): IO[Unit] = req match {
+        case ResendCurrent       => quiesced.get.ifM(IO.unit, engines.puller.resend)
+        case Quiesce             => onQuiesce
         case pop: Population.New => engines.puller.handleReply(pop)
         case get: OwnHardAck.Get => engines.server.handleGet(get)
         case ack: HardAck        => ownHardAckLane.append(ack) >> engines.server.afterAppend
@@ -426,7 +436,12 @@ abstract class PeerLiaisonCoilToHub(
             hardConfirmedStack.update(cur => Ordering[StackNumber].max(cur, hc.stackNum))
     }
 
-    override def receive: Receive[IO, CoilLiaisonMessage] = joining
+    override def receive: Receive[IO, Inbox] = joining
+
+    override def quiesce: IO[Unit] = self ! Quiesce
+
+    private def onQuiesce: IO[Unit] =
+        quiesced.set(true) >> cancelTimers >> tracer.traceWith(PeerLiaisonEvent.Quiesced)
 
     /** Tell the hub where this coil stands and arm the wait for its answer.
       *
@@ -480,7 +495,7 @@ abstract class PeerLiaisonCoilToHub(
             _ <- context.become(regular(engines))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
             _ <- engines.puller.start
-            _ <- startResendTimer
+            _ <- quiesced.get.ifM(IO.unit, startResendTimer)
         } yield ()
 
     /** Decline an offer that arrived too late to act on — the only thing this actor can do with
@@ -610,7 +625,9 @@ abstract class PeerLiaisonCoilToHub(
       * when fallback tears down the multisig regime and this liaison — instead of leaking a fiber
       * that keeps delivering `ResendCurrent` to a dead actor (dead letters).
       */
-    override def postStop: IO[Unit] =
+    override def postStop: IO[Unit] = cancelTimers
+
+    private def cancelTimers: IO[Unit] =
         resendFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel)) >>
             joinFiber.getAndSet(None).flatMap(_.fold(IO.unit)(_.cancel))
 }

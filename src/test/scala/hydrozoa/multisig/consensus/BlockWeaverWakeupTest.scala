@@ -4,6 +4,7 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
+import hydrozoa.lib.actor.Quiesce
 import hydrozoa.multisig.ledger.block.BlockNumber
 import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Properties, Test}
@@ -308,6 +309,82 @@ object BlockWeaverWakeupTest extends Properties("Block weaver wakeup"), TestKit 
           _ <- assertWith(
             starts == Vector(BlockNumber(1), BlockNumber(2)),
             s"nothing should start block 3 here; StartBlocks were $starts"
+          )
+      } yield true
+    )
+
+    // ===================================
+    // Quiescing, before the weaver is stopped. The forced-major property above is the control: the
+    // same armed wakeup, not quiesced, starts block 2.
+    // ===================================
+    val _ = property("quiescing cancels the armed wakeup") = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          made <- mkBlockWeaverActorWithEvents(Carol.headPeerNumber)
+          weaver = made._1
+          seen = made._2
+          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          brief1 <- mkDummyBlockBrief1(config.headConfig)
+          _ <- lift((weaver ! brief1) >> env.system.waitForIdle())
+          _ <- settle(env.jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1)))
+          // Arms a wakeup for block 2, due in ~2s.
+          confirmed <- mkConfirmedWithWakeups(
+            BlockNumber(1),
+            config.headConfig,
+            forcedMajorIn = 2.seconds,
+            depositWakeupIn = None
+          )
+          _ <- lift((weaver ! confirmed) >> env.system.waitForIdle())
+          _ <- lift((weaver ! Quiesce) >> env.system.waitForIdle())
+          // Sleep past when the armed wakeup would have fired.
+          _ <- lift(IO.sleep(4.seconds))
+          evs <- lift(IO(events(seen)))
+          starts <- lift(IO(env.jointLedgerMock.startBlockNums.get))
+          _ <- assertWith(
+            evs.contains(BlockWeaverEvent.Quiesced),
+            s"the weaver never quiesced; events were $evs"
+          )
+          _ <- assertWith(
+            starts == Vector(BlockNumber(1)),
+            s"the armed wakeup fired after the weaver quiesced; StartBlocks were $starts"
+          )
+      } yield true
+    )
+
+    val _ = property("a quiesced weaver arms no wakeup") = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          made <- mkBlockWeaverActorWithEvents(Carol.headPeerNumber)
+          weaver = made._1
+          seen = made._2
+          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          brief1 <- mkDummyBlockBrief1(config.headConfig)
+          _ <- lift((weaver ! brief1) >> env.system.waitForIdle())
+          _ <- settle(env.jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1)))
+          _ <- lift((weaver ! Quiesce) >> env.system.waitForIdle())
+          // Would arm a wakeup for block 2, due in ~2s.
+          confirmed <- mkConfirmedWithWakeups(
+            BlockNumber(1),
+            config.headConfig,
+            forcedMajorIn = 2.seconds,
+            depositWakeupIn = None
+          )
+          _ <- lift((weaver ! confirmed) >> env.system.waitForIdle())
+          _ <- lift(IO.sleep(4.seconds))
+          evs <- lift(IO(events(seen)))
+          starts <- lift(IO(env.jointLedgerMock.startBlockNums.get))
+          _ <- assertWith(
+            evs.exists {
+                case BlockWeaverEvent.WakeupNotArmed(_) => true
+                case _                                  => false
+            },
+            s"expected the weaver to decline to arm a wakeup; events were $evs"
+          )
+          _ <- assertWith(
+            starts == Vector(BlockNumber(1)),
+            s"a wakeup fired after the weaver quiesced; StartBlocks were $starts"
           )
       } yield true
     )

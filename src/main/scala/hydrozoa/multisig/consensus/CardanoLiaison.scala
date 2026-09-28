@@ -11,6 +11,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
+import hydrozoa.lib.actor.{Quiesce, Quiescent}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
@@ -561,7 +562,8 @@ trait CardanoLiaison(
     // hand off to, and re-announcing would just be spam.
     onRuleBasedRegimeObserved: TransactionInput => IO[Unit],
     advanceNodeStatus: NodeStatus => IO[Unit],
-) extends Actor[IO, CardanoLiaison.Request]:
+) extends Actor[IO, CardanoLiaison.Request | Quiesce.type],
+      Quiescent:
     import CardanoLiaison.*
 
     private given env: Env =
@@ -583,6 +585,11 @@ trait CardanoLiaison(
       */
     private val lastHandoffDispatchedFor = Ref.unsafe[IO, Option[TransactionInput]](None)
 
+    /** Set once asked to quiesce: the liaison polls L1 no more and submits nothing, and so forwards
+      * no `PollResults` either. It still learns the effects of the stacks that reach it.
+      */
+    private val quiesced = Ref.unsafe[IO, Boolean](false)
+
     /** The settlement/finalization txs whose silence period, and the fallback txs whose submission,
       * has been logged at WARN: see [[CardanoLiaison.classifyDispatch]]. A handful per head
       * lifetime, since each means a fallback.
@@ -600,7 +607,9 @@ trait CardanoLiaison(
     override def preStart: IO[Unit] =
         context.self ! CardanoLiaison.PreStart
 
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
+    override def quiesce: IO[Unit] = self ! Quiesce
+
+    override def receive: Receive[IO, Request | Quiesce.type] = PartialFunction.fromFunction {
         case CardanoLiaison.PreStart =>
             for {
                 // Suspends on the start barrier, so connections are in place before any real
@@ -613,12 +622,18 @@ trait CardanoLiaison(
             IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
     }
 
-    private def receiveConnected(req: Request)(using Env.Connected): IO[Unit] =
+    private def receiveConnected(req: Request | Quiesce.type)(using Env.Connected): IO[Unit] =
         req match {
             case CardanoLiaison.PreStart =>
                 IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
+            case Quiesce =>
+                quiesced.set(true) >> context.cancelReceiveTimeout >>
+                    tracer.traceWith(CardanoLiaisonEvent.Quiesced)
             case CardanoLiaison.Timeout =>
-                tracer.traceWith(CardanoLiaisonEvent.TimeoutReceived) >> runEffects
+                quiesced.get.ifM(
+                  IO.unit,
+                  tracer.traceWith(CardanoLiaisonEvent.TimeoutReceived) >> runEffects
+                )
             case stack: Stack.HardConfirmed =>
                 // The MULTISIGNED effects: SlowConsensusActor has aggregated every head
                 // peer's hard-ack signature into VKeyWitnesses and attached them onto
@@ -632,11 +647,11 @@ trait CardanoLiaison(
                         // Stack 0 (initial). We MUST submit the initialization tx from the
                         // hard-confirmed initial stack — NOT `config.initializationTx`,
                         // which is the UNSIGNED body from head config.
-                        handleInitialStackL1Effects(ini) >> runEffects
+                        handleInitialStackL1Effects(ini) >> runEffectsUnlessQuiesced
                     case reg: StackEffects.HardConfirmed.Regular =>
                         // Learn the stack's effects, then run the submission state
                         // machine immediately.
-                        handleStackL1Effects(reg) >> runEffects
+                        handleStackL1Effects(reg) >> runEffectsUnlessQuiesced
                 })
         }
 
@@ -785,6 +800,9 @@ trait CardanoLiaison(
         case TargetState.Uninitialized => NodeStatus.Initializing
         case TargetState.Active(_)     => NodeStatus.Active
         case TargetState.Finalized(_)  => NodeStatus.Finalized
+
+    private def runEffectsUnlessQuiesced(using Env.Connected): IO[Unit] =
+        quiesced.get.ifM(IO.unit, runEffects)
 
     /** The core part of the liaison that decides whether an action is needed and submits them.
       *

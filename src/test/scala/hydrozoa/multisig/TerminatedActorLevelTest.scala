@@ -2,35 +2,39 @@ package hydrozoa.multisig
 
 import hydrozoa.lib.logging.Level
 import hydrozoa.multisig.HeadMultisigRegimeManager.Actors
+import hydrozoa.multisig.LifecycleEvent.Stopping
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import org.scalatest.funsuite.AnyFunSuite
 
-/** A regime manager stops its own multisig children at the handoff to the rule-based regime, so
-  * their terminations then are expected (INFO); any other child termination is a warning.
+/** A regime manager stops its own children at the handoff to the rule-based regime and when the
+  * node shuts down, so their terminations then are expected (INFO); any other child termination is
+  * a warning.
   */
 class TerminatedActorLevelTest extends AnyFunSuite {
 
-    private def headLevel(atHandoff: Boolean): Level =
+    private def headLevel(stopping: Option[Stopping]): Level =
         HeadMultisigRegimeManagerEventFormat
             .humanFormat(HeadPeerNumber.zero)(
-              LifecycleEvent.TerminatedActor(Actors.BlockWeaver, atHandoff)
+              LifecycleEvent.TerminatedActor(Actors.BlockWeaver, stopping)
             )
             .level
 
-    private def coilLevel(atHandoff: Boolean): Level =
+    private def coilLevel(stopping: Option[Stopping]): Level =
         CoilMultisigRegimeManagerEventFormat
             .humanFormat(HeadPeerNumber.zero, CoilPeerNumber.zero)(
-              LifecycleEvent.TerminatedActor(Actors.BlockWeaver, atHandoff)
+              LifecycleEvent.TerminatedActor(Actors.BlockWeaver, stopping)
             )
             .level
 
-    test("a head's child terminated at the handoff is INFO, otherwise WARN") {
-        val _ = assert(headLevel(atHandoff = true) == Level.Info)
-        assert(headLevel(atHandoff = false) == Level.Warn)
+    test("a head's child terminated at the handoff or at shutdown is INFO, otherwise WARN") {
+        val _ = assert(headLevel(Some(Stopping.AtHandoff)) == Level.Info)
+        val _ = assert(headLevel(Some(Stopping.AtShutdown)) == Level.Info)
+        assert(headLevel(None) == Level.Warn)
     }
 
-    test("a coil's child terminated at the handoff is INFO, otherwise WARN") {
-        val _ = assert(coilLevel(atHandoff = true) == Level.Info)
-        assert(coilLevel(atHandoff = false) == Level.Warn)
+    test("a coil's child terminated at the handoff or at shutdown is INFO, otherwise WARN") {
+        val _ = assert(coilLevel(Some(Stopping.AtHandoff)) == Level.Info)
+        val _ = assert(coilLevel(Some(Stopping.AtShutdown)) == Level.Info)
+        assert(coilLevel(None) == Level.Warn)
     }
 }
