@@ -3,7 +3,6 @@ package hydrozoa.integration.stage1
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.syntax.contravariant.*
-import cats.syntax.flatMap.*
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId

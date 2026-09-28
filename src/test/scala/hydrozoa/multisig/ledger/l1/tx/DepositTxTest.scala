@@ -8,6 +8,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import io.bullet.borer.Cbor
 import java.util.concurrent.TimeUnit
 import monocle.*
 import monocle.syntax.all.*
@@ -128,12 +129,8 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
             } yield (index, fee, l2PayloadHash)
 
             Prop.forAll(gen)((idx, fee, l2PayloadHash) =>
-                val aux: AuxiliaryData.Metadata =
-                    AuxiliaryData.Metadata(
-                      MD.Deposit(idx, fee, l2PayloadHash)
-                          .asAuxData(config.headId)
-                          .getMetadata
-                    )
+                val aux: AuxiliaryData =
+                    MD.Deposit(idx, fee, l2PayloadHash).asAuxData(config.headId)
                 val expectedX = MD.Deposit(idx, fee, l2PayloadHash)
 
                 MD.Deposit.parse(aux) match {
@@ -143,6 +140,40 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                     case Left(_)  => "Metadata parsing returns Right" |: Prop(false)
                 }
             )
+        }
+
+    /** Heads built before the switch to the Alonzo format put the bare Shelley-era map on chain,
+      * and other clients may still emit it, so every auxiliary-data format must still parse. Each
+      * form goes through CBOR and back, as a transaction read from chain does.
+      */
+    val _ = property("Metadata parses from every auxiliary-data format") =
+        Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>
+            val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
+            val gen = for {
+                index <- Gen.choose(0, 10)
+                fee <- Gen.choose(0, 100_000_000).map(Coin(_))
+                l2PayloadHash <- genByteStringOfN(32)
+            } yield MD.Deposit(index, fee, l2PayloadHash)
+
+            Prop.forAll(gen) { expected =>
+                val emitted = expected.asAuxData(config.headId)
+                val md = emitted.getMetadata
+                val forms: List[(String, AuxiliaryData)] = List(
+                  "Shelley" -> AuxiliaryData.Metadata(md),
+                  "Shelley-MA" -> AuxiliaryData.MetadataWithScripts(md, IndexedSeq.empty),
+                  "Alonzo" -> AuxiliaryData.AlonzoFormat(Some(md))
+                )
+                val emitsAlonzo =
+                    "asAuxData emits the Alonzo format" |:
+                        emitted.isInstanceOf[AuxiliaryData.AlonzoFormat]
+                val parses = forms.map { (name, aux) =>
+                    val decoded =
+                        Cbor.decode(Cbor.encode(aux).toByteArray).to[AuxiliaryData].value
+                    s"$name form parses" |:
+                        (MD.Deposit.parse(decoded) == Right((config.headId, expected)))
+                }
+                Prop.all((emitsAlonzo :: parses)*)
+            }
         }
 
     val _ = property("Build deposit tx") =

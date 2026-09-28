@@ -23,7 +23,7 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend as L1Backend
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{RequestSequencer, SlowConsensusActorEvent, UserRequest}
-import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
+import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationKey}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Metadata}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
@@ -325,6 +325,7 @@ object TransientTokenDemo extends Properties("Transient token demo") {
             )
             params = InitializationParameters(
               initialEvacuationMap = evacuationMap,
+              initialL2StateHash = EutxoL2Ledger.initialStateHash(evacuationMap),
               initialEquityContributions = equity,
               headId = funding.headId
             )

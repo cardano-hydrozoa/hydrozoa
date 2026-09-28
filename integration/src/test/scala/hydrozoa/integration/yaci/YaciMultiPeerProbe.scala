@@ -2,7 +2,6 @@ package hydrozoa.integration.yaci
 
 import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Resource}
-import cats.syntax.all.*
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport
 import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.multisig.backend.cardano.CardanoBackend as L1Backend
