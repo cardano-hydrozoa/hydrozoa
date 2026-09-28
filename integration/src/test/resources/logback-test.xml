@@ -39,22 +39,6 @@
         </encoder>
     </appender>
 
-    <appender name="MERMAID" class="ch.qos.logback.core.FileAppender">
-        <file>stage4-peers-interaction.mmd</file>
-        <append>false</append>
-        <!-- A layout inside a LayoutWrappingEncoder, not a bare <layout>: logback reports the bare
-             form as a WARN status, and a WARN status makes it print its whole configuration
-             status (about 30 |-INFO lines) to the console of every JVM. -->
-        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
-            <layout class="hydrozoa.integration.MermaidSequenceDiagramLayout">
-                <pattern>%msg%n</pattern>
-            </layout>
-        </encoder>
-    </appender>
-    <logger name="Mermaid.PeerLiaison" level="info" additivity="false">
-        <appender-ref ref="MERMAID"/>
-    </logger>
-
     <!-- common test loggers -->
     <!-- default: warn -->
     <!-- The RBR MBT arms the settlement firewall on purpose, so it drops a settlement every tick
@@ -109,7 +93,6 @@
     <logger name="PeerLiaison.HeadToHead" level="debug"/>
     <logger name="PeerLiaison.HubToCoil" level="debug"/>
     <logger name="PeerLiaison.CoilToHub" level="debug"/>
-    <logger name="PeerLiaisonMermaid" level="info"/>
     <logger name="PeerTransport" level="debug"/>
     <logger name="CoilPeerWsTransport" level="debug"/>
     <logger name="HubWsTransport" level="debug"/>
