@@ -14,7 +14,7 @@ import io.circe.{Json, parser}
 import java.nio.file.Files
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.address.Address
-import scalus.cardano.ledger.{Coin, Value}
+import scalus.cardano.ledger.{CardanoInfo, Coin, Value}
 
 /** Pins the JSON field names + file names the bootstrap tooling reads. A successful decode proves
   * the field names (verificationKey / webSocketAddress / hubHeadPeerNumber / headPeers / coilPeers)
@@ -76,11 +76,35 @@ class BootstrapMembershipTest extends AnyFunSuite {
                 .as[Bootstrap.BootstrapDefaults]
                 .fold(e => fail(s"decode failed: $e"), identity)
         assert(
-          decoded.cardanoNetwork == network &&
+          decoded.cardanoNetwork == CardanoNetwork.Preview &&
               decoded.headParams.coilQuorum == 2 &&
               decoded.initialEquityContributions.size == 2 &&
               decoded.blockZeroEndTime.isEmpty
         )
+    }
+
+    test("defaults.json round-trips a standard chain and a custom one") {
+        // A chain that is not one of the three standard ones carries its own complete CardanoInfo,
+        // so nothing has to be resolved at read time.
+        val devnet = CardanoNetwork.Custom(CardanoInfo.preview, protocolMagic = 42L)
+
+        def roundTrip(network: CardanoNetwork): Bootstrap.BootstrapDefaults = {
+            given CardanoNetwork.Section = network
+            mkDefaults(network, coilQuorum = 2).asJson.deepDropNullValues
+                .as[Bootstrap.BootstrapDefaults]
+                .fold(e => fail(s"decode failed for $network: $e"), identity)
+        }
+
+        assert(
+          roundTrip(CardanoNetwork.Mainnet).cardanoNetwork == CardanoNetwork.Mainnet &&
+              roundTrip(devnet).cardanoNetwork == devnet
+        )
+    }
+
+    test("defaults.json encodes a standard chain as a bare name") {
+        given CardanoNetwork.Section = CardanoNetwork.Preview
+        val json = mkDefaults(CardanoNetwork.Preview, coilQuorum = 2).asJson
+        assert(json.hcursor.get[String]("cardanoNetwork") == Right("preview"))
     }
 
     test("a defaults.json carrying blockZeroStartTime still decodes; the field is ignored") {
@@ -143,6 +167,30 @@ class BootstrapMembershipTest extends AnyFunSuite {
         )
     }
 
+    test("readCardanoNetworkFile reads back what discover-network would have written") {
+        // The round trip an operator performs: `discover-network --out network.json`, then
+        // `--cardano-network-file network.json`.
+        val devnet = CardanoNetwork.Custom(CardanoInfo.preview, protocolMagic = 42L)
+        val path = Files.createTempFile("cardano-network", ".json")
+        Files.writeString(path, (devnet: CardanoNetwork).asJson.spaces2)
+        val read = Bootstrap.readCardanoNetworkFile(path).unsafeRunSync()
+        assert(read == devnet)
+    }
+
+    test("readCardanoNetworkFile refuses a chain wearing a standard chain's magic") {
+        // Only the baked-in CardanoInfo has preprod's Byron-aware slot geometry, so a `custom`
+        // block claiming preprod's magic must be rejected rather than quietly used.
+        val impostor =
+            CardanoNetwork.Custom(CardanoInfo.preview, CardanoNetwork.Preprod.protocolMagic)
+        val path = Files.createTempFile("cardano-network-impostor", ".json")
+        Files.writeString(path, (impostor: CardanoNetwork).asJson.spaces2)
+        val result = Bootstrap.readCardanoNetworkFile(path).attempt.unsafeRunSync()
+        assert(
+          result.left.exists(_.getMessage.contains("preprod")),
+          s"expected a rejection naming preprod, got: $result"
+        )
+    }
+
     test("L2Output round-trips through its CIP-0116 JSON") {
         val address =
             Address.fromBech32("addr_test1vrhh0xnmqlh5jpys4cqrj3vteje70r0swakm7q2w8nmcp3sh5wdk4")
@@ -152,11 +200,17 @@ class BootstrapMembershipTest extends AnyFunSuite {
         assert(decoded.value == output.value)
     }
 
-    /** The demo defaults [[InitBootstrapFiles]] writes: preview head parameters, head peer 0
-      * funding all equity, no pinned block-zero timing.
+    /** The demo defaults [[InitBootstrapFiles]] writes for Preview. */
+    private def mkPreviewDefaults(coilQuorum: Int): Bootstrap.BootstrapDefaults =
+        mkDefaults(CardanoNetwork.Preview, coilQuorum = coilQuorum)
+
+    /** The demo defaults [[InitBootstrapFiles]] writes: head parameters derived from the chain's
+      * own slot config, head peer 0 funding all equity, no pinned block-zero timing.
       */
-    private def mkPreviewDefaults(coilQuorum: Int): Bootstrap.BootstrapDefaults = {
-        val network = CardanoNetwork.Preview
+    private def mkDefaults(
+        network: CardanoNetwork,
+        coilQuorum: Int
+    ): Bootstrap.BootstrapDefaults = {
         val headParams = Bootstrap.BootstrapHeadParams(
           txTiming = TxTiming.demo(network.slotConfig),
           fallbackContingency = network.mkFallbackContingencyWithDefaults(Coin.ada(3), Coin.ada(3)),

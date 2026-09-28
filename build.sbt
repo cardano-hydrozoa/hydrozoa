@@ -458,10 +458,11 @@ lazy val integration: Project = (project in file("integration"))
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
-      // Yaci suites require Docker / a running Yaci DevKit instance, and the Preview suite requires
-      // a live public testnet + a funded master wallet; exclude both from the default test run.
-      // Run explicitly, e.g.: integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci
-      // NB: using * with testOnly still respects the excluded tests
+      // Suites needing external infra are excluded from the default test run: Yaci suites need
+      // Docker / a running Yaci DevKit instance, the Preview suite a live public testnet + a funded
+      // master wallet, and the Docker e2e suites Docker + the built image.
+      // NB: Tests.Exclude filters a suite out even when `testOnly` names it, so the `just` recipes
+      // that run one drop the exclusion with `set integration/Test/testOptions` first.
       Test / testOptions += Tests.Exclude(
         Seq(
           "hydrozoa.integration.stage1.Stage1PropertiesYaci",
@@ -469,7 +470,9 @@ lazy val integration: Project = (project in file("integration"))
           "hydrozoa.integration.yaci.YaciSetupProbe",
           "hydrozoa.integration.yaci.YaciMultiPeerProbe",
           "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci",
-          "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic"
+          "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesPublic",
+          "hydrozoa.integration.e2e.DockerSmokeTest",
+          "hydrozoa.integration.e2e.DockerRecoveryTest"
         )
       ),
       // ScalaCheck tuning for the default integration run: 10 cases per property (ScalaCheck's
