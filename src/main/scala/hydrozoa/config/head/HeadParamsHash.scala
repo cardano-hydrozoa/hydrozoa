@@ -59,7 +59,13 @@ object HeadParamsHash {
     def apply(
         config: HeadConfig.Bootstrap.Section,
         initialBlockHeader: BlockHeader.Initial
-    ): Hash32 = {
+    ): Hash32 = preimage(config, initialBlockHeader).mkDigest
+
+    /** The bytes [[apply]] digests, laid out as `docs/spec/head-params-hash.md` specifies. */
+    private[head] def preimage(
+        config: HeadConfig.Bootstrap.Section,
+        initialBlockHeader: BlockHeader.Initial
+    ): Preimage = {
         val out = Preimage()
         out.raw(domainTag)
 
@@ -121,11 +127,12 @@ object HeadParamsHash {
         }
 
         // -- scriptReferences. Pin an output reference exactly where the chain pins one, and the
-        // hash everywhere else: the two Plutus scripts contribute their hashes (a build mismatch
+        // hash everywhere else: the three Plutus scripts contribute their hashes (a build mismatch
         // nothing else catches), the setup ladder its rung-0 outref (what the regime datum
         // records as `setupG2Ladder`).
         out.scriptHash(HydrozoaBlueprint.treasuryScriptHash)
         out.scriptHash(HydrozoaBlueprint.disputeScriptHash)
+        out.scriptHash(HydrozoaBlueprint.regimeScriptHash)
         out.transactionInput(config.setupLadderAnchor)
 
         // -- initialBlockTiming. `endTime` carries the whole header: it reaches the initialization
@@ -151,6 +158,6 @@ object HeadParamsHash {
         out.u32(hubs.size)
         hubs.foreach(hub => out.u32(hub.convert))
 
-        out.mkDigest
+        out
     }
 }
