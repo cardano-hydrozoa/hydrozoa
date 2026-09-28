@@ -16,7 +16,8 @@ Every changed path falls into one bucket; the first matching rule in BUCKETS win
 A rename counts both its old and its new path; a deletion counts its path. What each bucket runs is
 in RUNS: `other` and `core-test` run all the tests, and `reporting` also the reporting canary
 (`just ci-canary`); docs alone, or no files at all, run nothing heavy. Any event but pull_request
-(merge_group, workflow_dispatch, ...) runs everything, the canary included.
+(merge_group, workflow_dispatch, ...) runs everything, the canary included, except a push that
+QUEUE_TESTED marks as already tested by the merge queue: that runs no tests.
 
 The change set of a pull_request run is HEAD^1..HEAD. For that event actions/checkout checks out
 GitHub's test merge (refs/pull/N/merge): a two-parent commit whose first parent is the base branch
@@ -33,6 +34,7 @@ Environment:
   GITHUB_EVENT_NAME    the triggering event (set by the runner)
   PR_HEAD_SHA          ${{ github.event.pull_request.head.sha }}; pull_request only
   PR_BASE_SHA          ${{ github.event.pull_request.base.sha }}; optional, only reported
+  QUEUE_TESTED         "true" when a successful merge_group run tested this push's commit; push only
   GITHUB_OUTPUT        receives code=, unit=, integration=, canary= as true/false (optional locally)
   GITHUB_STEP_SUMMARY  receives a readable summary (optional locally)
 
@@ -167,6 +169,12 @@ def main():
             forced = str(e)
     elif not event:
         forced = "GITHUB_EVENT_NAME is not set"
+    elif event == "push" and os.environ.get("QUEUE_TESTED") == "true":
+        # No tests, but code: the unit job still compiles, to save the compile cache.
+        outputs = {"code": True, **{name: False for name in OUTPUTS}}
+        why = "the merge queue already tested this commit"
+        report(event, "", "", {}, [], set(), outputs, warn=False, skipped=why)
+        return
     else:
         forced = f"the '{event}' event always runs everything"
 
@@ -186,12 +194,12 @@ def main():
     report(event, forced, change_set, counts, listing, runs, outputs, warn=warn)
 
 
-def report(event, forced, change_set, counts, listing, runs, outputs, warn):
+def report(event, forced, change_set, counts, listing, runs, outputs, warn, skipped=""):
     flags = " ".join(f"{k}={str(v).lower()}" for k, v in outputs.items())
     with open(os.environ.get("GITHUB_OUTPUT") or os.devnull, "a") as f:
         f.write("".join(f"{k}={str(v).lower()}\n" for k, v in outputs.items()))
 
-    plan = plan_text(runs)
+    plan = f"no tests: {skipped}" if skipped else plan_text(runs)
     count_text = ", ".join(f"{name} {n}" for name, n in counts.items())
     if warn:
         print(f"::warning title=CI plan::Running everything: {forced}.")
