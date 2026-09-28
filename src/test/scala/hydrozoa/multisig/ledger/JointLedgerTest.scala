@@ -808,6 +808,38 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
       } yield true
     )
 
+    val _ = property("A final block rejects every pending deposit and keeps none") = run(
+      resource = defaultResource,
+      testM = for {
+          _ <- ask
+          blockCreationStartTime <- startBlockNow(BlockNumber.zero.increment)
+          seqAndReq <- deposit(
+            requestValidityEndTime = RequestValidityEndTime(
+              BlockCreationEndTime(blockCreationStartTime + 20.seconds) + 10.minutes
+            ),
+            requestId = RequestId(0, 1)
+          )
+          (_, depositReq, _) = seqAndReq
+          _ <- completeBlockFinal(None)
+
+          // Asking for the state also waits until the final block has been handled. That state is
+          // what gets persisted as the final block's deposits map.
+          done <- unsafeGetDone
+          _ <- assertWith(
+            msg = s"No deposit should still be pending: ${done.deposits.numberOfDeposits} are",
+            condition = done.deposits.numberOfDeposits == 0
+          )
+          consensusAgentState <- getConsensusAgentState
+          _ <- assertWith(
+            msg = s"The final block should reject the pending deposit: $consensusAgentState",
+            condition = consensusAgentState.lastOption.exists(block =>
+                block.isInstanceOf[BlockBrief.Final] &&
+                    block.body.depositsRejected == List(depositReq.requestId)
+            )
+          )
+      } yield true
+    )
+
     val _ = property("Accepts deposit registration with sensible submission deadline") = run(
       resource = defaultResource,
       testM = for {

@@ -18,10 +18,12 @@ import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{CardanoLiaison, FastConsensusActor, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.l1.tx.RawTx
+import hydrozoa.multisig.persistence.{Persistence, StoreKey}
 import org.scalacheck.commands.SutCommand
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.ShelleyAddress
@@ -34,15 +36,17 @@ import scalus.utils.Pretty
 
 case class Stage1Sut(
     headAddress: ShelleyAddress,
-    // The shared L1 backend handle. Retained even though L1 effect-presence assertions moved to
-    // stage4 ([[hydrozoa.integration.stage4.EffectsLanded]]), because the real `CardanoLiaison`
-    // actor needs it: liaison.runEffects polls the backend on each tick and feeds the results to
-    // `JointLedger` via `PollResults`, which is how the head observes deposits maturing and L1
-    // settlements landing. Also used directly by SUT commands to query head UTxOs and to submit
-    // signed deposit txs straight to L1 (mirroring stage4's `RegisterAndSubmitDepositCommand`).
+    // The shared L1 backend handle. `CompleteBlockCommand` reads the head's UTxOs through it as
+    // the block's poll results, which is how the JointLedger sees deposits on L1, and
+    // `SubmitDepositsCommand` submits signed deposit txs through it. The real `CardanoLiaison`
+    // polls it too, but its `PollResults` go to `BlockWeaverMock`, which drops them.
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
     agent: AgentActor.Handle,
+    // The JointLedger's store, read after each block for the deposit rows it persisted.
+    persistence: Persistence[IO],
+    // Every deposit request sent to the JointLedger, whose decision rows are read after each block.
+    depositRequestIds: Ref[IO, List[RequestId]],
     log: ContraTracer[IO, Slf4jMsg],
     runId: String = "",
 )
@@ -173,8 +177,8 @@ object SutCommands:
                 (sut.agent ! cmd.request)
     }
 
-    implicit given SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] with {
-        override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] =
+    implicit given SutCommand[CompleteBlockCommand, CompletedBlock, Stage1Sut] with {
+        override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[CompletedBlock] =
             for {
                 _ <- sut.log.debug(
                   s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, " +
@@ -207,12 +211,22 @@ object SutCommands:
                 // All sync commands should be timed out since the system may terminate
                 d <- (sut.agent ?: AgentActor.CompleteBlock(block, cmd.blockNumber))
                     .timeout(10.seconds)
-            } yield d.blockBrief
+                // The JointLedger persists a block's rows before it hands the brief on, so they are
+                // in the store by the time the brief arrives here.
+                depositMap <- sut.persistence.getOrFail(StoreKey.DepositMap(cmd.blockNumber))
+                depositRequestIds <- sut.depositRequestIds.get
+                depositDecisions <- depositRequestIds.traverseFilter(id =>
+                    sut.persistence
+                        .get(StoreKey.DepositDecisionIndex(id))
+                        .map(_.map(id -> _))
+                )
+            } yield CompletedBlock(d.blockBrief, depositMap, depositDecisions.toMap)
     }
 
     given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
         override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] =
             sut.log.debug(">> RegisterDepositCommand") >>
+                sut.depositRequestIds.update(_ :+ cmd.request.requestId) >>
                 (sut.agent ! cmd.request)
     }
 
@@ -232,6 +246,8 @@ object SutCommands:
                 })
 
                 submissionErrors = ret.filter(_._2.isLeft)
+                // The model counts every submitted deposit as on L1 and predicts its absorption,
+                // so a rejected submission fails the command rather than only being logged.
                 _ <- IO.whenA(submissionErrors.nonEmpty)(
                   sut.log.error(
                     "Submit deposit errors:" + submissionErrors
@@ -241,6 +257,11 @@ object SutCommands:
                                 s"\n\tcbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
                         )
                         .mkString
+                  ) >> IO.raiseError(
+                    RuntimeException(
+                      "L1 rejected the deposit txs of requests " +
+                          submissionErrors.map(_._1._1).mkString(", ")
+                    )
                   )
                 )
             } yield ()

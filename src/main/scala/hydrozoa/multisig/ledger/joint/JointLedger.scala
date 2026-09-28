@@ -669,7 +669,8 @@ final case class JointLedger(
 
             _ <- panicOnMismatchWithExpectedBrief(referenceBlockBrief, blockBrief)
 
-            completedDone = p.done(blockBrief.header)
+            // The final block rejects every pending deposit, so none is left pending.
+            completedDone = p.setDeposits(DepositsMap.empty).done(blockBrief.header)
 
             // Final block: like a Major, it emits its own window's `evacuationMapDiff` (the L2
             // mutations applied while producing this block) so the slow side can fold them into

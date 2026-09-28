@@ -8,7 +8,10 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.block.BlockBrief.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.persistence.DepositDecision
 import io.circe.syntax.*
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
@@ -118,7 +121,9 @@ object Commands:
     // Complete Block
     // ===================================
 
-    /** Complete the current block (regular or final).  Result is the [[BlockBrief]] produced. */
+    /** Complete the current block (regular or final). Result is the [[BlockBrief]] produced and the
+      * deposit rows the JointLedger persisted with it.
+      */
     final case class CompleteBlockCommand(
         blockNumber: BlockNumber,
         // TODO: should we de-quantize this?
@@ -131,23 +136,45 @@ object Commands:
             s"CompleteBlockCommand(block=$blockNumber, blockDuration=$blockDuration, blockCreationEndTime=$blockCreationEndTime, isFinal=$isFinal)"
     }
 
-    /** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief.
+    /** What completing a block produced:
+      *   - the block brief;
+      *   - the deposits map persisted for this block (`StoreKey.DepositMap`), which holds the
+      *     deposits still undecided after it;
+      *   - the decision row (`StoreKey.DepositDecisionIndex`) of every deposit registered so far,
+      *     keyed by request id, with undecided deposits absent.
       */
-    implicit given CommandProp[CompleteBlockCommand, BlockBrief, Model.State] with
+    final case class CompletedBlock(
+        brief: BlockBrief,
+        depositMap: DepositsMap,
+        depositDecisions: Map[RequestId, DepositDecision]
+    )
+
+    /** Postcondition for [[CompleteBlockCommand]]: verifies model and SUT agree on the block brief
+      * and on the persisted deposit rows.
+      */
+    implicit given CommandProp[CompleteBlockCommand, CompletedBlock, Model.State] with
 
         override def onSuccessCheck(
             cmd: CompleteBlockCommand,
-            expectedResult: BlockBrief,
+            expectedResult: CompletedBlock,
             stateBefore: Model.State,
             stateAfter: Model.State,
-            result: BlockBrief
+            result: CompletedBlock
         ): Prop =
             given CardanoNetwork.Section = stateBefore.multiNodeConfig.headConfig
 
-            (expectedResult == result) :|
+            ((expectedResult.brief == result.brief) :|
                 "block briefs should be identical: " +
-                s"\n\texpected: ${expectedResult.asJson}" +
-                s"\n\tgot: ${result.asJson}"
+                s"\n\texpected: ${expectedResult.brief.asJson}" +
+                s"\n\tgot: ${result.brief.asJson}")
+            && ((expectedResult.depositMap == result.depositMap) :|
+                s"persisted deposits map of block ${cmd.blockNumber} should be identical: " +
+                s"\n\texpected: ${expectedResult.depositMap.requestIdsLong}" +
+                s"\n\tgot: ${result.depositMap.requestIdsLong}")
+            && ((expectedResult.depositDecisions == result.depositDecisions) :|
+                s"persisted deposit decisions after block ${cmd.blockNumber} should be identical: " +
+                s"\n\texpected: ${expectedResult.depositDecisions.toList.sortBy(_._1.asI64)}" +
+                s"\n\tgot: ${result.depositDecisions.toList.sortBy(_._1.asI64)}")
 
     implicit given CommandLabel[CompleteBlockCommand] with
         override def label(cmd: CompleteBlockCommand): String =

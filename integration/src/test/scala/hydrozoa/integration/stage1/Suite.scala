@@ -28,7 +28,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonE
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.eutxol2.toUtxos
-import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.metrics.PeerMetrics
@@ -40,7 +40,7 @@ import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionOutput, Utxo, Utxos, Value}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import test.TestPeerName.Alice
@@ -425,11 +425,19 @@ case class Suite(
         // Run cardano L1 backend - a mock or Yaci
         val cardanoBackendConfig = suiteCardano match {
             case Mock(_) =>
+                // The mock starts from the L1 as it stands once the initialization tx has landed.
+                // Stage 1 has no slow side to submit that tx, and the model funds deposits from
+                // its change output, so without this every deposit tx misses its inputs.
+                val initTx = multiNodeConfig.headConfig.initializationTx.tx
+                val initOutputs = initTx.body.value.outputs.toList.zipWithIndex.map((output, ix) =>
+                    TransactionInput(initTx.id, ix) -> output.value
+                )
                 CardanoBackendConfig.Mock(
                   network = multiNodeConfig.headConfig.cardanoInfo.network,
                   slotConfig = multiNodeConfig.headConfig.cardanoInfo.slotConfig,
                   protocolParams = multiNodeConfig.headConfig.cardanoInfo.protocolParams,
-                  genesisUtxos = state.preinitPeerUtxosL1
+                  genesisUtxos =
+                      state.preinitPeerUtxosL1 -- initTx.body.value.inputs.toSet ++ initOutputs
                 )
             case Yaci(url, _) =>
                 CardanoBackendConfig.Blockfrost(
@@ -585,11 +593,14 @@ case class Suite(
                     )
                   )
                   _ <- consensusActorD.complete(consensusActor)
+                  depositRequestIds <- IO.ref(List.empty[RequestId])
               } yield Stage1Sut(
                 headAddress = multiNodeConfig.headConfig.headMultisigAddress,
                 system = system,
                 cardanoBackend = cardanoBackend,
                 agent = agent,
+                persistence = persistence,
+                depositRequestIds = depositRequestIds,
                 log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Sut")),
                 runId = runId,
               )
