@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.joint
 
-import cats.effect.{IO, Ref}
+import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -58,10 +58,7 @@ final case class JointLedger(
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
-    /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section`); expose it as a
-      * given so the typed `WriteBatch.put` calls in [[persistOwnAckBundle]] pick it up.
-      */
-    private given CardanoNetwork.Section = config
+    private given env: Env = Env(config, l2Ledger, tracer, persistence, metrics)
 
     /** Typed sub-tracers for the polymorphic `BlockHeader.nextHeader*` /
       * `TxTiming.blockCanStayMinor` pure functions. Their events flow through the JL tracer wrapped
@@ -73,8 +70,6 @@ final case class JointLedger(
         tracer.contramap(JointLedgerEvent.TimingEvent.apply)
     private val dmTracer: ContraTracer[IO, DepositsMapEvent] =
         tracer.contramap(JointLedgerEvent.DepositsEvent.apply)
-
-    private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
     /** Drive an `ApplyDepositDecisions` command and fold its evacuation diffs into the L2 ledger
       * state, **panicking** on any non-`Applied` response. Unlike a user request (register /
@@ -111,33 +106,17 @@ final case class JointLedger(
         tracer.traceWith(JointLedgerEvent.L2CommandFailed(message)) *>
             IO.raiseError(new RuntimeException(message))
 
-    private def getConnections: IO[Connections] = for {
-        mConn <- this.connections.get
-        conn <- mConn.fold(
-          IO.raiseError(
-            IllegalStateException(
-              "Joint ledger is missing its connections to other actors."
-            )
-          )
-        )(IO.pure)
-    } yield conn
-
-    private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: HeadMultisigRegimeManager.PendingConnections =>
-            for {
-                _connections <- x.get.flatMap(IO.fromEither)
-                _ <- connections.set(
-                  Some(
-                    Connections(
-                      fastConsensusActor = _connections.consensusActor,
-                      stackComposer = _connections.stackComposer,
-                      headPeerLiaisons = _connections.headPeerLiaisons,
-                      coilRelay = _connections.coilRelay
-                    )
-                  )
+    private def initializeConnections: IO[Env.Connected] = {
+        val connections: IO[Connections] =
+            HeadMultisigRegimeManager.resolveConnections(pendingConnections)(c =>
+                Connections(
+                  fastConsensusActor = c.consensusActor,
+                  stackComposer = c.stackComposer,
+                  headPeerLiaisons = c.headPeerLiaisons,
+                  coilRelay = c.coilRelay
                 )
-            } yield ()
-        case x: JointLedger.Connections => connections.set(Some(x))
+            )
+        connections.map(env.connected)
     }
 
     override def preStart: IO[Unit] =
@@ -149,39 +128,56 @@ final case class JointLedger(
       * being guarded for at every handler. The carried [[State]] is the phase's data — no shared
       * mutable cell, since the actor handles one message at a time.
       *
-      * The initial phase is the cold-start `Done`; [[preStartLocal]] refines it from the store.
+      * The initial behavior is the start barrier: `PreStart` binds the connections, recovers the
+      * passive `Done` from the store (the cold-start `Done` on an empty store), and becomes
+      * [[done]]. Any other message before `PreStart` fail-stops.
       */
-    override def receive: Receive[IO, Requests.Request] = done(State.initialize(config))
+    override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
+        case Requests.PreStart =>
+            for {
+                // Suspends on the start barrier, so connections are in place before any real
+                // message is processed.
+                given Env.Connected <- initializeConnections
+                d <- recoverPassiveState
+                _ <- context.become(done(d))
+            } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
+    }
 
     /** Passive phase (between blocks): open the next block on `StartBlock`. User requests and block
       * completion need an open block, so they fail-stop here.
       */
-    private def done(d: Done): Receive[IO, Requests.Request] = PartialFunction.fromFunction {
-        case Requests.PreStart => preStartLocal
-        case s: StartBlock     => startBlock(s, d)
-        case req: SyncRequest.Any =>
-            req.request match { case r: GetState.type => r.handleSync(req, _ => IO.pure(d)) }
-        case _: UserRequestWithId | _: CompleteBlockRegular | _: CompleteBlockFinal =>
-            tracer.traceWith(JointLedgerEvent.InvalidStateExpectedProducing) >>
-                IO.raiseError(
-                  RuntimeException(
-                    "A request valid only while producing a block reached the JointLedger in its" +
-                        " passive (Done) phase."
-                  )
-                )
-    }
+    private def done(d: Done)(using Env.Connected): Receive[IO, Requests.Request] =
+        PartialFunction.fromFunction {
+            case Requests.PreStart =>
+                IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
+            case s: StartBlock => startBlock(s, d)
+            case req: SyncRequest.Any =>
+                req.request match { case r: GetState.type => r.handleSync(req, _ => IO.pure(d)) }
+            case _: UserRequestWithId | _: CompleteBlockRegular | _: CompleteBlockFinal =>
+                tracer.traceWith(JointLedgerEvent.InvalidStateExpectedProducing) >>
+                    IO.raiseError(
+                      RuntimeException(
+                        "A request valid only while producing a block reached the JointLedger in its" +
+                            " passive (Done) phase."
+                      )
+                    )
+        }
 
     /** Producing phase (a block is open): apply user requests and complete the block. `StartBlock`
       * fail-stops here — a block is already open.
       */
-    private def producing(p: Producing): Receive[IO, Requests.Request] =
+    private def producing(p: Producing)(using Env.Connected): Receive[IO, Requests.Request] =
         PartialFunction.fromFunction {
             case e: UserRequestWithId    => applyUserRequestWithId(e, p)
             case c: CompleteBlockRegular => completeBlockRegular(c, p)
             case f: CompleteBlockFinal   => completeBlockFinal(f, p)
             case req: SyncRequest.Any =>
                 req.request match { case r: GetState.type => r.handleSync(req, _ => IO.pure(p)) }
-            case Requests.PreStart | _: StartBlock =>
+            case Requests.PreStart =>
+                IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
+            case _: StartBlock =>
                 IO.raiseError(
                   RuntimeException(
                     "A `StartBlock` reached the JointLedger while it is already producing a block."
@@ -189,9 +185,11 @@ final case class JointLedger(
                 )
         }
 
-    private def preStartLocal: IO[Unit] =
+    /** The passive `Done` to start from: recovered from a non-empty store, else the cold-start
+      * `State.initialize`.
+      */
+    private def recoverPassiveState: IO[Done] =
         for {
-            _ <- initializeConnections
             // On a non-empty store restore the passive `Done` and co-anchor the L2 ledger to the
             // fast anchor. A cold start (empty store) keeps `State.initialize` here, but still
             // co-anchors the ledger at command zero and verifies its initial evacuation map. The
@@ -208,20 +206,22 @@ final case class JointLedger(
               markers.evacuationMapMark,
               config.l2ParamsHash
             )
-            // A non-empty store yields a refined `Done` to become; a cold start stays in the
-            // initial `Done` already installed by `receive`.
-            _ <- recovered match {
+            d <- recovered match {
                 case Some(recoveredDone) =>
-                    context.become(done(recoveredDone)) >> tracer.traceWith(
-                      JointLedgerEvent.PassiveStateRecovered(
-                        recoveredDone.previousBlockHeader.blockNum
-                      )
-                    )
-                case None => IO.unit
+                    tracer
+                        .traceWith(
+                          JointLedgerEvent.PassiveStateRecovered(
+                            recoveredDone.previousBlockHeader.blockNum
+                          )
+                        )
+                        .as(recoveredDone)
+                case None => IO.pure(State.initialize(config))
             }
-        } yield ()
+        } yield d
 
-    private def applyUserRequestWithId(e: UserRequestWithId, p: Producing): IO[Unit] = e match {
+    private def applyUserRequestWithId(e: UserRequestWithId, p: Producing)(using
+        Env.Connected
+    ): IO[Unit] = e match {
         case req: UserRequestWithId.DepositRequest     => registerDeposit(req, p)
         case req: UserRequestWithId.TransactionRequest => applyTransaction(req, p)
     }
@@ -236,7 +236,7 @@ final case class JointLedger(
         requestHash: RequestHash,
         e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | String,
         invalidation: JointLedger.Invalidation = JointLedger.Invalidation.PreCommand
-    ): IO[Unit] = {
+    )(using Env.Connected): IO[Unit] = {
         val currentBlockNum = p.nextBlockNumber
         // A post-command rejection (the L2 ledger consumed a number on the reject) must still
         // advance the command number so JointLedger stays in lock-step; a pre-command rejection
@@ -287,7 +287,9 @@ final case class JointLedger(
     /** Update the work-in-progress block to accept or reject the deposit, depending on whether the
       * L2 ledger can register it.
       */
-    private def registerDeposit(req: UserRequestWithId.DepositRequest, p: Producing): IO[Unit] = {
+    private def registerDeposit(req: UserRequestWithId.DepositRequest, p: Producing)(using
+        Env.Connected
+    ): IO[Unit] = {
         import req.*
         import request.*
         import body.*
@@ -377,7 +379,7 @@ final case class JointLedger(
     private def applyTransaction(
         req: UserRequestWithId.TransactionRequest,
         p: Producing
-    ): IO[Unit] = {
+    )(using Env.Connected): IO[Unit] = {
         import req.*
         import request.*
         import body.*
@@ -440,7 +442,7 @@ final case class JointLedger(
     /** Move the JointLedger from `Done` to `Producing` for the next block: set the creation start
       * time and re-initialize the per-block transient fields (L2 ledger state, user-request state).
       */
-    private def startBlock(args: StartBlock, d: Done): IO[Unit] = {
+    private def startBlock(args: StartBlock, d: Done)(using Env.Connected): IO[Unit] = {
         import args.*
         for {
             _ <- tracer.traceWith(
@@ -462,7 +464,7 @@ final case class JointLedger(
     private def completeBlockRegular(
         args: CompleteBlockRegular,
         p: Producing
-    ): IO[Unit] = {
+    )(using Env.Connected): IO[Unit] = {
         import args.*
         // Coil peers classify deposit existence from the head peers' soft-confirmed view
         // (the reference brief) rather than a fresh L1 poll. A coil below the settlement
@@ -645,7 +647,10 @@ final case class JointLedger(
     // If the produced block is NOT equal to a passed reference block, then:
     //   - Consensus is broken
     //   - Send a panic to the multisig regime manager in a suicide note
-    def completeBlockFinal(args: CompleteBlockFinal, p: Producing): IO[Unit] = {
+    def completeBlockFinal(
+        args: CompleteBlockFinal,
+        p: Producing
+    )(using Env.Connected): IO[Unit] = {
         import args.*
         for {
             blockBrief <- IO.pure {
@@ -710,9 +715,9 @@ final case class JointLedger(
         localFinalization: LocalFinalizationTrigger,
         blockResult: BlockResult,
         st: JointLedger.State
-    ): IO[Unit] =
+    )(using env: Env.Connected): IO[Unit] =
+        val conn = env.connections
         for {
-            conn <- getConnections
             // The block's brief is produced here (this peer's own when leading, or a reproduction
             // when following) — close the lead/replay lifecycle clock.
             _ <- IO(metrics.onBlockProduced((brief.blockNum: Int).toLong, brief.requests.size))
@@ -975,7 +980,7 @@ final case class JointLedger(
 
     // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
     // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
-    private def panic(msg: String): IO[Unit] = throw new RuntimeException(msg)
+    private def panic(msg: String): IO[Unit] = IO.raiseError(new RuntimeException(msg))
 }
 
 /** ==Hydrozoa's joint ledger on Cardano in the multisig regime==
@@ -1015,6 +1020,25 @@ object JointLedger {
         }
 
     type Config = HeadConfig.Section & OwnPeerPrivate.Section
+
+    private final case class Env(
+        config: Config,
+        l2Ledger: L2Ledger[IO],
+        tracer: ContraTracer[IO, JointLedgerEvent],
+        persistence: Persistence[IO],
+        metrics: PeerMetrics
+    ) extends CardanoNetwork.Section {
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+    }
+
+    private object Env {
+
+        final class Connected(env: Env, val connections: Connections)
+            extends CardanoNetwork.Section {
+            export env.*
+        }
+    }
 
     final case class Connections(
         fastConsensusActor: FastConsensusActor.Handle,

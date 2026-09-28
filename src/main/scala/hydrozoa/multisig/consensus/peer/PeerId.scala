@@ -54,4 +54,16 @@ object PeerId {
 
         /** Whether this peer is a head peer. */
         def isHead: Boolean = !self.isCoil
+
+        /** The head-peer number, or throw `orElse` if this is a coil peer. */
+        def expectHead(orElse: => String): HeadPeerNumber = self match {
+            case Head(n) => n
+            case Coil(_) => throw new IllegalStateException(orElse)
+        }
+
+        /** The coil-peer number, or throw `orElse` if this is a head peer. */
+        def expectCoil(orElse: => String): CoilPeerNumber = self match {
+            case Coil(n) => n
+            case Head(_) => throw new IllegalStateException(orElse)
+        }
 }
