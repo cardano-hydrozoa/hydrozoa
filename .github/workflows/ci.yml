@@ -2,8 +2,8 @@ name: CI
 
 on:
   # Each merge to main is compiled from scratch, and the compiled classes are saved for pull
-  # requests to start from; see "Choose the compile cache" in the plan job. A merge that came
-  # through the merge queue isn't tested again: the queue's run tested this same commit.
+  # requests to start from; see "Choose the compile cache" in the plan job. Its tests run only if
+  # no passing run has tested its tree; see "Find a run that already tested this tree".
   push:
     branches: [main]
   pull_request:
@@ -62,12 +62,14 @@ jobs:
     # supplies the toolchain; the host matters for Docker (the Yaci suites), the kernel and disk.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    # Reading the workflow's runs needs actions: read, for "Find the merge queue's run".
+    # Reading artifacts and runs needs actions: read, for "Find a run that already tested this
+    # tree".
     permissions:
       contents: read
       actions: read
     outputs:
-      queue-tested: ${{ steps.queue.outputs.tested }}
+      tree: ${{ steps.tested.outputs.tree }}
+      tree-tested: ${{ steps.tested.outputs.tested }}
       code: ${{ steps.plan.outputs.code }}
       unit: ${{ steps.plan.outputs.unit }}
       integration: ${{ steps.plan.outputs.integration }}
@@ -81,35 +83,31 @@ jobs:
         with:
           fetch-depth: 2
 
+      # A queue or push run whose tree a passing run already tested runs no tests. When main hasn't
+      # moved, a PR's own run, the queue's run and the push to main all test the same tree, so
+      # each after the first has nothing new to test. A push still compiles, to save the cache
+      # that pull requests start from: the queue's run can't save it, because a cache belongs to
+      # the ref that saved it and pull requests can't read the queue's temporary refs. The
+      # script's header says which runs it accepts; a failed lookup tests everything.
+      - name: Find a run that already tested this tree
+        id: tested
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/find-tested-tree.py
+
       # Decides which of the unit tests, the integration tests (Yaci included) and the reporting
       # canary a PR needs, from the files it changes; the script's header has the rules. A PR
       # confined to integration/ skips the unit tests, which that code can't affect; a change to
       # src/test/ runs both suites, since the integration suites build on core's test code.
-      # Merge-queue and manual runs always run everything, and so does a PR whose change set
-      # can't be determined.
-      # A merge through the merge queue moves main to the very commit the queue's run tested, so a
-      # push whose commit has a successful merge_group run needs no tests, only the compile that
-      # saves the cache. The queue's run can't save it instead: a cache belongs to the ref that
-      # saved it, and pull requests can't read the queue's temporary refs. Anything else, an
-      # admin's merge past the queue or a failed lookup, reads as untested and runs everything.
-      - name: Find the merge queue's run of this commit
-        id: queue
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
-        run: |
-          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=merge_group&status=success&head_sha=${SHA}" --jq '.total_count') || runs=0
-          if [ "${runs:-0}" -gt 0 ]; then tested=true; else tested=false; fi
-          echo "Successful merge-queue runs of ${SHA}: ${runs:-0}"
-          echo "tested=${tested}" >> "${GITHUB_OUTPUT}"
-
+      # Merge-queue and manual runs run everything unless their tree is already tested, and so
+      # does a PR whose change set can't be determined.
       - name: Plan the run
         id: plan
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          QUEUE_TESTED: ${{ steps.queue.outputs.tested }}
+          TREE_TESTED: ${{ steps.tested.outputs.tested }}
+          TESTED_BY: ${{ steps.tested.outputs.tested-by }}
         run: .github/scripts/classify-changes.py
 
       # Whether the test jobs start their compile from a saved one (restore), compile from scratch
@@ -140,7 +138,8 @@ jobs:
 
   # Precommit runs here for every PR that runs any test, so this job runs whenever a test job does,
   # and skips its unit step when the plan didn't call for the unit tests. It is also the job that
-  # saves the compile cache, so it runs for a merge the queue already tested, to compile and save.
+  # saves the compile cache, so it runs for a push whose tree is already tested, to compile and
+  # save.
   unit:
     needs: plan
     if: >-
@@ -220,9 +219,9 @@ jobs:
           key: ${{ needs.plan.outputs.compile-key }}-${{ github.sha }}
 
       # Runs even when the compile failed, so that one run reports formatting and lint as well.
-      # Not for a merge the queue already tested, whose run checked the same tree.
+      # Not for a push whose tree a passing run already tested.
       - name: Format / lint / nixfmt checks
-        if: ${{ !cancelled() && needs.plan.outputs.queue-tested != 'true' }}
+        if: ${{ !cancelled() && needs.plan.outputs.tree-tested != 'true' }}
         run: nix develop .#ci --command just precommit
 
       # The test steps run even when the precommit checks fail, so one run reports both: a
@@ -257,10 +256,10 @@ jobs:
       # Name every failed test on the run page: a summary plus error annotations, read from the
       # test-event files the build writes (see the script's header). Runs after a failing step
       # too. The steps' outcomes let it tell a pass from a step that failed without recording a
-      # failed or unfinished test, as a compile error does. Not for a merge the queue already
-      # tested, which runs no tests to summarise.
+      # failed or unfinished test, as a compile error does. Not for a push whose tree a passing run
+      # already tested, which runs no tests to summarise.
       - name: Summarise test results
-        if: always() && needs.plan.outputs.queue-tested != 'true'
+        if: always() && needs.plan.outputs.tree-tested != 'true'
         env:
           TEST_STEPS: unit=${{ steps.unit.outcome }}
         run: python3 .github/scripts/test-summary.py target
@@ -463,3 +462,22 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: .github/scripts/check-jobs.py
+
+      # Records that this run tested its tree, for "Find a run that already tested this tree" in a
+      # later run. Only a run that ran both test suites and passed records it; the reporting canary
+      # is left out because it tests CI's reporting, which a change outside `reporting` can't
+      # affect. The artifact is an empty file: its name carries the tree.
+      - name: Record the tested tree
+        if: >-
+          success() && needs.plan.outputs.tree != '' && needs.plan.outputs.unit == 'true' &&
+          needs.plan.outputs.integration == 'true'
+        run: touch tested-tree
+      - name: Upload the tested-tree record
+        if: >-
+          success() && needs.plan.outputs.tree != '' && needs.plan.outputs.unit == 'true' &&
+          needs.plan.outputs.integration == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tested-tree-${{ needs.plan.outputs.tree }}
+          path: tested-tree
+          retention-days: 14
