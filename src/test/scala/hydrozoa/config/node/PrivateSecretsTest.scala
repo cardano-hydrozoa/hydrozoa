@@ -142,6 +142,50 @@ class PrivateSecretsTest extends AnyFunSuite {
         assert(refusal.reason.contains("32 bytes of hex")): Unit
     }
 
+    // The CLI signers need only the peer's own key; demanding the node's other credentials would
+    // refuse an offline L2 signer for want of an admin password it never uses.
+    test("the own-signing-key overlay requires and splices only the peer's own key") {
+        val json = config(vkeyOf(skey('1')), vkeyOf(skey('2')))
+        val out = PrivateSecrets
+            .applyOwnSigningKey(json, Map("HYDROZOA_SIGNING_KEY" -> skey('1')), "test")
+            .fold(e => fail(s"unexpectedly refused: ${e.reason}"), identity)
+        val c = out.hcursor
+        assert(
+          c.downField("ownPeerPrivate")
+              .downField("ownHeadWallet")
+              .downField("signingKey")
+              .as[String] == Right(skey('1'))
+        ): Unit
+        assert(c.downField("blockfrostApiKey").failed): Unit
+        assert(
+          c.downField("nodeOperationEvacuationConfig")
+              .downField("ruleBasedWallet")
+              .downField("signingKey")
+              .failed
+        ): Unit
+    }
+
+    test("the own-signing-key overlay still pairs the key with its verification key") {
+        val json = config(vkeyOf(skey('1')), vkeyOf(skey('2')))
+        val refusal = PrivateSecrets
+            .applyOwnSigningKey(json, Map("HYDROZOA_SIGNING_KEY" -> skey('9')), "test")
+            .swap
+            .fold(_ => fail("expected a refusal"), identity)
+        assert(refusal.reason.contains("derives verification key")): Unit
+    }
+
+    // Narrowing what is required must not narrow what is refused: the config file carries no
+    // secrets, whichever command reads it.
+    test("the own-signing-key overlay refuses any credential left in the config") {
+        val json = config(vkeyOf(skey('1')), vkeyOf(skey('2')))
+            .deepMerge(Json.obj("blockfrostApiKey" -> Json.fromString("previewLEFTBEHIND")))
+        val refusal = PrivateSecrets
+            .applyOwnSigningKey(json, Map("HYDROZOA_SIGNING_KEY" -> skey('1')), "test")
+            .swap
+            .fold(_ => fail("expected a refusal"), identity)
+        assert(refusal.reason.contains("blockfrostApiKey")): Unit
+    }
+
     test("the env file parser handles comments, quotes, blanks and export") {
         val parsed = PrivateSecrets.parseEnvFile("""
           |# a comment

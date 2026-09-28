@@ -6,6 +6,11 @@ import sbt.hydrozoa.CompileProblems
 // mainClass, launcher script) therefore lives inside the `core` project's `.settings(...)` /
 // `.enablePlugins(...)` block below, not at the top level.
 
+// HYDROZOA_BUILD_TIME (epoch seconds), when set, is the build time `hydrozoa.BuildInfo` reports.
+// Not SOURCE_DATE_EPOCH: every nix shell sets that one (to 1980), release builds included.
+lazy val fixedBuildTimeMillis: Option[Long] =
+    sys.env.get("HYDROZOA_BUILD_TIME").flatMap(_.trim.toLongOption).map(_ * 1000L)
+
 // The git revision baked into the Docker image labels; matches `hydrozoa.BuildInfo.gitCommit`.
 lazy val gitRevision: String =
     scala.util
@@ -106,6 +111,12 @@ useFixedScalaCheck
 // No class of ours may extend Throwable other than through Exception (project/NoBareThrowables.scala);
 // run by `lintAll` and `lintCheckAll`, over the projects they lint.
 NoBareThrowables.settings(ScopeFilter(inProjects(cardanoOnchain, petri, core, integration, benchmark)))
+
+// `checkCompileState` compiles the projects the lint and the tests need, then fails unless each
+// one's compiled classes are of the current sources (project/CompileState.scala). CI runs it as
+// its compile step, after restoring `target/` from a build of main.
+CompileState.configSettings
+CompileState.settings(inProjects(cardanoOnchain, petri, core, integration, benchmark))
 
 // sbt 2 puts a project's test classes on classpaths as a jar, and packaging that jar picks a
 // `Main-Class` for its manifest from the test sources' main classes: every ScalaCheck
@@ -293,6 +304,10 @@ lazy val core: Project = (project in file("."))
         // Logging
         "ch.qos.logback" % "logback-classic" % "1.5.18",
         "org.typelevel" %% "log4cats-slf4j" % "2.7.1",
+        // ContraTracer port (extracted to its own repo), served via JitPack. Package stays
+        // `hydrozoa.lib.logging`; the SLF4J layer (Slf4jTracer/Slf4jMsg/LogEvent) remains local.
+        // JitPack strips the Scala `_3` suffix, hence a single `%`. See jitpack resolver below.
+        "com.github.cardano-hydrozoa" % "contratracer" % "0.1.1",
         // Used for input/output
         "org.scala-lang" %% "toolkit" % "0.7.0",
         // cats
@@ -343,6 +358,10 @@ lazy val core: Project = (project in file("."))
         "org.scalus" %% "scalus-testkit" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test,
+        // PropertyM (QuickCheck-style monadic properties) extracted to its own repo, served via
+        // JitPack. Package stays `org.scalacheck`; propagates to integration/examples via test->test.
+        // JitPack strips the Scala `_3` suffix, hence a single `%`. Pins ScalaCheck 1.18.0 to match.
+        "com.github.cardano-hydrozoa" % "scalacheck-propertym" % "0.2.1" % Test,
         "co.fs2" %% "fs2-io" % "3.12.2" % Test
       ),
       // Scalus compiler plugin — compiles on-chain `@Compile` code to UPLC (see `cardanoOnchain`
@@ -373,7 +392,14 @@ lazy val core: Project = (project in file("."))
         }
       ),
       // BuildTime forces a regenerate each build, keeping gitCommit current within a warm session.
-      buildInfoOptions += BuildInfoOption.BuildTime,
+      // With HYDROZOA_BUILD_TIME set (a CI job sets it once, at its start), the build time is
+      // that instead, so BuildInfo.scala is identical in every sbt run of the job and is not
+      // recompiled by each one.
+      buildInfoOptions ++= (if (fixedBuildTimeMillis.isEmpty) Seq(BuildInfoOption.BuildTime) else Nil),
+      buildInfoKeys ++= fixedBuildTimeMillis.toSeq.flatMap { ms =>
+          val fmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSSZ")
+          Seq[BuildInfoKey]("builtAtString" -> fmt.format(ms), "builtAtMillis" -> ms)
+      },
       // Fork JVM to properly pass system properties
       run / fork := true,
       // Silence the JVM's restricted-method warnings (blst-java JNI `System::load`, Scala
@@ -564,6 +590,19 @@ scalacOptions ++= Def.uncached(Seq(
   "-Wconf:msg=interpolation uses toString:s",
   "-Yretain-trees", // Essential for incremental compilation
 ) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil))
+
+// Under CI, Scalafix's compile keeps -Werror, so a CI job compiles with one set of options.
+// Whenever a scalafix command runs, sbt-scalafix drops -Werror from `compile / scalacOptions`, so
+// that its fixes can apply to code with warnings. Zinc records the options of every compile, even
+// one that compiles nothing, so the next -Werror compile would see them changed and recompile
+// every source. CI only checks, and a warning fails it either way. Elsewhere the plugin's
+// relaxation stands, so `lintAll` still fixes code that has warnings.
+Seq(Compile, Test).map(config =>
+  config / compile / scalacOptions := Def.uncached(
+    if (sys.env.contains("CI")) (config / scalacOptions).value
+    else (config / compile / scalacOptions).value
+  )
+)
 
 // Custom commands to format and lint all subprojects
 addCommandAlias(

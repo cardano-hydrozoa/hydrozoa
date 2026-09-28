@@ -1,8 +1,8 @@
 package hydrozoa.multisig.consensus.transport
 
 import cats.data.Chain
-import cats.effect.IO
 import cats.effect.std.Queue
+import cats.effect.{IO, Ref}
 import cats.syntax.applicative.*
 import cats.syntax.apply.*
 import fs2.Stream
@@ -48,6 +48,26 @@ object WsDuplex {
       * the peer is misbehaving, not that a message is merely large.
       */
     val maxTextFragments: Int = 1024
+
+    /** The read deadline passed while **our own** `onLine` handler was still running.
+      *
+      * The reader stamps each frame's arrival upstream of `onLine`, in the same sequential stream,
+      * so a handler that is slow for its own reasons stops the reads and no stamp is written. The
+      * watchdog cannot tell that from a silent peer by the stamp alone, and tearing the link down
+      * is still the right move either way (the alternative is buffering reads without bound). What
+      * differs is who to blame: this names the local handler, where a plain
+      * `TimeoutException("no WS frame ...")` would send an operator to look at the remote.
+      *
+      * A subclass of [[TimeoutException]], so every caller that handles the deadline handles this
+      * the same way.
+      */
+    final class HandlerStall(
+        val readIdleTimeout: FiniteDuration,
+        val handlerRunningFor: FiniteDuration
+    ) extends TimeoutException(
+          s"no WS frame read for $readIdleTimeout because the local onLine handler has been running" +
+              s" for $handlerRunningFor: a local stall, not peer silence"
+        )
 
     /** Read from a freshly connected `conn` until the first complete `Text` line arrives, and
       * answer any `Ping` on the way. `None` if the peer closed its send side first, or if `budget`
@@ -97,6 +117,10 @@ object WsDuplex {
         readIdleTimeout: FiniteDuration = defaultReadIdleTimeout
     ): IO[Unit] =
         IO.monotonic.flatMap(now => IO.ref(now)).flatMap { lastFrameAt =>
+            // When the current line's `onLine` started, while it runs: lets the watchdog tell our own
+            // stall from a silent peer. One cell per `run`, created as this lambda runs.
+            val handlerSince = Ref.unsafe[IO, Option[FiniteDuration]](None)
+
             val writer: IO[Unit] =
                 Stream
                     .fromQueueUnterminated(outbox)
@@ -129,9 +153,10 @@ object WsDuplex {
                             // undoing the very distinction this logging draws.
                             case close: WSFrame.Close => conn.send(close).attempt.as((partial, ()))
                             case WSFrame.Text(text, true) =>
-                                onLine((partial :+ text).toList.mkString).as(
-                                  (Chain.empty[String], ())
-                                )
+                                (IO.monotonic.flatMap(t => handlerSince.set(Some(t))) >>
+                                    onLine((partial :+ text).toList.mkString))
+                                    .guarantee(handlerSince.set(None))
+                                    .as((Chain.empty[String], ()))
                             case WSFrame.Text(text, false) =>
                                 val next = partial :+ text
                                 IO.raiseWhen(next.size > maxTextFragments)(
@@ -154,10 +179,14 @@ object WsDuplex {
             val watchdog: IO[Unit] = {
                 val tick = readIdleTimeout / 3
                 def loop: IO[Unit] =
-                    IO.sleep(tick) >> (IO.monotonic, lastFrameAt.get).flatMapN { (now, last) =>
-                        IO.raiseError(
-                          new TimeoutException(s"no WS frame for $readIdleTimeout")
-                        ).whenA(now - last >= readIdleTimeout) >> loop
+                    IO.sleep(tick) >> (IO.monotonic, lastFrameAt.get, handlerSince.get).flatMapN {
+                        (now, last, since) =>
+                            val stalled: Throwable = since match {
+                                case Some(start) => new HandlerStall(readIdleTimeout, now - start)
+                                case None =>
+                                    new TimeoutException(s"no WS frame for $readIdleTimeout")
+                            }
+                            IO.raiseError(stalled).whenA(now - last >= readIdleTimeout) >> loop
                     }
                 loop
             }

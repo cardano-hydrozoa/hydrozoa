@@ -3,6 +3,7 @@ package hydrozoa.app.cli
 import cats.effect.IO
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.PrivateSecrets
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.parser
 import java.nio.file.{Files, Path}
@@ -38,12 +39,16 @@ object DemoConfig {
             wallet <- readWallet(privateConfigPath)
         } yield L2Demo(cardanoNetwork, headId, wallet)
 
-    /** Load the peer's signing wallet from its private config — head or coil shape. */
+    /** Load the peer's signing wallet from its private config — head or coil shape. The
+      * verification key comes from the config, the signing key from the environment or the
+      * `private.env` beside it, exactly as [[hydrozoa.config.node.NodeConfig.load]] reads them.
+      */
     def readWallet(privateConfigPath: Path): IO[PeerWallet] =
         for {
-            json <- IO
+            fileJson <- IO
                 .blocking(Files.readString(privateConfigPath))
                 .flatMap(s => IO.fromEither(parser.parse(s)))
+            json <- PrivateSecrets.overlayOwnSigningKey(privateConfigPath, fileJson)
             ownPeer = json.hcursor.downField("ownPeerPrivate")
             wallet <- IO.fromEither {
                 def field(walletKind: String, key: String) =

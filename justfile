@@ -103,8 +103,10 @@ integration-yaci-docker:
   #!/usr/bin/env bash
   set -eo pipefail
   trap 'just notify "integration-yaci-docker"' EXIT
-  {{sbt}} "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
-  {{sbt}} "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
+  # `error` quiets what `set` logs about the setting it changes; `info` restores the level for the
+  # tests.
+  {{sbt}} "; error ; set integration/Test/testOptions := Seq() ; info ; integration/testOnly hydrozoa.integration.yaci.*"
+  {{sbt}} "; error ; set integration/Test/testOptions := Seq() ; info ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
 
 # Runs the ci-canary project's tests, whose outcomes are known (see `ciCanary` in build.sbt), then a
 # suite that halts its test JVM, then a compile with an error added on purpose. Run it after

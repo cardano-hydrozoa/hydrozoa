@@ -576,11 +576,35 @@ class HydrozoaRoutes(
                 _ =>
                     (for {
                         _ <- tracer.traceWith(FinalizeTriggered)
-                        _ <- blockWeaver ! BlockWeaver.LocalFinalizationTrigger.Triggered
-                        _ <- tracer.traceWith(FinalizeSignalSent)
-                    } yield Right(
-                      FinalizeResponse("success", "Head finalization triggered")
-                    )).handleErrorWith(err =>
+                        // Through the submission gate, like a user request: after the handoff the
+                        // BlockWeaver is stopped, and the trigger would only be a dead letter.
+                        sent <- submissions.admit(false)(
+                          (blockWeaver ! BlockWeaver.LocalFinalizationTrigger.Triggered).as(true)
+                        )
+                        result <-
+                            if sent then
+                                tracer
+                                    .traceWith(FinalizeSignalSent)
+                                    .as(
+                                      Right(
+                                        FinalizeResponse("success", "Head finalization triggered")
+                                      )
+                                    )
+                            else
+                                tracer
+                                    .traceWith(
+                                      RequestRejected("POST /api/admin/finalize", SubmissionsClosed)
+                                    )
+                                    .as(
+                                      Left(
+                                        (
+                                          StatusCode.ServiceUnavailable,
+                                          None,
+                                          ErrorResponse(SubmissionsClosed)
+                                        )
+                                      )
+                                    )
+                    } yield result).handleErrorWith(err =>
                         tracer
                             .traceWith(RequestFailed("POST /api/admin/finalize", err))
                             .as(

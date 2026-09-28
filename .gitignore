@@ -24,7 +24,6 @@ target/
 # traces and logs
 /hydrozoa-trace.jsonl
 **/*.log
-**/*.mmd
 
 #scratches
 .scratch

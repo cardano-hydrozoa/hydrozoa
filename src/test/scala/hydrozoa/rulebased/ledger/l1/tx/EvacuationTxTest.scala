@@ -187,6 +187,17 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
             evacuationTx.treasuryUtxoProduced != null,
             "Treasury UTXO produced should not be null"
           )
+          // The produced treasury utxo must name the output of this tx that carries it.
+          producedId = evacuationTx.treasuryUtxoProduced.utxoId
+          producedOutput = evacuationTx.treasuryUtxoProduced.treasuryOutput
+              .toOutput(using env.nodeConfigs.head._2)
+          _ <- assertWith(
+            producedId.transactionId == evacuationTx.tx.id &&
+                evacuationTx.tx.body.value.outputs
+                    .lift(producedId.index)
+                    .exists(_.value == producedOutput),
+            s"Treasury UTXO produced should resolve to its output in the tx, got $producedId"
+          )
           _ <- assertWith(
             {
                 val tried = builder.evacuateesToTryNext.toSet.map((_, payout) => payout.utxo.value)
