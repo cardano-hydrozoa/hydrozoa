@@ -20,9 +20,9 @@ on:
         options: [none, save, restore]
         default: none
 
-# A newer push to a pull request cancels the run for the older one. A run for main is never
-# cancelled: it is the build from scratch that the pull requests' compile cache comes from, so a
-# second merge, or a manual run on main, waits for it.
+# A newer push to a pull request cancels the run for the older one. A run for main that has
+# started is not cancelled: it is the build from scratch that the pull requests' compile cache
+# comes from. A newer merge waits for it, and replaces any run for main still waiting to start.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
