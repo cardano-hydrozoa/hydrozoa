@@ -114,6 +114,20 @@ object FastConsensusActor:
 
     case object PreStart
 
+    private final case class Env(
+        config: Config,
+        persistence: Persistence[IO],
+        tracer: ContraTracer[IO, FastConsensusActorEvent],
+        metrics: PeerMetrics
+    ) extends CardanoNetwork.Section:
+        def cardanoNetwork: CardanoNetwork = config.cardanoNetwork
+        def connected(connections: Connections): Env.Connected = Env.Connected(this, connections)
+
+    private object Env:
+        final class Connected(env: Env, val connections: Connections)
+            extends CardanoNetwork.Section:
+            export env.*
+
     def apply(
         config: Config,
         pendingConnections: HeadMultisigRegimeManager.PendingConnections |
@@ -167,62 +181,54 @@ class FastConsensusActor(
 ) extends Actor[IO, FastConsensusActor.Request]:
     import FastConsensusActor.*
 
-    /** `config` is a `CardanoNetwork.Section` (see [[FastConsensusActor.Config]]); expose it as a
-      * given so the typed `SoftConfirmation` `WriteBatch.put` in [[completeCell]] picks it up.
-      */
-    private given CardanoNetwork.Section = config
-
-    private val connections = Ref.unsafe[IO, Option[FastConsensusActor.Connections]](None)
-
-    private def getConnections: IO[Connections] =
-        connections.get.flatMap(
-          _.fold(
-            IO.raiseError(
-              IllegalStateException("Consensus Actor is missing its connections to other actors.")
-            )
-          )(IO.pure)
-        )
-
-    private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: HeadMultisigRegimeManager.PendingConnections =>
-            for {
-                _connections <- x.get.flatMap(IO.fromEither)
-                _ <- connections.set(
-                  Some(
-                    FastConsensusActor.Connections(
-                      // Soft-block fan-out goes via the rate limiter on the
-                      // FastConsensusActor → BlockWeaver lane (see
-                      // hydrozoa.multisig.consensus.limiter.Limiter).
-                      blockWeaver = _connections.blockWeaverLimiter,
-                      cardanoLiaison = _connections.cardanoLiaison,
-                      requestSequencer = _connections.requestSequencer,
-                      headPeerLiaisons = _connections.headPeerLiaisons,
-                      stackComposer = _connections.stackComposer,
-                      coilRelay = _connections.coilRelay,
-                      coilUplink = _connections.coilUplink,
-                    )
-                  )
-                )
-            } yield ()
-        case x: FastConsensusActor.Connections => connections.set(Some(x))
-    }
+    // `Env extends CardanoNetwork.Section`, so this given also supplies the section the typed
+    // `SoftConfirmation` `WriteBatch.put` in [[completeCell]] needs.
+    private given env: Env = Env(config, persistence, tracer, metrics)
 
     override def preStart: IO[Unit] = context.self ! FastConsensusActor.PreStart
 
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
-
-    private def receiveTotal(req: Request): IO[Unit] = req match {
-        case FastConsensusActor.PreStart => preStartLocal
-        case brief: BlockBrief.Next      => handleBrief(brief)
-        case ack: SoftAck                => handleAck(ack)
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
+        case FastConsensusActor.PreStart =>
+            for {
+                // Suspends on the start barrier, so connections are in place before any real
+                // message is processed.
+                given Env.Connected <- initializeConnections
+                _ <- context.become(PartialFunction.fromFunction(receiveConnected))
+            } yield ()
+        case x =>
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
     }
 
-    private def preStartLocal: IO[Unit] = initializeConnections
+    private def receiveConnected(req: Request)(using Env.Connected): IO[Unit] = req match {
+        case FastConsensusActor.PreStart =>
+            IO.raiseError(RuntimeException("Unexpected duplicate PreStart"))
+        case brief: BlockBrief.Next => handleBrief(brief)
+        case ack: SoftAck           => handleAck(ack)
+    }
 
-    private def handleBrief(brief: BlockBrief.Next): IO[Unit] =
+    private def initializeConnections: IO[Env.Connected] = {
+        val connections: IO[FastConsensusActor.Connections] =
+            HeadMultisigRegimeManager.resolveConnections(pendingConnections)(c =>
+                FastConsensusActor.Connections(
+                  // Soft-block fan-out goes via the rate limiter on the
+                  // FastConsensusActor → BlockWeaver lane (see
+                  // hydrozoa.multisig.consensus.limiter.Limiter).
+                  blockWeaver = c.blockWeaverLimiter,
+                  cardanoLiaison = c.cardanoLiaison,
+                  requestSequencer = c.requestSequencer,
+                  headPeerLiaisons = c.headPeerLiaisons,
+                  stackComposer = c.stackComposer,
+                  coilRelay = c.coilRelay,
+                  coilUplink = c.coilUplink,
+                )
+            )
+        connections.map(env.connected)
+    }
+
+    private def handleBrief(brief: BlockBrief.Next)(using Env.Connected): IO[Unit] =
         withCell(brief.blockNum)(_.acceptBrief(brief))
 
-    private def handleAck(ack: SoftAck): IO[Unit] = {
+    private def handleAck(ack: SoftAck)(using env: Env.Connected): IO[Unit] = {
         val isOwn = config.ownPeerId == PeerId.Head(ack.peerNum)
         for {
             _ <- tracer.traceWith(
@@ -242,8 +248,10 @@ class FastConsensusActor(
     /** Decide whether to broadcast a fresh own ack immediately or postpone it onto the previous
       * block's cell. See the [[FastConsensusActor]] class-level doc for postponed-ack semantics.
       */
-    private def scheduleOwnAck(ack: SoftAck): IO[Unit] = for {
-        _ <- IO.raiseWhen(config.ownPeerId != PeerId.Head(ack.peerNum))(Error.AlienAckAnnouncement)
+    private def scheduleOwnAck(ack: SoftAck)(using env: Env.Connected): IO[Unit] = for {
+        _ <- IO.raiseWhen(config.ownPeerId != PeerId.Head(ack.peerNum))(
+          Error.AlienAckAnnouncement
+        )
         state <- stateRef.get
         prevBlockNum = ack.blockNum match {
             case n if (n: Int) == 0 => None
@@ -272,7 +280,7 @@ class FastConsensusActor(
       */
     private def withCell(blockNum: BlockNumber)(
         f: ConsensusCell => Either[CollectingError, ConsensusCell]
-    ): IO[Unit] = for {
+    )(using env: Env.Connected): IO[Unit] = for {
         state <- stateRef.get
         cell = state.cells.getOrElse(blockNum, ConsensusCell.fresh(blockNum))
         updated <- IO.fromEither(f(cell))
@@ -282,83 +290,85 @@ class FastConsensusActor(
         )
     } yield ()
 
-    private def completeCell(cell: ConsensusCell): IO[Unit] = for {
-        conn <- getConnections
-        brief <- cell.brief.liftTo[IO](
-          new IllegalStateException(s"Saturated cell ${cell.blockNum} without a brief")
-        )
-        // Verify every ack's signature against the brief's blockHash — the block's content digest,
-        // so a peer that derived a different block cannot have signed these.
-        _ <- cell.acks.toList.traverse_((vk, ack) =>
-            verifySignature(vk, ack.signature, brief.blockHash)
-        )
+    private def completeCell(cell: ConsensusCell)(using env: Env.Connected): IO[Unit] = {
+        import env.connections
+        for {
+            brief <- cell.brief.liftTo[IO](
+              new IllegalStateException(s"Saturated cell ${cell.blockNum} without a brief")
+            )
+            // Verify every ack's signature against the brief's blockHash — the block's content
+            // digest, so a peer that derived a different block cannot have signed these.
+            _ <- cell.acks.toList.traverse_((vk, ack) =>
+                verifySignature(vk, ack.signature, brief.blockHash)
+            )
 
-        finalizationRequested = cell.acks.values.exists(_.finalizationRequested)
-        confirmed = mkSoftConfirmed(brief, cell.acks, finalizationRequested)
+            finalizationRequested = cell.acks.values.exists(_.finalizationRequested)
+            confirmed = mkSoftConfirmed(brief, cell.acks, finalizationRequested)
 
-        confirmedBlockType = brief match {
-            case _: BlockBrief.Minor => "minor"
-            case _: BlockBrief.Major => "major"
-            case _: BlockBrief.Final => "final"
-        }
-        _ <- tracer.traceWith(
-          FastConsensusActorEvent.BlockSoftConfirmed(
-            confirmed.blockNum,
-            confirmedBlockType,
-            confirmed.blockBrief.blockVersion.major: Int,
-            confirmed.blockBrief.blockVersion.minor: Int
-          )
-        )
-        // Peer stats (docs/spec/peer-stats-endpoint.md): count the block and its events. A final
-        // block is bucketed with major for the minor/major split.
-        isMajorBlock = brief match
-            case _: BlockBrief.Minor => false
-            case _                   => true
-        _ <- IO(
-          metrics.onBlockConfirmed(
-            (confirmed.blockNum: Int).toLong,
-            isMajorBlock,
-            brief.requests.size
-          )
-        )
+            confirmedBlockType = brief match {
+                case _: BlockBrief.Minor => "minor"
+                case _: BlockBrief.Major => "major"
+                case _: BlockBrief.Final => "final"
+            }
+            _ <- tracer.traceWith(
+              FastConsensusActorEvent.BlockSoftConfirmed(
+                confirmed.blockNum,
+                confirmedBlockType,
+                confirmed.blockBrief.blockVersion.major: Int,
+                confirmed.blockBrief.blockVersion.minor: Int
+              )
+            )
+            // Peer stats (docs/spec/peer-stats-endpoint.md): count the block and its events. A final
+            // block is bucketed with major for the minor/major split.
+            isMajorBlock = brief match
+                case _: BlockBrief.Minor => false
+                case _                   => true
+            _ <- IO(
+              metrics.onBlockConfirmed(
+                (confirmed.blockNum: Int).toLong,
+                isMajorBlock,
+                brief.requests.size
+              )
+            )
 
-        // Persist the SoftConfirmation record (header + aggregated multisig) before fanning out
-        // (CR4 write-before-send). `softConfirmed` derives as max(SoftConfirmation.key); we keep
-        // the subsumed soft-acks (no compaction on confirmation). The value carries this node's
-        // local confirmation moment as an arrival stamp — a wall-clock instant is derived on read
-        // via the per-generation zero-time anchor, so none is stored.
-        stamp <- persistence.arrivalStamp
-        _ <- persistence.write(
-          WriteBatch.start.put(StoreKey.SoftConfirmation(confirmed.blockNum))(
-            Timestamped(stamp, confirmed)
-          )
-        )
+            // Persist the SoftConfirmation record (header + aggregated multisig) before fanning out
+            // (CR4 write-before-send). `softConfirmed` derives as max(SoftConfirmation.key); we keep
+            // the subsumed soft-acks (no compaction on confirmation). The value carries this node's
+            // local confirmation moment as an arrival stamp — a wall-clock instant is derived on
+            // read via the per-generation zero-time anchor, so none is stored.
+            stamp <- persistence.arrivalStamp
+            _ <- persistence.write(
+              WriteBatch.start.put(StoreKey.SoftConfirmation(confirmed.blockNum))(
+                Timestamped(stamp, confirmed)
+              )
+            )
 
-        // Fan out the soft-confirmed block. (Peer liaisons no longer receive BlockConfirmed: the
-        // new lane protocol prunes per-reply, not on local confirmation.)
-        _ <- conn.blockWeaver ! confirmed
-        _ <- conn.stackComposer ! confirmed
+            // Fan out the soft-confirmed block. (Peer liaisons no longer receive BlockConfirmed: the
+            // new lane protocol prunes per-reply, not on local confirmation.)
+            _ <- connections.blockWeaver ! confirmed
+            _ <- connections.stackComposer ! confirmed
 
-        // Backpressure: announce this block and the per-author high-water request number it carried,
-        // so recipients can advance their confirmed-high-water windows. A block carries only the
-        // authors that appear in it, so an empty map leaves every recipient unchanged
-        // (docs/spec/fast-consensus.md).
-        //
-        // Sent on EVERY soft-confirmation, empty map included: a coil peer anchors its block and
-        // soft-ack pull ceilings on `blockNum`, which advances whether or not the block carried
-        // requests. `coilUplink` is the only non-empty recipient on a coil peer.
-        requestHighWater = ReplayCursors.maxRequestNumberPerPeer(confirmed.requests.map(_._1))
-        highWaterMsg = SoftConfirmedHighWater(confirmed.blockNum, requestHighWater)
-        _ <- conn.requestSequencer.traverse_(_ ! highWaterMsg)
-        _ <- conn.headPeerLiaisons.traverse_(_ ! highWaterMsg)
-        _ <- conn.coilUplink.traverse_(_ ! highWaterMsg)
+            // Backpressure: announce this block and the per-author high-water request number it
+            // carried, so recipients can advance their confirmed-high-water windows. A block
+            // carries only the authors that appear in it, so an empty map leaves every recipient
+            // unchanged (docs/spec/fast-consensus.md).
+            //
+            // Sent on EVERY soft-confirmation, empty map included: a coil peer anchors its block
+            // and soft-ack pull ceilings on `blockNum`, which advances whether or not the block
+            // carried requests. `coilUplink` is the only non-empty recipient on a coil peer.
+            requestHighWater = ReplayCursors.maxRequestNumberPerPeer(confirmed.requests.map(_._1))
+            highWaterMsg = SoftConfirmedHighWater(confirmed.blockNum, requestHighWater)
+            _ <- connections.requestSequencer.traverse_(_ ! highWaterMsg)
+            _ <- connections.headPeerLiaisons.traverse_(_ ! highWaterMsg)
+            _ <- connections.coilUplink.traverse_(_ ! highWaterMsg)
 
-        // Announce any postponed own-ack for the next block now that this cell is done.
-        _ <- cell.postponedNextBlockOwnAck.traverse_(announceAck)
+            // Announce any postponed own-ack for the next block now that this cell is done.
+            _ <- cell.postponedNextBlockOwnAck.traverse_(announceAck)
 
-        // Drop the completed cell.
-        _ <- stateRef.update(s => s.copy(cells = s.cells - cell.blockNum))
-    } yield ()
+            // Drop the completed cell.
+            _ <- stateRef.update(s => s.copy(cells = s.cells - cell.blockNum))
+        } yield ()
+    }
 
     private def verifySignature(
         vk: VerificationKey,
@@ -375,10 +385,10 @@ class FastConsensusActor(
 
     // Broadcast this peer's own soft-ack to the head-peer mesh, and (on a hub) to CoilRelay so its
     // coil peers receive it.
-    private def announceAck(ack: SoftAck): IO[Unit] =
-        getConnections.flatMap(conn =>
-            (conn.headPeerLiaisons ! ack).parallel >> conn.coilRelay.traverse_(_ ! ack)
-        )
+    private def announceAck(ack: SoftAck)(using env: Env.Connected): IO[Unit] = {
+        import env.connections
+        (connections.headPeerLiaisons ! ack).parallel >> connections.coilRelay.traverse_(_ ! ack)
+    }
 
     private def mkSoftConfirmed(
         brief: BlockBrief.Next,
