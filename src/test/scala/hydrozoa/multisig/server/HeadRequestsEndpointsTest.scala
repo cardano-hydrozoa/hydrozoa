@@ -1,7 +1,7 @@
 package hydrozoa.multisig.server
 
-import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.actor.HydrozoaActorSystem
@@ -119,7 +119,8 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
 
     private def withRoutes(
         reader: ConsensusStoreReader[IO],
-        submissions: SubmissionGate = SubmissionGate.unsafeOpen()
+        submissions: SubmissionGate = SubmissionGate.unsafeOpen(),
+        onBlockWeaver: BlockWeaver.Request => IO[Unit] = _ => IO.unit
     )(check: HttpApp[IO] => IO[Unit]): Unit =
         HydrozoaActorSystem
             .withoutRoot("HeadRequestsEndpointsTest")
@@ -133,7 +134,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                     )
                     blockWeaverStub <- system.actorOf(
                       new Actor[IO, BlockWeaver.Request] {
-                          override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+                          override def receive: Receive[IO, BlockWeaver.Request] = onBlockWeaver(_)
                       }
                     )
                     routes <- HydrozoaRoutes(
@@ -380,6 +381,47 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
             } yield {
                 val _ = assert(resp.status == Status.ServiceUnavailable, error)
                 val _ = assert(error == Right(HydrozoaRoutes.SubmissionsClosed))
+                ()
+            }
+        }
+    }
+
+    private val adminFinalize: Request[IO] =
+        Request[IO](Method.POST, Uri.unsafeFromString("/api/admin/finalize"))
+            .putHeaders(
+              org.http4s.headers.Authorization(org.http4s.BasicCredentials("admin", "admin"))
+            )
+
+    test("POST /api/admin/finalize reaches the BlockWeaver while the head is in multisig") {
+        val received = Deferred.unsafe[IO, BlockWeaver.Request]
+        withRoutes(stubReader(Map.empty), onBlockWeaver = r => received.complete(r).void) { app =>
+            for {
+                resp <- app.run(adminFinalize)
+                trigger <- received.get.timeout(5.seconds)
+            } yield {
+                val _ = assert(resp.status == Status.Ok)
+                val _ = assert(trigger == BlockWeaver.LocalFinalizationTrigger.Triggered)
+                ()
+            }
+        }
+    }
+
+    test("POST /api/admin/finalize is refused with a 503 once the head has handed off") {
+        val submissions = SubmissionGate.unsafeOpen()
+        val received = Ref.unsafe[IO, List[BlockWeaver.Request]](Nil)
+        withRoutes(stubReader(Map.empty), submissions, r => received.update(_ :+ r)) { app =>
+            for {
+                _ <- submissions.closeAndDrain(0.seconds)
+                resp <- app.run(adminFinalize)
+                error <- resp.as[Json].map(_.hcursor.get[String]("error"))
+                // The stub handles messages asynchronously; the test above shows a trigger
+                // arrives well within this.
+                _ <- IO.sleep(200.millis)
+                sent <- received.get
+            } yield {
+                val _ = assert(resp.status == Status.ServiceUnavailable, error)
+                val _ = assert(error == Right(HydrozoaRoutes.SubmissionsClosed))
+                val _ = assert(sent.isEmpty, s"the closed route still sent $sent")
                 ()
             }
         }

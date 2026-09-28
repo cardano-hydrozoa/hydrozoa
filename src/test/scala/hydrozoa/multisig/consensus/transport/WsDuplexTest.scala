@@ -63,7 +63,9 @@ class WsDuplexTest extends AnyFunSuite {
             .unsafeRunSync()(using
               cats.effect.unsafe.implicits.global
             )
-        assert(result.isLeft && result.left.exists(_.isInstanceOf[TimeoutException]))
+        val _ = assert(result.isLeft && result.left.exists(_.isInstanceOf[TimeoutException]))
+        // A silent peer is blamed on the peer, not on our handler.
+        assert(!result.left.exists(_.isInstanceOf[WsDuplex.HandlerStall]))
     }
 
     test("the peer's keep-alive Ping holds a quiet link open past the deadline, and is Pong'd") {
@@ -152,5 +154,35 @@ class WsDuplexTest extends AnyFunSuite {
             .executeEmbed(prog)
             .unsafeRunSync()(using cats.effect.unsafe.implicits.global)
         assert(outcome.left.exists(_.isInstanceOf[IllegalStateException]))
+    }
+
+    /** The reader stamps each frame upstream of `onLine`, in one sequential stream, so a handler
+      * that is slow for its own reasons stops the reads and the deadline passes although the peer
+      * is sending normally. Tearing the link down is still right (the alternative buffers without
+      * bound), but the error must name the local handler, not the peer.
+      *
+      * Frames arrive every 5 s, well inside the 30 s deadline; only the handler is slow (40 s), so
+      * the first line's handler is still running when the deadline passes at ~35 s.
+      */
+    test("a deadline passed while our own handler runs is reported as a local stall") {
+        val prog = for {
+            sent <- Ref.of[IO, List[WSFrame]](Nil)
+            outbox <- Queue.unbounded[IO, String]
+            c = scheduled(
+              List.fill(6)((5.seconds, Some(WSFrame.Text("x", true): WSFrame))),
+              sent
+            )
+            outcome <- WsDuplex
+                .run(c, outbox, _ => IO.sleep(40.seconds), readIdleTimeout = 30.seconds)
+                .attempt
+        } yield outcome
+        val outcome = TestControl
+            .executeEmbed(prog)
+            .unsafeRunSync()(using cats.effect.unsafe.implicits.global)
+        val stall = outcome.left.toOption.collect { case s: WsDuplex.HandlerStall => s }
+        val _ = assert(stall.nonEmpty, s"expected a HandlerStall, got $outcome")
+        // Still a TimeoutException, so every caller that handles the deadline treats it the same.
+        val _ = assert(stall.exists(_.isInstanceOf[TimeoutException]))
+        assert(stall.exists(_.handlerRunningFor >= 30.seconds))
     }
 }

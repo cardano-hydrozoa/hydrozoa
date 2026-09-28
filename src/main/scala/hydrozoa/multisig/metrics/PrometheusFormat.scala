@@ -159,9 +159,12 @@ object PrometheusFormat:
           "Partitions in the stack being built.",
           s.composer.partitionsTotal
         )
-        // The phase itself as a labelled 0/1 set, so a dashboard can select on it.
+        // The phase itself as a labelled 0/1 set, so a dashboard can select on it. One family, so
+        // HELP and TYPE are declared once above the series rather than once per label value — the
+        // exposition format allows at most one of each per metric name.
+        b ++= "# HELP hydrozoa_composer_phase What the StackComposer is currently waiting for.\n"
+        b ++= "# TYPE hydrozoa_composer_phase gauge\n"
         StackComposerPhase.values.foreach { p =>
-            b ++= "# TYPE hydrozoa_composer_phase gauge\n"
             b ++= s"hydrozoa_composer_phase{phase=\"$p\"} ${
                     if s.composer.phase == p then 1 else 0
                 }\n"

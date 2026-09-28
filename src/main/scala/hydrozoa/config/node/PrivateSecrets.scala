@@ -131,6 +131,24 @@ object PrivateSecrets:
       * Kubernetes deployment override one value without rewriting the file the rest come from.
       */
     def overlay(privateConfigPath: Path, json: Json): IO[Json] =
+        withProvided(privateConfigPath)(applySecrets(json, _, _))
+
+    /** [[overlay]] narrowed to this peer's own signing key, for the CLI commands that sign with the
+      * peer's wallet but run no node (`submit-l2-tx`, `deploy-scripts-and-g2-setup`) and so have no
+      * use for the other credentials [[overlay]] demands.
+      *
+      * Everything else is [[overlay]]'s: the same variable, env file and precedence, the same
+      * pairing check, and the same refusal of a config file that still carries any credential.
+      */
+    def overlayOwnSigningKey(privateConfigPath: Path, json: Json): IO[Json] =
+        withProvided(privateConfigPath)(applyOwnSigningKey(json, _, _))
+
+    /** Collect the credentials the environment and the env file provide, and hand them to `apply`
+      * with a description of where they came from.
+      */
+    private def withProvided(privateConfigPath: Path)(
+        apply: (Map[String, String], String) => Either[StartupRefusal, Json]
+    ): IO[Json] =
         for {
             envPath <- IO.delay(
               sys.env
@@ -144,7 +162,7 @@ object PrivateSecrets:
             }
             provided = fromFile ++ sys.env.view.filterKeys(fromFile.keySet ++ allEnvNames).toMap
             resolved <- IO.fromEither(
-              applySecrets(json, provided, s"$privateConfigPath (credentials from $envPath)")
+              apply(provided, s"$privateConfigPath (credentials from $envPath)")
             )
         } yield resolved
 
@@ -167,21 +185,45 @@ object PrivateSecrets:
             .map(m => StartupRefusal(s"$source: $m"))
             .flatMap(own => resolve(own :: fixedSecrets, provided, source, json))
 
+    /** The pure core of [[overlayOwnSigningKey]]: only the peer's own signing key is required and
+      * spliced, but a leftover value of any credential still refuses the config.
+      */
+    def applyOwnSigningKey(
+        json: Json,
+        provided: Map[String, String],
+        source: String
+    ): Either[StartupRefusal, Json] =
+        ownWalletSecret(json).left
+            .map(m => StartupRefusal(s"$source: $m"))
+            .flatMap(own =>
+                leakRefusal(own :: fixedSecrets, source, json)
+                    .toLeft(())
+                    .flatMap(_ => resolve(List(own), provided, source, json))
+            )
+
+    /** ⛔ The config file carries no secrets: any credential still sitting in it is a refusal. */
+    private def leakRefusal(
+        secrets: List[Secret],
+        source: String,
+        json: Json
+    ): Option[StartupRefusal] =
+        val leaked = secrets.filter(s => at(json, s.path).exists(v => !isPlaceholder(v)))
+        Option.when(leaked.nonEmpty)(
+          StartupRefusal(
+            s"$source still contains credentials that are now read from the environment: " +
+                s"${leaked.map(_.path.mkString(".")).mkString(", ")}. Move each value out and " +
+                "delete the field, so the config file carries no secrets."
+          )
+        )
+
     private def resolve(
         secrets: List[Secret],
         fromFile: Map[String, String],
         source: String,
         json: Json
     ): Either[StartupRefusal, Json] =
-        val leaked = secrets.filter(s => at(json, s.path).exists(v => !isPlaceholder(v)))
-        if leaked.nonEmpty then
-            Left(
-              StartupRefusal(
-                s"$source still contains credentials that are now read from the environment: " +
-                    s"${leaked.map(_.path.mkString(".")).mkString(", ")}. Move each value out and " +
-                    "delete the field, so the config file carries no secrets."
-              )
-            )
+        val leaked = leakRefusal(secrets, source, json)
+        if leaked.isDefined then leaked.toLeft(json)
         else
             // A signing key is required only where its public half is: a config with no rule-based
             // wallet at all is a different (and self-reporting) problem, and demanding a key for a
