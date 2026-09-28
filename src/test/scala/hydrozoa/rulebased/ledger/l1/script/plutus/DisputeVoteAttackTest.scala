@@ -6,7 +6,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
 import hydrozoa.lib.cardano.scalus.contextualscalus
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addRequiredSigners
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
@@ -177,8 +177,11 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
             finalized <- context
                 .addRequiredSigners(boxA.votingSigners ++ boxB.votingSigners)
                 .finalizeContext(
+                  protocolParams = config.cardanoProtocolParams,
                   diffHandler = contextualscalus.Change.changeOutputDiffHandler(0),
-                  validators = nonSigningValidators
+                  evaluator = PlutusScriptEvaluator(config.cardanoInfo, EvaluateAndComputeCost),
+                  validators = nonSigningValidators,
+                  debugScripts = TracedScripts.debugScripts
                 )
         } yield finalized.transaction
     }
@@ -285,7 +288,8 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
             env.headConfig.network
           ),
           slotConfig = env.headConfig.slotConfig,
-          evaluatorMode = EvaluateAndComputeCost
+          evaluatorMode = EvaluateAndComputeCost,
+          debugScripts = TracedScripts.debugScripts
         )
 
         // E1: a peer votes on ANOTHER peer's reserved box. We set the required signer to ourselves

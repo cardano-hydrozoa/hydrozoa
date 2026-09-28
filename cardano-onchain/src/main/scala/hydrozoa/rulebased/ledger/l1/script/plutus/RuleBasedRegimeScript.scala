@@ -100,8 +100,7 @@ object RuleBasedRegimeValidator extends Validator {
 }
 
 object RuleBasedRegimeScript {
-    // Compile the validator using PlutusV3.compile
-    given scalus.compiler.Options = scalus.compiler.Options.default
+    given scalus.compiler.Options = ScriptCompilerOptions.options
 
     val compiledPlutusV3Program: PlutusV3[Data => Unit] =
         PlutusV3.compile(RuleBasedRegimeValidator.validate)

@@ -171,7 +171,7 @@ class EvacuationAttackTest extends AnyFunSuite {
         )
 
     private def submit(tx: Transaction) =
-        mkEmulator().submit(ownWallet.signTx(tx))
+        TracedScripts.submit(mkEmulator(), ownWallet.signTx(tx))
 
     /** Assert the mutated tx is rejected, and that the rejection mentions `reason` (so it is the
       * intended script check doing the rejecting, not a phase-1 fee/balance error).
@@ -315,7 +315,7 @@ class EvacuationAttackTest extends AnyFunSuite {
           validators = Seq.empty,
           mutators = Seq(CardanoMutator)
         )
-        emu.submit(ownWallet.signTx(mutated)) match {
+        TracedScripts.submit(emu, ownWallet.signTx(mutated)) match {
             case Right(_) =>
                 fail("forged-ladder: expected rejection but the transaction was accepted")
             case Left(err) =>
@@ -412,7 +412,7 @@ class EvacuationAttackTest extends AnyFunSuite {
         buildEvacuation(residual, key, evacMap) match {
             case Left(_) => () // expected: cannot re-pay a drained obligation from the residual
             case Right(evac2) =>
-                emu2.submit(ownWallet.signTx(evac2.tx)) match {
+                TracedScripts.submit(emu2, ownWallet.signTx(evac2.tx)) match {
                     case Right(_) => fail("double-drain of the same obligation was accepted")
                     case Left(err) =>
                         val s = err.toString

@@ -1,7 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
-import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{cip67BeaconTokenPrefix, findRegimeReference}
@@ -244,8 +243,7 @@ object DisputeResolutionValidator extends Validator {
 
                 //  headMp must match the corresponding field of the Unresolved datum in treasury.
                 val treasuryDatum =
-                    treasuryReference.resolved
-                        .inlineDatumOfType[RuleBasedTreasuryDatum] match {
+                    treasuryReference.resolved.datum.inlineOrFail[RuleBasedTreasuryDatum] match {
                         case u: Unresolved => u
                         case _             => fail(VoteTreasuryDatum)
                     }
@@ -354,7 +352,7 @@ object DisputeResolutionValidator extends Validator {
                     case None    => ()
                     case Some(_) => fail(VoteOutputNoScriptRef)
 
-                val voteOutputDatum = voteOutput.inlineDatumOfType[VoteDatum]
+                val voteOutputDatum = voteOutput.datum.inlineOrFail[VoteDatum]
 
                 // voteStatus field of voteOutput must be a Vote matching voteRedeemer
                 // on the commitment and versionMinor fields.
@@ -435,8 +433,8 @@ object DisputeResolutionValidator extends Validator {
 
                 // The key field of removedInput must be greater than the key field and equal to the
                 // link field of continuingInput.
-                val continuingDatum = continuingInput.inlineDatumOfType[VoteDatum]
-                val removedDatum = removedInput.inlineDatumOfType[VoteDatum]
+                val continuingDatum = continuingInput.datum.inlineOrFail[VoteDatum]
+                val removedDatum = removedInput.datum.inlineOrFail[VoteDatum]
                 require(
                   removedDatum.key > continuingDatum.key && removedDatum.key == continuingDatum.link,
                   KeyLinkFieldsDoNotMatch
@@ -483,8 +481,7 @@ object DisputeResolutionValidator extends Validator {
                 // headMp must match the corresponding field of the Unresolved datum in treasury;
                 // disputeId lives in the regime reference input.
                 val treasuryDatum =
-                    treasuryReference.resolved
-                        .inlineDatumOfType[RuleBasedTreasuryDatum] match {
+                    treasuryReference.resolved.datum.inlineOrFail[RuleBasedTreasuryDatum] match {
                         case u: Unresolved => u
                         case _             => fail(TreasuryDatumIsUnresolved)
                     }
@@ -532,7 +529,7 @@ object DisputeResolutionValidator extends Validator {
                     case Some(_) => fail(TallyOutputNoScriptRef)
 
                 // voteStatus of continuingOutput must equal maxVote of the two inputs.
-                val continuingOutputDatum = continuingOutput.inlineDatumOfType[VoteDatum]
+                val continuingOutputDatum = continuingOutput.datum.inlineOrFail[VoteDatum]
                 require(
                   continuingOutputDatum.voteStatus === maxVote(
                     continuingDatum.voteStatus,
@@ -573,7 +570,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // TODO: This is checked by the treasury validator
                 val treasuryDatum =
-                    treasuryInput.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
+                    treasuryInput.resolved.datum.inlineOrFail[RuleBasedTreasuryDatum] match {
                         case u: Unresolved => u
                         case _             => fail(ResolveDatumIsUnresolved)
                     }
@@ -622,7 +619,7 @@ object DisputeResolutionValidator extends Validator {
                     case None    => ()
                     case Some(_) => fail(AbstainVoteOutputNoScriptRef)
 
-                val voteOutputDatum = voteOutput.inlineDatumOfType[VoteDatum]
+                val voteOutputDatum = voteOutput.datum.inlineOrFail[VoteDatum]
                 voteOutputDatum.voteStatus match {
                     case VoteStatus.Abstain => ()
                     case _                  => fail(AbstainOutputDatumCheck)
@@ -652,8 +649,7 @@ object DisputeResolutionValidator extends Validator {
 }
 
 object DisputeResolutionScript {
-    // Compile the validator using PlutusV3.compile
-    given scalus.compiler.Options = scalus.compiler.Options.default
+    given scalus.compiler.Options = ScriptCompilerOptions.options
 
     val compiledPlutusV3Program: PlutusV3[Data => Unit] =
         PlutusV3.compile(DisputeResolutionValidator.validate)
