@@ -5,6 +5,7 @@ import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
+import hydrozoa.config.head.multisig.block.{BlockConfig, generateBlockConfig}
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
@@ -17,6 +18,7 @@ import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
@@ -87,6 +89,7 @@ case class Stage4Suite(
           Stage4Suite.genInitialState(
             nPeers = nPeers,
             nCoilPeers = nCoilPeers,
+            nCommands = nCommands,
             useTestControl = useTestControl,
             takeoffOffset = takeoffOffset,
           )
@@ -790,9 +793,40 @@ case class Stage4Suite(
 
 object Stage4Suite:
 
+    /** The shared block-config generator, with `maxRequestsPerBlock` raised to the smallest value
+      * whose backpressure window holds all of a case's requests.
+      *
+      * The model has no notion of request backpressure: it expects every submission to be admitted,
+      * and it assigns each request's id at generation time. A peer's RequestSequencer, though,
+      * refuses a request once it would be more than `backpressureCoefficient * maxRequestsPerBlock`
+      * past that peer's own soft-confirmed high-water, and the harness's SubmissionClient surfaces
+      * the refusal as a 400. With `softBlockMinPeriod` pinned to 5s, a small `maxRequestsPerBlock`
+      * lets requests arrive faster than blocks drain them, the window fills, and the case fails on
+      * a node doing what it should. Every command submits at most one request, so a window of at
+      * least `nCommands` is never reached, even with nothing confirmed.
+      *
+      * Clamping the drawn value rather than narrowing the range keeps the generator's draws, so a
+      * recorded seed still replays the same case.
+      */
+    def generateBackpressureFreeBlockConfig(
+        nCommands: Int,
+        generateDrawn: Gen[BlockConfig] = generateBlockConfig
+    ): Gen[BlockConfig] =
+        generateDrawn.map { drawn =>
+            val coefficient: Int = drawn.backpressureCoefficient
+            val floor = math.max(1, (nCommands + coefficient - 1) / coefficient)
+            if (drawn.maxRequestsPerBlock: Int) >= floor then drawn
+            else drawn.copy(maxRequestsPerBlock = PositiveInt.unsafeApply(floor))
+        }
+
     def genInitialState(
         nPeers: Int = 2,
         nCoilPeers: Int = 0,
+        // The test case's command count: every command submits at most one request, so it bounds
+        // how many requests any one peer authors (see `generateBackpressureFreeBlockConfig`). The
+        // default 0 leaves the drawn block config as it is, for callers that run no command
+        // sequence of their own.
+        nCommands: Int = 0,
         absorptionSlack: FiniteDuration = 60.seconds,
         meanInterArrivalTime: HeadPeerNumber => FiniteDuration = _ => 12.seconds,
         useTestControl: Boolean = true,
@@ -827,7 +861,10 @@ object Stage4Suite:
         val generateHeadStartTime = MultiPeerHeadHarness.generateHeadStartTime(takeoffTime)
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
-          generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming)
+          generateHeadParams = generateHeadParameters(
+            generateTxTiming = generateYaciTxTiming,
+            generateBlockConfig = generateBackpressureFreeBlockConfig(nCommands)
+          )
               .map(_.copy(coilQuorum = nCoilPeers)),
           generateInitializationParameters = InitParamsType.TopDown(
             InitializationParametersGenTopDown.GenWithDeps(

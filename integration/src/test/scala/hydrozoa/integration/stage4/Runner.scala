@@ -4,13 +4,17 @@ import cats.data.StateT
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.implicits.*
+import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer}
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.AnyCommand
-import org.scalacheck.{Prop, PropertyM, Test, YetAnotherProperties}
+import org.scalacheck.rng.Seed
+import org.scalacheck.{Gen, Prop, PropertyM, Test, YetAnotherProperties}
 import scala.concurrent.duration.DurationInt
 
 object Stage4Runner:
@@ -126,6 +130,7 @@ object Stage4Runner:
             initialState <- PropertyM.pick[IO, ModelState](
               Stage4Suite.genInitialState(
                 nPeers = 3,
+                nCommands = 300,
                 meanInterArrivalTime = p =>
                     (p: Int) match
                         case 0 => 30.seconds
@@ -173,6 +178,35 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     val _ = property("Twenty-peers head works") =
         Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
+
+    // The generator guard behind every property here: no peer can author past its request
+    // backpressure window within one case, whatever `maxRequestsPerBlock` the shared generator
+    // draws. Checked over the boundary values rather than sampled, since the shared generator's
+    // uniform draw rarely lands under the floor.
+    val _ = property("Block config keeps a case's requests inside the backpressure window") = {
+        val checks =
+            for {
+                nCommands <- List(1, 2, 3, 4, 10, 11, 300, 500, 501)
+                drawn <- List(1, 2, 3, 4, 5, 166, 167, 168, 2000)
+            } yield {
+                val bc = Stage4Suite
+                    .generateBackpressureFreeBlockConfig(
+                      nCommands,
+                      Gen.const(BlockConfig(PositiveInt.unsafeApply(drawn)))
+                    )
+                    .pureApply(Gen.Parameters.default, Seed(0L))
+                val m: Int = bc.maxRequestsPerBlock
+                val window = (bc.backpressureCoefficient: Int) * m
+                // A peer's largest request number within a case is nCommands - 1, admitted while
+                // it is at most `confirmed + window` (RequestSequencer), and confirmed >= 0.
+                val label = s"nCommands=$nCommands drawn=$drawn -> maxRequestsPerBlock=$m"
+                ((window >= nCommands) :| s"$label: window $window too small") &&
+                ((m >= drawn) :| s"$label: lowered the drawn value") &&
+                ((m == drawn || (bc.backpressureCoefficient: Int) * (m - 1) < nCommands) :|
+                    s"$label: raised further than needed")
+            }
+        Prop.all(checks*)
+    }
 
     // Extended variants: large command sequences or high peer counts
     val _ = property("Two-peers head works (extended)") =
