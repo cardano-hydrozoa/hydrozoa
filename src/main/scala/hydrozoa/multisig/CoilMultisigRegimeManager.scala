@@ -10,7 +10,7 @@ import hydrozoa.multisig.LifecycleEvent.{StartingActors, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
+import hydrozoa.multisig.consensus.peer.PeerId.Head
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.transport.{CoilTransport, RemoteHubProxy}
 import hydrozoa.multisig.ledger.l2.L2Ledger
@@ -56,13 +56,9 @@ trait CoilMultisigRegimeManager(
         for {
             _ <- tracer.traceWith(StartingActors)
 
-            ownCoilNum = config.ownPeerId match {
-                case Coil(n) => n
-                case Head(_) =>
-                    throw new IllegalStateException(
-                      "CoilMultisigRegimeManager runs only on coil peers"
-                    )
-            }
+            ownCoilNum = config.ownPeerId.expectCoil(
+              "CoilMultisigRegimeManager runs only on coil peers"
+            )
             hubNum = config
                 .coilPeerHub(ownCoilNum)
                 .getOrElse(
