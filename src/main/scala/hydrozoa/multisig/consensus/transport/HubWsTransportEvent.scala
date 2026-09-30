@@ -1,6 +1,7 @@
 package hydrozoa.multisig.consensus.transport
 
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
+import scala.concurrent.duration.FiniteDuration
 
 /** Typed events emitted by [[HubWsTransport]]. Pure data; formatters in
   * [[HubWsTransportEventFormat]] decide how each variant is rendered to a particular sink.
@@ -28,10 +29,12 @@ object HubWsTransportEvent:
       */
     final case class InboundAfterUnregister(coil: CoilPeerNumber) extends HubWsTransportEvent
 
-    /** A coil's position arrived while no local liaison was registered for that coil — before the
-      * first one, or after one was unregistered; it is held and handed to the next one registered.
+    /** A coil dialled in and proved its number before this hub had registered a liaison for it, so
+      * its handshake is held unanswered until there is one. The regime manager registers them in
+      * its `preStart`, so this is ordinary at boot and a fault if it persists.
       */
-    final case class JoinPositionHeld(coil: CoilPeerNumber) extends HubWsTransportEvent
+    final case class AwaitingLiaison(coil: CoilPeerNumber, after: FiniteDuration)
+        extends HubWsTransportEvent
 
     /** Received an inbound wire payload from a coil peer that is not in the coil-emitted subset. */
     final case class UnexpectedInboundWire(coil: CoilPeerNumber, payload: CoilFrame.Wire)

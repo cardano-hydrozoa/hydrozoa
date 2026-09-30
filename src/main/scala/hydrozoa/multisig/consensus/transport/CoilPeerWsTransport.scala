@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.transport
 
-import cats.effect.std.{Mutex, Queue}
+import cats.effect.std.Queue
 import cats.effect.{Deferred, FiberIO, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
@@ -58,26 +58,25 @@ final class CoilPeerWsTransport private (
     private val ownMarks: IO[Join.Connected],
     private val ownHead: HeadIdentity,
     private val outbox: Queue[IO, String],
-    private val inboundRef: Ref[IO, Option[InboundRoute[LiaisonProtocol.CoilLiaisonHandle]]],
-    private val heldAnswer: Ref[IO, Option[Join.Answer]],
-    private val registering: Mutex[IO],
+    private val inboundRef: Ref[IO, CoilPeerWsTransport.Inbound],
     private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
 )(using CardanoNetwork.Section)
     extends CoilTransport {
+    import CoilPeerWsTransport.Inbound
 
     /** Hands the liaison any join answer that arrived before it, then routes inbound to it.
       *
-      * The held answer goes first and the handle is published after it, both under [[registering]],
-      * so a frame the reader delivers on the fast path never overtakes it.
+      * One compare-and-set takes the held answer and publishes the handle together, so a frame
+      * being routed concurrently either finds the handle or holds its answer where this will see it
+      * — never both.
       */
     override def register(localLiaison: LiaisonProtocol.CoilLiaisonHandle): IO[Unit] =
-        registering.lock.surround(
-          heldAnswer.getAndSet(None).flatMap(_.traverse_(localLiaison ! _)) >>
-              inboundRef.set(Some(InboundRoute.Live(localLiaison)))
-        )
+        inboundRef
+            .modify(s => (Inbound(Some(InboundRoute.Live(localLiaison)), None), s.heldAnswer))
+            .flatMap(_.traverse_(localLiaison ! _))
 
     override def unregister: IO[Unit] =
-        registering.lock.surround(inboundRef.set(Some(InboundRoute.Closed))) >>
+        inboundRef.update(_.copy(route = Some(InboundRoute.Closed))) >>
             tracer.traceWith(LiaisonUnregistered)
 
     override def send(request: LiaisonProtocol.CoilEmitted): IO[Unit] =
@@ -101,26 +100,30 @@ final class CoilPeerWsTransport private (
       * An answer is held the same way after the liaison was unregistered, since a later register
       * would otherwise wait on an answer it never saw. Pull traffic then is the hub not knowing
       * this coil handed off, and is dropped as expected rather than as a fault.
+      *
+      * The decision is one compare-and-set on [[Inbound]] and the send is made after it, so a frame
+      * that arrives while [[register]] is publishing its handle is either delivered or held for it,
+      * never lost between the two. The send order is not preserved: a serving frame routed
+      * concurrently may reach the liaison before the held answer does, which join mode is built for
+      * — it ignores serving traffic until the answer seats it.
       */
     private def toLiaison(request: LiaisonProtocol.FromHub): IO[Unit] =
-        inboundRef.get.flatMap {
-            case Some(InboundRoute.Live(liaison)) => liaison ! request
-            case _ =>
-                registering.lock.surround(inboundRef.get.flatMap {
-                    case Some(InboundRoute.Live(liaison)) => liaison ! request
-                    case route =>
-                        request match {
-                            case answer: (Join.Offer | Join.NoOffer) =>
-                                heldAnswer.set(Some(answer)) >> tracer.traceWith(JoinAnswerHeld)
-                            case _ =>
-                                route match {
-                                    case Some(InboundRoute.Closed) =>
-                                        tracer.traceWith(InboundAfterUnregister)
-                                    case _ => tracer.traceWith(NoLiaisonForInbound)
-                                }
-                        }
-                })
-        }
+        inboundRef.modify { s =>
+            s.route match {
+                case Some(InboundRoute.Live(liaison)) => (s, liaison ! request)
+                case route =>
+                    request match {
+                        case answer: (Join.Offer | Join.NoOffer) =>
+                            (s.copy(heldAnswer = Some(answer)), tracer.traceWith(JoinAnswerHeld))
+                        case _ =>
+                            route match {
+                                case Some(InboundRoute.Closed) =>
+                                    (s, tracer.traceWith(InboundAfterUnregister))
+                                case _ => (s, tracer.traceWith(NoLiaisonForInbound))
+                            }
+                    }
+            }
+        }.flatten
 
     private def dispatchInbound(payload: CoilFrame.Wire): IO[Unit] =
         payload match {
@@ -300,6 +303,49 @@ final class CoilPeerWsTransport private (
 
 object CoilPeerWsTransport {
 
+    /** Where this link's inbound goes, and the join answer it is holding for a liaison not yet
+      * registered. The liaison in question is **this coil node's own**
+      * [[hydrozoa.multisig.consensus.liaison.PeerLiaisonCoilToHub]]; a coil runs exactly one, and
+      * [[hydrozoa.multisig.CoilMultisigRegimeManager]] spawns it in `preStart`.
+      *
+      * ==Why the answer is held rather than waited for==
+      *
+      * The hub's answer arrives on an already-established socket, so unlike the hub — which reads a
+      * coil's position off a handshake it is still processing, and can simply pause there — this
+      * end has nothing in flight to pause. The dialer opens the link before the regime manager has
+      * finished building actors, and the hub answers a join exactly once per dial, so the answer is
+      * kept until there is a liaison to give it to.
+      *
+      * ==Why route and held answer are one value==
+      *
+      * Two fibers touch this state: a reader routing an inbound frame, and
+      * [[CoilPeerWsTransport.register]] publishing a liaison. Held in two separate refs, they
+      * interleave into a lost update:
+      *
+      * {{{
+      *   reader fiber (an answer arrives)      register fiber
+      *   ────────────────────────────────      ──────────────────────────────
+      *   read route       → empty
+      *                                         read heldAnswer → None    ← looks, finds nothing
+      *                                         set  route      → Live(L)
+      *   set  heldAnswer  → Some(answer)                                 ← stores, too late
+      *
+      *   result: a live liaison, and an answer nobody will ever hand it.
+      * }}}
+      *
+      * As one value, a routing decision and a `register` are each a single compare-and-set, and
+      * that interleaving cannot be expressed: `register` publishes the route and takes the held
+      * answer in the same swap, so whichever fiber wins, the answer lands.
+      *
+      * Send order is not preserved — a serving frame routed concurrently may reach the liaison
+      * ahead of the held answer. Join mode is built for that: it ignores serving traffic until the
+      * answer seats it, and the hub's puller retransmits whatever it dropped.
+      */
+    final case class Inbound(
+        route: Option[InboundRoute[LiaisonProtocol.CoilLiaisonHandle]],
+        heldAnswer: Option[Join.Answer]
+    )
+
     /** @param ownWallet
       *   this coil peer's signing wallet — the same key `coilPeers` lists for `ownCoilNum`, and the
       *   one its hard acks are signed with.
@@ -319,11 +365,7 @@ object CoilPeerWsTransport {
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
-            inboundRef <- Ref[IO].of(
-              Option.empty[InboundRoute[LiaisonProtocol.CoilLiaisonHandle]]
-            )
-            heldAnswer <- Ref[IO].of(Option.empty[Join.Answer])
-            registering <- Mutex[IO]
+            inboundRef <- Ref[IO].of(Inbound(None, None))
         } yield new CoilPeerWsTransport(
           ownCoilNum,
           ownWallet,
@@ -332,8 +374,6 @@ object CoilPeerWsTransport {
           ownHead,
           outbox,
           inboundRef,
-          heldAnswer,
-          registering,
           tracer
         )
 }

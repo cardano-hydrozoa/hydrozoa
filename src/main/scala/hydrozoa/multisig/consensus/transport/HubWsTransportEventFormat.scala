@@ -26,10 +26,10 @@ object HubWsTransportEventFormat:
                 debug(
                   s"inbound from coil=${coil.convert} after its liaison was unregistered; dropping"
                 )
-            case JoinPositionHeld(coil) =>
-                info(
-                  s"coil=${coil.convert}'s position arrived with no liaison registered to take " +
-                      "it; holding it for the next one"
+            case AwaitingLiaison(coil, after) =>
+                warn(
+                  s"coil=${coil.convert} dialled in but no liaison is registered for it after " +
+                      s"$after; holding its handshake unanswered until there is one"
                 )
             case UnexpectedInboundWire(coil, payload) =>
                 warn(s"unexpected hub-bound wire from coil=${coil.convert}: $payload")
