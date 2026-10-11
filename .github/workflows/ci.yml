@@ -246,7 +246,7 @@ jobs:
 
       - name: Upload unit test log
         if: always() && needs.plan.outputs.unit == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unit-log-attempt-${{ github.run_attempt }}
           path: target/unit-tests.log
@@ -267,7 +267,7 @@ jobs:
       # Artifact names must be unique within a run, hence the job in each name.
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-unit-attempt-${{ github.run_attempt }}
           path: target/out/jvm/*/*/test-reports/
@@ -334,7 +334,7 @@ jobs:
 
       - name: Upload integration log
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: integration-log-attempt-${{ github.run_attempt }}
           path: |
@@ -352,7 +352,7 @@ jobs:
 
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-integration-attempt-${{ github.run_attempt }}
           path: target/out/jvm/*/*/test-reports/
@@ -423,7 +423,7 @@ jobs:
       # The Yaci suites log through the same config as the integration tests.
       - name: Upload Yaci integration log
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: yaci-log-attempt-${{ github.run_attempt }}
           path: integration/integration-tests.log
@@ -438,7 +438,7 @@ jobs:
 
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-yaci-attempt-${{ github.run_attempt }}
           path: target/out/jvm/*/*/test-reports/
@@ -476,7 +476,7 @@ jobs:
         if: >-
           success() && needs.plan.outputs.tree != '' && needs.plan.outputs.unit == 'true' &&
           needs.plan.outputs.integration == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tested-tree-${{ needs.plan.outputs.tree }}
           path: tested-tree
