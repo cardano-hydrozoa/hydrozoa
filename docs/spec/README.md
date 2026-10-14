@@ -29,6 +29,7 @@ graduate here once built. For project-wide conventions, start with the style gui
 | [logging-tracing.md](logging-tracing.md) | Contextual logging and tracing: Tracer, IOLocal-carried context, routing keys, migration off SLF4J MDC. |
 | [observability-endpoints.md](observability-endpoints.md) | The user-facing server's `/health` (liveness) and `/ready` (readiness) endpoints: semantics, status mapping, how `NodeStatus` is maintained. |
 | [peer-stats-endpoint.md](peer-stats-endpoint.md) | `GET /head/stats` and the Prometheus `GET /head/metrics`: live per-peer operational metrics served without touching storage or perturbing the hot path. |
+| [performance-tuning.md](performance-tuning.md) | How a head's performance is measured and tuned: the optimization targets and the round-trip ceiling model, the instruments that show each one, the measurement method, and the settings that move them. |
 | [persistence-and-crash-recovery.md](persistence-and-crash-recovery.md) | Durable consensus data and crash recovery for head and coil peers: what each actor persists, equivocation avoidance, the RocksDB CFs/journals, and snapshot + log-replay recovery. |
 | [petri-net-library.md](petri-net-library.md) | The typed Petri net library under `petri/`, used to model the protocol: its four separable concerns (topology, syntax, semantics, presentation) and the builder monad that constructs a net. |
 | [rate-limiter.md](rate-limiter.md) | A generic throttling actor that slows the fast/slow cycles (longer block/stack durations) without touching consensus logic. |
