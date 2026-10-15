@@ -108,18 +108,23 @@ object InProcessHubCoilTransport {
                 }
             }
 
-        /** Hand the hub this coil's marks, retrying until its liaison is registered.
+        /** Hand the hub this coil's marks, once both ends of the link have a liaison.
           *
-          * The retry is what a dialer does over a socket — a coil that comes up before its hub
-          * keeps trying until the hub is there. Forked, because the caller is the coil liaison's
-          * join mode and it must stay free to receive the answer this announcement provokes.
+          * The same rule the WebSocket transports enforce by not opening a socket: nothing crosses
+          * a link until there is somewhere to deliver on each end. The hub answers a position once,
+          * to whatever this registry says `coilInbound` is at that moment, so announcing before
+          * this coil has registered strands the answer and the join never ends.
+          *
+          * Forked, because the caller is the coil liaison's join mode and it must stay free to
+          * receive the answer this announcement provokes.
           */
         override def announceMarks(m: Join.Connected): IO[Unit] =
             def announce: IO[Unit] =
                 registry.get.flatMap { reg =>
-                    reg.get(ownCoilNum).flatMap(_.hubInbound) match {
-                        case Some(hub) => hub ! m
-                        case None      => IO.sleep(100.millis) >> announce
+                    val ends = reg.get(ownCoilNum)
+                    (ends.flatMap(_.hubInbound), ends.flatMap(_.coilInbound)) match {
+                        case (Some(hub), Some(_)) => hub ! m
+                        case _                    => IO.sleep(100.millis) >> announce
                     }
                 }
             marks.set(m) >> announce.start.void
