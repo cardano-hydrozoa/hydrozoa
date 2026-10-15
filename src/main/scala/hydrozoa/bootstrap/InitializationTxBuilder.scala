@@ -102,7 +102,7 @@ object InitializationTxBuilder {
             }
 
             object Mints {
-                def apply(): List[Mint] = List(mintTreasuryToken, mintMultisigRegimeToken)
+                def apply(): List[Mint] = List(mintTreasuryToken, mintRegimeWitnessToken)
 
                 private val mintTreasuryToken = Mint(
                   config.headMultisigScript.script.scriptHash,
@@ -111,7 +111,7 @@ object InitializationTxBuilder {
                   config.headMultisigScript.witnessValue
                 )
 
-                private val mintMultisigRegimeToken = Mint(
+                private val mintRegimeWitnessToken = Mint(
                   config.headMultisigScript.script.scriptHash,
                   config.headTokenNames.regimeWitnessTokenName,
                   1,

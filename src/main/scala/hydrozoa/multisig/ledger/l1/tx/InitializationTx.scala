@@ -254,7 +254,7 @@ object InitializationTx {
                         )
 
                 //////
-                // Multisig regime is coherent: expected address, contains only MR token and ADA, datum pins this
+                // Multisig regime is coherent: expected address, contains only the HRWT and ADA, datum pins this
                 // head's config digest, HNS in reference script
 
                 // address
@@ -334,7 +334,7 @@ object InitializationTx {
                 )
 
                 //////
-                // Check mint coherence: only a single head token and MR token should be minted
+                // Check mint coherence: exactly one head token and one HRWT should be minted
                 mintOuter <- tx.body.value.mint.toRight(InvalidTransactionError("Mints are empty"))
                 mintInner <- mintOuter.assets
                     .get(expectedHNS.policyId)
@@ -346,10 +346,10 @@ object InitializationTx {
                         Left(InvalidTransactionError("multiple head tokens minted"))
                 }
                 _ <- mintInner.get(config.headTokenNames.regimeWitnessTokenName) match {
-                    case None     => Left(InvalidTransactionError("MR token not minted"))
+                    case None     => Left(InvalidTransactionError("HRWT not minted"))
                     case Some(1L) => Right(())
                     case Some(_) =>
-                        Left(InvalidTransactionError("multiple MR tokens minted"))
+                        Left(InvalidTransactionError("multiple HRWTs minted"))
                 }
 
                 // Equity comes from the tx's own metadata (totalEquity), not config — the init tx is
