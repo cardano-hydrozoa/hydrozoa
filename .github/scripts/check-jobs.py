@@ -3,8 +3,8 @@
 
 Reads $NEEDS, the workflow's `needs` context as JSON (`${{ toJSON(needs) }}`): for each job, its
 `result` (success, failure, cancelled or skipped) and its `outputs`. Passes when the `plan` job
-succeeded and set its outputs, and every test job either succeeded or was skipped because the plan
-didn't call for it. Anything else fails, with one line per reason: a test job skipped although the
+succeeded and set its outputs, every job in ALWAYS succeeded, and every test job either succeeded or
+was skipped because the plan didn't call for it. Anything else fails, with one line per reason: a test job skipped although the
 plan called for it would otherwise let a run pass with nothing tested (a mistyped output name reads
 as empty, which skips the job).
 
@@ -25,6 +25,8 @@ TEST_JOBS = {
     "integration": ("integration",),
     "yaci": ("integration",),
 }
+# Jobs that run on every event, whatever the plan says, and must succeed.
+ALWAYS = ("flake-check",)
 
 
 def problems(needs):
@@ -36,6 +38,10 @@ def problems(needs):
     for name in PLAN_OUTPUTS:
         if outputs.get(name) not in ("true", "false"):
             found.append(f"{PLAN}: output {name} is {outputs.get(name)!r}, not true or false")
+    for job in ALWAYS:
+        result = needs.get(job, {}).get("result", "missing")
+        if result != "success":
+            found.append(f"{job}: {result}")
     for job, called_by in TEST_JOBS.items():
         result = needs.get(job, {}).get("result", "missing")
         wanted = [o for o in called_by if outputs.get(o) != "false"]

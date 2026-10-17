@@ -447,8 +447,28 @@ jobs:
 
   # The required check. Passes when the plan succeeded and each test job either passed or was
   # skipped because the plan didn't call for it; see the script for the rules.
+  # The flake's checks: mdreflow over every Markdown file (settings in .mdreflow.yaml). It needs no
+  # plan, because it is cheap and a docs-only PR is exactly what it checks.
+  flake-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        # Its download of the Nix tarball has no retry or timeout of its own.
+        timeout-minutes: 5
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .github/scripts/install-nix.sh
+
+      - name: Run the flake's checks
+        run: nix flake check
+
   build:
-    needs: [plan, unit, integration, yaci]
+    needs: [plan, unit, integration, yaci, flake-check]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

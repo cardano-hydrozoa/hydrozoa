@@ -6,6 +6,10 @@
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    mdreflow = {
+      url = "github:GeorgeFlerovsky/mdreflow/v0.3.0-fork.2";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -14,6 +18,7 @@
       flake-utils,
       nixpkgs,
       git-hooks,
+      mdreflow,
       ...
     }@inputs:
     (flake-utils.lib.eachDefaultSystem (
@@ -49,6 +54,21 @@
             ln -s ${sbtBspShim}/bin/sbt $out/bin/sbt
           '';
         };
+        mdreflowPkg = mdreflow.packages.${system}.default;
+        # One sentence per line in every Markdown file. The settings live in .mdreflow.yaml, so
+        # running `mdreflow .` by hand does the same as the hook.
+        mdreflowHook = {
+          enable = true;
+          name = "mdreflow";
+          entry = "${mdreflowPkg}/bin/mdreflow";
+          files = "\\.(md|mdx|markdown)$";
+        };
+        # The mdreflow hook alone, as a flake check: the full hook set runs sbt, which needs the
+        # network and so cannot run in the build sandbox.
+        mdreflow-check = git-hooks.lib.${system}.run {
+          src = ./.;
+          hooks.mdreflow = mdreflowHook;
+        };
         # Define the hooks
         pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
@@ -61,10 +81,13 @@
               entry = "${pkgs.bash}/bin/bash -c '${sbt0}/bin/sbt \"; scalafixAll --check ; scalafmtCheck\" && ${pkgs.nixfmt}/bin/nixfmt flake.nix --check'";
               pass_filenames = false;
             };
+            mdreflow = mdreflowHook;
           };
         };
       in
       {
+        checks.mdreflow = mdreflow-check;
+
         devShells = {
           default = pkgs.mkShell {
             JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
@@ -76,6 +99,7 @@
               jq # JSON on the command line; used by integration/yaci/yaci-devnet.sh
               just # command runner, similar to `make`
               libnotify # used in justfile
+              mdreflowPkg # Markdown formatting; see .mdreflow.yaml
               nixfmt
               sbtWithBspShim
             ];
