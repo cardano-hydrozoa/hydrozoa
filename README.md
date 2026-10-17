@@ -9,75 +9,84 @@ written in Scala 3.
 
 ## What is Hydrozoa?
 
-Hydrozoa is a multi-party state channel protocol that decouples *execution*
-from *custody*.
+Hydrozoa is a multi-party state channel protocol that decouples *execution* from
+*custody*.
 
 * **L2 state channel.** A small set of head peers run a fast off-chain ledger,
-  rapidly sequencing user transactions while the L1 holds the funds. The
-  channel admits continuous **deposits and withdrawals while open**; if
-  consensus stalls, a pre-signed dead-man's-switch transaction matures and
-  shifts custody into a rules-based regime where every participant can
-  individually evacuate against the last KZG-committed state.
+  rapidly sequencing user transactions while the L1 holds the funds.
+  The channel admits continuous **deposits and withdrawals while open**;
+  if consensus stalls,
+  a pre-signed dead-man's-switch transaction matures and shifts custody into a
+  rules-based regime where every participant can individually evacuate against
+  the last KZG-committed state.
 
 * **Pluggable L2 ledger, EUTXO built in.** Hydrozoa treats the L2 ledger as a
-  black-box state machine. An **EUTXO-based L2 ledger** is provided out of the
-  box (transactions are CBOR-serialized Cardano txs; outputs are either
-  L2-bound or L1-bound via settlement / rollout effects), and
-  application-specific ledgers can be slotted in — for example, Sugar Rush, a
-  privacy-enhancing CLOB DEX, runs as its own domain-specific L2.
+  black-box state machine.
+  An **EUTXO-based L2 ledger** is provided out of the box (transactions are
+  CBOR-serialized Cardano txs;
+  outputs are either L2-bound or L1-bound via settlement / rollout effects),
+  and application-specific ledgers can be slotted in — for example, Sugar Rush,
+  a privacy-enhancing CLOB DEX, runs as its own domain-specific L2.
 
 * **Cardano-first, multi-L1 by design.** Cardano is the initial and currently
-  the only supported L1. The architecture is intentionally agnostic about the
-  custody chain; **multi-L1 custody** (one head holding funds from several
-  L1s) and **inter-head transactions** are planned future work.
+  the only supported L1.
+  The architecture is intentionally agnostic about the custody chain;
+  **multi-L1 custody** (one head holding funds from several L1s) and
+  **inter-head transactions** are planned future work.
 
-This repository contains the L1 interface, the consensus actors (fast and
-slow), the rules-based fallback regime, and the EUTXO L2 ledger — i.e. the
-operational substrate of a Hydrozoa head.
+This repository contains the L1 interface, the consensus actors (fast and slow),
+the rules-based fallback regime, and the EUTXO L2 ledger —
+i.e. the operational substrate of a Hydrozoa head.
 
 ## Getting Started
 
 * Read the [Gummiworm whitepaper](https://gummiworm.net/whitepaper/introduction)
-  (the protocol spec), or browse the in-repo design specs — see
-  [Specification](#specification) below.
-* Deploy a multi-party head — [`DEPLOYMENT.md`](docs/user-guide/DEPLOYMENT.md) is an end-to-end
-  runbook: fleet configuration, node image, head initialization on a Cardano
-  testnet, and running the peers.
-* Join the discussion =>
-  goto [discussions](https://github.com/cardano-hydrozoa/hydrozoa/discussions)
-* Start hacking by picking up an issue =>
-  goto [issues: help wanted](https://github.com/cardano-hydrozoa/hydrozoa/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22help%20wanted%22)
+  (the protocol spec), or browse the in-repo design specs —
+  see [Specification](#specification) below.
+* Deploy a multi-party head —
+  [`DEPLOYMENT.md`](docs/user-guide/DEPLOYMENT.md) is an end-to-end runbook:
+  fleet configuration, node image, head initialization on a Cardano testnet,
+  and running the peers.
+* Join the discussion => goto
+  [discussions](https://github.com/cardano-hydrozoa/hydrozoa/discussions)
+* Start hacking by picking up an issue => goto
+  [issues: help wanted](https://github.com/cardano-hydrozoa/hydrozoa/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22help%20wanted%22)
 
 ## Specification
 
 The authoritative protocol description is the **Gummiworm whitepaper**:
 <https://gummiworm.net/whitepaper/introduction>.
 
-In-repo documentation complements it: [`docs/`](docs/) documents the system as
-built — [`docs/user-guide/`](docs/user-guide/) task-oriented how-tos and
-[`docs/spec/`](docs/spec/) design/reference. The top-level [`design/`](design/)
-directory is a scratchpad for in-flight feature specs, which graduate into
-`docs/spec/` once built.
+In-repo documentation complements it:
+[`docs/`](docs/) documents the system as built —
+[`docs/user-guide/`](docs/user-guide/) task-oriented how-tos and
+[`docs/spec/`](docs/spec/) design/reference.
+The top-level [`design/`](design/) directory is a scratchpad for in-flight
+feature specs, which graduate into `docs/spec/` once built.
 
 ## Developer's Guide
 
 ### Prerequisites
 
-The preferred and supported setup is [Nix](https://nixos.org/download/). Install
-a recent Nix and run `nix develop` to drop into a dev shell with every
-dependency pinned (JDK, `sbt`, `just`, `nixfmt`); formatting and linting run through sbt.
-If you use [direnv](https://direnv.net/), `.envrc` already runs `use flake .`
-so the shell loads automatically.
+The preferred and supported setup is [Nix](https://nixos.org/download/).
+Install a recent Nix and run `nix develop` to drop into a dev shell with every
+dependency pinned (JDK, `sbt`, `just`, `nixfmt`);
+formatting and linting run through sbt.
+If you use [direnv](https://direnv.net/),
+`.envrc` already runs `use flake .` so the shell loads automatically.
 
-Without Nix you'll need a Java JDK (21+; the Nix shell pins JDK 25) and
-[sbt](https://www.scala-sbt.org/). The project targets Scala 3.3.6 (LTS).
+Without Nix you'll need a Java JDK (21+;
+the Nix shell pins JDK 25) and [sbt](https://www.scala-sbt.org/).
+The project targets Scala 3.3.6 (LTS).
 
 ### Setting up IntelliJ IDEA
 
-`File` -> `New` -> `Project from Existing Sources` -> `select the project directory`
--> `Import project from external model` -> `BSP` -> `Sbt`
+`File` -> `New` -> `Project from Existing Sources` ->
+`select the project directory` -> `Import project from external model` -> `BSP`
+-> `Sbt`
 
-Launch IDEA from within the Nix shell so `sbt` and the other tools are on `PATH`.
+Launch IDEA from within the Nix shell so `sbt` and the other tools are on
+`PATH`.
 
 ### Building and testing
 
@@ -103,17 +112,18 @@ Always run linting and formatting before committing.
 ### Integration tests
 
 The `integration` subproject contains model-based test suites built on
-ScalaCheck commands-inspired modified `ModelBasedSuite` harness. "Stages" here refer
-to **levels of testing** — each stage exercises the system
-at a different layer of abstraction:
+ScalaCheck commands-inspired modified `ModelBasedSuite` harness.
+"Stages" here refer to **levels of testing** —
+each stage exercises the system at a different layer of abstraction:
 
 * **`stage1` — single-peer head, low-level commands.** Drives the node with
   primitives like `StartBlock` / `CompleteBlock` and checks that the produced
-  block briefs match the model and that timing rules are satisfied. Useful for
-  pinning down block-production and scheduling invariants in isolation. The
-  same suite runs against three L1 backends: an in-process **mock L1**, a
-  local **[Yaci DevKit](https://devkit.yaci.xyz/docker)**, and a **public
-  Cardano testnet** (Preview, via Blockfrost).
+  block briefs match the model and that timing rules are satisfied.
+  Useful for pinning down block-production and scheduling invariants in
+  isolation.
+  The same suite runs against three L1 backends: an in-process **mock L1**,
+  a local **[Yaci DevKit](https://devkit.yaci.xyz/docker)**,
+  and a **public Cardano testnet** (Preview, via Blockfrost).
 
 * **`stage4` — multi-peer head, real user commands.** Runs several peers in a
   single suite, communicating either in-process or over the WebSocket transport,
@@ -136,13 +146,14 @@ sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"    #
 sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesPublic"  # public Preview testnet
 ```
 
-The Yaci suite requires a running Yaci DevKit instance and is excluded from
-the default integration run. The public-testnet suite runs by default and
-needs network access.
+The Yaci suite requires a running Yaci DevKit instance and is excluded from the
+default integration run.
+The public-testnet suite runs by default and needs network access.
 
 ## License
 
-Code is licensed under [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0);
+Code is licensed under
+[Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0);
 documentation and the specification under
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). See `LICENSE`
-and `NOTICE` for details.
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+See `LICENSE` and `NOTICE` for details.
