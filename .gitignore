@@ -58,3 +58,7 @@ target/
 # Editor leftovers
 *.swp
 *.swo
+
+# nix build output
+/result
+/result-*

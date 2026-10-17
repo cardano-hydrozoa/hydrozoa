@@ -1,10 +1,12 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with
+code in this repository.
 
 ## Project Overview
 
-Hydrozoa is a lightweight multi-party state channels implementation for Cardano, written in Scala 3.
+Hydrozoa is a lightweight multi-party state channels implementation for Cardano,
+written in Scala 3.
 
 ## Development Commands
 
@@ -23,14 +25,18 @@ sbt test
 sbt "testOnly *SpecificTestSuite*"
 ```
 
-**Note on `sbt`**: the build runs on **sbt 2** (`project/build.properties`). The `sbtn` thin client
-bundled with nixpkgs `sbt` is sbt 1.x and cannot drive an sbt 2 server (it reports
-`unknown event: sbt/exec`), so the devshell **removes `sbtn`** — use `sbt`. If a warm server from a
-previous session is still running on the wrong version, `sbt shutdown` first, then re-launch `sbt`
-so it reboots into the version named in `build.properties`. (Restore `sbtn` once nixpkgs ships sbt 2.)
+**Note on `sbt`**: the build runs on **sbt 2** (`project/build.properties`).
+The `sbtn` thin client bundled with nixpkgs `sbt` is sbt 1.x and cannot drive an
+sbt 2 server (it reports `unknown event: sbt/exec`),
+so the devshell **removes `sbtn`** — use `sbt`.
+If a warm server from a previous session is still running on the wrong version,
+`sbt shutdown` first,
+then re-launch `sbt` so it reboots into the version named in `build.properties`.
+(Restore `sbtn` once nixpkgs ships sbt 2.)
 
-**Note**: IDEA (and Claude Code) are launched from within the Nix shell, so `sbt` and other tools
-are available directly — no `nix develop --command` prefix needed.
+**Note**: IDEA (and Claude Code) are launched from within the Nix shell,
+so `sbt` and other tools are available directly —
+no `nix develop --command` prefix needed.
 
 ### Code Quality
 ```bash
@@ -73,85 +79,111 @@ sbt "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
 
 ## Design specifications
 
-`design/` (a top-level directory) is a scratchpad for **in-flight** feature design: a spec lives
-there while its feature is being built, then graduates into `docs/spec/` as an as-built reference
-once it lands.
+`design/` (a top-level directory) is a scratchpad for **in-flight** feature
+design: a spec lives there while its feature is being built,
+then graduates into `docs/spec/` as an as-built reference once it lands.
 
 ## Documentation
 
 Documentation lives under `docs/` in two sections:
 
-- **[`docs/user-guide/`](docs/user-guide/README.md)** — task-oriented how-tos: deployment, building
-  deposits, L2 transactions, and L2 minting.
+- **[`docs/user-guide/`](docs/user-guide/README.md)** — task-oriented how-tos:
+  deployment, building deposits, L2 transactions, and L2 minting.
 - **`docs/spec/`** — design and reference docs (below).
 
 Working design and reference docs (`docs/spec/`):
 
 **Consensus & protocol**
-- [`fast-consensus.md`](docs/spec/fast-consensus.md) — fast cycle: per-block soft-confirmation via
-  per-peer header signatures.
-- [`slow-consensus.md`](docs/spec/slow-consensus.md) — slow cycle: turning a run of soft-confirmed
-  blocks into a multisigned, L1-submittable set of effect transactions over stacks.
-- [`rate-limiter.md`](docs/spec/rate-limiter.md) — generic throttling actor that slows the consensus
-  cycles without changing consensus logic.
-- [`transient-tokens.md`](docs/spec/transient-tokens.md) — minting/burning on the L2 ledger: the
-  transient-token compartment and projection-based validation.
-- [`l2-isomorphism.md`](docs/spec/l2-isomorphism.md) — driving the EUTXO L2 ledger with native Cardano
-  txs: headId pin, screening vs submission, how deposits pin their L2 payload, backend selection.
-- [`coil-network.md`](docs/spec/coil-network.md) — coil-ready peers: the follower-only node type, hub
-  fan-out (`CoilRelay`/`CoilAckSequencer`), threshold multisig, and head↔coil liaison lanes.
-- [`persistence-and-crash-recovery.md`](docs/spec/persistence-and-crash-recovery.md) — durable
-  consensus data + crash recovery: per-actor persistence, RocksDB CFs/journals, snapshot + replay.
-- [`init-tx-parsing.md`](docs/spec/init-tx-parsing.md) — the head parses its init tx from config
-  instead of rebuilding it; the builder lives in the `hydrozoa.bootstrap` submodule.
-- [`head-params-hash.md`](docs/spec/head-params-hash.md) — one digest over the whole head config,
-  pinned in the multisig regime datum: the preimage layout, exclusions, and the checks.
-- [`block-hash.md`](docs/spec/block-hash.md) — `requestHash` and `blockHash`: what each preimage
-  covers, when it is taken, and who re-derives and compares it.
-- [`l2-state-certificate.md`](docs/spec/l2-state-certificate.md) — `l2StateHash`: how the head
-  certifies its L2 state on the effects a stack already produces (settlement datum and SEC).
-- [`effect-tracking.md`](docs/spec/effect-tracking.md) — linking blocks and requests to their L1
-  effects: effect identity, the reverse-index CFs, and consensus-safe withdrawal tracking.
-- [`liaison-backpressure.md`](docs/spec/liaison-backpressure.md) — every liaison lane in one table:
-  what it carries, its reply width, and the ceiling that bounds it.
-- [`l2-ledger-command-coordination.md`](docs/spec/l2-ledger-command-coordination.md) — driving a
-  black-box L2 ledger as an ordered command stream, and the contract a backend must implement.
-- [`evacuate-command.md`](docs/spec/evacuate-command.md) — `hydrozoa evacuate`: starting the
-  rule-based regime standalone from a left-over database.
+- [`fast-consensus.md`](docs/spec/fast-consensus.md) — fast cycle:
+  per-block soft-confirmation via per-peer header signatures.
+- [`slow-consensus.md`](docs/spec/slow-consensus.md) — slow cycle:
+  turning a run of soft-confirmed blocks into a multisigned,
+  L1-submittable set of effect transactions over stacks.
+- [`rate-limiter.md`](docs/spec/rate-limiter.md) —
+  generic throttling actor that slows the consensus cycles without changing
+  consensus logic.
+- [`transient-tokens.md`](docs/spec/transient-tokens.md) —
+  minting/burning on the L2 ledger:
+  the transient-token compartment and projection-based validation.
+- [`l2-isomorphism.md`](docs/spec/l2-isomorphism.md) —
+  driving the EUTXO L2 ledger with native Cardano txs: headId pin,
+  screening vs submission, how deposits pin their L2 payload, backend selection.
+- [`coil-network.md`](docs/spec/coil-network.md) — coil-ready peers:
+  the follower-only node type, hub fan-out (`CoilRelay`/`CoilAckSequencer`),
+  threshold multisig, and head↔coil liaison lanes.
+- [`persistence-and-crash-recovery.md`](docs/spec/persistence-and-crash-recovery.md)
+  — durable consensus data + crash recovery: per-actor persistence,
+  RocksDB CFs/journals, snapshot + replay.
+- [`init-tx-parsing.md`](docs/spec/init-tx-parsing.md) —
+  the head parses its init tx from config instead of rebuilding it;
+  the builder lives in the `hydrozoa.bootstrap` submodule.
+- [`head-params-hash.md`](docs/spec/head-params-hash.md) —
+  one digest over the whole head config, pinned in the multisig regime datum:
+  the preimage layout, exclusions, and the checks.
+- [`block-hash.md`](docs/spec/block-hash.md) — `requestHash` and `blockHash`:
+  what each preimage covers, when it is taken,
+  and who re-derives and compares it.
+- [`l2-state-certificate.md`](docs/spec/l2-state-certificate.md) —
+  `l2StateHash`:
+  how the head certifies its L2 state on the effects a stack already produces
+  (settlement datum and SEC).
+- [`effect-tracking.md`](docs/spec/effect-tracking.md) —
+  linking blocks and requests to their L1 effects: effect identity,
+  the reverse-index CFs, and consensus-safe withdrawal tracking.
+- [`liaison-backpressure.md`](docs/spec/liaison-backpressure.md) —
+  every liaison lane in one table: what it carries, its reply width,
+  and the ceiling that bounds it.
+- [`l2-ledger-command-coordination.md`](docs/spec/l2-ledger-command-coordination.md)
+  — driving a black-box L2 ledger as an ordered command stream,
+  and the contract a backend must implement.
+- [`evacuate-command.md`](docs/spec/evacuate-command.md) — `hydrozoa evacuate`:
+  starting the rule-based regime standalone from a left-over database.
 
 **API**
-- [`l2-query-endpoints.md`](docs/spec/l2-query-endpoints.md) — the user-facing server's read-only L2
-  queries: `GET /l2/cardano-eutxo/utxos/{address}` and `GET /l2/cardano-eutxo/transactions` (EUTXO-only).
-- [`observability-endpoints.md`](docs/spec/observability-endpoints.md) — the user-facing server's
-  `/health` (liveness) and `/ready` (readiness) endpoints and the `NodeStatus` behind them.
-- [`peer-stats-endpoint.md`](docs/spec/peer-stats-endpoint.md) — the per-peer statistics surface:
-  the push-based `PeerMetrics` registry (atomic counters + a 1 Hz EWMA sampler) behind
-  `GET /head/stats` (JSON) and `GET /head/metrics` (Prometheus).
-- [`archive-watermark.md`](docs/spec/archive-watermark.md) — how a node learns an archiver is
-  attached and how far it got: the `archiver` declaration and `POST /api/admin/archive/watermark`.
+- [`l2-query-endpoints.md`](docs/spec/l2-query-endpoints.md) —
+  the user-facing server's read-only L2 queries:
+  `GET /l2/cardano-eutxo/utxos/{address}` and
+  `GET /l2/cardano-eutxo/transactions` (EUTXO-only).
+- [`observability-endpoints.md`](docs/spec/observability-endpoints.md) —
+  the user-facing server's `/health` (liveness) and `/ready` (readiness)
+  endpoints and the `NodeStatus` behind them.
+- [`peer-stats-endpoint.md`](docs/spec/peer-stats-endpoint.md) —
+  the per-peer statistics surface:
+  the push-based `PeerMetrics` registry (atomic counters + a 1 Hz EWMA sampler)
+  behind `GET /head/stats` (JSON) and `GET /head/metrics` (Prometheus).
+- [`archive-watermark.md`](docs/spec/archive-watermark.md) —
+  how a node learns an archiver is attached and how far it got:
+  the `archiver` declaration and `POST /api/admin/archive/watermark`.
 
 **Testing**
-- [`integration-stages.md`](docs/spec/integration-stages.md) — the stage1/stage4 integration test
-  levels: what each exercises and where to add a test.
-- [`testcontrol-driver.md`](docs/spec/testcontrol-driver.md) — how `ModelBasedSuite` drives tests on a
-  cats-effect `TestControl` virtual clock.
-- [`crash-recovery-testing.md`](docs/spec/crash-recovery-testing.md) — the `Persistence` decorator
-  seam and the three decorators over it, the restart primitives, and what they do not cover.
+- [`integration-stages.md`](docs/spec/integration-stages.md) —
+  the stage1/stage4 integration test levels:
+  what each exercises and where to add a test.
+- [`testcontrol-driver.md`](docs/spec/testcontrol-driver.md) —
+  how `ModelBasedSuite` drives tests on a cats-effect `TestControl` virtual
+  clock.
+- [`crash-recovery-testing.md`](docs/spec/crash-recovery-testing.md) —
+  the `Persistence` decorator seam and the three decorators over it,
+  the restart primitives, and what they do not cover.
 
 **Reference**
-- [`style-guide.md`](docs/spec/style-guide.md) — hand-applied Scala conventions (see [Code
-  Style](#code-style)).
-- [`logging-tracing.md`](docs/spec/logging-tracing.md) — contextual logging and Tracer design.
+- [`style-guide.md`](docs/spec/style-guide.md) —
+  hand-applied Scala conventions (see [Code Style](#code-style)).
+- [`logging-tracing.md`](docs/spec/logging-tracing.md) —
+  contextual logging and Tracer design.
 - [`codecs.md`](docs/spec/codecs.md) — codec conventions (WIP notes).
-- [`versioning.md`](docs/spec/versioning.md) — the software, protocol and store versions: what each
-  covers, where it is checked, and why a format change deploys by head migration.
-- [`petri-net-library.md`](docs/spec/petri-net-library.md) — the typed Petri net library under
-  `petri/` used to model the protocol.
+- [`versioning.md`](docs/spec/versioning.md) — the software,
+  protocol and store versions: what each covers, where it is checked,
+  and why a format change deploys by head migration.
+- [`petri-net-library.md`](docs/spec/petri-net-library.md) —
+  the typed Petri net library under `petri/` used to model the protocol.
 
 ## Development Environment
 
 ### Using Nix
-The project uses a Nix flake for a reproducible dev environment. Launch IDEA (and Claude Code) from within the Nix shell so all tools (`sbt`, `just`, etc.) are on `PATH`:
+The project uses a Nix flake for a reproducible dev environment.
+Launch IDEA (and Claude Code) from within the Nix shell so all tools (`sbt`,
+`just`, etc.) are on `PATH`:
 ```bash
 nix develop
 # then launch your editor from here
@@ -166,77 +198,96 @@ Mechanical settings (auto-enforced by scalafmt/scalafix):
 - **Import sorting**: scalastyle format
 - **Scalafix rules**: ExplicitResultTypes, OrganizeImports, RemoveUnused, etc.
 
-Hand-applied conventions — full rules and worked examples in
+Hand-applied conventions —
+full rules and worked examples in
 [`docs/spec/style-guide.md`](docs/spec/style-guide.md):
 
-- **Naming**: functions are verb phrases (`mk*` counts); no ad-hoc contractions (use the
-  established term or full word; `tx`/`id`/`VKey`/`SEC` exempt); never "genesis" for stack 0;
-  "broadcast" = cross-peer network sends only (local fan-out is "announce"/"fan out").
-  — [Naming](docs/spec/style-guide.md#naming)
-- **Organization**: every public def has a doc comment; privates come after publics, ordered
-  caller-before-callee; every `extension` lives inside an `object`; no inline FQNs (always
-  import); give functions the minimal data they need (fields > section > whole config).
-  — [Code organization](docs/spec/style-guide.md#code-organization)
-- **Types/givens**: prefer an explicit `Unsigned`/`HardConfirmed` split over a phantom `+S`
-  type parameter; opaque-tuple `Conversion` givens must `.convert` each element; never write
-  `given x: T = summon` (resolves to itself → infinite loop).
-  — [Types and givens](docs/spec/style-guide.md#types-and-givens)
+- **Naming**: functions are verb phrases (`mk*` counts);
+  no ad-hoc contractions (use the established term or full word;
+  `tx`/`id`/`VKey`/`SEC` exempt); never "genesis" for stack 0;
+  "broadcast" = cross-peer network sends only (local fan-out is "announce"/"fan
+  out"). — [Naming](docs/spec/style-guide.md#naming)
+- **Organization**: every public def has a doc comment;
+  privates come after publics, ordered caller-before-callee;
+  every `extension` lives inside an `object`; no inline FQNs (always import);
+  give functions the minimal data they need (fields > section > whole config). —
+  [Code organization](docs/spec/style-guide.md#code-organization)
+- **Types/givens**:
+  prefer an explicit `Unsigned`/`HardConfirmed` split over a phantom `+S` type
+  parameter; opaque-tuple `Conversion` givens must `.convert` each element;
+  never write `given x: T = summon` (resolves to itself → infinite loop). —
+  [Types and givens](docs/spec/style-guide.md#types-and-givens)
 
 ### Terminology
 
 - **Reuse the project's existing names; don't coin new ones.** When a concept
   already has a concrete name — an actor (`JointLedger`, `StackComposer`,
-  `FastConsensusActor`/`SCA`), a type, a spec term — use it in code, comments, and
-  docs. Don't invent a fresh descriptive phrase for something already named (e.g.
-  write "JointLedger", not "the signer / ledger side"; "fast-side" / "slow-side",
-  not "block-side" / "stack-side"). New synonyms fragment the vocabulary and make
-  the code harder to search and read.
+  `FastConsensusActor`/`SCA`), a type, a spec term — use it in code, comments,
+  and docs.
+  Don't invent a fresh descriptive phrase for something already named (e.g.
+  write "JointLedger", not "the signer / ledger side";
+  "fast-side" / "slow-side", not "block-side" / "stack-side").
+  New synonyms fragment the vocabulary and make the code harder to search and
+  read.
 
 ### Comments
 
-See [Comments](docs/spec/style-guide.md#comments) for the full rule. In short:
+See [Comments](docs/spec/style-guide.md#comments) for the full rule.
+In short:
 
-- Describe the code **as it is now** — no historical perspective ("formerly X", "moved to the
-  slow side", "as of step N", "renamed from"). History lives in Git and memory.
-- Keep a comment **scoped to the local code's concern** — don't explain downstream or
-  other-actor internals from a method that doesn't do that work.
-- Don't reference `.scratch/` (gitignored); link a committed `docs/spec/` doc (or an in-flight
-  `design/` one) or inline the point.
+- Describe the code **as it is now** — no historical perspective ("formerly X",
+  "moved to the slow side", "as of step N", "renamed from").
+  History lives in Git and memory.
+- Keep a comment **scoped to the local code's concern** —
+  don't explain downstream or other-actor internals from a method that doesn't
+  do that work.
+- Don't reference `.scratch/` (gitignored);
+  link a committed `docs/spec/` doc (or an in-flight `design/` one) or inline
+  the point.
 
 ### Logging
 
-- When you add a new named logger / tracer route, add a matching `<logger name="…">` line to
-  **every** `logback.xml` in the same subproject — keep them in sync. Configs by subproject:
-  - root: `src/main/resources/logback.xml` **and** `src/test/resources/logback-test.xml`
+- When you add a new named logger / tracer route,
+  add a matching `<logger name="…">` line to **every** `logback.xml` in the same
+  subproject — keep them in sync.
+  Configs by subproject:
+  - root:
+    `src/main/resources/logback.xml` **and**
+    `src/test/resources/logback-test.xml`
   - `integration`: `integration/src/test/resources/logback-test.xml`
 
 ### Warnings
 
-- CI compiles with `-Werror` (gated on `$CI` in `build.sbt`); reproduce locally with
-  `just build-werror`.
-- Monocle's `Focus[T](_.field)` macro emits synthetic field-named locals that trip
-  `-Wunused:all`. Annotate the enclosing def with
-  `@nowarn("msg=unused local definition")` (import `scala.annotation.nowarn`).
+- CI compiles with `-Werror` (gated on `$CI` in `build.sbt`);
+  reproduce locally with `just build-werror`.
+- Monocle's `Focus[T](_.field)` macro emits synthetic field-named locals that
+  trip `-Wunused:all`.
+  Annotate the enclosing def with `@nowarn("msg=unused local definition")`
+  (import `scala.annotation.nowarn`).
 
 ## Testing
 
 - **Unit tests**: Located in `src/test/scala/hydrozoa/`
-- **Integration tests**: Separate `integration` project (currently needs updates - see issue #111)
+- **Integration tests**:
+  Separate `integration` project (currently needs updates - see issue #111)
 - **Property-based testing**: Using ScalaCheck for testing protocol invariants
 - **Benchmarks**: JMH-based performance testing in `benchmark/` subproject
 
 ### ScalaCheck rules
 
-- **Never use `.sample` or `.sample.get`** on a `Gen[_]` in tests. It bypasses ScalaCheck's seeding
-  mechanism, breaking reproducibility (a failing seed cannot be replayed), and throws
-  `NoSuchElementException` if the generator returns `None`. Always drive generation through
-  `forAll`, `pick`, or another ScalaCheck-managed entry point.
+- **Never use `.sample` or `.sample.get`** on a `Gen[_]` in tests.
+  It bypasses ScalaCheck's seeding mechanism,
+  breaking reproducibility (a failing seed cannot be replayed),
+  and throws `NoSuchElementException` if the generator returns `None`.
+  Always drive generation through `forAll`, `pick`,
+  or another ScalaCheck-managed entry point.
 
 ## Transaction Builder Implementation
 
 ## Important Notes
 
-- The project is currently undergoing refactoring (expected completion: October 2025)
+- The project is currently undergoing refactoring (expected completion:
+  October 2025)
 - Some README instructions may not work during the refactor period
 - Use implicit conversions carefully when working with opaque types
 - Always run linting and formatting before committing changes

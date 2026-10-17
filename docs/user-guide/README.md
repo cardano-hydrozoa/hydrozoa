@@ -10,13 +10,15 @@ Task-oriented how-tos for running and using a Hydrozoa head.
 | [L2MINTING.md](L2MINTING.md) | Mint and burn tokens on L2: the transient-token declarations and the metadata a minting tx must carry. |
 | [REQUEST-HASH.md](REQUEST-HASH.md) | Compute the `requestHash` every submission carries: the preimage layout, the pinned vectors, and what a mismatch means. |
 
-Each of DEPOSIT / L2TXS / L2MINTING has a matching CLI subcommand of the packaged `hydrozoa`
-launcher (`submit-deposit`, `submit-l2-tx`) that serves as a runnable worked example; the guides
-walk both the wire format and the CLI.
+Each of DEPOSIT / L2TXS / L2MINTING has a matching CLI subcommand of the
+packaged `hydrozoa` launcher (`submit-deposit`,
+`submit-l2-tx`) that serves as a runnable worked example;
+the guides walk both the wire format and the CLI.
 
-The reference EUTXO L2 ledger drives an isomorphic ledger with **native Cardano transactions** — an
-L2 tx is an ordinary Cardano `Transaction`, and a deposit is an ordinary Cardano tx plus an
-out-of-band payload. The guides assume that model.
+The reference EUTXO L2 ledger drives an isomorphic ledger with **native Cardano
+transactions** — an L2 tx is an ordinary Cardano `Transaction`,
+and a deposit is an ordinary Cardano tx plus an out-of-band payload.
+The guides assume that model.
 
-For the machine-readable request/response shapes these how-tos build against, see the
-[API reference](../api/).
+For the machine-readable request/response shapes these how-tos build against,
+see the [API reference](../api/).

@@ -77,6 +77,27 @@
         "type": "github"
       }
     },
+    "mdreflow": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792267291,
+        "narHash": "sha256-HMZ7ifpLJojMqIT1qeEWLoqGsSfw0unGYTxV0QtNeNg=",
+        "owner": "GeorgeFlerovsky",
+        "repo": "mdreflow",
+        "rev": "f35cb55b31a9e156b2a11be1c0e2e271f2baf0ed",
+        "type": "github"
+      },
+      "original": {
+        "owner": "GeorgeFlerovsky",
+        "ref": "v0.3.0-fork.2",
+        "repo": "mdreflow",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1790340521,
@@ -97,6 +118,7 @@
       "inputs": {
         "flake-utils": "flake-utils",
         "git-hooks": "git-hooks",
+        "mdreflow": "mdreflow",
         "nixpkgs": "nixpkgs"
       }
     },
