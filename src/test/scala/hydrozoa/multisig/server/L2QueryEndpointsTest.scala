@@ -300,6 +300,43 @@ class L2QueryEndpointsTest extends AnyFunSuite:
         }
     }
 
+    test("on an EUTXO node, the /docs spec lists the L2 query routes beside the core API") {
+        withSeededRoutes { (app, _) =>
+            for {
+                resp <- app.run(Request[IO](Method.GET, Uri.unsafeFromString("/docs/docs.yaml")))
+                body <- resp.bodyText.compile.string
+                _ <- IO(
+                  assert(
+                    body.contains("/l2/cardano-eutxo/utxos/{address}") &&
+                        body.contains("/l2/cardano-eutxo/transactions"),
+                    "the /docs spec should list both L2 query routes"
+                  )
+                )
+                _ <- IO(
+                  assert(body.contains("/head/requests"), "the /docs spec should list the core API")
+                )
+            } yield ()
+        }
+    }
+
+    test("with no L2 reader (an any-remote node), the /docs spec omits the L2 query routes") {
+        withNoReaderRoutes { app =>
+            for {
+                resp <- app.run(Request[IO](Method.GET, Uri.unsafeFromString("/docs/docs.yaml")))
+                body <- resp.bodyText.compile.string
+                _ <- IO(
+                  assert(resp.status == Status.Ok, s"expected 200 for the spec, got ${resp.status}")
+                )
+                _ <- IO(
+                  assert(
+                    !body.contains("/l2/cardano-eutxo"),
+                    "the /docs spec should not list routes the node does not mount"
+                  )
+                )
+            } yield ()
+        }
+    }
+
     test("GET /l2/cardano-eutxo/transactions?count=abc is a 400, not a 404") {
         withSeededRoutes { (app, _) =>
             // tapir rejects an un-decodable query param with a 400 and a plain-text body, so check

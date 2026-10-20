@@ -618,18 +618,20 @@ class HydrozoaRoutes(
           schemaName = sname => OpenAPIDocsOptions.default.schemaName(sname).stripSuffix("View")
         )
 
-    /** Swagger UI (served at `/docs`) + the raw OpenAPI document for the core API. */
-    private val coreDocsEndpoints: List[ServerEndpoint[Any, IO]] =
-        SwaggerInterpreter(openAPIInterpreterOptions = docsOptions)
-            .fromServerEndpoints[IO](coreEndpoints, apiTitle, apiVersion)
-
     /** The EUTXO L2-query routes, mounted only when the node runs the EUTXO ledger. */
     private val l2Routes: List[ServerEndpoint[Any, IO]] =
         l2QueryReader.fold(List.empty)(l2ServerEndpoints)
 
-    /** The full route set: the core API + its docs, plus the EUTXO L2-query routes when present. */
+    /** Swagger UI (served at `/docs`) + the raw OpenAPI document for every route the node mounts:
+      * the core API, plus the EUTXO L2-query routes when present.
+      */
+    private val docsEndpoints: List[ServerEndpoint[Any, IO]] =
+        SwaggerInterpreter(openAPIInterpreterOptions = docsOptions)
+            .fromServerEndpoints[IO](coreEndpoints ++ l2Routes, apiTitle, apiVersion)
+
+    /** The full route set: the core API, the EUTXO L2-query routes when present, and their docs. */
     val routes: HttpRoutes[IO] =
-        Http4sServerInterpreter[IO]().toRoutes(coreEndpoints ++ coreDocsEndpoints ++ l2Routes)
+        Http4sServerInterpreter[IO]().toRoutes(coreEndpoints ++ l2Routes ++ docsEndpoints)
 
     /** The core OpenAPI document as YAML — pinned by the golden test (docs/api/openapi.yaml). */
     def openApiYaml: String =
