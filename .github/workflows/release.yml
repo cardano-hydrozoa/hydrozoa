@@ -53,6 +53,9 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            # A four-part tag (v0.1.11.1) is not semver, so the two rules above skip it;
+            # this one publishes the tag with its leading v stripped.
+            type=match,pattern=v(.*),group=1
             type=raw,value=latest
 
       - name: Build and push
