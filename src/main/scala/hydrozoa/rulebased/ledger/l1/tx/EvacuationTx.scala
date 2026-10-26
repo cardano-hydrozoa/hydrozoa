@@ -24,6 +24,7 @@ import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ReferenceOutput, Send}
+import scalus.uplc.eval.OutOfExBudgetError
 
 final case class EvacuationTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
@@ -297,6 +298,15 @@ private object EvacuationTxOps {
                         _
                       )
                     ) =>
+                    loop(halveEvacuation(evacuatees))
+                // The evaluator stops a script at the tx's `maxTxExecutionUnits`, so an overrun
+                // can also surface as a failed evaluation before `ExUnitsTooBigValidator` runs.
+                case Left(
+                      BuilderError(
+                        SomeBuildError.BalancingError(TxBalancingError.EvaluationFailed(e), _),
+                        _
+                      )
+                    ) if e.getCause.isInstanceOf[OutOfExBudgetError] =>
                     loop(halveEvacuation(evacuatees))
                 case Left(e) => Left(e)
             }
