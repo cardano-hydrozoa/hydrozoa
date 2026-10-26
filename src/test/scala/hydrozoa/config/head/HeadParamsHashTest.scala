@@ -3,7 +3,6 @@ package hydrozoa.config.head
 import cats.data.Validated
 import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.initialization.InitializationParameters
-import hydrozoa.config.head.multisig.block.BlockConfig
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork

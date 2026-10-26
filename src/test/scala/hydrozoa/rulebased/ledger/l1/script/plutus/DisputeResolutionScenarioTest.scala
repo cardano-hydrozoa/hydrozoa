@@ -21,6 +21,7 @@ import hydrozoa.rulebased.ledger.l1.utxo.BallotBox
 import org.scalacheck.rng.Seed
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.funsuite.AnyFunSuite
+import scala.annotation.nowarn
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import scalus.cardano.address.Address
@@ -171,6 +172,8 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
       * `Voted(X2)`; not voting leaves it `AwaitingVote`. Returns whether *any* box voted on this
       * branch.
       */
+    // The `async` macro expansion trips the unused-symbol lint on names it uses.
+    @nowarn("msg=unused (explicit parameter|pattern variable)")
     private def voteEach(
         boxes: List[(BallotBox[VoteStatus.AwaitingVote], CollateralUtxo)],
         anyVoted: Boolean
@@ -206,6 +209,8 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
     /** The full scenario: vote (branched) -> sleep past the deadline -> tally down (branched) ->
       * resolve. Yields the resolved datum paired with whether this branch cast any vote.
       */
+    // The `async` macro expansion trips the unused-symbol lint on names it uses.
+    @nowarn("msg=unused (explicit parameter|pattern variable)")
     private val scenario: Scenario[(RuleBasedTreasuryDatum, Boolean)] =
         async[Scenario] {
             val anyVoted = voteEach(awaitingBoxes, false).await
@@ -294,6 +299,8 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
     /** Recursive contraction: branch over every legal tally pair at each step, thread the emulator
       * forward, and resolve the single survivor. Returns the resolved datum on each branch.
       */
+    // The `async` macro expansion trips the unused-symbol lint on names it uses.
+    @nowarn("msg=unused (explicit parameter|pattern variable)")
     private def tallyDown(bs: List[BallotBox[VoteStatus]]): Scenario[RuleBasedTreasuryDatum] =
         async[Scenario] {
             if bs.size == 1 then {

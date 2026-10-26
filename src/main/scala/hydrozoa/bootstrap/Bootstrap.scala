@@ -48,7 +48,6 @@ import org.http4s.Uri
 import scala.collection.immutable.SortedMap
 import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, PlutusScriptEvaluator, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}

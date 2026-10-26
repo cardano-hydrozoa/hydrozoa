@@ -171,7 +171,7 @@ Build it from this repo — see §3.
 
 Cloning this repo is only needed to run a version other than the published
 image, or to hack on Hydrozoa.
-Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7.
+Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.9.0.
 JDK 23+ if not using Nix (the runtime passes
 `--sun-misc-unsafe-memory-access=allow`).
 

@@ -54,7 +54,7 @@ object SoftConfirmationCodec:
     given softConfirmedNextDecoder(using
         CardanoNetwork.Section
     ): Decoder[Block.SoftConfirmed.Next] = Decoder.instance(c =>
-        c.downField("kind").as[String].flatMap {
+        c.downField("kind").as[String].flatMap[DecodingFailure, Block.SoftConfirmed.Next] {
             case "Minor" => c.downField("v").as[Block.SoftConfirmed.Minor].widen
             case "Major" => c.downField("v").as[Block.SoftConfirmed.Major].widen
             case "Final" => c.downField("v").as[Block.SoftConfirmed.Final].widen

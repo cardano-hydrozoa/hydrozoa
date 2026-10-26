@@ -3,7 +3,6 @@ package hydrozoa.multisig.persistence.recovery
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, HubHardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.event.RequestId.*
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.{JournalKey, Markers}

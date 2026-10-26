@@ -81,7 +81,6 @@ object L2LedgerCommand {
         // ScreenDeposit encoder (the screening endpoint's request body,
         // hydrozoa.multisig.ledger.remote.RemoteL2Screener), so the two bodies cannot drift.
         given depositRegistrationEncoder: io.circe.Encoder[L2LedgerCommand.RegisterDeposit] = {
-            import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _}
             import hydrozoa.multisig.ledger.remote.RemoteL2Screener.screenDepositEncoder
             import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
             (r: L2LedgerCommand.RegisterDeposit) =>

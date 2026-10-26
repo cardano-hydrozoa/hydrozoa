@@ -20,10 +20,10 @@ import hydrozoa.rulebased.ledger.l1.tx.VoteTx
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import org.scalacheck.{Arbitrary, Gen, Properties, Test}
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State, UtxoEnv}
-import scalus.cardano.ledger.{BlockHeader as _, *}
 import scalus.cardano.onchain.plutus.prelude.{List as SList, Option as SOption}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilderStep.ValidityEndSlot

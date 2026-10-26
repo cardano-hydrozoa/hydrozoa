@@ -188,7 +188,9 @@ given L2ConformanceValidator[TransactionWitnessSet] with
     ): Either[String, Unit] =
         for
             // Validate empty fields
-            _ <- validateEquals("Bootstrap Witnesses")(l1.bootstrapWitnesses)(Set.empty)
+            _ <- validateEquals("Bootstrap Witnesses")(l1.bootstrapWitnesses)(
+              TaggedSortedSet.empty[BootstrapWitness]
+            )
             _ <- validateEquals("Plutus V1 Scripts")(l1.plutusV1Scripts)(
               TaggedSortedStrictMap.empty[ScriptHash, Script.PlutusV1]
             )

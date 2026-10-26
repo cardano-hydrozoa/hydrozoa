@@ -347,7 +347,7 @@ abstract class PeerLiaisonHeadToHead(
                     def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
                         case LaneOutbound.Items(xs)            => xs
                         case LaneOutbound.OutOfBounds(_, _, _) => Nil
-                    val all = List(blockR, stackR, reqR, saR, hhR, hubR)
+                    val all = List[LaneOutbound.Reply[?]](blockR, stackR, reqR, saR, hhR, hubR)
                     if all.forall(items(_).isEmpty) then Server.Served.Empty
                     else
                         Server.Served.Reply(

@@ -569,8 +569,9 @@ lazy val ciCanary: Project = (project in file("ci-canary"))
     )
     .settings(recordTestEvents)
 
-// Latest Scala 3 LTS version
-ThisBuild / scalaVersion := "3.3.7"
+// Latest Scala 3 LTS version. scalus-plugin is published per full Scala version, so a Scala bump
+// needs a Scalus release that ships the plugin for it.
+ThisBuild / scalaVersion := "3.9.0"
 
 // NB (sbt 2): a bare setting is added to every subproject. Written as `ThisBuild / scalacOptions
 // ++=`, each per-subproject addition would append to the *shared* ThisBuild scope, so the flags
@@ -584,10 +585,16 @@ scalacOptions ++= Def.uncached(Seq(
   "-Wvalue-discard",
   "-Wunused:all",
   "-Wall",
-  // Scala 3.3.7 enables `-Wtostring-interpolation` (via `-Wall`), which flags many pre-existing
+  // `-Wall` enables `-Wtostring-interpolation`, which flags many pre-existing
   // `s"...$x"` sites where `x` is not a String. Silenced (non-fatal under `-Werror`) pending a
   // dedicated cleanup pass; demote to a warning/error once those sites are fixed.
   "-Wconf:msg=interpolation uses toString:s",
+  // ScalaPB's generated sources are not ours to fix.
+  "-Wconf:src=.*src_managed.*:s",
+  // Scala 3.9 warns when a type parameter or a constructor parameter shadows a name in scope.
+  // The codebase uses such names on purpose (e.g. a `State` type parameter beside `cats.data`).
+  "-Wconf:id=E226:s",
+  "-Wconf:id=E227:s",
   "-Yretain-trees", // Essential for incremental compilation
 ) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil))
 
@@ -640,7 +647,7 @@ inThisBuild(
     // Release version — drives the Docker image tag, `hydrozoa.BuildInfo.version`, and `GET
     // /version`. Bump here for a release (see RELEASE.md), then tag `v<version>`.
     version := "0.1.14",
-    scalaVersion := "3.3.7",
+    scalaVersion := "3.9.0",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision
   )

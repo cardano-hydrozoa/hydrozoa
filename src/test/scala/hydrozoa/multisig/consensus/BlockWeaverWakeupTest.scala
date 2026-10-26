@@ -180,7 +180,7 @@ object BlockWeaverWakeupTest extends Properties("Block weaver wakeup"), TestKit 
             BlockNumber(1),
             config.headConfig,
             forcedMajorIn = NeverInThisTest,
-            depositWakeupIn = Some(-30.seconds)
+            depositWakeupIn = Some((-30).seconds)
           )
           _ <- lift((weaver ! confirmed) >> env.system.waitForIdle())
           _ <- settle(env.jointLedgerMock.startBlockNums.get.contains(BlockNumber(2)))

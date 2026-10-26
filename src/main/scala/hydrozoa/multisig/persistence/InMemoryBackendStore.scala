@@ -15,7 +15,7 @@ import scala.collection.immutable.TreeMap
 object InMemoryBackendStore:
 
     private given byteVectorOrdering: Ordering[Vector[Byte]] =
-        Ordering.Implicits.seqOrdering(
+        Ordering.Implicits.seqOrdering(using
           Ordering.fromLessThan[Byte]((a, b) => (a & 0xff) < (b & 0xff))
         )
 

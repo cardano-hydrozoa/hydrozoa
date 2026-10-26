@@ -25,7 +25,7 @@ import hydrozoa.multisig.persistence.recovery.HardConfirmationScan
 import hydrozoa.multisig.{HeadMultisigRegimeManager, NodeStatus}
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
-import scalus.cardano.ledger.{Block as _, BlockHeader as _, Transaction, TransactionHash, TransactionInput}
+import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionInput}
 
 /** Hydrozoa's liaison to Cardano L1 (actor):
   *   - Keeps track of the target L1 state the liaison tries to achieve by observing all L1 block
@@ -270,7 +270,7 @@ object CardanoLiaison:
                     case PartitionEffects.Minor(_, _)           => Nil
                 }
                 val backbones: List[SettlementTx | FinalizationTx] =
-                    settlements ++ finalization.toList
+                    List.concat[SettlementTx | FinalizationTx](settlements, finalization)
                 val perBackbone =
                     backbones.map(b =>
                         mkHappyPathEffectInputsAndEffects(b, rolloutsFor(b, allRollouts))

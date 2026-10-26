@@ -113,7 +113,7 @@ object RemoteL2Screener {
     given screenDepositEncoder: Encoder.AsObject[L2Screener.ScreenDeposit] = {
         import Destination.given
         import RemoteL2LedgerCodecs.{given_Encoder_Value, given_Encoder_Coin}
-        import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
+        import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringEncoder, transactionInputEncoder}
         Encoder.AsObject.instance { (r: L2Screener.ScreenDeposit) =>
             io.circe.JsonObject(
               "depositId" -> r.depositId.asJson,

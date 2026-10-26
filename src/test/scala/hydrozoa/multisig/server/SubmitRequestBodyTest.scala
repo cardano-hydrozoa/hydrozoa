@@ -3,12 +3,14 @@ package hydrozoa.multisig.server
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody}
 import io.circe.parser.decode
 import org.scalatest.funsuite.AnyFunSuite
+import scala.annotation.nowarn
 import scalus.uplc.builtin.ByteString
 
 /** The submit-body wire contract: the internally-tagged JSON the [[SubmissionClient]] posts must
   * decode as [[ApiDto.SubmitRequestView]] and [[ApiDto.toUserRequest]] must recover the request.
   * (Guards the CLI ⇄ `POST /head/requests` round-trip, which has no HTTP-level test.)
   */
+@nowarn("msg=inferred to be union type")
 class SubmitRequestBodyTest extends AnyFunSuite:
 
     private val l1Hex = "deadbeef"

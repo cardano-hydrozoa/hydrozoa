@@ -14,9 +14,9 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{
 import hydrozoa.rulebased.ledger.l1.tx.DeinitTxOps.Build.Error.*
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryUtxo}
 import monocle.*
-import scalus.cardano.ledger.{BlockHeader as _, *}
+import scalus.cardano.ledger.*
+import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{SomeBuildError, *}
 import scalus.uplc.builtin.ByteString.hex
 
 final case class DeinitTx(

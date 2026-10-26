@@ -19,8 +19,8 @@ import hydrozoa.rulebased.ledger.l1.tx.VoteTxOps.Build.Error.{InvalidVoteDatum, 
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import monocle.*
 import scala.util.{Failure, Success, Try}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{BlockHeader as _, *}
 import scalus.cardano.onchain.plutus.prelude.{List as SList, Option as SOption}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos

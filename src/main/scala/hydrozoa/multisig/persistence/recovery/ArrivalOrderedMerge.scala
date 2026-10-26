@@ -34,7 +34,7 @@ object ArrivalOrderedMerge:
 
     /** Order a flat bag of entries by arrival stamp (then the deterministic tiebreak). */
     def mergeAll(entries: List[RawJournalEntry]): List[RawJournalEntry] =
-        entries.sorted(entryOrdering)
+        entries.sorted(using entryOrdering)
 
     /** Unsigned lexicographic order on raw key bytes — byte-for-byte, low index first, comparing
       * each byte as an **unsigned** value in `[0, 255]`; if one key is a prefix of the other, the
@@ -80,4 +80,6 @@ object ArrivalOrderedMerge:
             .by[RawJournalEntry, (Int, Long, String)](e =>
                 (e.stamp.generation, e.stamp.monotonicNanos, e.key.cf.name)
             )
-            .orElse(Ordering.by[RawJournalEntry, Array[Byte]](_.key.encode)(unsignedBytesOrdering))
+            .orElse(
+              Ordering.by[RawJournalEntry, Array[Byte]](_.key.encode)(using unsignedBytesOrdering)
+            )
