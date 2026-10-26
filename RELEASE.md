@@ -169,7 +169,7 @@ No manual `docker push` is needed.
   No separate build is needed for arm64: the staged context is JVM bytecode,
   the base image (`eclipse-temurin:25-jre`) is multi-arch,
   and both native dependencies ship aarch64 objects inside the same jars —
-  `blst-java` as `supranational/blst/Linux/aarch64/libblst.so`,
+  `scalus-crypto-jni` as `natives/linux_arm64/libscalus_crypto.so`,
   `rocksdbjni` as `librocksdbjni-linux-aarch64.so`.
   The generated Dockerfile's only `RUN` steps are `chmod` and `useradd` over 168
   files, so QEMU emulation costs seconds rather than a rebuild.

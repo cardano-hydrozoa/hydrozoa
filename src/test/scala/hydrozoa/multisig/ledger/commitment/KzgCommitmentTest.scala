@@ -1,13 +1,14 @@
 package hydrozoa.multisig.ledger.commitment
 
-import java.math.BigInteger
+import hydrozoa.lib.cardano.scalus.Scalar
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.prelude.bls12_381.G1
+import scalus.uplc.builtin.Builtins.{bls12_381_G1_add, bls12_381_G1_scalarMul}
 import scalus.uplc.builtin.ByteString
-import supranational.blst.{P1, Scalar}
+import scalus.uplc.builtin.bls12_381.G1Element
 
 /** The commitment is a consensus value — it goes into the treasury datum every peer signs and into
   * the on-chain evacuation proof — so the accumulator library it is computed with is not a free
@@ -21,7 +22,7 @@ class KzgCommitmentTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     /** Distinct scalars, derived from the index so a size is reproducible without a generator. */
     private def scalarsOfSize(n: Int): SList[Scalar] =
-        SList.from((1 to n).toList.map(i => Scalar(BigInteger.valueOf(i.toLong * 7919))))
+        SList.from((1 to n).toList.map(i => Scalar.applyUnsafe(BigInt(i.toLong * 7919))))
 
     private def agrees(scalars: SList[Scalar]): Boolean =
         KzgCommitment.calculateKzgCommitment(scalars) == Schoolbook.commitment(scalars)
@@ -31,7 +32,7 @@ class KzgCommitmentTest extends AnyFunSuite with ScalaCheckPropertyChecks {
         // generated case would dominate the suite's runtime. The sizes that exercise the
         // library's algorithm switches are covered explicitly below.
         forAll(Gen.listOf(Gen.choose(1L, Long.MaxValue)), minSuccessful(20)) { values =>
-            assert(agrees(SList.from(values.map(v => Scalar(BigInteger.valueOf(v))))))
+            assert(agrees(SList.from(values.map(v => Scalar.applyUnsafe(BigInt(v))))))
         }
     }
 
@@ -58,33 +59,31 @@ class KzgCommitmentTest extends AnyFunSuite with ScalaCheckPropertyChecks {
   *
   * Deliberately the slow formulation: `O(n^2)` to multiply the binomials out, and one scalar
   * multiplication per coefficient to evaluate them. Being slow is what makes it a useful oracle —
-  * it shares no code with the implementation beyond the SRS itself.
+  * it shares no code with the implementation beyond the SRS and the curve arithmetic.
   */
 private object Schoolbook {
 
     def commitment(scalars: SList[Scalar]): ByteString = {
         val srs = TrustedSetup.takeSrsG1(scalars.length.toInt + 1)
-        ByteString.fromArray(evaluate(srs, expand(scalars)).compress())
+        evaluate(srs, expand(scalars)).toCompressedByteString
     }
 
     /** Multiplies the normalized binomials `(x + s)` out into the coefficients of their product,
       * lowest degree first, by schoolbook convolution.
       */
     private def expand(binomials: SList[Scalar]): SList[Scalar] = {
-        val zero = Scalar(BigInteger.ZERO)
-        val one = Scalar(BigInteger.ONE)
-        binomials.foldLeft(SList.singleton(one.dup())) { (acc, term) =>
-            // `mul` mutates its receiver, so both operands are cloned before they are combined.
-            val shifted: SList[Scalar] = SList.Cons(zero.dup(), acc.map(_.dup))
-            val multiplied = acc.map(s => s.mul(term)).appended(zero.dup())
-            SList.map2(shifted, multiplied)((l, r) => l.add(r))
+        binomials.foldLeft(SList.singleton(Scalar.one)) { (acc, term) =>
+            val shifted: SList[Scalar] = SList.Cons(Scalar.zero, acc)
+            val multiplied = acc.map(_ * term).appended(Scalar.zero)
+            SList.map2(shifted, multiplied)(_ + _)
         }
     }
 
     /** Evaluates the polynomial in the exponent: one scalar multiplication per coefficient, summed.
       */
-    private def evaluate(srsG1: SList[P1], coefficients: SList[Scalar]): P1 = {
-        val terms = SList.map2(coefficients, srsG1)((c, point) => point.dup().mult(c))
-        terms.foldLeft(P1(G1.zero.toCompressedByteString.bytes))((a, b) => a.add(b))
+    private def evaluate(srsG1: SList[G1Element], coefficients: SList[Scalar]): G1Element = {
+        val terms =
+            SList.map2(coefficients, srsG1)((c, point) => bls12_381_G1_scalarMul(c.toInt, point))
+        terms.foldLeft(G1.zero)(bls12_381_G1_add)
     }
 }

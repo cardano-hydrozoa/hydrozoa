@@ -757,7 +757,8 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
             now.toSlot.slot,
             env.headConfig.cardanoProtocolParams,
             certState = CertState.empty,
-            env.headConfig.network
+            env.headConfig.network,
+            Coin.zero
           ),
           slotConfig = env.headConfig.slotConfig,
           evaluatorMode = EvaluateAndComputeCost,

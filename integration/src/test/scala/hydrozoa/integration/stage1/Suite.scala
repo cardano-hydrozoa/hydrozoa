@@ -635,7 +635,8 @@ case class Suite(
                               slot = slot,
                               params = mock.protocolParams,
                               certState = CertState.empty,
-                              network = mock.network
+                              network = mock.network,
+                              treasury = Coin.zero
                             ),
                             slotConfig = mock.slotConfig
                           )

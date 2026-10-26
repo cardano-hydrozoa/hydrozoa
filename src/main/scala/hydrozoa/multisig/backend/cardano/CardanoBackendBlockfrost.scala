@@ -381,7 +381,7 @@ class CardanoBackendBlockfrost private (
         val value = Value(Coin(lovelace), MultiAsset(assets))
 
         // Parse datum if present - inline datum is CBOR-encoded Data in hex
-        val datumOption: Option[DatumOption.Inline] =
+        val datumOption: Option[DatumOption] =
             Option(utxo.getInlineDatum).flatMap { inlineDatumHex =>
                 if inlineDatumHex.isEmpty then None
                 else {
@@ -390,7 +390,7 @@ class CardanoBackendBlockfrost private (
                     scala.util.Try {
                         val datumBytes = ByteString.fromHex(inlineDatumHex)
                         val data = Cbor.decode(datumBytes.bytes).to[Data].value
-                        DatumOption.Inline(data): DatumOption.Inline
+                        DatumOption.Inline(data)
                     }.toOption
                 }
             }

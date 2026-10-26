@@ -23,15 +23,14 @@ import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.bls12_381.*
 import scalus.uplc.builtin.{ByteString, Data, ToData}
 import scalus.|>
-import supranational.blst.Scalar
 
 @nowarn("msg=unused value")
 class RuleBasedTreasuryScriptTest extends AnyFunSuite {
 
     test("Membership check: empty accumulator / subset") {
 
-        val crs_g2 = TrustedSetup.takeSrsG2(1).map(G2Element.apply)
-        val accumulator = TrustedSetup.takeSrsG1(1).head |> G1Element.apply
+        val crs_g2 = TrustedSetup.takeSrsG2(1)
+        val accumulator = TrustedSetup.takeSrsG1(1).head
         val subset: List[ScalusScalar] = List()
         val proof = accumulator
 
@@ -45,10 +44,8 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         // Hashes of utxos
         val subsetScalus: List[ScalusScalar] = List.empty
 
-        val subsetBlst = subsetScalus.map(ss => Scalar().from_bendian(ss._1.toByteArray))
-
-        val commitmentPoint1 = KzgCommitment.calculateKzgCommitment(subsetBlst)
-        val commitmentPoint2 = KzgCommitment.calculateKzgCommitment(subsetBlst)
+        val commitmentPoint1 = KzgCommitment.calculateKzgCommitment(subsetScalus)
+        val commitmentPoint2 = KzgCommitment.calculateKzgCommitment(subsetScalus)
 
         assert(
           commitmentPoint1 == commitmentPoint2
@@ -68,9 +65,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
           ScalusScalar("10660627058191719947148018507418106787651292500144510379470545154509").get
         )
 
-        val subsetBlst = subsetScalus.map(ss => Scalar().from_bendian(ss._1.toByteArray))
-
-        val commitmentPoint = KzgCommitment.calculateKzgCommitment(subsetBlst)
+        val commitmentPoint = KzgCommitment.calculateKzgCommitment(subsetScalus)
 
         assert(
           commitmentPoint.toHex ==
@@ -97,7 +92,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val proof = G1.generator
 
         // Pre-calculated powers of tau
-        val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(G2Element.apply)
+        val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1)
 
         assert(
           RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof)
@@ -125,7 +120,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
       "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
     )
     private val setupG2: List[ByteString] =
-        TrustedSetup.takeSrsG2(4).map(p2 => G2Element(p2).toCompressedByteString)
+        TrustedSetup.takeSrsG2(4).map(_.toCompressedByteString)
 
     private val treasuryScriptAddr: Address =
         Address.fromScriptHash(ByteString.fromHex("11" * 28))
@@ -148,9 +143,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val scalar = (evacueeKey, evacueeOutput)
             |> ToData.tupleToData |> serialiseData |> blake2b_224
             |> ScalusScalar.fromByteStringBigEndianUnsafe
-        KzgCommitment.calculateKzgCommitment(
-          List.singleton(Scalar().from_bendian(scalar._1.toByteArray))
-        )
+        KzgCommitment.calculateKzgCommitment(List.singleton(scalar))
     }
 
     private val treasuryInValue: Value =

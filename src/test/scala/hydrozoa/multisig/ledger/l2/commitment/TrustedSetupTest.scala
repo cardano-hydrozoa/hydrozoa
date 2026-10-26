@@ -5,8 +5,6 @@ import org.scalatest.funsuite.AnyFunSuite
 import scala.annotation.nowarn
 import scalus.cardano.onchain.plutus.prelude.bls12_381.{G1, G2}
 import scalus.uplc.builtin.bls12_381.*
-import scalus.|>
-import supranational.blst.{P1, P2}
 
 @nowarn("msg=unused value")
 class TrustedSetupTest extends AnyFunSuite:
@@ -21,22 +19,12 @@ class TrustedSetupTest extends AnyFunSuite:
         )
     }
 
-    test("load trusted setup as P1/P2") {
-        assertResult(P1.generator().compress(), "first G1 element")(
-          TrustedSetup.takeSrsG1(1).head.compress()
-        )
-
-        assertResult(P2.generator().compress(), "first G2 element")(
-          TrustedSetup.takeSrsG2(1).head.compress()
-        )
-    }
-
     test("load trusted setup as G1/G2") {
         assertResult(G1.generator) {
-            TrustedSetup.takeSrsG1(1).head |> G1Element.apply
+            TrustedSetup.takeSrsG1(1).head
         }
 
         assertResult(G2.generator) {
-            TrustedSetup.takeSrsG2(1).head |> G2Element.apply
+            TrustedSetup.takeSrsG2(1).head
         }
     }

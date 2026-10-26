@@ -3,10 +3,8 @@ package hydrozoa.multisig.ledger.commitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator
 import scala.util.Try
-import scalus.uplc.builtin.bls12_381.G2Element
-import supranational.blst.P2
 
-import KzgCommitment.{KzgCommitment, asG1Element, asScalusScalar}
+import KzgCommitment.{KzgCommitment, asG1Element}
 
 /** Membership check is required when withdrawing.
   */
@@ -40,7 +38,7 @@ object Membership {
             // 2. Check that the setup is big enough
             monomialG2 = TrustedSetup.setup.g2Monomial
             _ <- Either.cond(monomialG2.sizeIs >= subset.size + 1, (), SubsetIsTooLarge)
-            crsG2 = TrustedSetup.takeSrsG2(subset.size + 1).map(G2Element.apply)
+            crsG2 = TrustedSetup.takeSrsG2(subset.size + 1)
 
             // 3. Build the proof
             proof = rest.kzgCommitment
@@ -48,13 +46,12 @@ object Membership {
             // 4. Validate the membership proof
             commitmentG1 = set.kzgCommitment.asG1Element
             proofG1 = proof.asG1Element
-            subsetScalars = subset.scalars.map(_.asScalusScalar)
 
             membershipCheck =
                 RuleBasedTreasuryValidator.checkMembership(
                   setupG2 = crsG2,
                   acc = commitmentG1,
-                  subset = subsetScalars,
+                  subset = subset.scalars,
                   proof = proofG1
                 )
 

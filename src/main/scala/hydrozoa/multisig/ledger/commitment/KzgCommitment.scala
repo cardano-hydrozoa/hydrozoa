@@ -10,7 +10,6 @@ import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.bls12_381.G1Element
 import scalus.|>
-import supranational.blst.Scalar
 
 export KzgCommitment.asG1Element
 export KzgCommitment.kzgCommitment
@@ -34,30 +33,21 @@ object KzgCommitment {
 
     def empty: KzgCommitment = Map.empty.asInstanceOf[Utxos].kzgCommitment
 
-    def hashToScalar(utxo: Utxos): SList[Scalar] =
+    def hashToScalar(utxo: Utxos): SList[ScalusScalar] =
 
         def toPlutus(ti: TransactionInput, to: TransactionOutput): TxInInfo =
             LedgerToPlutusTranslation.getTxInInfoV3(ti, Map(ti -> to))
 
-        // Calculate hashes
-        val scalars = SList.from(
-          utxo.toList
+        SList.from(
+          utxo.iterator
               .map(e =>
                   toPlutus(e._1, e._2)
                       |> (_.toData)
                       |> serialiseData
                       |> blake2b_224
-                      |> (_.bytes)
-                      |> Scalar().from_bendian
+                      |> ScalusScalar.fromByteStringBigEndianUnsafe
               )
         )
-
-        // println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
-        scalars
-
-    extension (self: Scalar)
-        def asScalusScalar: ScalusScalar =
-            ScalusScalar.fromByteStringBigEndianUnsafe(ByteString.fromArray(self.to_bendian()))
 
     /** Calculates the commitment for the pairing-based accumulator.
       *
@@ -74,7 +64,7 @@ object KzgCommitment {
       * @return
       *   G1 point that corresponds to the commitment
       */
-    def calculateKzgCommitment(scalars: SList[Scalar]): KzgCommitment = {
+    def calculateKzgCommitment(scalars: SList[ScalusScalar]): KzgCommitment = {
         val setup = TrustedSetup.accumulatorSetupG1
 
         // The product polynomial has one coefficient more than it has roots, so an n-element set
@@ -86,12 +76,14 @@ object KzgCommitment {
         )
 
         BilinearAccumulatorProver
-            .accumulateG1(setup, scalars.toScalaList.map(asFieldElement).toVector)
+            .accumulateG1(setup, toFieldElements(scalars))
             .toCompressedByteString
     }
 
-    /** A `blst` scalar as the plain non-negative integer the accumulator prover takes. `blst`
-      * reduces on the way in, so the round trip through big-endian bytes is exact.
-      */
-    private def asFieldElement(scalar: Scalar): BigInt = BigInt(1, scalar.to_bendian())
+    /** The scalars as the plain integers the accumulator prover takes, built in one pass. */
+    def toFieldElements(scalars: SList[ScalusScalar]): Vector[BigInt] = {
+        val elements = Vector.newBuilder[BigInt]
+        scalars.foreach(scalar => elements += scalar.toInt)
+        elements.result()
+    }
 }

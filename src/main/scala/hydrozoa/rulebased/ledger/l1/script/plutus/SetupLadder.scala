@@ -4,7 +4,6 @@ import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.bls12_381.G2Element
 
 /** The deployed-once G2 setup ladder: 7 utxos at the burn address whose inline datums are
   * self-contained prefixes of the KZG trusted setup. Rung `i` holds the first `2^i + 1` compressed
@@ -31,7 +30,7 @@ object SetupLadder {
     def rungDatum(i: Int): Data =
         TrustedSetup
             .takeSrsG2(rungSizes(i))
-            .map(p2 => G2Element(p2).toCompressedByteString)
+            .map(_.toCompressedByteString)
             .toData
 
     /** All rung datums in rung order, ready to deploy as [[DeploymentTx]] payloads. */

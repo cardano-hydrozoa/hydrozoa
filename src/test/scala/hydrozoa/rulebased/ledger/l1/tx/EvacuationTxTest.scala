@@ -25,8 +25,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.onchain.plutus.prelude
 import scalus.cardano.onchain.plutus.v3.TokenName
-import scalus.uplc.builtin.bls12_381.{G1Element, G2Element}
-import supranational.blst.Scalar
+import scalus.uplc.builtin.bls12_381.G1Element
 
 /** Generator for resolved treasury UTXO with resolved datum */
 def genResolvedTreasuryUtxo(
@@ -131,12 +130,9 @@ def genMembershipCheck: Gen[(prelude.List[ScalusScalar], G1Element, G1Element)] 
         // Acc elements
         length <- Gen.choose(EvacuationTx.Assumptions.maxEvacuationsPerTx, 1024)
         identity <- Gen.listOfN(length, Arbitrary.arbitrary[ScalusScalar])
-        identityBlst = prelude.List.from(
-          identity.map(ss => Scalar().from_bendian(ss._1.toByteArray))
-        )
 
         // Accumulator
-        commitmentPoint = KzgCommitment.calculateKzgCommitment(identityBlst)
+        commitmentPoint = KzgCommitment.calculateKzgCommitment(prelude.List.from(identity))
         commitmentG1 = commitmentPoint.asG1Element
 
         // Subset
@@ -144,11 +140,7 @@ def genMembershipCheck: Gen[(prelude.List[ScalusScalar], G1Element, G1Element)] 
 
         // Proof
         theRest = identity.diff(subset) // I don't like the name, but diff is disjoint
-        theRestBlst = prelude.List.from(
-          theRest.map(ss => Scalar().from_bendian(ss._1.toByteArray))
-        )
-
-        proofPoint = KzgCommitment.calculateKzgCommitment(theRestBlst)
+        proofPoint = KzgCommitment.calculateKzgCommitment(prelude.List.from(theRest))
         proofG1 = proofPoint.asG1Element
 
     } yield (prelude.List.from(subset), commitmentG1, proofG1)
@@ -232,7 +224,6 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
             val crsG2 =
                 TrustedSetup
                     .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-                    .map(G2Element.apply)
 
             RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof) == true
         )
