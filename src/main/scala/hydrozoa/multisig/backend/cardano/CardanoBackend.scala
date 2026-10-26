@@ -102,8 +102,8 @@ object CardanoBackend:
             extends Error(s"The redeemer for input with index $ix was not found for tx $txId")
         case ErrorDecodingRedeemerCbor(hex: String)
             extends Error(s"Error decoding redeemer Data from hex: $hex")
-        case ErrorDecodingDatumCbor(hex: String)
-            extends Error(s"Error decoding datum Data from hex: $hex")
+        case NoInlineDatum(utxo: TransactionInput)
+            extends Error(s"The output $utxo carries no inline datum")
         case ErrorResolving(ti: TransactionInput, msg: String)
             extends Error(
               s"Error resolving transaction input $ti: $msg"
