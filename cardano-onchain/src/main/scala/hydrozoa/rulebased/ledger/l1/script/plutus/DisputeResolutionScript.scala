@@ -166,7 +166,9 @@ object DisputeResolutionValidator extends Validator {
                 log("Vote")
 
                 // Identify the spent ballot box by ownRef.
-                val voteInput = tx.inputs.find(_.outRef === ownRef).get.resolved
+                val voteInput = tx
+                    .findInputOrFail(ownRef, "Impossible happened: own input was not found")
+                    .resolved
 
                 // Let (headMp, disputeId) be the minting policy and asset name of the only non-ADA
                 // tokens in voteInput.
@@ -175,12 +177,10 @@ object DisputeResolutionValidator extends Validator {
                 // Bound the transaction to a single ballot box by token identity (a txid filter
                 // misses co-spent boxes once ratcheting diverges a box's source tx from fallback).
                 require(
-                  tx.inputs
-                      .filter(i =>
-                          (i.outRef !== ownRef)
-                              && i.resolved.value.containsCurrencySymbol(headMp)
-                      )
-                      .isEmpty,
+                  tx.inputs.forall(i =>
+                      !((i.outRef !== ownRef)
+                          && i.resolved.value.containsCurrencySymbol(headMp))
+                  ),
                   VoteOnlyOneVoteUtxoIsSpent
                 )
 
@@ -256,11 +256,10 @@ object DisputeResolutionValidator extends Validator {
 
                 // The transaction’s time -validity upper bound must not exceed the deadlineVoting
                 // field of treasury.
-                tx.validRange.to.boundType match {
-                    case IntervalBoundType.Finite(toTime) =>
-                        require(toTime <= treasuryDatum.deadlineVoting, VoteTimeValidityCheck)
-                    case _ => fail(VoteTimeValidityCheck)
-                }
+                require(
+                  tx.validToOrFail(VoteTimeValidityCheck) <= treasuryDatum.deadlineVoting,
+                  VoteTimeValidityCheck
+                )
 
                 // The multisig field of voteRedeemer must have signatures of the sec field of
                 // voteRedeemer (its serialized Data) for all the public keys in the headPeers
@@ -400,7 +399,8 @@ object DisputeResolutionValidator extends Validator {
                 // the simplest schedule.
 
                 // TODO: hide `ownInput` and `otherInput` so they can't be used accidentally
-                val ownInput = tx.inputs.find(_.outRef === ownRef).get
+                val ownInput =
+                    tx.findInputOrFail(ownRef, "Impossible happened: own input was not found")
                 val otherInput: TxInInfo =
                     tx.inputs.filter(i =>
                         i.resolved.address === ownInput.resolved.address && (i.outRef !== ownRef)
@@ -444,12 +444,10 @@ object DisputeResolutionValidator extends Validator {
                 // prevents co-spending unrelated ballot boxes or the treasury in the same
                 // Tally tx.
                 require(
-                  tx.inputs
-                      .filter(i =>
-                          (i.outRef !== continuingInputId) && (i.outRef !== removedInputId)
-                              && (i.resolved.value.containsCurrencySymbol(contCs))
-                      )
-                      .isEmpty,
+                  tx.inputs.forall(i =>
+                      !((i.outRef !== continuingInputId) && (i.outRef !== removedInputId)
+                          && (i.resolved.value.containsCurrencySymbol(contCs)))
+                  ),
                   NoOtherInputs
                 )
 
@@ -492,14 +490,10 @@ object DisputeResolutionValidator extends Validator {
                   RegimeDatumMatchesDisputeId
                 )
 
-                tx.validRange.from.boundType match {
-                    case IntervalBoundType.Finite(fromTime) =>
-                        require(
-                          treasuryDatum.deadlineVoting <= fromTime,
-                          TallyOnlyAfterVotingDeadline
-                        )
-                    case _ => fail(TallyValidityStartRequired)
-                }
+                require(
+                  treasuryDatum.deadlineVoting <= tx.validFromOrFail(TallyValidityStartRequired),
+                  TallyOnlyAfterVotingDeadline
+                )
 
                 // continuingOutput must have: same address, combined tokens, and ADA at least
                 // continuingInput.ADA + max(0, removedInput.ADA - tx.fee). Computing residualAda
@@ -547,7 +541,8 @@ object DisputeResolutionValidator extends Validator {
             case DisputeRedeemer.Resolve =>
                 log("Resolve")
 
-                val voteInput = tx.inputs.find(_.outRef === ownRef).get
+                val voteInput =
+                    tx.findInputOrFail(ownRef, "Impossible happened: own input was not found")
                 val (headMp, _, _) = voteInput.resolved.value.onlyNonAdaAsset
 
                 // Let treasury be a spent input that holds a head beacon token of headMp and CIP-67
@@ -585,15 +580,15 @@ object DisputeResolutionValidator extends Validator {
 
                 // 1. Identify the spent ballot box by ownRef, and bound the tx to a single ballot
                 //    box by token identity: no other spent input may carry the head's policy.
-                val voteInput = tx.inputs.find(_.outRef === ownRef).get.resolved
+                val voteInput = tx
+                    .findInputOrFail(ownRef, "Impossible happened: own input was not found")
+                    .resolved
                 val (headMp, _, _) = voteInput.value.onlyNonAdaAsset
                 require(
-                  tx.inputs
-                      .filter(i =>
-                          (i.outRef !== ownRef)
-                              && i.resolved.value.containsCurrencySymbol(headMp)
-                      )
-                      .isEmpty,
+                  tx.inputs.forall(i =>
+                      !((i.outRef !== ownRef)
+                          && i.resolved.value.containsCurrencySymbol(headMp))
+                  ),
                   AbstainOnlyOneVoteUtxoIsSpent
                 )
 

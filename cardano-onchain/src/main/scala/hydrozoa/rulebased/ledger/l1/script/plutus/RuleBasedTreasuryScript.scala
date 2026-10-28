@@ -204,23 +204,17 @@ object RuleBasedTreasuryValidator extends Validator {
                     .resolved
 
                 // Treasury (own) input
-                // TODO: factor out
-                val treasuryInput = tx.inputs
-                    .find(_.outRef === ownRef)
-                    .getOrFail("Impossible happened: own input was not found")
-                    .resolved
+                val ownInput =
+                    tx.findInputOrFail(ownRef, "Impossible happened: own input was not found")
+                val treasuryInput = ownInput.resolved
 
                 // Total expected output
                 val treasuryOutputExpected = voteInput.value + treasuryInput.value
 
                 // TODO: pass output index in redeemer?
                 // The only treasury output
-                val treasuryOutput = tx.outputs
-                    .filter(e => e.address === treasuryInput.address) match
-                    case List.Cons(o, tail) =>
-                        require(tail.isEmpty, ResolveTreasuryOutputFailure)
-                        o
-                    case _ => fail(ResolveTreasuryOutputFailure)
+                val treasuryOutput =
+                    tx.findContinuingOutputOrFail(ownInput, ResolveTreasuryOutputFailure)
 
                 // Check treasury output value
                 require(
@@ -279,10 +273,8 @@ object RuleBasedTreasuryValidator extends Validator {
                 // Let headMp be the corresponding field in treasuryInput.
                 val headMp = resolvedDatum.headMp
 
-                // TODO: factor out
-                val treasuryInput = tx.inputs
-                    .find(_.outRef === ownRef)
-                    .getOrFail("Impossible happened: own input was not found")
+                val treasuryInput = tx
+                    .findInputOrFail(ownRef, "Impossible happened: own input was not found")
                     .resolved
 
                 // Let headId be the asset name of the only headMp token in treasuryInput with CIP-67
@@ -318,11 +310,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 require(
-                  treasuryOutput.value.toSortedMap
-                      .get(headMp)
-                      .getOrFail(EvacuateBeaconTokenShouldBePreserved)
-                      .get(headId)
-                      .getOrFail(EvacuateBeaconTokenShouldBePreserved) == BigInt(1),
+                  treasuryOutput.value.hasNft(headMp, headId),
                   EvacuateBeaconTokenShouldBePreserved
                 )
 
@@ -438,10 +426,8 @@ object RuleBasedTreasuryValidator extends Validator {
                     case d: Resolved   => (d.headMp, d.evacuationActive)
                     case _: Unresolved => fail(DeinitRequiresResolvedTreasury)
 
-                // TODO: factor out
-                val treasuryInput = tx.inputs
-                    .find(_.outRef === ownRef)
-                    .getOrFail("Impossible happened: own input was not found")
+                val treasuryInput = tx
+                    .findInputOrFail(ownRef, "Impossible happened: own input was not found")
                     .resolved
 
                 val headTokensInput = treasuryInput.value.toSortedMap
@@ -458,14 +444,14 @@ object RuleBasedTreasuryValidator extends Validator {
                 // tx. The burn map may contain more `headMp` burns than the treasury's own tokens
                 // (the same DeinitTx also burns the HRWT held by the regime utxo), so require
                 // inclusion rather than equality.
-                val headTokensMint = (-tx.mint).toSortedMap
+                val headTokensMint = tx.mint.toSortedMap
                     .get(headMp)
                     .getOrFail(DeinitTokensNotBurned)
 
                 require(
                   headTokensInput.toList.forall(tokenNameAndAmount =>
                       headTokensMint.get(tokenNameAndAmount._1) match
-                          case Some(burned) => burned == tokenNameAndAmount._2
+                          case Some(minted) => minted == -tokenNameAndAmount._2
                           case None         => false
                   ),
                   DeinitTokensNotBurned
