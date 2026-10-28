@@ -378,6 +378,7 @@ lazy val core: Project = (project in file("."))
       buildInfoPackage := "hydrozoa",
       buildInfoKeys := Seq[BuildInfoKey](
         version,
+        scalaVersion,
         "scalusVersion" -> scalusVersion,
         "upickleVersion" -> upickleVersion,
         BuildInfoKey.action("gitCommit") {

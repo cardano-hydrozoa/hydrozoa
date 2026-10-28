@@ -1,5 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
+import hydrozoa.BuildInfo
 import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedRegimeValidator.RegimeRedeemer
@@ -9,9 +10,19 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import java.io.File
 import scalus.cardano.address.Network
-import scalus.cardano.blueprint.Blueprint
+import scalus.cardano.blueprint.{Blueprint, CompilerInfo}
 
 object Export {
+
+    /** The toolchain that compiles the validators, as the blueprint preamble records it: the Scalus
+      * version, with the Scala version as semver build metadata (e.g. `1.4.1+scala.3.9.0`). Both
+      * decide the script bytes, so a pin is only reproducible under the toolchain it names.
+      */
+    val toolchain: CompilerInfo =
+        CompilerInfo(
+          CompilerInfo.currentScalus.name,
+          CompilerInfo.currentScalus.version.map(v => s"$v+scala.${BuildInfo.scalaVersion}")
+        )
 
     /** Creates a CIP-57 compliant Blueprint describing the Hydrozoa rule-based validators:
       *   - DisputeResolutionScript: Manages voting and tallying during dispute resolution
@@ -59,7 +70,7 @@ object Export {
                 "These validators manage dispute resolution and treasury operations when multi-party consensus is no longer held."
           ),
           version = Some("1.0.0"),
-          compiler = Some(scalus.cardano.blueprint.CompilerInfo.currentScalus),
+          compiler = Some(toolchain),
           plutusVersion = Some(scalus.cardano.ledger.Language.PlutusV3),
           license = Some("Apache-2.0")
         )
