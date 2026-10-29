@@ -120,9 +120,10 @@ jobs:
       # gives a pull request's run the caches of its own merge ref, its base branch and main, and
       # shows a cache that a pull request's run saves to no other ref, so no pull request can
       # change what another starts from. Only main and manual `save` runs save, so a pull request
-      # based on main starts from main's latest build. A merge-queue run compiles from scratch, as
-      # the last check before main. Every job's compile ends in the build's checkCompileState,
-      # which fails unless zinc's analysis records exactly the current sources.
+      # based on main starts from main's latest build. A merge-queue run restores main's latest
+      # build too: the push to main compiles from scratch, and is the clean build. Every job's
+      # compile ends in the build's checkCompileState, which fails unless zinc's analysis records
+      # exactly the current sources.
       - name: Choose the compile cache
         id: compile-cache
         env:
@@ -132,7 +133,7 @@ jobs:
         run: |
           case "${EVENT}" in
             push) mode=save ;;
-            pull_request) mode=restore ;;
+            pull_request | merge_group) mode=restore ;;
             workflow_dispatch) mode=${DISPATCHED:-none} ;;
             *) mode=none ;;
           esac
