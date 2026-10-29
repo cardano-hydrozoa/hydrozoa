@@ -15,9 +15,10 @@ Every changed path falls into one bucket; the first matching rule in BUCKETS win
   other        anything else, such as production code and the root dotfiles
 A rename counts both its old and its new path; a deletion counts its path. What each bucket runs is
 in RUNS: `other` and `core-test` run all the tests, and `reporting` also the reporting canary
-(`just ci-canary`); docs alone, or no files at all, run nothing heavy. Any event but pull_request
-(merge_group, workflow_dispatch, ...) runs everything, the canary included, except a push or
-merge_group run whose tree TREE_TESTED marks as already tested by a passing run: that runs no tests.
+(`just ci-canary`); docs alone, or no files at all, run nothing heavy. pull_request and merge_group
+runs are classified; any other event (push, workflow_dispatch, ...) runs everything, the canary
+included. A push or merge_group run whose tree TREE_TESTED marks as already tested by a passing run
+runs no tests.
 
 The change set of a pull_request run is HEAD^1..HEAD. For that event actions/checkout checks out
 GitHub's test merge (refs/pull/N/merge): a two-parent commit whose first parent is the base branch
@@ -25,6 +26,14 @@ and whose second is the PR head. Its difference from the first parent is exactly
 test differs from the base, needs no merge-base search, and has no file-count limit (the REST API
 lists at most 3000 files per PR). Checkout with `fetch-depth: 2` makes both parents local; with
 less, the first parent is fetched by its SHA.
+
+A merge_group run checks out the queue's merge commit, which has the same shape: its first parent is
+the group's base (main and the entries ahead of it in the queue) and its second is the PR head, so
+HEAD^1..HEAD is again exactly what this entry adds. Classifying from it is sound because the main
+ruleset's merge queue merges an entry only once every entry ahead of it has passed ("Only merge
+non-failing pull requests"): the base is then a tested tree. If that setting is turned off, a
+merge_group run must run everything again. A queue commit with one parent (a squash or rebase merge
+method) is not recognised, and everything runs.
 
 It fails safe: if the change set can't be established, or anything unexpected happens, everything
 runs, and the step summary and a warning annotation say why. Tests are never skipped because
@@ -34,6 +43,8 @@ Environment:
   GITHUB_EVENT_NAME    the triggering event (set by the runner)
   PR_HEAD_SHA          ${{ github.event.pull_request.head.sha }}; pull_request only
   PR_BASE_SHA          ${{ github.event.pull_request.base.sha }}; optional, only reported
+  MERGE_GROUP_BASE_SHA ${{ github.event.merge_group.base_sha }}; merge_group only
+  MERGE_GROUP_HEAD_SHA ${{ github.event.merge_group.head_sha }}; merge_group only
   TREE_TESTED          "true" when a passing run already tested this tree; push and merge_group only
   TESTED_BY            the id of that run, for the report
   GITHUB_OUTPUT        receives code=, unit=, integration=, canary= as true/false (optional locally)
@@ -43,6 +54,9 @@ To try it locally, run it in a clone whose HEAD is a merge of a branch into its 
   git switch --detach main && git merge --no-ff --no-edit <branch>
   GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA=$(git rev-parse <branch>) \\
     .github/scripts/classify-changes.py
+and as a merge-queue run at any merge commit on main, which is the commit the queue tested:
+  GITHUB_EVENT_NAME=merge_group MERGE_GROUP_BASE_SHA=$(git rev-parse HEAD^1) \\
+    MERGE_GROUP_HEAD_SHA=$(git rev-parse HEAD) .github/scripts/classify-changes.py
 """
 
 import os
@@ -102,11 +116,22 @@ def git(*args, check=True):
     return r
 
 
-def pr_changes():
-    """The (status, path) pairs of the pull request's test merge commit against its first parent."""
-    head_sha = os.environ.get("PR_HEAD_SHA")
-    if not head_sha:
-        raise RunEverything("PR_HEAD_SHA is not set, so the PR head can't be checked")
+def merge_changes(event):
+    """The (status, path) pairs of the checked-out merge against its first parent: a pull request's
+    test merge, or a merge-queue entry's merge commit. Also returns the change set's name and what
+    it is, for the report."""
+    if event == "pull_request":
+        head_sha = os.environ.get("PR_HEAD_SHA")
+        if not head_sha:
+            raise RunEverything("PR_HEAD_SHA is not set, so the PR head can't be checked")
+    else:
+        group_base = os.environ.get("MERGE_GROUP_BASE_SHA")
+        group_head = os.environ.get("MERGE_GROUP_HEAD_SHA")
+        if not group_base or not group_head:
+            raise RunEverything(
+                "MERGE_GROUP_BASE_SHA or MERGE_GROUP_HEAD_SHA is not set, so the queue's merge "
+                "can't be checked"
+            )
     r = git("rev-parse", "--verify", "--quiet", "HEAD^{commit}", check=False)
     if r.returncode != 0:
         raise RunEverything("no commit is checked out")
@@ -117,14 +142,23 @@ def pr_changes():
     parents = [line[len("parent "):] for line in header.splitlines() if line.startswith("parent ")]
     if len(parents) != 2:
         n = len(parents)
-        raise RunEverything(f"HEAD {head} has {n} parent(s), not the 2 of a PR test merge")
+        raise RunEverything(f"HEAD {head} has {n} parent(s), not the 2 of a merge")
     base, pr_head = parents
-    if pr_head != head_sha:
-        raise RunEverything(f"HEAD's second parent {pr_head} is not the PR head {head_sha}")
-    event_base = os.environ.get("PR_BASE_SHA")
-    if event_base and event_base != base:
-        print(f"Note: the event's base {event_base} differs from the merge's first parent {base};"
-              " the base branch moved, and the merge is what is tested.")
+    if event == "pull_request":
+        if pr_head != head_sha:
+            raise RunEverything(f"HEAD's second parent {pr_head} is not the PR head {head_sha}")
+        event_base = os.environ.get("PR_BASE_SHA")
+        if event_base and event_base != base:
+            print(f"Note: the event's base {event_base} differs from the merge's first parent"
+                  f" {base}; the base branch moved, and the merge is what is tested.")
+        about = f"the PR head {pr_head[:12]} merged into its base"
+    else:
+        if head != group_head:
+            raise RunEverything(f"HEAD {head} is not the queue's merge commit {group_head}")
+        if base != group_base:
+            raise RunEverything(f"HEAD's first parent {base} is not the group's base {group_base}")
+        about = (f"the PR head {pr_head[:12]} merged onto the queue's base: main and the entries"
+                 " ahead of it")
     if git("cat-file", "-e", f"{base}^{{commit}}", check=False).returncode != 0:
         print(f"Base {base} is not in the clone; fetching it.")
         fetch = ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--depth=1"]
@@ -142,7 +176,7 @@ def pr_changes():
         (fields[i].decode(), fields[i + 1].decode("utf-8", "surrogateescape"))
         for i in range(0, len(fields), 2)
     ]
-    return f"{base[:12]}..{head[:12]}", pairs
+    return f"{base[:12]}..{head[:12]}", pairs, about
 
 
 def plan_text(runs):
@@ -162,20 +196,21 @@ def main():
     event = os.environ.get("GITHUB_EVENT_NAME", "")
     forced = ""  # why everything runs regardless of the files; empty means the files decide
     change_set = ""
+    about = ""
     changes = []
-    if event == "pull_request":
-        try:
-            change_set, changes = pr_changes()
-        except RunEverything as e:
-            forced = str(e)
-    elif not event:
-        forced = "GITHUB_EVENT_NAME is not set"
-    elif event in ("push", "merge_group") and os.environ.get("TREE_TESTED") == "true":
+    if event in ("push", "merge_group") and os.environ.get("TREE_TESTED") == "true":
         # No tests, but code: a push's unit job still compiles, to save the compile cache.
         outputs = {"code": True, **{name: False for name in OUTPUTS}}
         why = f"run {os.environ.get('TESTED_BY') or '?'} already tested this tree"
         report(event, "", "", {}, [], set(), outputs, warn=False, skipped=why)
         return
+    elif event in ("pull_request", "merge_group"):
+        try:
+            change_set, changes, about = merge_changes(event)
+        except RunEverything as e:
+            forced = str(e)
+    elif not event:
+        forced = "GITHUB_EVENT_NAME is not set"
     else:
         forced = f"the '{event}' event always runs everything"
 
@@ -190,12 +225,13 @@ def main():
     if forced:
         runs = set(OUTPUTS)
     outputs = {"code": bool(runs), **{name: name in runs for name in OUTPUTS}}
-    # An anticipated failure on a pull_request is worth an annotation; other events are by design.
-    warn = event == "pull_request" and bool(forced)
-    report(event, forced, change_set, counts, listing, runs, outputs, warn=warn)
+    # An anticipated failure on a pull_request or merge_group is worth an annotation; other events
+    # run everything by design.
+    warn = event in ("pull_request", "merge_group") and bool(forced)
+    report(event, forced, change_set, counts, listing, runs, outputs, warn=warn, about=about)
 
 
-def report(event, forced, change_set, counts, listing, runs, outputs, warn, skipped=""):
+def report(event, forced, change_set, counts, listing, runs, outputs, warn, skipped="", about=""):
     flags = " ".join(f"{k}={str(v).lower()}" for k, v in outputs.items())
     with open(os.environ.get("GITHUB_OUTPUT") or os.devnull, "a") as f:
         f.write("".join(f"{k}={str(v).lower()}\n" for k, v in outputs.items()))
@@ -206,8 +242,7 @@ def report(event, forced, change_set, counts, listing, runs, outputs, warn, skip
         print(f"::warning title=CI plan::Running everything: {forced}.")
     print(f"Event: {event or '<unset>'}")
     if change_set:
-        head = os.environ["PR_HEAD_SHA"][:12]
-        print(f"Change set: {change_set}, the PR head {head} merged into its base")
+        print(f"Change set: {change_set}, {about}")
         print(f"Files: {len(listing)} ({count_text})")
         print("::group::Changed files by bucket")
         for line in listing:
@@ -223,7 +258,7 @@ def report(event, forced, change_set, counts, listing, runs, outputs, warn, skip
         summary += [f"Everything runs because {forced}.", ""]
     if change_set:
         summary += [
-            f"Change set `{change_set}` (the PR head merged into its base): "
+            f"Change set `{change_set}` ({about}): "
             f"{len(listing)} files ({count_text}).",
             "",
         ]

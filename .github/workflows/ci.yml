@@ -98,14 +98,18 @@ jobs:
       # Decides which of the unit tests, the integration tests (Yaci included) and the reporting
       # canary a PR needs, from the files it changes; the script's header has the rules. A PR
       # confined to integration/ skips the unit tests, which that code can't affect; a change to
-      # src/test/ runs both suites, since the integration suites build on core's test code.
-      # Merge-queue and manual runs run everything unless their tree is already tested, and so
-      # does a PR whose change set can't be determined.
+      # src/test/ runs both suites, since the integration suites build on core's test code. A
+      # merge-queue run is planned the same way, from what its PR adds to the queue's base (main and
+      # the entries ahead of it), which is sound only while the ruleset's queue merges an entry
+      # after every entry ahead of it has passed. Manual runs run everything unless their tree is
+      # already tested, and so does a run whose change set can't be determined.
       - name: Plan the run
         id: plan
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           TREE_TESTED: ${{ steps.tested.outputs.tested }}
           TESTED_BY: ${{ steps.tested.outputs.tested-by }}
         run: .github/scripts/classify-changes.py
@@ -116,9 +120,10 @@ jobs:
       # gives a pull request's run the caches of its own merge ref, its base branch and main, and
       # shows a cache that a pull request's run saves to no other ref, so no pull request can
       # change what another starts from. Only main and manual `save` runs save, so a pull request
-      # based on main starts from main's latest build. A merge-queue run compiles from scratch, as
-      # the last check before main. Every job's compile ends in the build's checkCompileState,
-      # which fails unless zinc's analysis records exactly the current sources.
+      # based on main starts from main's latest build. A merge-queue run restores main's latest
+      # build too: the push to main compiles from scratch, and is the clean build. Every job's
+      # compile ends in the build's checkCompileState, which fails unless zinc's analysis records
+      # exactly the current sources.
       - name: Choose the compile cache
         id: compile-cache
         env:
@@ -128,7 +133,7 @@ jobs:
         run: |
           case "${EVENT}" in
             push) mode=save ;;
-            pull_request) mode=restore ;;
+            pull_request | merge_group) mode=restore ;;
             workflow_dispatch) mode=${DISPATCHED:-none} ;;
             *) mode=none ;;
           esac
@@ -170,9 +175,22 @@ jobs:
         run: .github/scripts/install-nix.sh
 
       # The one job that saves this cache; the others restore it only, since two jobs saving the
-      # same key race for it.
+      # same key race for it. A merge-queue run restores only: its cache would belong to the
+      # queue's temporary ref, which nothing reads again, and each one takes about 0.6 GB of the
+      # repository's 10 GB.
       - name: Cache sbt / coursier / ivy
+        if: github.event_name != 'merge_group'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.sbt
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+      - name: Restore sbt / coursier / ivy cache
+        if: github.event_name == 'merge_group'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.sbt
@@ -264,13 +282,17 @@ jobs:
           TEST_STEPS: unit=${{ steps.unit.outcome }}
         run: python3 .github/scripts/test-summary.py target
 
-      # Artifact names must be unique within a run, hence the job in each name.
+      # Artifact names must be unique within a run, hence the job in each name. The ci-events files
+      # (test-summary.py's input) are kept with the reports: they record when each suite started and
+      # ended, which the JUnit reports don't for ScalaCheck suites.
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-unit-attempt-${{ github.run_attempt }}
-          path: target/out/jvm/*/*/test-reports/
+          path: |
+            target/out/jvm/*/*/test-reports/
+            target/out/jvm/**/ci-events/
           if-no-files-found: ignore
           retention-days: 3
 
@@ -355,7 +377,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-integration-attempt-${{ github.run_attempt }}
-          path: target/out/jvm/*/*/test-reports/
+          path: |
+            target/out/jvm/*/*/test-reports/
+            target/out/jvm/**/ci-events/
           if-no-files-found: ignore
           retention-days: 3
 
@@ -441,7 +465,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-yaci-attempt-${{ github.run_attempt }}
-          path: target/out/jvm/*/*/test-reports/
+          path: |
+            target/out/jvm/*/*/test-reports/
+            target/out/jvm/**/ci-events/
           if-no-files-found: ignore
           retention-days: 3
 
