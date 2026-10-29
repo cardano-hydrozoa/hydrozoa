@@ -107,7 +107,7 @@ class RemoteL2Ledger private (
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.RegisterDeposit
     ): IO[RegisterDepositResponse] =
-        sendRequest(Request.RegisterDeposit(commandNumber, req)).flatMap {
+        sendRequest(Request.RegisterDeposit(commandNumber, req)).flatMap[RegisterDepositResponse] {
             case r: L2LedgerResponse.Applied.RegisterDeposit  => IO.pure(r)
             case r: L2LedgerResponse.Rejected.RegisterDeposit => IO.pure(r)
             case r: L2LedgerResponse.UnrecoverableError       => IO.pure(r)
@@ -118,22 +118,24 @@ class RemoteL2Ledger private (
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
     ): IO[ApplyDepositDecisionsResponse] =
-        sendRequest(Request.ApplyDepositDecisions(commandNumber, req)).flatMap {
-            case r: L2LedgerResponse.Applied.ApplyDepositDecisions => IO.pure(r)
-            case r: L2LedgerResponse.UnrecoverableError            => IO.pure(r)
-            case other => unexpected("ApplyDepositDecisions", other)
-        }
+        sendRequest(Request.ApplyDepositDecisions(commandNumber, req))
+            .flatMap[ApplyDepositDecisionsResponse] {
+                case r: L2LedgerResponse.Applied.ApplyDepositDecisions => IO.pure(r)
+                case r: L2LedgerResponse.UnrecoverableError            => IO.pure(r)
+                case other => unexpected("ApplyDepositDecisions", other)
+            }
 
     override def applyTransaction(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyTransaction
     ): IO[ApplyTransactionResponse] =
-        sendRequest(Request.ApplyTransaction(commandNumber, req)).flatMap {
-            case r: L2LedgerResponse.Applied.ApplyTransaction  => IO.pure(r)
-            case r: L2LedgerResponse.Rejected.ApplyTransaction => IO.pure(r)
-            case r: L2LedgerResponse.UnrecoverableError        => IO.pure(r)
-            case other => unexpected("ApplyTransaction", other)
-        }
+        sendRequest(Request.ApplyTransaction(commandNumber, req))
+            .flatMap[ApplyTransactionResponse] {
+                case r: L2LedgerResponse.Applied.ApplyTransaction  => IO.pure(r)
+                case r: L2LedgerResponse.Rejected.ApplyTransaction => IO.pure(r)
+                case r: L2LedgerResponse.UnrecoverableError        => IO.pure(r)
+                case other => unexpected("ApplyTransaction", other)
+            }
 
     /** A remote whose `Applied` variant does not match the command sent is a protocol violation
       * (not one of the four verdicts), so it fail-stops rather than being returned.

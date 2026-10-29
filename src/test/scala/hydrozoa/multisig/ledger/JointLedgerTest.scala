@@ -7,7 +7,7 @@ import cats.effect.unsafe.implicits.*
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import com.suprnation.actor.{ActorSystem, test as _}
+import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
@@ -45,8 +45,8 @@ import scala.annotation.unused
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
 import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*

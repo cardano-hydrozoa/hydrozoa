@@ -193,7 +193,7 @@ object SutCommands:
                 headUtxos <- sut.cardanoBackend
                     .utxosAt(sut.headAddress)
                     .map(_.fold(err => throw RuntimeException(err.toString), _.keySet))
-                block <- IO.pure(
+                block <- IO.pure[CompleteBlockRegular | CompleteBlockFinal](
                   if cmd.isFinal
                   then
                       CompleteBlockFinal(

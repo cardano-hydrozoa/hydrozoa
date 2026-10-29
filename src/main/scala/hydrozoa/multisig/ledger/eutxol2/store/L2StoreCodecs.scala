@@ -94,8 +94,6 @@ object L2StoreCodecs:
       Encoder.encodeList[Utxo].contramap(_.iterator.map((i, o) => Utxo(i, o)).toList)
     )
 
-    private given Codec[MultiAsset] = cborHexCodec[MultiAsset]
-
     given snapshotCodec: Codec[L2Snapshot] = Codec.from(
       Decoder.instance(c =>
           for

@@ -28,7 +28,6 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Metadata}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import java.util.concurrent.TimeUnit
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}

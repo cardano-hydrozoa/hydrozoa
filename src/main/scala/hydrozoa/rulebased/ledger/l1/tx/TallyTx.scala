@@ -15,7 +15,7 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{Di
 import hydrozoa.rulebased.ledger.l1.state.VoteState.*
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
-import scalus.cardano.ledger.{Utxo as _, *}
+import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*

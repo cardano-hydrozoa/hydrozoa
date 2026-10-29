@@ -10,7 +10,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
-import hydrozoa.multisig.ledger.joint.obligation.Payout.Obligation
 import hydrozoa.multisig.ledger.l1.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, Equity, MultisigTreasuryUtxo}
 import java.util.concurrent.TimeUnit

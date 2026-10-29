@@ -399,7 +399,7 @@ final class WsPeerTransport private (
                         // handshake would hang teardown. Bound the JOIN, which is cancelable.
                         tracer.traceWith(DialerStopped(rid, uri)) >>
                             fiber.cancel.start
-                                .flatMap(_.join.timeoutTo(dialerCancelBudget, IO.unit))
+                                .flatMap(_.join.void.timeoutTo(dialerCancelBudget, IO.unit))
                                 .void
                     )
                     .void

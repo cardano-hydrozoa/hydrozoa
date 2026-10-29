@@ -727,7 +727,7 @@ trait ModelBasedSuite {
             // drain shutdown using tickUntilAdvancing — shutdownSut calls waitForIdle → IO.sleep.
             // If no sentinel (startup crashed / empty commands already resolved), just drain.
             _ <- IO(pendingDelay.getAndSet(None)).flatMap {
-                case Some((_, gate)) => gate.complete(())
+                case Some((_, gate)) => gate.complete(()).void
                 case None            => IO.unit
             } >> tickUntilAdvancing(
               tc,

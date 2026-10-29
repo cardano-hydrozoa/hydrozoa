@@ -14,6 +14,7 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedRegimeUtxo}
 import org.scalacheck.{Gen, Properties}
+import scala.annotation.nowarn
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
@@ -66,6 +67,7 @@ def genBallotBox(
       ballotBoxOutput = ballotBoxOutput
     )
 
+@nowarn("msg=inferred to be union type")
 def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] = {
     given config: VoteTx.Config = multiNodeConfig.nodeConfigs.head._2
 

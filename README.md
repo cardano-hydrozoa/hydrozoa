@@ -77,7 +77,7 @@ If you use [direnv](https://direnv.net/),
 
 Without Nix you'll need a Java JDK (21+;
 the Nix shell pins JDK 25) and [sbt](https://www.scala-sbt.org/).
-The project targets Scala 3.3.6 (LTS).
+The project targets Scala 3.9.0 (LTS).
 
 ### Setting up IntelliJ IDEA
 

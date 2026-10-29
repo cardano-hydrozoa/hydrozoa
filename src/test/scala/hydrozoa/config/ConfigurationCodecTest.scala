@@ -11,7 +11,7 @@ import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnPeerPrivate}
 import hydrozoa.config.node.{MultiNodeConfig, NodePrivateConfig}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import io.circe.syntax.*
-import monocle.syntax.all.{as as _, *}
+import monocle.syntax.all.*
 import org.scalacheck.Properties
 import scalus.cardano.ledger.CardanoInfo
 import test.TestPeersSpec

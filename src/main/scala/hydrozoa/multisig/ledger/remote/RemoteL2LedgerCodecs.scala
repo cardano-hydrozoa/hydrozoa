@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.remote
 
+import cats.syntax.foldable.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputDecoder, keepRawTransactionOutputEncoder}
@@ -18,8 +19,6 @@ object RemoteL2LedgerCodecs {
 
     // Reuse codecs from the HTTP server, excluding types we override for sugar-rush-ledger compatibility
     // We exclude certain codecs here to provide sugar-rush-ledger compatible format
-    import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinEncoder as _, coinDecoder as _, valueEncoder as _, valueDecoder as _}
-    import EvacuationDiff.given
 
     export BlockNumber.given
     export EvacuationDiff.given
@@ -61,44 +60,50 @@ object RemoteL2LedgerCodecs {
             val tokenMap = scala.collection.mutable
                 .Map[PolicyId, scala.collection.mutable.Map[AssetName, Long]]()
 
-            assets.foreach { assetEntry =>
-                val assetCursor = assetEntry.hcursor
-                val tag = assetCursor.downField("asset").downField("tag").as[String].getOrElse("")
-                val value = assetCursor.downField("value").as[Long].getOrElse(0L)
+            assets
+                .traverse_ { assetEntry =>
+                    val assetCursor = assetEntry.hcursor
+                    val tag =
+                        assetCursor.downField("asset").downField("tag").as[String].getOrElse("")
+                    val value = assetCursor.downField("value").as[Long].getOrElse(0L)
 
-                tag match {
-                    case "Ada" =>
-                        coin = Coin(value)
-                    case "NativeToken" =>
-                        val policyIdHex = assetCursor
-                            .downField("asset")
-                            .downField("policyId")
-                            .as[String]
-                            .getOrElse("")
-                        val assetNameHex = assetCursor
-                            .downField("asset")
-                            .downField("assetName")
-                            .as[String]
-                            .getOrElse("")
+                    tag match {
+                        case "Ada" =>
+                            coin = Coin(value)
+                            Right(())
+                        case "NativeToken" =>
+                            val policyIdHex = assetCursor
+                                .downField("asset")
+                                .downField("policyId")
+                                .as[String]
+                                .getOrElse("")
+                            val assetNameHex = assetCursor
+                                .downField("asset")
+                                .downField("assetName")
+                                .as[String]
+                                .getOrElse("")
 
-                        val policyId = ScriptHash.fromHex(policyIdHex)
-                        val assetName = AssetName.fromHex(assetNameHex)
+                            val policyId = ScriptHash.fromHex(policyIdHex)
+                            val assetName = AssetName.fromHex(assetNameHex)
 
-                        val innerMap =
-                            tokenMap.getOrElseUpdate(policyId, scala.collection.mutable.Map())
-                        innerMap(assetName) = value
-                    case unknown =>
-                        Left(io.circe.DecodingFailure(s"Unknown asset tag: $unknown", c.history))
+                            val innerMap =
+                                tokenMap.getOrElseUpdate(policyId, scala.collection.mutable.Map())
+                            innerMap(assetName) = value
+                            Right(())
+                        case unknown =>
+                            Left(
+                              io.circe.DecodingFailure(s"Unknown asset tag: $unknown", c.history)
+                            )
+                    }
                 }
-            }
-
-            val multiAsset = MultiAsset(
-              scala.collection.immutable.SortedMap.from(
-                tokenMap.view.mapValues(m => scala.collection.immutable.SortedMap.from(m))
-              )
-            )
-
-            Right(Value(coin, multiAsset))
+                .map { _ =>
+                    val multiAsset = MultiAsset(
+                      scala.collection.immutable.SortedMap.from(
+                        tokenMap.view.mapValues(m => scala.collection.immutable.SortedMap.from(m))
+                      )
+                    )
+                    Value(coin, multiAsset)
+                }
         }
     }
 

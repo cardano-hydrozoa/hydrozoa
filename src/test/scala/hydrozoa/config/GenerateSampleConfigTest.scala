@@ -13,7 +13,7 @@ import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnPeerPrivate}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig, NodePrivateConfig}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import io.circe.parser
-import monocle.syntax.all.{as as _, *}
+import monocle.syntax.all.*
 import org.scalacheck.Properties
 
 object GenerateSampleConfigTest extends Properties("GenerateSampleConfig") {

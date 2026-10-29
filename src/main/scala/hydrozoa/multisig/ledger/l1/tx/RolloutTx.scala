@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
 import monocle.{Focus, Lens}
 import scala.Function.const
-import scala.annotation.tailrec
+import scala.annotation.{nowarn, tailrec}
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{Coin, ProtocolParams, Sized, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -434,6 +434,7 @@ private object RolloutTxOps {
       * @tparam T
       *   indicates the type of [[RolloutTx]] being built.
       */
+    @nowarn("msg=Unstable inline accessor")
     trait PartialResult[T <: RolloutTx](_payoutObligationsRemaining: Vector[Payout.Obligation])
         extends Build.State.Section[T] {
         def builder: Build[T]

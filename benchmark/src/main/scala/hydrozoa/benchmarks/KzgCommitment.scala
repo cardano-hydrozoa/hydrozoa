@@ -6,6 +6,7 @@ import org.openjdk.jmh.annotations.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.frequency
 import org.scalacheck.{Arbitrary, Gen}
+import scala.compiletime.uninitialized
 import scalus.cardano.address.*
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genMapOfSizeFromArbitrary, given}
@@ -71,7 +72,7 @@ def printUtxoStat(utxos: Utxos): Unit = {
 @State(Scope.Benchmark)
 class UtxoToPlutusBenchmark {
 
-    var utxos: List[(TransactionInput, TransactionOutput)] = _
+    var utxos: List[(TransactionInput, TransactionOutput)] = uninitialized
 
     var index = 0
 
@@ -96,7 +97,7 @@ class UtxoToPlutusBenchmark {
 @State(Scope.Benchmark)
 class UtxoToDataBenchmark {
 
-    var sampleData: List[TxInInfo] = _
+    var sampleData: List[TxInInfo] = uninitialized
 
     var index = 0
 
@@ -122,7 +123,7 @@ class UtxoToDataBenchmark {
 @State(Scope.Benchmark)
 class UtxoSerializationBenchmark {
 
-    var sampleData: List[Data] = _
+    var sampleData: List[Data] = uninitialized
 
     var index = 0
 
@@ -148,7 +149,7 @@ class UtxoSerializationBenchmark {
 @State(Scope.Benchmark)
 class HashByteStringBenchmark {
 
-    var sampleData: List[ByteString] = _
+    var sampleData: List[ByteString] = uninitialized
 
     var index = 0
 
@@ -177,10 +178,10 @@ class HashUtxoBenchmark {
 
     @Param(Array("10", "50", "100", "1000", "10000", "20000", "25000", "32767"))
     // @Param(Array("10", "50", "100"))
-    var size: Int = _
+    var size: Int = uninitialized
 
     // The auto-generated input for the commitment calculation
-    var utxos: Utxos = _
+    var utxos: Utxos = uninitialized
 
     @Setup(Level.Iteration)
     def setup(): Unit =
@@ -204,9 +205,9 @@ class HashUtxoBenchmark {
 class ProductPolyBenchmark {
 
     @Param(Array("10", "50", "100", "1000", "10000", "20000", "25000", "32767"))
-    var size: Int = _
+    var size: Int = uninitialized
 
-    var elements: Vector[BigInt] = _
+    var elements: Vector[BigInt] = uninitialized
 
     @Setup(Level.Iteration)
     def setup(): Unit = elements = genElements(size)
@@ -227,10 +228,10 @@ class ProductPolyBenchmark {
 class CommitPolyBenchmark {
 
     @Param(Array("10", "50", "100", "1000", "10000", "20000", "25000", "32767"))
-    var size: Int = _
+    var size: Int = uninitialized
 
-    var coefficients: Vector[BigInt] = _
-    var srs: Vector[G1Element] = _
+    var coefficients: Vector[BigInt] = uninitialized
+    var srs: Vector[G1Element] = uninitialized
 
     @Setup(Level.Iteration)
     def setup(): Unit = {

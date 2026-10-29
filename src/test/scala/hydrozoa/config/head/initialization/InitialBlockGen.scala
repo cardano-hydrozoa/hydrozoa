@@ -3,7 +3,6 @@ package hydrozoa.config.head.initialization
 import cats.data.ReaderT
 import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
-import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.{HeadConfig, HeadParamsHash, generateHeadConfigBootstrap}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}

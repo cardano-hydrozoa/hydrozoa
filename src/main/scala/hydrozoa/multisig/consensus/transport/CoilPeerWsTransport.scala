@@ -292,7 +292,7 @@ final class CoilPeerWsTransport private (
                 // the boot barriers. Run the cancel on its own fiber and bound the JOIN, which IS
                 // cancelable. A healthy dialer sits in `IO.sleep` and completes this immediately.
                 fiber.cancel.start
-                    .flatMap(_.join.timeoutTo(dialerCancelBudget, IO.unit))
+                    .flatMap(_.join.void.timeoutTo(dialerCancelBudget, IO.unit))
                     .void
             )
             .void
