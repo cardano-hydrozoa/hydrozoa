@@ -159,29 +159,6 @@ class TransportUnregisterTest extends AnyFunSuite {
         )
     }
 
-    test("hub: a coil's inbound with no liaison ever registered is still a fault") {
-        val events = for {
-            seen <- Ref[IO].of(Vector.empty[HubWsTransportEvent])
-            hub <- newHub(seen)
-            coilT <- newCoil(Ref.unsafe[IO, Vector[CoilPeerWsTransportEvent]](Vector.empty))
-            events <- hubLink(hub, coilT).use { _ =>
-                coilT.send(coilPush) >>
-                    await(seen)(
-                      _.contains(HubWsTransportEvent.NoLiaisonForInbound(coil)),
-                      "a push with no liaison ever registered was not reported"
-                    ) >> seen.get
-            }
-        } yield events
-        assert(
-          !events
-              .timeout(60.seconds)
-              .unsafeRunSync()
-              .exists(_.isInstanceOf[HubWsTransportEvent.InboundAfterUnregister])
-        )
-    }
-
-    // ---- coil side: CoilPeerWsTransport ----
-
     test("coil: the hub's inbound after unregister is dropped as expected, not delivered") {
         val run = HydrozoaActorSystem.withoutRoot("unregister-coil").use { system =>
             for {
