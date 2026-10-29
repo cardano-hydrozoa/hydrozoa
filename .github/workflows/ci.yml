@@ -282,13 +282,17 @@ jobs:
           TEST_STEPS: unit=${{ steps.unit.outcome }}
         run: python3 .github/scripts/test-summary.py target
 
-      # Artifact names must be unique within a run, hence the job in each name.
+      # Artifact names must be unique within a run, hence the job in each name. The ci-events files
+      # (test-summary.py's input) are kept with the reports: they record when each suite started and
+      # ended, which the JUnit reports don't for ScalaCheck suites.
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-unit-attempt-${{ github.run_attempt }}
-          path: target/out/jvm/*/*/test-reports/
+          path: |
+            target/out/jvm/*/*/test-reports/
+            target/out/jvm/**/ci-events/
           if-no-files-found: ignore
           retention-days: 3
 
@@ -373,7 +377,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-integration-attempt-${{ github.run_attempt }}
-          path: target/out/jvm/*/*/test-reports/
+          path: |
+            target/out/jvm/*/*/test-reports/
+            target/out/jvm/**/ci-events/
           if-no-files-found: ignore
           retention-days: 3
 
@@ -459,7 +465,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-yaci-attempt-${{ github.run_attempt }}
-          path: target/out/jvm/*/*/test-reports/
+          path: |
+            target/out/jvm/*/*/test-reports/
+            target/out/jvm/**/ci-events/
           if-no-files-found: ignore
           retention-days: 3
 
