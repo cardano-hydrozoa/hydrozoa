@@ -98,14 +98,18 @@ jobs:
       # Decides which of the unit tests, the integration tests (Yaci included) and the reporting
       # canary a PR needs, from the files it changes; the script's header has the rules. A PR
       # confined to integration/ skips the unit tests, which that code can't affect; a change to
-      # src/test/ runs both suites, since the integration suites build on core's test code.
-      # Merge-queue and manual runs run everything unless their tree is already tested, and so
-      # does a PR whose change set can't be determined.
+      # src/test/ runs both suites, since the integration suites build on core's test code. A
+      # merge-queue run is planned the same way, from what its PR adds to the queue's base (main and
+      # the entries ahead of it), which is sound only while the ruleset's queue merges an entry
+      # after every entry ahead of it has passed. Manual runs run everything unless their tree is
+      # already tested, and so does a run whose change set can't be determined.
       - name: Plan the run
         id: plan
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           TREE_TESTED: ${{ steps.tested.outputs.tested }}
           TESTED_BY: ${{ steps.tested.outputs.tested-by }}
         run: .github/scripts/classify-changes.py
