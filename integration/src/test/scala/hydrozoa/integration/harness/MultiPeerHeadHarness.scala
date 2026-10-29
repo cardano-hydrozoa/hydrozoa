@@ -1280,6 +1280,7 @@ object MultiPeerHeadHarness:
                       params = cardanoInfo.protocolParams,
                       certState = CertState.empty,
                       network = cardanoInfo.network,
+                      treasury = Coin.zero,
                     ),
                     slotConfig = cardanoInfo.slotConfig,
                   ),

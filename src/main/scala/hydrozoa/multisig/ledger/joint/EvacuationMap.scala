@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.joint
 
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder}
+import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.event.RequestId
@@ -24,7 +25,6 @@ import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{ByteString, Data, ToData, platform}
 import scalus.|>
-import supranational.blst.Scalar
 
 given toDataTransactionInput: ToData[TransactionInput] with {
     override def apply(i: TransactionInput): Data =
@@ -181,9 +181,9 @@ final case class EvacuationMap(
         EvacuationMapHash(platform.blake2b_256(ByteString.unsafeFromArray(buffer.toByteArray)))
     }
 
-    lazy val scalars: SList[Scalar] = {
+    lazy val scalars: SList[ScalusScalar] = {
         SList.from(
-          evacuationMap.toList.map(e =>
+          evacuationMap.iterator.map(e =>
               // FIXME: redundant CBOR encoding with `Sized`, since we're keeping the original serialization anyways
               mkScalar(e._1, LedgerToPlutusTranslation.getTxOutV2(Sized(e._2.utxo.value)))
           )
@@ -270,11 +270,8 @@ object EvacuationMap:
             |> blake2b_224
     }
 
-    def mkScalar(key: EvacuationKey, output: TxOut): Scalar =
-        (key, output)
-            |> mkHash
-            |> (_.bytes)
-            |> Scalar().from_bendian
+    def mkScalar(key: EvacuationKey, output: TxOut): ScalusScalar =
+        (key, output) |> mkHash |> ScalusScalar.fromByteStringBigEndianUnsafe
 
     def from(i: IterableOnce[(EvacuationKey, Payout.Obligation)]): EvacuationMap =
         EvacuationMap(TreeMap.from(i))

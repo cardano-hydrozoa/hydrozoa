@@ -82,7 +82,8 @@ object HydrozoaTransactionMutator {
                 time.toSlot.slot,
                 protocolParams,
                 CertState.empty,
-                config.network
+                config.network,
+                Coin.zero
               ),
               slotConfig = config.slotConfig
             )

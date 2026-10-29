@@ -285,7 +285,8 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
             now.toSlot.slot,
             env.headConfig.cardanoProtocolParams,
             certState = CertState.empty,
-            env.headConfig.network
+            env.headConfig.network,
+            Coin.zero
           ),
           slotConfig = env.headConfig.slotConfig,
           evaluatorMode = EvaluateAndComputeCost,

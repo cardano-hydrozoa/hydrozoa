@@ -17,7 +17,7 @@ import hydrozoa.multisig.ledger.l2.{L2Ledger, L2StateHash}
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import scala.util.control.NonFatal
 import scalus.cardano.ledger.rules.{Context, DefaultValidators, OutsideForecastValidator, OutsideValidityIntervalValidator, STS, State, UtxoEnv}
-import scalus.cardano.ledger.{CertState, TransactionException}
+import scalus.cardano.ledger.{CertState, Coin, TransactionException}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.platform
 
@@ -222,7 +222,8 @@ object JoinOfferVerifier:
             slot = 0L,
             params = config.cardanoProtocolParams,
             certState = CertState.empty,
-            network = config.network
+            network = config.network,
+            treasury = Coin.zero
           ),
           slotConfig = config.slotConfig
         )

@@ -40,7 +40,7 @@ Global / excludeLintKeys ++= Set(
   rpmScriptsDirectory
 )
 
-val scalusVersion = "1.2.0"
+val scalusVersion = "1.4.1"
 // A val, not an inline literal, because `hydrozoa.BuildInfo` bakes it in: it is part of the
 // `l2ParamsHash` preimage, which serializes ProtocolParams with scalus's upickle writer and so
 // depends on upickle's formatting as well as scalus's (docs/spec/head-params-hash.md).
@@ -217,8 +217,8 @@ lazy val core: Project = (project in file("."))
       executableScriptName := "hydrozoa",
       Compile / discoveredMainClasses := Seq("hydrozoa.app.Main"),
       // Bake the clean-output JVM flags into the generated launcher scripts (both `stage` and the
-      // Docker image), matching the `run` / `Test` settings: silence blst-java's JNI `System::load`
-      // and Scala `LazyVals`' `sun.misc.Unsafe` restricted-method warnings.
+      // Docker image), matching the `run` / `Test` settings: silence the JNI library loads of
+      // rocksdbjni and scalus-crypto-jni and Scala `LazyVals`' `sun.misc.Unsafe` warnings.
       bashScriptExtraDefines ++= Seq(
         """addJava "--enable-native-access=ALL-UNNAMED"""",
         """addJava "--sun-misc-unsafe-memory-access=allow"""",
@@ -402,8 +402,9 @@ lazy val core: Project = (project in file("."))
       },
       // Fork JVM to properly pass system properties
       run / fork := true,
-      // Silence the JVM's restricted-method warnings (blst-java JNI `System::load`, Scala
-      // `LazyVals` via `sun.misc.Unsafe`) for forked `run`/CLI invocations, matching Test.
+      // Silence the JVM's restricted-method warnings (JNI loads by rocksdbjni and
+      // scalus-crypto-jni, Scala `LazyVals` via `sun.misc.Unsafe`) for forked `run`/CLI
+      // invocations, matching Test.
       run / javaOptions ++= Seq(
         "--enable-native-access=ALL-UNNAMED",
         "--sun-misc-unsafe-memory-access=allow"
@@ -418,9 +419,9 @@ lazy val core: Project = (project in file("."))
       // Forking otherwise serializes the suites; keep sbt's parallel suite execution in the
       // single forked JVM so the full run isn't dramatically slower than in-process.
       Test / testForkedParallel := true,
-      // Forked test JVMs don't inherit the sbt launcher's JDK-25 flags, so grant the same
-      // native access (blst-java JNI `System::load`, Scala `LazyVals` via `sun.misc.Unsafe`)
-      // to keep test output free of restricted-method warnings.
+      // Forked test JVMs don't inherit the sbt launcher's JDK-25 flags, so grant the same native
+      // access (JNI loads by rocksdbjni and scalus-crypto-jni, Scala `LazyVals` via
+      // `sun.misc.Unsafe`) to keep test output free of restricted-method warnings.
       Test / javaOptions ++= Seq(
         "--enable-native-access=ALL-UNNAMED",
         "--sun-misc-unsafe-memory-access=allow"

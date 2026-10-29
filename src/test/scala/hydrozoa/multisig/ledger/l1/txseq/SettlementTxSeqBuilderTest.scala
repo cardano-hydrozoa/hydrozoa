@@ -62,7 +62,8 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                                   slot = 0L,
                                   params = multiNodeConfig.headConfig.cardanoProtocolParams,
                                   certState = CertState.empty,
-                                  network = multiNodeConfig.headConfig.network
+                                  network = multiNodeConfig.headConfig.network,
+                                  treasury = Coin.zero
                                 ),
                                 slotConfig = multiNodeConfig.headConfig.slotConfig,
                                 evaluatorMode = EvaluateAndComputeCost

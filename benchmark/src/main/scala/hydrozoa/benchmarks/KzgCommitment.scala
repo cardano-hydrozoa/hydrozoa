@@ -26,11 +26,7 @@ def genUtxos(size: Int) =
 
 /** The scalars a utxo set commits to, as the field elements the accumulator takes. */
 def genElements(size: Int): Vector[BigInt] =
-    KzgCommitment
-        .hashToScalar(genUtxos(size))
-        .toScalaList
-        .map(s => BigInt(1, s.to_bendian()))
-        .toVector
+    KzgCommitment.toFieldElements(KzgCommitment.hashToScalar(genUtxos(size)))
 
 /** N.B. don't use it BEFORE testing hashing, it will be memoized by JVM! Use it in the @TearDown
   * method after the benchmarks to control the test data set.

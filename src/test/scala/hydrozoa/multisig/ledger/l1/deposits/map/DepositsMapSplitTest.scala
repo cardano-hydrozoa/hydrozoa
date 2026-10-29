@@ -42,7 +42,7 @@ object DepositsMapSplitTest extends Properties("DepositsMap.split") {
         val one =
             genDepositUtxo(config, Some(config.headMultisigAddress), Gen.const(Value.ada(10)))()
         val candidates =
-            Gen.listOfN(k * 4, one).pureApply(Gen.Parameters.default, Seed(1L))
+            Gen.listOfN(k * 8, one).pureApply(Gen.Parameters.default, Seed(1L))
         val distinct = candidates
             .distinctBy(_.absorptionStartTime.instant)
             .sortBy(_.absorptionStartTime.instant)

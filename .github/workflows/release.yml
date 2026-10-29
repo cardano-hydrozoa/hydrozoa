@@ -37,7 +37,7 @@ jobs:
         run: nix develop .#ci --command sbt --server --batch Docker/stage
 
       # The staged context is JVM bytecode plus a Dockerfile whose only RUN steps
-      # are chmod and useradd, and both native dependencies (blst-java,
+      # are chmod and useradd, and both native dependencies (scalus-crypto-jni,
       # rocksdbjni) ship linux/aarch64 objects inside the same jars. So arm64
       # needs no separate build -- only a runtime that can execute those two
       # trivial RUN steps, which QEMU covers cheaply for 168 files.

@@ -546,7 +546,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                       slot = 0,
                       params = config.cardanoProtocolParams,
                       certState = CertState.empty,
-                      network = config.network
+                      network = config.network,
+                      treasury = Coin.zero
                     ),
                     slotConfig = config.slotConfig,
                     evaluatorMode = EvaluateAndComputeCost
