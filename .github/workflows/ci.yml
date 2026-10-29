@@ -175,9 +175,22 @@ jobs:
         run: .github/scripts/install-nix.sh
 
       # The one job that saves this cache; the others restore it only, since two jobs saving the
-      # same key race for it.
+      # same key race for it. A merge-queue run restores only: its cache would belong to the
+      # queue's temporary ref, which nothing reads again, and each one takes about 0.6 GB of the
+      # repository's 10 GB.
       - name: Cache sbt / coursier / ivy
+        if: github.event_name != 'merge_group'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.sbt
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+      - name: Restore sbt / coursier / ivy cache
+        if: github.event_name == 'merge_group'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.sbt
