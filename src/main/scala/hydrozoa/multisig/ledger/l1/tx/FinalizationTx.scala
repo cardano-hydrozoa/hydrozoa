@@ -245,14 +245,14 @@ private object FinalizationTxOps {
               config.headMultisigScript.witnessAttached
             )
 
-            private val burnMultisigRegimeToken = Mint(
+            private val burnRegimeWitnessToken = Mint(
               config.headMultisigScript.script.scriptHash,
               config.headTokenNames.regimeWitnessTokenName,
               -1,
               config.headMultisigScript.witnessAttached
             )
 
-            private val burnSteps = List(burnTreasuryToken, burnMultisigRegimeToken)
+            private val burnSteps = List(burnTreasuryToken, burnRegimeWitnessToken)
 
             /////////////////////////////////////////////////////////
             // Spend steps

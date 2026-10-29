@@ -87,7 +87,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             val multisigRegimeUtxo = iTx.multisigRegimeProduced
             val expectedHeadTokenName =
                 config.headTokenNames.treasuryTokenName
-            val expectedMulitsigRegimeTokenName =
+            val expectedRegimeWitnessTokenName =
                 config.headTokenNames.regimeWitnessTokenName
             val expectedHeadNativeScript = config.headMultisigScript
             val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
@@ -118,7 +118,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                           expectedHeadNativeScript.policyId ->
                               SortedMap(
                                 expectedHeadTokenName -> 1L,
-                                expectedMulitsigRegimeTokenName -> 1L
+                                expectedRegimeWitnessTokenName -> 1L
                               )
                         )
                       )
@@ -187,7 +187,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             )
 
             props.append(
-              "MR utxo only contains MR token in multiassets" |:
+              "multisig regime utxo only contains the HRWT in multiassets" |:
                   multisigRegimeUtxo
                       .toUtxo(using config)
                       .output
@@ -196,14 +196,14 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                   MultiAsset(
                     SortedMap(
                       expectedHeadNativeScript.policyId -> SortedMap(
-                        expectedMulitsigRegimeTokenName -> 1L
+                        expectedRegimeWitnessTokenName -> 1L
                       )
                     )
                   )
             )
 
             props.append(
-              "MR utxo contains at least enough coin for fallback deposit" |:
+              "multisig regime utxo contains at least enough coin for fallback deposit" |:
                   (multisigRegimeUtxo
                       .toUtxo(using config)
                       .output
@@ -283,7 +283,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 //                        )
 //                  ),
 //                  multisigRegimeUtxo = MultisigRegimeUtxo(
-//                    regimeWitnessTokenName = expectedMulitsigRegimeTokenName,
+//                    regimeWitnessTokenName = expectedRegimeWitnessTokenName,
 //                    utxoId = TransactionInput(iTx.tx.id, 1),
 //                    address = expectedHeadNativeScript.mkAddress(testNetwork),
 //                    value = multisigRegimeUtxo.output.value,
