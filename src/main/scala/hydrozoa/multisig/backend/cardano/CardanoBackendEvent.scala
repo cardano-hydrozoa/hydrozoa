@@ -20,8 +20,3 @@ object CardanoBackendEvent:
         extends CardanoBackendEvent
     final case class SubmitTxRelevantUtxos(utxos: Utxos) extends CardanoBackendEvent
     final case class SubmitTxAlreadyKnown(txId: TransactionHash) extends CardanoBackendEvent
-
-    // ── Blockfrost-specific events ───────────────────────────────────────────
-
-    final case class FetchScriptFailed(utxoRef: TransactionInput, error: CardanoBackend.Error)
-        extends CardanoBackendEvent

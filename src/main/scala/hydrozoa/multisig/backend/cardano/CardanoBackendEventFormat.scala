@@ -27,8 +27,3 @@ object CardanoBackendEventFormat:
                 trace(s"tx utxos: $utxos")
             case SubmitTxAlreadyKnown(txId) =>
                 debug(s"tx $txId is already known, do nothing")
-            case FetchScriptFailed(utxoRef, error) =>
-                warn(
-                  s"Failed to fetch reference script for UTXO $utxoRef",
-                  "error" -> error.getMessage
-                )

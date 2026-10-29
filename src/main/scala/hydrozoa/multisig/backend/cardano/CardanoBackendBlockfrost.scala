@@ -4,10 +4,10 @@ import cats.data.EitherT
 import cats.effect.*
 import cats.syntax.traverse.*
 import com.bloxbean.cardano.client.api.common.OrderEnum
-import com.bloxbean.cardano.client.api.model.{Amount, Result, Utxo}
+import com.bloxbean.cardano.client.api.model.Result
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
-import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, ScriptDatumCbor, TxContentRedeemers, TxContentUtxo, TxContentUtxoOutputs}
+import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, ScriptDatumCbor, TxContentRedeemers}
 import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.logging.ContraTracer
@@ -21,15 +21,15 @@ import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.jdk.CollectionConverters.*
-import scala.util.Try
-import scalus.cardano.address.{Address, ShelleyAddress}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger
 import scalus.cardano.ledger.*
-import scalus.cardano.node.BlockfrostProvider
+import scalus.cardano.node.{BlockfrostProvider, UtxoFilter, UtxoQuery, UtxoQueryError, UtxoSource}
 import scalus.uplc.builtin.{ByteString, Data}
 
-/** Cardano backend to use with Blockfrost-compatible API. Currently, uses both BloxBeans's
-  * [[BackendServive]] and Scalus' [[BlockfrostProvider]] for protocol parameters handle.
+/** Cardano backend to use with Blockfrost-compatible API. UTxO reads and protocol parameters go
+  * through Scalus' [[BlockfrostProvider]]; tx lookups, asset history, redeemers and submission go
+  * through BloxBean's [[BackendService]].
   *
   * @param backendService
   *   BloxBean backend service
@@ -58,18 +58,14 @@ class CardanoBackendBlockfrost private (
 
     /** The Scalus provider, built on first use and memoised **only if it succeeds**.
       *
-      * ⛔ This used to be a plain `Future[BlockfrostProvider]` created eagerly at construction. A
-      * Scala `Future` memoises its outcome — including its failure — so a single Blockfrost blip at
-      * the moment the backend was built poisoned every later `fetchLatestParams` for the entire
-      * life of the process, with no retry and no way back short of a restart. The node looked
-      * healthy: it polled L1 fine, because `utxosAt` goes through BloxBean's service and never
-      * touches this.
-      *
-      * That is disqualifying for a start-up gate built on protocol parameters — one blip and the
-      * gate could never be satisfied. So: retry on failure, memoise on success.
+      * Building it fetches from Blockfrost, so it can fail. A memoised failure — what an eager
+      * Scala `Future` would keep — would fail every later UTxO poll and `fetchLatestParams` for the
+      * life of the process, with no way back short of a restart. So: retry on failure, memoise on
+      * success.
       *
       * ⚠️ Two concurrent first-callers may each build one; the loser's is discarded. Harmless (the
-      * provider is a stateless HTTP wrapper) and cheaper than serialising every access.
+      * discarded provider has only its own empty script cache) and cheaper than serialising every
+      * access.
       */
     private def provider: IO[BlockfrostProvider] =
         providerRef.get.flatMap {
@@ -77,127 +73,46 @@ class CardanoBackendBlockfrost private (
             case None    => mkProvider.flatTap(p => providerRef.set(Some(p)))
         }
 
+    /** Runs a UTxO query on the provider. A failure to build the provider, or an exception from the
+      * query, comes back as a `Left` like any other query error.
+      */
+    private def findUtxos(query: UtxoQuery): IO[Either[UtxoQueryError, Utxos]] =
+        provider
+            .flatMap(p => IO.fromFuture(IO.delay(p.findUtxos(query))))
+            .handleError(e => Left(UtxoQueryError.NetworkError(e.getMessage, Some(e))))
+
     private val httpClient: HttpClient = HttpClient.newHttpClient()
 
     // BloxBean's get*Service builds a fresh Retrofit + OkHttpClient (its own
     // connection pool and dispatcher threads) on every call — and pagination
     // calls it once per page. Cache one instance per service.
-    private val utxoService = backendService.getUtxoService
     private val scriptService = backendService.getScriptService
     private val transactionService = backendService.getTransactionService
     private val assetService = backendService.getAssetService
 
-    /** `IO.blocking`: a synchronous Blockfrost round trip — see [[paginate]] for why that matters.
-      * The call also has to be suspended rather than passed to `EitherT.fromEither`, whose argument
-      * is strict: evaluating it eagerly would run the request when `resolve` is called instead of
-      * when the returned `IO` is run.
+    /** Reads the input's transaction rather than querying the input itself: Scalus reports any
+      * failure of an input query as `NotFound`, so a Blockfrost outage would look like a spent
+      * input. A transaction query keeps "no such tx" (HTTP 404) apart from a failed request.
       */
     override def resolve(input: Input): IO[Either[Error, Option[ledger.Utxo]]] =
-        (for {
-            res <- EitherT(
-              IO.blocking(
-                Try(
-                  utxoService.getTxOutput(input.transactionId.toHex, input.index)
-                ).toEither.left.map(e => Error.ErrorResolving(input, e.getMessage))
-              )
-            )
-            mbUtxo <- res match {
-                // Resolution "successful", but no utxo found
-                case _ if res.code() == 404 => EitherT.right(IO.pure(None))
-                // Resolution genuinely successful: utxo was found
-                case _ if res.isSuccessful =>
-                    for {
-                        utxos <- EitherT(convertUtxosWithScripts(List(res.getValue)))
-                        utxo = ledger.Utxo(utxos.head)
-                    } yield Some(utxo)
-                // Resolution unsuccessful for some other reason. The status code goes in the
-                // message: it is what separates "retry, the backend is having a moment" (429, 5xx)
-                // from "this will never work" (401 on a bad key, 400), and the response body alone
-                // does not carry it — a proxy's 502 body is often empty.
-                case _ =>
-                    EitherT.left(
-                      IO.pure(
-                        ErrorResolving(
-                          input,
-                          s"resolution failed with HTTP ${res.code()}: ${res.getResponse}"
-                        )
-                      )
-                    )
-            }
-        } yield mbUtxo).value
+        findUtxos(UtxoQuery(UtxoSource.FromTransaction(input.transactionId))).map {
+            case Right(utxos) => Right(utxos.get(input).map(ledger.Utxo(input, _)))
+            case Left(UtxoQueryError.NotFound(_)) => Right(None)
+            case Left(error)                      => Left(ErrorResolving(input, error.toString))
+        }
 
     override def utxosAt(address: ShelleyAddress): IO[Either[CardanoBackend.Error, Utxos]] =
-        paginate(page =>
-            utxoService
-                .getUtxos(address.toBech32.get, pageSize, page, OrderEnum.asc)
-        ).map(_.map(convertUtxosWithoutScripts))
+        findUtxos(UtxoQuery(UtxoSource.FromAddress(address)))
+            .map(_.left.map(error => Unexpected(error.toString)))
 
     override def utxosAt(
         address: ShelleyAddress,
         asset: (PolicyId, AssetName)
-    ): IO[Either[CardanoBackend.Error, Utxos]] = {
-        val unit = s"${asset._1.toHex}${asset._2.bytes.toHex}"
-        paginate(page =>
-            utxoService
-                .getUtxos(address.toBech32.get, unit, pageSize, page, OrderEnum.asc)
-        ).map(_.map(convertUtxosWithoutScripts))
-    }
-
-    /** Converts UTXOs without fetching their reference scripts: any `scriptRef` on the resulting
-      * outputs is left as `None`.
-      *
-      * Used by [[utxosAt]]. None of its callers read the reference script off the returned UTXOs
-      * (they use only value/datum/input), so fetching scripts here would be pure waste — one extra
-      * Blockfrost /scripts request per ref-script UTXO, on a hot polling path. The one consumer
-      * that genuinely needs the script (the reference-script checker in
-      * `ScriptReferenceUtxos.resolve`) goes through [[resolve]], which keeps
-      * [[convertUtxosWithScripts]].
-      */
-    private def convertUtxosWithoutScripts(utxos: List[Utxo]): Utxos =
-        utxos.map(convert(_, scriptRef = None)).toMap
-
-    /** Converts UTXOs with script fetching. Fetches reference scripts if needed before converting.
-      *
-      * Only used by [[resolve]], which backs the reference-script checker; the polling [[utxosAt]]
-      * path deliberately avoids the per-UTXO /scripts request via [[convertUtxosWithoutScripts]].
-      */
-    private def convertUtxosWithScripts(
-        utxos: List[Utxo]
-    ): IO[Either[CardanoBackend.Error, Utxos]] = {
-        utxos
-            .traverse { utxo =>
-                val scriptRefEither
-                    : IO[Either[CardanoBackend.Error, Option[scalus.cardano.ledger.ScriptRef]]] =
-                    Option(utxo.getReferenceScriptHash) match {
-                        case None => IO.pure(Right(None))
-                        case Some(scriptHash) =>
-                            IO.delay(fetchScript(scriptHash)).flatMap {
-                                case Left(error) =>
-                                    val utxoId = TransactionInput(
-                                      Hash[Blake2b_256, HashPurpose.TransactionHash](
-                                        ByteString.fromHex(utxo.getTxHash)
-                                      ),
-                                      utxo.getOutputIndex
-                                    )
-                                    tracer
-                                        .traceWith(
-                                          CardanoBackendEvent.FetchScriptFailed(utxoId, error)
-                                        )
-                                        .as(Left(error))
-                                case Right(script) =>
-                                    IO.pure(Right(Some(scalus.cardano.ledger.ScriptRef(script))))
-                            }
-                    }
-
-                scriptRefEither.map {
-                    case Left(error)      => Left(error)
-                    case Right(scriptRef) => Right(convert(utxo, scriptRef))
-                }
-            }
-            .map { results =>
-                results.sequence.map(_.toMap)
-            }
-    }
+    ): IO[Either[CardanoBackend.Error, Utxos]] =
+        findUtxos(
+          UtxoQuery(UtxoSource.FromAddress(address)) && UtxoFilter.HasAsset(asset._1, asset._2)
+        )
+            .map(_.left.map(error => Unexpected(error.toString)))
 
     /** `IO.blocking`, here and at every other `backendService` call site: those calls are
       * synchronous okhttp, so the thread that enters one stays there for the whole HTTPS round
@@ -209,7 +124,7 @@ class CardanoBackendBlockfrost private (
       */
     private def paginate[A](
         apiCall: Int => Result[java.util.List[A]],
-        mbStopPred: Option[A => Boolean] = None
+        mbStopPred: Option[A => Boolean]
     ): IO[Either[CardanoBackend.Error, List[A]]] =
         IO.blocking {
             val elems: mutable.Buffer[A] = mutable.Buffer.empty
@@ -244,167 +159,6 @@ class CardanoBackendBlockfrost private (
                     if e.getCause != null then e.getCause.getMessage else "N/A"
                 }"))
         )
-
-    /** Fetches a script by its hash from Blockfrost, trying both native and Plutus scripts. Returns
-      * the script as a Scalus Script type (Native or PlutusV3).
-      *
-      * Uses lazy evaluation to try native script first, then Plutus if native fails.
-      */
-    private def fetchScript(
-        scriptHash: String
-    ): Either[CardanoBackend.Error, scalus.cardano.ledger.Script] = {
-
-        lazy val nativeResult: Either[String, scalus.cardano.ledger.Script] =
-            Try(scriptService.getNativeScript(scriptHash)).toEither.left
-                .map(ex => s"Exception fetching native script $scriptHash: ${ex.getMessage}")
-                .flatMap { res =>
-                    if res.isSuccessful then
-                        convertNativeScript(res.getValue)
-                            .toRight(
-                              s"Failed to convert native script $scriptHash: conversion returned None"
-                            )
-                    else Left(s"Failed to fetch native script $scriptHash: ${res.getResponse}")
-                }
-
-        lazy val plutusResult: Either[String, scalus.cardano.ledger.Script] =
-            Try(scriptService.getPlutusScript(scriptHash)).toEither.left
-                .map(ex => s"Exception fetching Plutus script $scriptHash: ${ex.getMessage}")
-                .flatMap { res =>
-                    if res.isSuccessful then
-                        convertPlutusScript(res.getValue)
-                            .toRight(
-                              s"Failed to convert Plutus script $scriptHash: conversion returned None"
-                            )
-                    else Left(s"Failed to fetch Plutus script $scriptHash: ${res.getResponse}")
-                }
-
-        // Alternative-like behavior: try native first, fallback to Plutus if it fails
-        nativeResult
-            .orElse(plutusResult)
-            .left
-            .map(errorMsg => Unexpected(s"Failed to fetch script with hash $scriptHash: $errorMsg"))
-    }
-
-    /** Converts a BloxBean NativeScript to a Scalus Script.Native.
-      *
-      * @return
-      *   Some(script) if conversion succeeds, None if it fails
-      */
-    private def convertNativeScript(
-        native: com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-    ): Option[scalus.cardano.ledger.Script.Native] = {
-        scala.util.Try {
-            val scriptBytes = native.serializeScriptBody()
-            // Parse the native script CBOR to get the Timelock
-            import io.bullet.borer.Cbor
-            import scalus.cardano.ledger.Timelock
-            val timelock = Cbor.decode(scriptBytes).to[Timelock].value
-            scalus.cardano.ledger.Script.Native(timelock)
-        }.toOption
-    }
-
-    /** Converts a BloxBean PlutusScript to a Scalus Script (PlutusV1, PlutusV2, or PlutusV3).
-      *
-      * @return
-      *   Some(script) if conversion succeeds, None if it fails or version is unsupported
-      */
-    private def convertPlutusScript(
-        plutus: com.bloxbean.cardano.client.plutus.spec.PlutusScript
-    ): Option[scalus.cardano.ledger.Script] = {
-        import com.bloxbean.cardano.client.plutus.spec.Language
-
-        scala.util.Try {
-            val scriptBytes = ByteString.fromArray(plutus.serializeScriptBody())
-            plutus.getLanguage match {
-                case Language.PLUTUS_V1 => scalus.cardano.ledger.Script.PlutusV1(scriptBytes)
-                case Language.PLUTUS_V2 => scalus.cardano.ledger.Script.PlutusV2(scriptBytes)
-                case Language.PLUTUS_V3 => scalus.cardano.ledger.Script.PlutusV3(scriptBytes)
-            }
-        }.toOption
-    }
-
-    /** Pure function to convert a BloxBean UTXO to Scalus types.
-      *
-      * @param utxo
-      *   The BloxBean UTXO
-      * @param scriptRef
-      *   Optional reference script (already fetched)
-      * @return
-      *   A pair of TransactionInput and TransactionOutput
-      */
-    private def convert(
-        utxo: Utxo,
-        scriptRef: Option[scalus.cardano.ledger.ScriptRef]
-    ): (TransactionInput, TransactionOutput) = {
-        import scalus.cardano.ledger.{Blake2b_256, Coin, DatumOption, Hash, HashPurpose, MultiAsset, TransactionInput, TransactionOutput, Value}
-        import scalus.uplc.builtin.ByteString
-
-        import scala.collection.immutable.SortedMap
-
-        val txHash =
-            Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(utxo.getTxHash))
-        val utxoId = TransactionInput(txHash, utxo.getOutputIndex)
-
-        // Parse address from bech32
-        val address: Address = Address.fromBech32(utxo.getAddress) match {
-            case addr: scalus.cardano.address.ShelleyAddress => addr
-            case _ =>
-                throw new IllegalArgumentException(s"Unsupported address type: ${utxo.getAddress}")
-        }
-
-        // Convert amounts to Value (lovelace + MultiAsset)
-        val amounts = utxo.getAmount.asScala.toList
-        val lovelace = amounts.find(_.getUnit == "lovelace").fold(0L)(_.getQuantity.longValue)
-
-        // Build MultiAsset from non-lovelace amounts
-        val assetsByPolicy = amounts.filter(_.getUnit != "lovelace").groupBy { amount =>
-            // Unit format: policyId + assetName (both hex concatenated)
-            val unit = amount.getUnit
-            scalus.cardano.ledger.ScriptHash.fromByteString(
-              ByteString.fromHex(unit.take(56))
-            ): PolicyId // First 56 chars = 28 bytes = policy ID
-        }
-
-        val assets = {
-            import scalus.cardano.ledger.Hash.given
-            SortedMap.from(assetsByPolicy.map { case (policyId, assetList) =>
-                val assetMap = SortedMap.from(assetList.map { amount =>
-                    val unit = amount.getUnit
-                    val assetNameHex = unit.drop(56) // Remaining chars = asset name
-                    val assetName = AssetName(ByteString.fromHex(assetNameHex))
-                    (assetName, amount.getQuantity.longValue)
-                })
-                (policyId, assetMap)
-            })
-        }
-
-        val value = Value(Coin(lovelace), MultiAsset(assets))
-
-        // Parse datum if present - inline datum is CBOR-encoded Data in hex
-        val datumOption: Option[DatumOption] =
-            Option(utxo.getInlineDatum).flatMap { inlineDatumHex =>
-                if inlineDatumHex.isEmpty then None
-                else {
-                    import io.bullet.borer.Cbor
-                    import scalus.uplc.builtin.Data
-                    scala.util.Try {
-                        val datumBytes = ByteString.fromHex(inlineDatumHex)
-                        val data = Cbor.decode(datumBytes.bytes).to[Data].value
-                        DatumOption.Inline(data)
-                    }.toOption
-                }
-            }
-
-        val output =
-            TransactionOutput.Babbage(
-              address = address,
-              value = value,
-              datumOption = datumOption,
-              scriptRef = scriptRef
-            )
-
-        (utxoId, output)
-    }
 
     /** `IO.blocking`: a synchronous Blockfrost round trip — see [[paginate]] for why that matters.
       */
@@ -454,7 +208,7 @@ class CardanoBackendBlockfrost private (
               )
             )
 
-            txRets <- txIds.traverse(txHash => EitherT(continuingTx(txHash, unit)))
+            txRets <- txIds.traverse(txHash => EitherT(continuingTx(txHash, asset)))
 
         } yield txRets.flatten).value
 
@@ -471,10 +225,15 @@ class CardanoBackendBlockfrost private (
       */
     private def continuingTx(
         txHash: TransactionHash,
-        unit: String
+        asset: (PolicyId, AssetName)
     ): IO[Either[CardanoBackend.Error, Option[ContinuingTx]]] = {
+        val (policyId, assetName) = asset
+        val unit = s"${policyId.toHex}${assetName.bytes.toHex}"
         (for {
-            utxos <- EitherT(txUtxos(txHash))
+            outputs <- EitherT(
+              findUtxos(UtxoQuery(UtxoSource.FromTransaction(txHash)))
+                  .map(_.left.map(error => Unexpected(error.toString)))
+            )
             // A redeemer's `tx_index` points into the tx's CANONICALLY-SORTED regular spend inputs
             // (excluding reference + collateral), not Blockfrost's returned input order — so index
             // the continuing (asset-bearing) input the same way, or `txRedeemer` looks it up at the
@@ -493,25 +252,18 @@ class CardanoBackendBlockfrost private (
                   .map(_._2),
               ifNone = NoTxInputWithAsset(txHash, unit)
             )
-            output <- EitherT.fromOption[IO](
-              opt = utxos.getOutputs.asScala.find { output =>
-                  output.getAmount.asScala.exists(_.getUnit == unit)
-              },
+            continuingOutput <- EitherT.fromOption[IO](
+              opt = outputs
+                  .find((_, output) =>
+                      output.value.assets.assets.get(policyId).exists(_.contains(assetName))
+                  )
+                  .map(ledger.Utxo(_)),
               ifNone = NoTxOutputWithAsset(txHash, unit)
             )
-            // Rebuild the continuing output as a scalus utxo (input = this tx's outref at the
-            // continuing output's index). The datum decode also guards that the output is a
-            // well-formed inline-datum output, matching the old behaviour.
-            _ <- EitherT.fromOption[IO](
-              opt = scala.util.Try {
-                  val datumBytes =
-                      ByteString.fromHex(output.getInlineDatum)
-                  Cbor.decode(datumBytes.bytes).to[Data].value
-              }.toOption,
-              ifNone = ErrorDecodingDatumCbor(output.getInlineDatum)
-            )
-            continuingOutput = ledger.Utxo(
-              convert(bloxbeanUtxoOf(txHash, output), scriptRef = None)
+            _ <- EitherT.cond[IO](
+              continuingOutput.output.datumOption.exists(_.isInstanceOf[DatumOption.Inline]),
+              (),
+              NoInlineDatum(continuingOutput.input)
             )
 
             redeemerInfo <- EitherT(txRedeemer(txHash, inputIx))
@@ -539,48 +291,6 @@ class CardanoBackendBlockfrost private (
             case other                                => other
         }
     }
-
-    /** Adapt a Blockfrost tx-utxos output (already located by asset) to the BloxBean `Utxo` model
-      * that [[convert]] consumes, so the continuing output can be rebuilt as a scalus utxo. The
-      * output's outref is `txHash#outputIndex`.
-      */
-    private def bloxbeanUtxoOf(
-        txHash: TransactionHash,
-        output: TxContentUtxoOutputs
-    ): Utxo = {
-        val u = new Utxo()
-        u.setTxHash(txHash.toHex)
-        u.setOutputIndex(output.getOutputIndex)
-        u.setAddress(output.getAddress)
-        u.setInlineDatum(output.getInlineDatum)
-        u.setAmount(
-          output.getAmount.asScala
-              .map(a => new Amount(a.getUnit, new java.math.BigInteger(a.getQuantity)))
-              .asJava
-        )
-        u
-    }
-
-    private def txUtxos(txHash: TransactionHash): IO[Either[CardanoBackend.Error, TxContentUtxo]] =
-        IO.delay(transactionService.getTransactionUtxos(txHash.toHex))
-            .map(res =>
-                if res.isSuccessful then Right(res.getValue)
-                else
-                    Left(
-                      Unexpected(
-                        s"Unexpected exception while retrieving tx utxos: ${res.getResponse}"
-                      )
-                    )
-            )
-            .handleError(e =>
-                Left(
-                  Unexpected(
-                    s"Unexpected exception while retrieving tx utxos: ${e.getMessage}, caused by: ${
-                            if e.getCause != null then e.getCause.getMessage else "N/A"
-                        }"
-                  )
-                )
-            )
 
     /** One input of a Blockfrost `/txs/{hash}/utxos` response, carrying the fields BloxBean's
       * `TxContentUtxoInputs` model omits: the outref (`txHash`#`outputIndex`, for canonical
