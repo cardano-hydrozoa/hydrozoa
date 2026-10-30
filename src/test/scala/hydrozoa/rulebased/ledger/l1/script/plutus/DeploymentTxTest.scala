@@ -43,7 +43,7 @@ class DeploymentTxTest extends AnyFunSuite {
             initialState.copy(utxos = initialState.utxos + (fundingTxInput -> fundingUtxo.output))
 
         // 2. Get the treasury script from HydrozoaBlueprint and wrap it in ScriptRef
-        val treasuryScript = RuleBasedTreasuryScript.compiledPlutusV3Program.script
+        val treasuryScript = HydrozoaBlueprint.treasuryScript
         val scriptRef = ScriptRef(treasuryScript)
 
         // 3. Build deploy transaction
@@ -124,7 +124,7 @@ class DeploymentTxTest extends AnyFunSuite {
             initialState.copy(utxos = initialState.utxos + (fundingTxInput -> fundingUtxo.output))
 
         // 2. Get the dispute script from HydrozoaBlueprint and wrap it in ScriptRef
-        val disputeScript = DisputeResolutionScript.compiledPlutusV3Program.script
+        val disputeScript = HydrozoaBlueprint.disputeScript
         val scriptRef = ScriptRef(disputeScript)
 
         // 3. Build deploy transaction

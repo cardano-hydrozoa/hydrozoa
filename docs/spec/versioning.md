@@ -73,11 +73,18 @@ What it does not cover, and what pins each instead:
 | not covered | pinned by |
 |---|---|
 | head configuration: timings, contingencies, rosters, script reference utxos | `headParamsHash`, in the multisig regime datum, for the head's life |
+| on-chain script bytes | the blueprint pinned in `src/main/resources/plutus.json`, read through `HydrozoaBlueprint`; the script hashes enter `headParamsHash` |
 | L2 ledger rules | `l2ParamsHash`, a field of `HeadParameters` and so of `headParamsHash`; the cardano-eutxo ledger derives it from `"gummiworm-l2-params-cardano-eutxo-v1"` |
 | L2 payload encoding | the ledger; opaque to Gummiworm (whitepaper, *Wire format*) |
 | store layouts | the store version |
 | the black-box L2 ledger socket | its own contract — see *Out of scope* |
 | the user-facing HTTP API | `apiVersion` in the OpenAPI document |
+
+The node never compiles a validator: it deploys and checks the pinned scripts.
+A Scala or Scalus upgrade that compiles them to different bytes fails
+`ExportTest`, which names the cause.
+Re-pinning with `just export` changes the script hashes and so `headParamsHash`,
+and deploys by head migration.
 
 The `-v1` domain tags stay.
 They keep one digest from being read as another.

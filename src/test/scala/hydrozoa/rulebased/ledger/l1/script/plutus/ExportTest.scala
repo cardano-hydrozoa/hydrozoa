@@ -56,7 +56,7 @@ class ExportTest extends AnyFunSuite {
           "Dispute Resolution script hash mismatch. " +
               s"Expected: ${existingDispute.hash}, " +
               s"Got: ${freshDispute.hash}. " +
-              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              driftAdvice(existingBlueprint)
         ) {
             freshDispute.hash
         }
@@ -64,7 +64,7 @@ class ExportTest extends AnyFunSuite {
         assertResult(
           existingDispute.compiledCode,
           "Dispute Resolution compiled code should match. " +
-              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              driftAdvice(existingBlueprint)
         ) {
             freshDispute.compiledCode
         }
@@ -78,7 +78,7 @@ class ExportTest extends AnyFunSuite {
           "Rule-Based Treasury script hash mismatch. " +
               s"Expected: ${existingTreasury.hash}, " +
               s"Got: ${freshTreasury.hash}. " +
-              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              driftAdvice(existingBlueprint)
         ) {
             freshTreasury.hash
         }
@@ -86,7 +86,7 @@ class ExportTest extends AnyFunSuite {
         assertResult(
           existingTreasury.compiledCode,
           "Rule-Based Treasury compiled code should match. " +
-              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              driftAdvice(existingBlueprint)
         ) {
             freshTreasury.compiledCode
         }
@@ -100,7 +100,7 @@ class ExportTest extends AnyFunSuite {
           "Rule-Based Regime script hash mismatch. " +
               s"Expected: ${existingRegime.hash}, " +
               s"Got: ${freshRegime.hash}. " +
-              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              driftAdvice(existingBlueprint)
         ) {
             freshRegime.hash
         }
@@ -108,7 +108,7 @@ class ExportTest extends AnyFunSuite {
         assertResult(
           existingRegime.compiledCode,
           "Rule-Based Regime compiled code should match. " +
-              "Please run: nix develop --command sbt 'runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export'"
+              driftAdvice(existingBlueprint)
         ) {
             freshRegime.compiledCode
         }
@@ -192,5 +192,21 @@ class ExportTest extends AnyFunSuite {
         val regimeRedeemer = regimeValidator.redeemer.get
         assert(regimeRedeemer.schema.title.contains("RegimeRedeemer"))
         assert(regimeRedeemer.schema.anyOf.isDefined, "RegimeRedeemer should be an enum with anyOf")
+    }
+
+    /** What a mismatch between a fresh compile and the pinned blueprint means, and what to do. */
+    private def driftAdvice(pinned: Blueprint): String = {
+        val pinnedToolchain = pinned.preamble.compiler.flatMap(_.version).getOrElse("unknown")
+        val currentToolchain = Export.toolchain.version.getOrElse("unknown")
+        val cause =
+            if pinnedToolchain == currentToolchain then
+                "The toolchain is the pinned one, so a validator's source changed."
+            else
+                s"The toolchain changed from $pinnedToolchain to $currentToolchain, and it " +
+                    "compiles the validators to different bytes."
+        s"$cause The node deploys and checks the scripts pinned in plutus.json, so new bytes " +
+            "change the script hashes and headParamsHash: deployed heads need a migration " +
+            "(docs/spec/versioning.md). To accept that, re-pin with `just export`; otherwise " +
+            "keep the pinned toolchain and source."
     }
 }

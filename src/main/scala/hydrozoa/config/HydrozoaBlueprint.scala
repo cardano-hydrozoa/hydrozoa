@@ -79,14 +79,28 @@ object HydrozoaBlueprint {
     private val disputeTitle: String = "Dispute Resolution Validator"
     private val regimeTitle: String = "Rule-Based Regime Validator"
 
-    /** Gets the script hash for the validator titled `title` from the blueprint. */
+    /** Gets the script hash for the validator titled `title` from the blueprint, and checks that it
+      * is the hash of the validator's `compiledCode`: a hand-edited or half-updated blueprint would
+      * otherwise pin one script and deploy another.
+      */
     private def getScriptHash(title: String): Either[Error, ScriptHash] =
         for {
             validator <- getValidator(title)
             hashHex <- validator.hash.toRight(
               Error.BlueprintLoadError(s"$title hash not present in blueprint", None)
             )
-        } yield ScriptHash.fromHex(hashHex)
+            declared = ScriptHash.fromHex(hashHex)
+            script <- getScript(title)
+            _ <- Either.cond(
+              script.scriptHash == declared,
+              (),
+              Error.BlueprintLoadError(
+                s"$title hash ${declared.toHex} is not the hash of its compiledCode " +
+                    s"(${script.scriptHash.toHex})",
+                None
+              )
+            )
+        } yield declared
 
     /** Gets the compiled PlutusV3 script for the validator titled `title` from the blueprint. */
     private def getScript(title: String): Either[Error, Script] =

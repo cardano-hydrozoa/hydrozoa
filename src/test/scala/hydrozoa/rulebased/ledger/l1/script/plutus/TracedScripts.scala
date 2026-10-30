@@ -1,5 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
+import hydrozoa.config.HydrozoaBlueprint
 import scalus.cardano.ledger.rules.{Context, STS, State}
 import scalus.cardano.ledger.{ScriptHash, Transaction, TransactionException}
 import scalus.cardano.node.SubmitError
@@ -15,14 +16,19 @@ import scalus.uplc.DebugScript
   */
 object TracedScripts {
 
-    /** Each validator's traced compile, keyed by the hash of the untraced script it stands in for.
+    /** Each validator's traced compile, keyed by the hash of the pinned script it stands in for:
+      * transactions carry the blueprint's scripts ([[HydrozoaBlueprint]]), so a key computed from a
+      * fresh compile would never match one once the compiler drifts from the pin.
       */
     lazy val debugScripts: Map[ScriptHash, DebugScript] =
-        Seq(
-          DisputeResolutionScript.compiledPlutusV3Program,
-          RuleBasedTreasuryScript.compiledPlutusV3Program,
-          RuleBasedRegimeScript.compiledPlutusV3Program
-        ).map(p => p.script.scriptHash -> DebugScript.fromCompiled(p)).toMap
+        Map(
+          HydrozoaBlueprint.disputeScriptHash ->
+              DebugScript.fromCompiled(DisputeResolutionScript.compiledPlutusV3Program),
+          HydrozoaBlueprint.treasuryScriptHash ->
+              DebugScript.fromCompiled(RuleBasedTreasuryScript.compiledPlutusV3Program),
+          HydrozoaBlueprint.regimeScriptHash ->
+              DebugScript.fromCompiled(RuleBasedRegimeScript.compiledPlutusV3Program)
+        )
 
     /** [[ImmutableEmulator.submit]], with [[debugScripts]] in the ledger context. Returns the state
       * the transaction leads to, not a new emulator, since callers only inspect rejections.
