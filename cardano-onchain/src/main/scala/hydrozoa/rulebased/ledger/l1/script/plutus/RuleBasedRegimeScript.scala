@@ -58,10 +58,7 @@ object RuleBasedRegimeValidator extends Validator {
             case Deinit =>
                 log("Deinit")
 
-                val ownInput = tx.inputs
-                    .find(_.outRef === ownRef)
-                    .getOrFail(OwnInputNotFound)
-                    .resolved
+                val ownInput = tx.findInputOrFail(ownRef, OwnInputNotFound).resolved
 
                 // The HRWT is the regime utxo's only non-ada asset, so its policy is the head
                 // multisig policy — the one authentication this validator needs. Minting under it
@@ -72,14 +69,14 @@ object RuleBasedRegimeValidator extends Validator {
                   RegimeTokenMissing
                 )
 
-                val headTokensBurned = (-tx.mint).toSortedMap
+                val headTokensMinted = tx.mint.toSortedMap
                     .get(headMp)
                     .getOrFail(HeadTokensNotBurned)
 
                 // Every token this utxo carries must be burned, so nothing survives the spend to
                 // be re-locked or swept elsewhere.
-                val regimeTokenBurned = headTokensBurned.get(regimeTokenName) match
-                    case Some(burned) => burned == regimeTokenAmount
+                val regimeTokenBurned = headTokensMinted.get(regimeTokenName) match
+                    case Some(minted) => minted == -regimeTokenAmount
                     case None         => false
                 require(regimeTokenBurned, RegimeTokenNotBurned)
 
@@ -88,12 +85,12 @@ object RuleBasedRegimeValidator extends Validator {
                 // its Deinit branch, which requires the treasury to be resolved and fully
                 // evacuated. An HRWT-only check would let the regime utxo go while the treasury
                 // still needs it to resolve or evacuate.
-                headTokensBurned.toList.filter((tokenName, _) =>
+                headTokensMinted.toList.filter((tokenName, _) =>
                     tokenName.take(4) == cip67BeaconTokenPrefix
                 ) match
                     case List.Cons(tokenNameAndAmount, none) =>
                         require(
-                          none.isEmpty && tokenNameAndAmount._2 == BigInt(1),
+                          none.isEmpty && tokenNameAndAmount._2 == BigInt(-1),
                           TreasuryTokenNotBurned
                         )
                     case _ => fail(TreasuryTokenNotBurned)
