@@ -30,8 +30,8 @@ enum L2LedgerConfig:
     /** A remote L2 ledger (e.g. SugarRush) each node reaches over its own `remoteLedgerUri`.
       *
       * Carries no parameters: a remote ledger's are its own and never cross into the head config.
-      * What the head holds instead is `l2ParamsHash`, the digest the operator copies across —
-      * GUM-342.
+      * What the head holds instead is `l2ParamsHash`, the digest the operator copies across from
+      * the ledger (`l2-ledger-digests.json` in the bootstrap directory).
       */
     case AnyRemote
 

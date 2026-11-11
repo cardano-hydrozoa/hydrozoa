@@ -31,7 +31,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationMap}
-import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.joint.{EvacuationMap, EvacuationMapHash}
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.l2.L2StateHash
@@ -255,8 +255,27 @@ object Bootstrap:
           * from `l2-cardano-eutxo.json` instead.
           */
         val initialEvacuationMap = "initial-evacuation-map.json"
+
+        /** The digests a remote L2 ledger exports beside its opening evacuation map, consumed under
+          * `--l2-ledger any-remote`: `l2ParamsHash` and `initialL2StateHash` (required), and
+          * optionally `initialEvacuationMapHash`, which, when present, is checked against
+          * [[initialEvacuationMap]] so the two files cannot come from different ledger states.
+          * Absent for the built-in EUTXO ledger, which computes both digests itself.
+          */
+        val remoteLedgerDigests = "l2-ledger-digests.json"
         val refUtxos = "ref-utxos.json"
     }
+
+    /** What a remote L2 ledger hands the bootstrap about the state it opens the head in. The head
+      * cannot derive any of it (only the ledger knows its own parameters and state), so the
+      * operator exports it from the ledger into the bootstrap directory
+      * ([[BootstrapDir.initialEvacuationMap]], [[BootstrapDir.remoteLedgerDigests]]).
+      */
+    final case class RemoteLedgerOpening(
+        initialEvacuationMap: EvacuationMap,
+        l2ParamsHash: Hash32,
+        initialL2StateHash: L2StateHash
+    )
 
     /** Read the bootstrap directory's four files ([[BootstrapDir]]) and assemble them into the
       * [[BootstrapConfig]]. The defaults decode against their own `cardanoNetwork` (the timing
@@ -415,7 +434,7 @@ object Bootstrap:
         bootstrapConfig: BootstrapConfig,
         scriptReferenceUtxos: ScriptReferenceUtxos,
         l2Ledger: L2LedgerKind,
-        mbInitialEvacuationMap: Option[EvacuationMap]
+        mbRemoteOpening: Option[RemoteLedgerOpening]
     ): IO[HeadConfig] = for {
         // Equity comes from the config (per head peer). Its total is what the treasury backs beyond
         // the L2 value; the per-peer split is recorded but the init tx consumes only the sum.
@@ -435,6 +454,7 @@ object Bootstrap:
                 L2LedgerConfig.CardanoEutxo(cardanoNetwork.cardanoProtocolParams)
             case L2LedgerKind.AnyRemote => L2LedgerConfig.AnyRemote
         }
+        l2ParamsHash <- IO.fromEither(sourceL2ParamsHash(l2LedgerConfig, mbRemoteOpening))
         headParams = HeadParameters(
           txTiming = bhp.txTiming,
           fallbackContingency = bhp.fallbackContingency,
@@ -442,7 +462,7 @@ object Bootstrap:
           settlementConfig = bhp.settlementConfig,
           blockConfig = bhp.blockConfig,
           coilQuorum = bhp.coilQuorum,
-          l2ParamsHash = sourceL2ParamsHash(l2LedgerConfig),
+          l2ParamsHash = l2ParamsHash,
           l2Ledger = l2LedgerConfig,
           // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
           identityIsomorphism = false,
@@ -452,9 +472,11 @@ object Bootstrap:
         // value). A remote ledger supplies its own opening map, so its total is authoritative there;
         // for the built-in EUTXO ledger the map is projected from `initialL2State` further down,
         // once the seed utxo — the source of the synthetic key ids — is resolved.
-        initialL2Value = mbInitialEvacuationMap.fold(
-          Value.combine(bootstrapConfig.initialL2State.map(_.value))
-        )(_.totalValue)
+        initialL2Value = mbRemoteOpening
+            .map(_.initialEvacuationMap)
+            .fold(
+              Value.combine(bootstrapConfig.initialL2State.map(_.value))
+            )(_.totalValue)
 
         headPeers <- IO.fromOption(
           HeadPeers(
@@ -575,13 +597,20 @@ object Bootstrap:
         initialUtxos: Utxos = bootstrapConfig.initialL2State.zipWithIndex.map { case (out, i) =>
             TransactionInput(genesisTxId, i) -> out.toTransactionOutput
         }.toMap
-        evacMap <- mbInitialEvacuationMap.fold(
-          IO.fromEither(
-            initialUtxos.toEvacuationMap(cardanoNetwork).left.map(e => RuntimeException(e.toString))
-          )
-        )(IO.pure)
+        evacMap <- mbRemoteOpening
+            .map(_.initialEvacuationMap)
+            .fold(
+              IO.fromEither(
+                initialUtxos
+                    .toEvacuationMap(cardanoNetwork)
+                    .left
+                    .map(e => RuntimeException(e.toString))
+              )
+            )(IO.pure)
 
-        initialL2StateHash = sourceInitialL2StateHash(l2Ledger, evacMap)
+        initialL2StateHash <- IO.fromEither(
+          sourceInitialL2StateHash(l2Ledger, evacMap, mbRemoteOpening)
+        )
 
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
@@ -659,18 +688,19 @@ object Bootstrap:
       * The head cannot compute this: only the ledger knows its own parameters, and bootstrap has no
       * ledger running to ask. So it is sourced per backend instead
       * (`docs/spec/head-params-hash.md`) — the built-in ledger's is computed from the same L2
-      * parameter snapshot the ledger will validate against. The checks themselves never branch this
-      * way; obtaining the value is the one place that must.
-      *
-      * TODO: a remote ledger's digest has to come from the operator, printed out-of-band as the
-      * initial evacuation map already is. Until that input exists a remote head carries a zero
-      * hash, which the reported digest will not match — an `any-remote` head does not boot.
-      * GUM-342.
+      * parameter snapshot the ledger will validate against; a remote ledger's comes from the
+      * operator, exported from the ledger beside its initial evacuation map
+      * ([[BootstrapDir.remoteLedgerDigests]]). The checks themselves never branch this way;
+      * obtaining the value is the one place that must.
       */
-    private def sourceL2ParamsHash(l2Ledger: L2LedgerConfig): Hash32 = l2Ledger match {
+    private def sourceL2ParamsHash(
+        l2Ledger: L2LedgerConfig,
+        mbRemoteOpening: Option[RemoteLedgerOpening]
+    ): Either[RuntimeException, Hash32] = l2Ledger match {
         case L2LedgerConfig.CardanoEutxo(protocolParams) =>
-            EutxoL2Ledger.mkL2ParamsHash(protocolParams)
-        case L2LedgerConfig.AnyRemote => Hash32.fromByteString(zeroDigest)
+            Right(EutxoL2Ledger.mkL2ParamsHash(protocolParams))
+        case L2LedgerConfig.AnyRemote =>
+            mbRemoteOpening.map(_.l2ParamsHash).toRight(missingRemoteOpening("l2ParamsHash"))
     }
 
     /** The digest of the state the L2 ledger opens the head in, which the initialization
@@ -679,24 +709,27 @@ object Bootstrap:
       * Sourced per backend for the same reason as [[sourceL2ParamsHash]], and from the same place —
       * the ledger's construction is its own. The built-in ledger's is derivable from the opening
       * evacuation map with no ledger running, because that map *is* its opening state (as the utxo
-      * set, both other compartments empty). A remote ledger's is not derivable at all: the map is
-      * only a projection of whatever state sits behind it.
-      *
-      * TODO: a remote ledger's has to come from the operator, beside the initial evacuation map.
-      * Until that input exists a remote head certifies a zero hash on its initialization
-      * transaction and then refuses to boot against the real digest. GUM-342.
+      * set, both other compartments empty). A remote ledger's is not derivable at all — the map is
+      * only a projection of whatever state sits behind it — so it comes from the operator.
       */
     private def sourceInitialL2StateHash(
         l2Ledger: L2LedgerKind,
-        initialEvacuationMap: EvacuationMap
-    ): L2StateHash = l2Ledger match {
-        case L2LedgerKind.CardanoEutxo => EutxoL2Ledger.initialStateHash(initialEvacuationMap)
-        case L2LedgerKind.AnyRemote    => L2StateHash(zeroDigest)
+        initialEvacuationMap: EvacuationMap,
+        mbRemoteOpening: Option[RemoteLedgerOpening]
+    ): Either[RuntimeException, L2StateHash] = l2Ledger match {
+        case L2LedgerKind.CardanoEutxo =>
+            Right(EutxoL2Ledger.initialStateHash(initialEvacuationMap))
+        case L2LedgerKind.AnyRemote =>
+            mbRemoteOpening
+                .map(_.initialL2StateHash)
+                .toRight(missingRemoteOpening("initialL2StateHash"))
     }
 
-    /** The 32 zero bytes both `any-remote` placeholders above stand on until GUM-342 replaces them.
-      */
-    private def zeroDigest: ByteString = ByteString.fromArray(new Array[Byte](32))
+    private def missingRemoteOpening(what: String): RuntimeException =
+        RuntimeException(
+          s"an any-remote head needs the remote ledger's $what " +
+              s"(${BootstrapDir.remoteLedgerDigests} in the bootstrap directory)"
+        )
 
 end Bootstrap
 
@@ -1283,7 +1316,7 @@ object BuildHeadConfig:
       * and validates nothing beyond the map's own decoder — the peers' agreement on it is checked
       * by the ledger's own boot-time digest.
       */
-    private def readInitialEvacuationMap(
+    private[bootstrap] def readInitialEvacuationMap(
         bootstrapDir: Path,
         network: CardanoNetwork
     ): IO[EvacuationMap] = {
@@ -1302,6 +1335,80 @@ object BuildHeadConfig:
                 IO.fromEither(parser.decode[EvacuationMap](str))
             }
         } yield map
+    }
+
+    /** The digests a remote L2 ledger exported into the bootstrap directory
+      * ([[Bootstrap.BootstrapDir.remoteLedgerDigests]]): `{"l2ParamsHash": hex,
+      * "initialL2StateHash": hex, "initialEvacuationMapHash"?: hex}`, each 32 bytes. Other fields
+      * are ignored, so a ledger may print more than the bootstrap needs.
+      */
+    final case class RemoteLedgerDigests(
+        l2ParamsHash: Hash32,
+        initialL2StateHash: L2StateHash,
+        initialEvacuationMapHash: Option[EvacuationMapHash]
+    )
+
+    object RemoteLedgerDigests {
+        private def hex32(field: String): Decoder[ByteString] =
+            Decoder.decodeString.emap(s =>
+                Try(ByteString.fromHex(s)).toEither.left
+                    .map(_ => s"$field is not hex: $s")
+                    .filterOrElse(_.size == 32, s"$field must be 32 bytes: $s")
+            )
+
+        given Decoder[RemoteLedgerDigests] = Decoder.instance { c =>
+            for {
+                params <- c.downField("l2ParamsHash").as(using hex32("l2ParamsHash"))
+                state <- c.downField("initialL2StateHash").as(using hex32("initialL2StateHash"))
+                evac <- c
+                    .downField("initialEvacuationMapHash")
+                    .as(using Decoder.decodeOption(using hex32("initialEvacuationMapHash")))
+            } yield RemoteLedgerDigests(
+              Hash32.fromByteString(params),
+              L2StateHash(state),
+              evac.map(EvacuationMapHash(_))
+            )
+        }
+    }
+
+    /** Read everything a remote L2 ledger exported about its opening state: the evacuation map and
+      * its digests. When the digests file names the map's digest too, the two files are checked
+      * against each other, so a map and digests exported from different ledger states (or different
+      * genesis files) fail the build instead of every node's boot.
+      */
+    private[bootstrap] def readRemoteLedgerOpening(
+        bootstrapDir: Path,
+        network: CardanoNetwork
+    ): IO[Bootstrap.RemoteLedgerOpening] = {
+        val path = bootstrapDir.resolve(Bootstrap.BootstrapDir.remoteLedgerDigests)
+        for {
+            evacuationMap <- readInitialEvacuationMap(bootstrapDir, network)
+            exists <- IO.blocking(Files.exists(path))
+            _ <- IO.raiseUnless(exists)(
+              RuntimeException(
+                s"--l2-ledger any-remote requires $path — export the ledger's l2ParamsHash and " +
+                    "initialL2StateHash from the remote L2 ledger and place them there"
+              )
+            )
+            str <- IO.blocking(Files.readString(path))
+            digests <- IO.fromEither(
+              parser.decode[RemoteLedgerDigests](str).left.map(e => RuntimeException(s"$path: $e"))
+            )
+            _ <- digests.initialEvacuationMapHash.fold(IO.unit) { expected =>
+                val actual = evacuationMap.digest
+                IO.raiseUnless(actual == expected)(
+                  RuntimeException(
+                    s"$path names initialEvacuationMapHash ${expected.toHex}, but " +
+                        s"${Bootstrap.BootstrapDir.initialEvacuationMap} digests to " +
+                        s"${actual.toHex}: the two were exported from different ledger states"
+                  )
+                )
+            }
+        } yield Bootstrap.RemoteLedgerOpening(
+          evacuationMap,
+          digests.l2ParamsHash,
+          digests.initialL2StateHash
+        )
     }
 
     private def buildHeadConfig(
@@ -1375,18 +1482,19 @@ object BuildHeadConfig:
                         )
                     )
             }
-            // A remote ledger's opening map comes from the ledger itself; the built-in EUTXO ledger
-            // projects its own from `l2-cardano-eutxo.json` inside mkSharedHeadConfig.
-            mbInitialEvacuationMap <- l2Ledger match {
+            // A remote ledger's opening map and digests come from the ledger itself; the built-in
+            // EUTXO ledger projects its own map from `l2-cardano-eutxo.json` and computes its own
+            // digests inside mkSharedHeadConfig.
+            mbRemoteOpening <- l2Ledger match {
                 case L2LedgerKind.CardanoEutxo => IO.pure(None)
                 case L2LedgerKind.AnyRemote =>
-                    readInitialEvacuationMap(bootstrapDir, cardanoNetwork).map(Some(_))
+                    readRemoteLedgerOpening(bootstrapDir, cardanoNetwork).map(Some(_))
             }
             headConfig <- Bootstrap.mkSharedHeadConfig(cardanoNetwork, backend)(
               bootstrapConfig,
               scriptReferenceUtxos,
               l2Ledger,
-              mbInitialEvacuationMap
+              mbRemoteOpening
             )
             _ <- IO.blocking {
                 Option(outPath.getParent).foreach(Files.createDirectories(_))
