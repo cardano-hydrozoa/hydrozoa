@@ -557,10 +557,12 @@ so a ledger that does not report the field cannot complete a `restoreTo` at all:
 the coordination protocol marks all three digests REQUIRED
 (`docs/spec/l2-ledger-command-coordination.md`).
 
-What `any-remote` is missing is not the check but a value to give it.
-`build-head-config` has no operator-supplied field to read,
-so it writes a zero hash;
-GUM-342 carries both that and the remote side reporting its own.
+For `any-remote`, the value the check compares against is operator-supplied:
+`build-head-config` reads it from `l2-ledger-digests.json` in the bootstrap
+directory,
+which the operator exports from the remote ledger beside its initial evacuation
+map (`docs/spec/l2-ledger-command-coordination.md`,
+"Initial evacuation map and digests").
 
 ### 1. The initialization transaction matches the hash
 

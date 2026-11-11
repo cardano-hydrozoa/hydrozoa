@@ -461,6 +461,30 @@ This file is the bootstrap input for a remote-ledger head — backend-agnostic,
 and already in final form:
 the bootstrap copies it into the head config rather than deriving anything from
 it.
+It goes in the bootstrap directory as `initial-evacuation-map.json`.
+
+### Initial digests
+
+Beside the map, a ledger **must** print the digests the head cannot derive,
+because only the ledger knows its own parameters and state:
+
+```json
+{ "l2ParamsHash": "<hex32>", "initialL2StateHash": "<hex32>",
+  "initialEvacuationMapHash": "<hex32, optional>" }
+```
+
+The operator places this in the bootstrap directory as `l2-ledger-digests.json`.
+`build-head-config --l2-ledger any-remote` pins `l2ParamsHash` in the head
+parameters (and so in `headParamsHash`,
+carried by the regime datum) and certifies `initialL2StateHash` in the init tx's
+treasury datum.
+When `initialEvacuationMapHash` is present it is checked against
+`initial-evacuation-map.json`'s digest,
+so a map and digests exported from different ledger states fail the build rather
+than every node's boot.
+Extra fields are ignored.
+At boot each node's first `restoreTo(0)` compares the ledger's reported digests
+with these, so a mismatch is still caught there.
 
 ## Wire protocol
 
